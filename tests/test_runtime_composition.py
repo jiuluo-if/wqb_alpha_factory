@@ -110,6 +110,14 @@ class TestAgentRuntimeComposition(unittest.TestCase):
         self.assertEqual(agent.last_run_stats["status"], "NOT_STARTED")
         self.assertFalse(agent.memory.best_exhausted)
 
+    def test_constructor_does_not_materialize_trial_ledger(self):
+        agent = Agent(object(), _config(self.state_dir))
+        agent.inspect_optimizer_parents()
+        agent.optimizer_context()
+        self.assertFalse(os.path.exists(os.path.join(self.state_dir, "trial_ledger.jsonl")))
+        self.assertFalse(os.path.exists(os.path.join(self.state_dir, "proposals.json")))
+        self.assertFalse(any(name.endswith(".checkpoint.json") for name in os.listdir(self.state_dir)))
+
     def test_components_are_built_once_and_workflows_share_their_identity(self):
         with mock.patch(
             "wqb_agent.agent.build_runtime_components",
@@ -139,6 +147,7 @@ class TestAgentRuntimeComposition(unittest.TestCase):
     def test_selection_accounting_survives_rebuilt_agent_runtime(self):
         decision = OptimizationDecision(parent_id="parent", decision="STOP")
         first = Agent(object(), _config(self.state_dir))
+        self.assertFalse(os.path.exists(os.path.join(self.state_dir, "trial_ledger.jsonl")))
         first.trial_ledger.record_optimization_selection(
             decision, outcome="STOP", emitted=False, timestamp=1
         )
@@ -152,6 +161,7 @@ class TestAgentRuntimeComposition(unittest.TestCase):
         self.assertEqual(summary["optimization_selection_count"], 1)
         self.assertEqual(summary["non_emitted_optimization_selection_count"], 1)
         self.assertEqual(summary["selection_trial_count"], 2)
+        self.assertEqual(summary["history_completeness"], "COMPLETE_FROM_START")
         self.assertEqual(summary["history_completeness"], "COMPLETE_FROM_START")
 
     def test_domain_component_constructors_are_not_duplicated(self):

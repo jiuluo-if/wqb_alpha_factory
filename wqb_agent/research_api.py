@@ -32,6 +32,7 @@ from typing import Any
 from .artifacts import atomic_write_json_if_changed
 from .config import normalize_config
 from .expression import analyze_expression
+from .locking import OwnerBusyError, single_instance_scope
 from .optimization_decision import OptimizationDecision, optimization_decision_identity
 from .proposal_contract import (
     TARGETED_BATCH_TTL_SEC,
@@ -441,6 +442,26 @@ def _targeted_field_profiles(runtime, proposals):
 def materialize_targeted_batch(decisions, *, agent=None, client=None,
                                config=None, state_dir=None, max_candidates=4,
                                ttl_sec=TARGETED_BATCH_TTL_SEC):
+    runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
+    directory = state_dir or getattr(runtime, "state_dir", None) or ".wqb_state"
+    try:
+        with single_instance_scope(directory, operation="materialize-targeted-batch"):
+            return _materialize_targeted_batch_locked(
+                decisions, agent=runtime, client=client, config=config,
+                state_dir=directory, max_candidates=max_candidates, ttl_sec=ttl_sec,
+            )
+    except OwnerBusyError:
+        return {
+            "written": False,
+            "status": "LOCAL_OWNER_BUSY",
+            "path": os.path.join(directory, "proposals.json"),
+        }
+
+
+def _materialize_targeted_batch_locked(decisions, *, agent=None, client=None,
+                                       config=None, state_dir=None,
+                                       max_candidates=4,
+                                       ttl_sec=TARGETED_BATCH_TTL_SEC):
     """Write Agent-authored CHILD/VALIDATE decisions into the one inbox.
 
     The optimizer already validated the decisions; this only freezes the
@@ -462,6 +483,14 @@ def materialize_targeted_batch(decisions, *, agent=None, client=None,
     decision_ids = [optimization_decision_identity(item) for item in authored]
     fingerprint = _targeted_batch_fingerprint(decision_ids)
     existing = _read_targeted_envelope(path)
+    barrier = _targeted_recovery_barrier(runtime)
+    if barrier is not None:
+        return {
+            "written": False,
+            "status": "TARGETED_BATCH_RECOVERY_BLOCKED",
+            "path": path,
+            "reason": barrier,
+        }
     if _active_targeted_batch(existing, time.time()):
         existing_fingerprint = existing.get("decision_fingerprint")
         if not existing_fingerprint:
@@ -525,6 +554,25 @@ def materialize_targeted_batch(decisions, *, agent=None, client=None,
         "expires_at": envelope["expires_at"],
         "proposal_count": len(proposals),
     }
+
+
+def _targeted_recovery_barrier(runtime):
+    checkpoints = getattr(runtime, "checkpoints", None)
+    scan = getattr(checkpoints, "scan", None)
+    if not callable(scan):
+        return None
+    for record in scan() or ():
+        if record.get("malformed"):
+            return "MALFORMED_CHECKPOINT"
+        checkpoint = record.get("checkpoint")
+        if not isinstance(checkpoint, Mapping) or not checkpoint.get("complete", False):
+            return "UNFINISHED_CHECKPOINT"
+        for experiment in checkpoint.get("experiments") or ():
+            if not isinstance(experiment, Mapping):
+                return "MALFORMED_CHECKPOINT"
+            if str(experiment.get("status") or "").upper() in {"SUBMIT_UNKNOWN", "UNKNOWN"}:
+                return "UNKNOWN_REQUIRES_RECONCILIATION"
+    return None
 
 
 def _targeted_batch_fingerprint(decision_ids):

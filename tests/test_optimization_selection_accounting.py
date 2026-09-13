@@ -1,12 +1,29 @@
 import json
+import multiprocessing
 import os
 import tempfile
+import time
 import unittest
 
 from wqb_agent.checkpoints import CheckpointStore
+from wqb_agent.locking import OwnerBusyError
 from wqb_agent.optimization_decision import OptimizationDecision
 from wqb_agent.state import Experiment
 from wqb_agent.trial_ledger import SIMULATION_LIFECYCLE_PHASES, TrialLedger
+
+
+def _record_selection_in_process(path, result):
+    decision = OptimizationDecision(parent_id="p-cross-process", decision="STOP")
+    for _ in range(50):
+        try:
+            written = TrialLedger(path, persist=True).record_optimization_selection(
+                decision, timestamp=time.time()
+            )
+            result.put(bool(written))
+            return
+        except OwnerBusyError:
+            time.sleep(0.01)
+    result.put("busy")
 
 
 class TestOptimizationSelectionAccounting(unittest.TestCase):
@@ -85,6 +102,26 @@ class TestOptimizationSelectionAccounting(unittest.TestCase):
             summary = second.summarize()
             self.assertEqual(summary["optimization_selection_count"], 1)
             self.assertEqual(summary["selection_trial_count"], 2)
+
+    def test_cross_process_selection_has_one_physical_canonical_row(self):
+        context = multiprocessing.get_context("spawn")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "trial_ledger.jsonl")
+            result = context.Queue()
+            first = context.Process(target=_record_selection_in_process, args=(path, result))
+            second = context.Process(target=_record_selection_in_process, args=(path, result))
+            first.start()
+            second.start()
+            first.join(10)
+            second.join(10)
+
+            self.assertFalse(first.is_alive())
+            self.assertFalse(second.is_alive())
+            with open(path, encoding="utf-8") as handle:
+                rows = [json.loads(line) for line in handle]
+            selections = [row for row in rows if row.get("phase") == "optimization_selection"]
+            self.assertEqual(len(selections), 1)
+            self.assertEqual(TrialLedger(path).summarize()["selection_trial_count"], 1)
 
     def test_legacy_trajectory_marks_incomplete_history_without_inventing_selections(self):
         with tempfile.TemporaryDirectory() as tmp:

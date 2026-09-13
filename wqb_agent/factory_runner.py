@@ -24,6 +24,7 @@ from contextlib import redirect_stdout
 from .artifacts import atomic_write_json_if_changed
 from .diversity import field_concept_keys, semantic_mechanism_key
 from .expression import canonical_expression
+from .locking import OwnerBusyError, single_instance_scope
 from .proposal_contract import (
     FACTORY_BATCH_SIZE,
     factory_batch_stats,
@@ -302,6 +303,17 @@ class AIFactoryRunner:
     @classmethod
     def request_stop(cls, state_dir):
         """Set a durable stop request in the canonical session envelope."""
+        try:
+            with single_instance_scope(state_dir, operation="factory-stop"):
+                return cls._request_stop_owned(state_dir)
+        except OwnerBusyError:
+            return {
+                "status": "LOCAL_OWNER_BUSY",
+                "last_action": "LOCAL_OWNER_BUSY",
+            }
+
+    @classmethod
+    def _request_stop_owned(cls, state_dir):
         session = cls.read_session(state_dir)
         if not session or session.get("status") != "RUNNING":
             return None
@@ -421,6 +433,28 @@ class AIFactoryRunner:
     def run(self, duration_sec=86400, max_rounds=0, idle_sleep_sec=30,
             max_simulations=240, daily_simulation_cap=None,
             weekly_simulation_cap=None):
+        try:
+            with single_instance_scope(self.state_dir, operation="factory-run"):
+                return self._run_locked(
+                    duration_sec=duration_sec,
+                    max_rounds=max_rounds,
+                    idle_sleep_sec=idle_sleep_sec,
+                    max_simulations=max_simulations,
+                    daily_simulation_cap=daily_simulation_cap,
+                    weekly_simulation_cap=weekly_simulation_cap,
+                )
+        except OwnerBusyError:
+            return {
+                "schema_version": CHECKPOINT_VERSION,
+                "created_by_version": CREATED_BY_VERSION,
+                "status": "LOCAL_OWNER_BUSY",
+                "last_action": "LOCAL_OWNER_BUSY",
+                "last_result": {"status": "LOCAL_OWNER_BUSY"},
+            }
+
+    def _run_locked(self, duration_sec=86400, max_rounds=0, idle_sleep_sec=30,
+                    max_simulations=240, daily_simulation_cap=None,
+                    weekly_simulation_cap=None):
         # RESEARCH_POLICY:
         # This compatibility loop is not the default agent-facing model;
         # safety boundaries inside Agent and Client remain mechanism.

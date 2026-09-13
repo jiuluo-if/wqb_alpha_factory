@@ -231,6 +231,72 @@ class TestTargetedBatchMaterialization(unittest.TestCase):
         self.assertEqual(result["status"], "TARGETED_BATCH_CONFLICT")
         self.assertEqual(after, payload)
 
+    def test_unfinished_checkpoint_blocks_materialization_before_selection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            original = {"batch_type": "existing", "proposals": [{"id": "original"}]}
+            path = os.path.join(tmp, "proposals.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(original, handle)
+            runtime = self._runtime(tmp, [_targeted_proposal(9)])
+            runtime.checkpoints = SimpleNamespace(scan=lambda: [{
+                "path": os.path.join(tmp, "round_1.checkpoint.json"),
+                "round_no": 1,
+                "malformed": False,
+                "checkpoint": {"complete": False},
+            }])
+            result = research_api.materialize_targeted_batch(
+                [child_decision("p1")], agent=runtime, state_dir=tmp,
+            )
+            with open(path, encoding="utf-8") as handle:
+                after = json.load(handle)
+
+        self.assertEqual(result["status"], "TARGETED_BATCH_RECOVERY_BLOCKED")
+        self.assertEqual(after, original)
+
+    def test_malformed_checkpoint_blocks_materialization_without_replacing_inbox(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            original = {"batch_type": "existing", "proposals": [{"id": "original"}]}
+            path = os.path.join(tmp, "proposals.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(original, handle)
+            runtime = self._runtime(tmp, [_targeted_proposal(9)])
+            runtime.checkpoints = SimpleNamespace(scan=lambda: [{
+                "path": os.path.join(tmp, "round_1.checkpoint.json"),
+                "round_no": 1, "malformed": True, "checkpoint": {},
+            }])
+            result = research_api.materialize_targeted_batch(
+                [child_decision("p1")], agent=runtime, state_dir=tmp,
+            )
+            with open(path, encoding="utf-8") as handle:
+                after = json.load(handle)
+
+        self.assertEqual(result["status"], "TARGETED_BATCH_RECOVERY_BLOCKED")
+        self.assertEqual(after, original)
+
+    def test_submit_unknown_checkpoint_blocks_materialization_without_replacement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            original = {"batch_type": "existing", "proposals": [{"id": "original"}]}
+            path = os.path.join(tmp, "proposals.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(original, handle)
+            runtime = self._runtime(tmp, [_targeted_proposal(9)])
+            runtime.checkpoints = SimpleNamespace(scan=lambda: [{
+                "path": os.path.join(tmp, "round_1.checkpoint.json"),
+                "round_no": 1, "malformed": False,
+                "checkpoint": {
+                    "complete": True,
+                    "experiments": [{"status": "SUBMIT_UNKNOWN"}],
+                },
+            }])
+            result = research_api.materialize_targeted_batch(
+                [child_decision("p1")], agent=runtime, state_dir=tmp,
+            )
+            with open(path, encoding="utf-8") as handle:
+                after = json.load(handle)
+
+        self.assertEqual(result["status"], "TARGETED_BATCH_RECOVERY_BLOCKED")
+        self.assertEqual(after, original)
+
 
 class TestFactoryNeverInventsAgentDecisions(unittest.TestCase):
     """P1-D：Python 不得替 Agent 伪造 CHILD decision。"""

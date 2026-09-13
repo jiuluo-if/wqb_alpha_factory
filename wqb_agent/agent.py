@@ -10,6 +10,7 @@ DO NOT USE FOR: choosing economic hypotheses or bypassing `research_api`.
 import json
 import os
 import time
+from contextlib import nullcontext
 
 from .alpha_colors import classify_alpha_color
 from .alpha_feed_cache import WEEKLY_SIMULATION_CAP, WeeklyAlphaFeedCache, refresh_due
@@ -28,6 +29,7 @@ from .expression import canonical_expression, submission_fingerprint
 from .heartbeat import HeartbeatSink
 from .identity import candidate_identity
 from .incremental_value import build_incremental_value
+from .locking import OwnerBusyError, single_instance_scope
 from .metrics import (
     check_pass,
     checks_passed,
@@ -147,6 +149,19 @@ class Agent:
         )
         self.operator_reference = _operator_reference(operator_path)
         self._init_workflows()
+
+    def _mutation_scope(self, operation):
+        state_dir = getattr(self, "state_dir", None)
+        if not state_dir:
+            return nullcontext()
+        return single_instance_scope(state_dir, operation=operation)
+
+    def _local_owner_busy(self):
+        self.last_run_stats = {
+            **getattr(self, "last_run_stats", {}),
+            "status": "LOCAL_OWNER_BUSY",
+        }
+        return None
 
     def _install_policy(self, policy):
         """将 resolved policy 集中投影为旧 Agent 兼容属性。"""
@@ -341,12 +356,22 @@ class Agent:
 
     def propose_optimization(self, decisions, *, max_candidates=4):
         """Agent-facing：校验 OptimizationDecision 后走唯一 CHILD 生成路径。"""
-        authored = list(decisions or ())
-        result = self.optimizer_workflow.generate_from_decisions(
-            authored, max_candidates=max_candidates
-        )
-        self._record_optimization_selection(authored, result)
-        return result
+        try:
+            with self._mutation_scope("propose-optimization"):
+                authored = list(decisions or ())
+                result = self.optimizer_workflow.generate_from_decisions(
+                    authored, max_candidates=max_candidates
+                )
+                self._record_optimization_selection(authored, result)
+                return result
+        except OwnerBusyError:
+            return {
+                "status": "LOCAL_OWNER_BUSY",
+                "proposals": [],
+                "accepted": [],
+                "rejected": [],
+                "decision_results": [],
+            }
 
     def _record_optimization_selection(self, decisions, result):
         """Bridge finalized decisions to the sole TrialLedger owner."""
@@ -444,23 +469,27 @@ class Agent:
 
     def run_proposals(self, path=None, allow_unresolved_checkpoint=False):
         """Compatibility facade for the guarded proposal workflow."""
-        self.proposal_execution.update_agent_config(
-            factory_batch_size=self.factory_batch_size,
-            min_factory_datasets=self.min_factory_datasets,
-            min_cross_dataset_pairs=self.min_cross_dataset_pairs,
-            candidates_per_round=self.candidates_per_round,
-            max_proposals_per_round=self.max_proposals_per_round,
-            research_allocation=self.research_allocation,
-            research_integrity=self.research_integrity,
-            max_field_alpha_count=self.max_field_alpha_count,
-            require_platform_alpha_count=self.require_platform_alpha_count,
-        )
-        result = self.proposal_execution.run(
-            path=path,
-            allow_unresolved_checkpoint=allow_unresolved_checkpoint,
-        )
-        self.last_run_stats = dict(self.proposal_execution.last_run_stats)
-        return result
+        try:
+            with self._mutation_scope("run-proposals"):
+                self.proposal_execution.update_agent_config(
+                    factory_batch_size=self.factory_batch_size,
+                    min_factory_datasets=self.min_factory_datasets,
+                    min_cross_dataset_pairs=self.min_cross_dataset_pairs,
+                    candidates_per_round=self.candidates_per_round,
+                    max_proposals_per_round=self.max_proposals_per_round,
+                    research_allocation=self.research_allocation,
+                    research_integrity=self.research_integrity,
+                    max_field_alpha_count=self.max_field_alpha_count,
+                    require_platform_alpha_count=self.require_platform_alpha_count,
+                )
+                result = self.proposal_execution.run(
+                    path=path,
+                    allow_unresolved_checkpoint=allow_unresolved_checkpoint,
+                )
+                self.last_run_stats = dict(self.proposal_execution.last_run_stats)
+                return result
+        except OwnerBusyError:
+            return self._local_owner_busy()
 
     # ----------------------------------------------------- crash recovery
 
@@ -469,17 +498,29 @@ class Agent:
         return self.proposal_execution._proposal_checkpoint_path(round_no)
 
     def skip_stale_reconciled(self, round_no, simulation_id, min_attempts=3):
-        return self.proposal_execution.skip_stale_reconciled(
-            round_no, simulation_id, min_attempts=min_attempts
-        )
+        try:
+            with self._mutation_scope("skip-stale"):
+                return self.proposal_execution.skip_stale_reconciled(
+                    round_no, simulation_id, min_attempts=min_attempts
+                )
+        except OwnerBusyError:
+            return self._local_owner_busy()
 
     def skip_submit_unknown_authorized(self, round_no, proposal_id):
-        return self.proposal_execution.skip_submit_unknown_authorized(
-            round_no, proposal_id
-        )
+        try:
+            with self._mutation_scope("skip-submit-unknown"):
+                return self.proposal_execution.skip_submit_unknown_authorized(
+                    round_no, proposal_id
+                )
+        except OwnerBusyError:
+            return self._local_owner_busy()
 
     def finalize_recorded_round(self, round_no):
-        return self.proposal_execution.finalize_recorded_round(round_no)
+        try:
+            with self._mutation_scope("finalize-round"):
+                return self.proposal_execution.finalize_recorded_round(round_no)
+        except OwnerBusyError:
+            return self._local_owner_busy()
 
     def _unfinished_checkpoint_except(self, round_no):
         return self.proposal_execution._unfinished_checkpoint_except(round_no)

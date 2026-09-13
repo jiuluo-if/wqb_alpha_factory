@@ -7,8 +7,10 @@ import os
 import re
 import threading
 import time
+from contextlib import nullcontext
 
 from .artifacts import atomic_write_json_if_changed
+from .locking import single_instance_scope, state_owner_held
 from .schema import CHECKPOINT_VERSION, CREATED_BY_VERSION, migrate_artifact
 
 _CHECKPOINT_NAME = re.compile(r"round_(\d+)\.checkpoint\.json")
@@ -30,6 +32,16 @@ class CheckpointStore:
 
     def write(self, round_no, hypothesis, experiments, complete):
         """Atomically persist one checkpoint and return whether bytes changed."""
+        state_dir = os.path.abspath(self.state_dir)
+        owner_scope = (
+            nullcontext()
+            if state_owner_held(state_dir)
+            else single_instance_scope(state_dir, operation="checkpoint-write")
+        )
+        with owner_scope:
+            return self._write_owned(round_no, hypothesis, experiments, complete)
+
+    def _write_owned(self, round_no, hypothesis, experiments, complete):
         path = self.path(round_no)
         os.makedirs(self.state_dir, exist_ok=True)
         checkpoint_experiments = []

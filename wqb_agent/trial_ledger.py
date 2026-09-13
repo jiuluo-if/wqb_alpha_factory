@@ -14,6 +14,7 @@ import os
 import threading
 import time
 from collections import Counter, defaultdict
+from contextlib import nullcontext
 
 from .artifacts import (
     append_jsonl_if_unique,
@@ -22,6 +23,7 @@ from .artifacts import (
 )
 from .expression import canonical_expression
 from .identity import candidate_identity
+from .locking import single_instance_scope, state_owner_held
 from .optimization_decision import optimization_decision_identity
 from .schema import CREATED_BY_VERSION, TRIAL_LEDGER_VERSION
 from .search_policy import structural_fingerprint
@@ -61,20 +63,26 @@ class TrialLedger:
 
     SCHEMA_VERSION = TRIAL_LEDGER_VERSION
 
-    def __init__(self, path, persist=True):
+    def __init__(self, path, persist=True, trajectory_path=None):
         self.path = path
         self.persist = bool(persist)
+        self.trajectory_path = trajectory_path
         self._events = []
         self._append_lock = threading.Lock()
 
-    def initialize_history_completeness(self, trajectory_path):
-        """Record the one-time completeness boundary in this ledger owner."""
-        if not self.path or not self.persist:
-            return "COMPLETE_FROM_START"
+    def _durable_scope(self, operation):
+        if not self.persist or not self.path:
+            return nullcontext()
+        state_dir = os.path.dirname(os.path.abspath(self.path))
+        if state_owner_held(state_dir):
+            return nullcontext()
+        return single_instance_scope(state_dir, operation)
+
+    def _history_completeness_unlocked(self, trajectory_path):
         existing = list(iter_jsonl_objects(self.path)) if os.path.exists(self.path) else []
         for row in existing:
             if row.get("phase") == "history_completeness":
-                return str(row.get("outcome") or "UNKNOWN")
+                return str(row.get("outcome") or "UNKNOWN"), True
         trajectory_has_rows = False
         if trajectory_path and os.path.exists(trajectory_path):
             try:
@@ -83,6 +91,9 @@ class TrialLedger:
             except OSError:
                 trajectory_has_rows = True
         outcome = "INCOMPLETE_LEGACY" if trajectory_has_rows or existing else "COMPLETE_FROM_START"
+        return outcome, False
+
+    def _write_history_completeness_unlocked(self, outcome):
         row = {
             "schema_version": self.SCHEMA_VERSION,
             "created_by_version": CREATED_BY_VERSION,
@@ -97,6 +108,16 @@ class TrialLedger:
         }
         append_jsonl_if_unique(self.path, row, ("event_id",), lock=self._append_lock)
         return outcome
+
+    def initialize_history_completeness(self, trajectory_path):
+        """Record the one-time completeness boundary in this ledger owner."""
+        if not self.path or not self.persist:
+            return "COMPLETE_FROM_START"
+        with self._durable_scope("trial-ledger-history"):
+            outcome, exists = self._history_completeness_unlocked(trajectory_path)
+            if not exists:
+                self._write_history_completeness_unlocked(outcome)
+            return outcome
 
     @staticmethod
     def _trial_id(trial):
@@ -176,9 +197,17 @@ class TrialLedger:
                 return False
             self._events.append(row)
             return True
-        return append_jsonl_if_unique(
-            self.path, row, ("event_id",), lock=self._append_lock
-        )
+        with self._durable_scope("trial-ledger-record"):
+            if self.trajectory_path:
+                outcome, exists = self._history_completeness_unlocked(self.trajectory_path)
+            else:
+                outcome, exists = None, True
+            written = append_jsonl_if_unique(
+                self.path, row, ("event_id",), lock=self._append_lock
+            )
+            if self.trajectory_path and not exists:
+                self._write_history_completeness_unlocked(outcome)
+            return written
 
     def record_outcome_settled(self, trial, *, reward, reward_version="reward_v1",
                                base_quality=None, robustness=None,

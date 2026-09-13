@@ -2,12 +2,15 @@
 
 import inspect
 import json
+import multiprocessing
 import os
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock
 
 from wqb_agent.agent import Agent
+from wqb_agent.locking import single_instance_scope
 from wqb_agent.proposal_execution import ProposalExecutionWorkflow
 from wqb_agent.state import Experiment
 
@@ -19,6 +22,22 @@ class CountingClient:
     def submit_simulation(self, expression, settings, **kwargs):
         self.sim_calls.append((expression, settings))
         raise AssertionError("characterization path must not submit")
+
+
+def _run_agent_in_process(state_dir, path, output):
+    client = CountingClient()
+    agent = _agent(state_dir, client)
+    result = agent.run_proposals(path)
+    output.put({
+        "result": result,
+        "status": agent.last_run_stats.get("status"),
+        "sim_calls": list(client.sim_calls),
+        "checkpoints": [
+            name for name in os.listdir(state_dir)
+            if name.endswith(".checkpoint.json")
+        ],
+        "ledger": os.path.exists(os.path.join(state_dir, "trial_ledger.jsonl")),
+    })
 
 
 def _agent(tmpdir, client=None):
@@ -101,6 +120,49 @@ class TestProposalExecutionCharacterization(unittest.TestCase):
 
 
 class TestProposalExecutionBoundary(unittest.TestCase):
+    def test_direct_agent_run_is_blocked_before_workflow_when_other_thread_owns_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = _agent(tmp)
+            path = os.path.join(tmp, "proposals.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump({"round_no": 1, "proposals": []}, handle)
+            called = []
+            original = agent.proposal_execution.run
+            agent.proposal_execution.run = lambda **kwargs: called.append(kwargs)
+            with single_instance_scope(tmp, operation="outer"):
+                thread = threading.Thread(
+                    target=agent.run_proposals, args=(path,),
+                )
+                thread.start()
+                thread.join()
+            agent.proposal_execution.run = original
+
+        self.assertEqual(called, [])
+        self.assertEqual(agent.last_run_stats["status"], "LOCAL_OWNER_BUSY")
+
+    def test_direct_agent_run_is_blocked_before_post_across_processes(self):
+        context = multiprocessing.get_context("spawn")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "proposals.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump({"round_no": 1, "proposals": []}, handle)
+            output = context.Queue()
+            with single_instance_scope(tmp, operation="outer"):
+                process = context.Process(
+                    target=_run_agent_in_process, args=(tmp, path, output)
+                )
+                process.start()
+                process.join(15)
+
+            self.assertFalse(process.is_alive())
+            result = output.get(timeout=2)
+
+        self.assertEqual(result["status"], "LOCAL_OWNER_BUSY")
+        self.assertIsNone(result["result"])
+        self.assertEqual(result["sim_calls"], [])
+        self.assertEqual(result["checkpoints"], [])
+        self.assertFalse(result["ledger"])
+
     def test_agent_run_proposals_delegates_to_workflow(self):
         agent = Agent.__new__(Agent)
         workflow = Mock()

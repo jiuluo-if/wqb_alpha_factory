@@ -73,9 +73,10 @@ def build_runtime_components(client, config):
         persist=True,
     )
     trial_ledger = TrialLedger(
-        os.path.join(state_dir, "trial_ledger.jsonl"), persist=True
+        os.path.join(state_dir, "trial_ledger.jsonl"),
+        persist=True,
+        trajectory_path=trajectory.path,
     )
-    trial_ledger.initialize_history_completeness(trajectory.path)
     builder = CandidateBuilder(
         neutralization=config.simulation_config.settings["neutralization"],
         catalog_path=config.runtime.alpha_template_catalog,

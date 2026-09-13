@@ -1,13 +1,39 @@
 import json
+import os
 import tempfile
+import threading
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from wqb_agent.checkpoints import CheckpointStore
+from wqb_agent.locking import OwnerBusyError, single_instance_scope
 
 
 class TestCheckpointStore(unittest.TestCase):
+    def test_write_reuses_outer_state_owner_for_execution_worker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = CheckpointStore(tmp)
+            outcomes = []
+            with single_instance_scope(tmp, operation="outer"):
+                thread = threading.Thread(
+                    target=lambda: self._write_from_thread(store, outcomes)
+                )
+                thread.start()
+                thread.join()
+
+            self.assertEqual(outcomes, ["written"])
+            self.assertTrue(os.path.exists(store.path(1)))
+
+    @staticmethod
+    def _write_from_thread(store, outcomes):
+        try:
+            store.write(1, {"id": "h"}, [], complete=False)
+        except OwnerBusyError:
+            outcomes.append("busy")
+        else:
+            outcomes.append("written")
+
     def test_write_and_load_preserve_checkpoint_shape(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = CheckpointStore(f"{tmp}/new-state")
