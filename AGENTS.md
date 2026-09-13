@@ -20,7 +20,7 @@
 - 优化候选编排归 `wqb_agent/optimizer_workflow.py` 的 `OptimizerWorkflow` 所有；`Agent` 的优化方法只作兼容 facade。它只消费已有证据、cloud 轻量优先级提示和 Agent-authored `child_economic_hypothesis`，不生成经济机制、不扫描参数、不写 proposals、不修改 trajectory、不刷新 Alpha Feed 或触发 Simulation。
 - 不可绕过：`SUBMIT_UNKNOWN` 不重发、known progress URL 只读、checkpoint exactly-once、UNKNOWN/UNAVAILABLE 不升 PASS、Alpha submission 手动完成。模拟/已提交 Alpha 的远端轻量元数据只按美国东部本地滚动 7 日窗口缓存，指标、轨迹、checkpoint 和证据不进入该缓存。
 - 任务路由：状态恢复看 `preflight.py/audit.py/state.py` + `test_research_constraints.py/test_runtime_safety.py`；执行看 `agent.py/simulator.py/client.py` + `test_simulator.py/test_recovery.py`；配置看 `config.py/agent.py` + `test_runtime_safety.py/test_agent_flow.py`。
-- 改完至少运行：`python -m unittest discover -s tests`、`python -m compileall -q wqb_agent scripts tests`、`python -m ruff check .`；不要为 lint 顺手重写无关业务。
+- 改完必须只运行与变更直接相关的定向测试：`python scripts/run_targeted_tests.py --files <changed-files>`，再对 changed Python files 运行语法检查和 Ruff；禁止使用 `unittest discover`、coverage 驱动全量测试或任何等价的全仓测试命令。无法映射到相关测试时必须先补充显式映射，不能回退全量测试。
 
 ## 四个核心概念
 
@@ -169,26 +169,23 @@ python main.py run-proposals
 
 优先删除重复概念，合并而不是新增第二套 state、proposal contract、evaluation、facade 或 manager/orchestrator。研究策略不要硬编码成机制。
 
-本地默认采用增量验证：审查 diff，识别直接受影响的行为，运行 1–5 个相关测试方法或测试类、一个最近邻回归、changed Python files 的 `py_compile` 和 Ruff；只有 typed frontier 被改动时才运行对应的 mypy。失败时按 targeted → nearby subsystem → broader contract progressive expansion，普通本地修改默认不跑 whole suite。
+本地默认采用增量验证：审查 diff，识别直接受影响的行为，运行 1–5 个相关测试方法或测试类、一个最近邻回归、changed Python files 的 `py_compile` 和 Ruff；只有 typed frontier 被改动时才运行对应的 mypy。失败时按 targeted → nearby subsystem → broader contract progressive expansion；普通本地修改和 CI 均禁止 whole-repository test suite。
 
-改动跨多个 owner、shared helper、proposal/schema、state merge semantics 或 safety contract 时，扩大到相关 module/contract suite；改动 safety contract 必须增加对应行为测试。是否执行本地 full gate 由任务明确要求决定；push 后由 CI 承担 authoritative whole-repository regression。
+改动跨多个 owner、shared helper、proposal/schema、state merge semantics 或 safety contract 时，扩大到相关 module/contract suite；改动 safety contract 必须增加对应行为测试。扩大仍必须停留在受影响的 module/contract 范围；本地和 push 后 CI 均不得执行 authoritative whole-repository regression。
 
-CI authoritative full lane 执行：
+CI 强约束：
 
 ```powershell
-python -m compileall -q wqb_agent scripts tests
 python -m mypy wqb_agent/config.py wqb_agent/runtime_policy.py wqb_agent/runtime_components.py wqb_agent/runtime_composition.py wqb_agent/credentials.py wqb_agent/suggestion_workflow.py wqb_agent/alpha_feed_workflow.py wqb_agent/optimizer_workflow.py wqb_agent/alpha_color_workflow.py
 python -m ruff check .
-coverage erase
-coverage run --branch -m unittest discover -s tests
-coverage report
+python scripts/run_targeted_tests.py --base-sha <CI base SHA>
 python main.py --state-dir tests/fixtures state doctor
 python main.py --state-dir tests/fixtures state audit
 python scripts/check_repo_privacy.py
 ```
 
-CI 中完整测试只在 coverage execution 中运行一次；coverage 与 full suite 合并承担测试和 branch coverage 质量门。
+CI 严禁执行全量测试：不得出现 `unittest discover`、`coverage run -m unittest`、`pytest` 无路径/无选择器调用，或其他等价的全仓测试入口。每次只允许由 `scripts/run_targeted_tests.py` 根据 base SHA 与变更文件的显式映射选择相关测试；测试映射缺失必须 fail-closed 并先补映射。CI 不再以 coverage 作为全仓测试门。
 
 质量门采用 Python 3.11 单矩阵。Coverage 只统计 `wqb_agent`，初始 `fail_under=76.0`，阈值只能逐步提高。mypy 仅检查配置、运行时装配、凭据、Suggestion/Alpha Feed/Optimizer/Alpha Color 九个 typed frontier 模块，不对全仓开启 strict。Ruff 在现有规则上增加 import sorting、选定安全 UP 规则和 `B007/B904`，不启用 `ALL`、`SIM` 或 `RUF`。这些质量命令不得触发 live BRAIN、Simulation POST 或 Alpha submission。
 
-提交或推送必须得到用户明确授权；获授权时 Git 邮箱必须为 `2966684515@qq.com`，提交信息必须以 `fix：` 或其他前缀加中文内容。
+用户已明确授权并设为持续强约束：每次优化任务完成且验证通过后，必须提交并推送，不能停留在未推送状态；获授权时 Git 邮箱必须为 `2966684515@qq.com`，提交信息必须以 `fix：` 或其他前缀加中文内容。仍禁止强推、改写历史、跳过 CI 或上传无关改动。

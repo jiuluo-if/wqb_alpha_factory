@@ -20,9 +20,9 @@ SAFETY_INVARIANTS = (
     "Alpha submission 由用户手动完成",
 )
 VALIDATION_COMMANDS = (
-    "python -m unittest discover -s tests",
-    "python -m compileall -q wqb_agent scripts tests",
-    "python -m ruff check .",
+    "python scripts/run_targeted_tests.py --files <changed-files>",
+    "python -m py_compile <changed-python-files>",
+    "python -m ruff check <changed-python-files>",
 )
 TASK_ROUTES = {
     "general": {

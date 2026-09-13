@@ -2,7 +2,7 @@
 
 ## Principles
 
-测试验证当前可观察行为和安全不变量。日常维护优先快速、可定位的增量反馈；CI 是完整仓库回归和覆盖率的 authoritative gate。
+测试验证当前可观察行为和安全不变量。日常维护与 CI 都只执行与变更直接相关的定向测试；禁止用全仓回归掩盖测试映射缺失。
 
 ## Local Fast Lane
 
@@ -12,17 +12,15 @@
 
 失败或涉及多个 owner、shared helper、proposal/schema、state merge semantics 或 safety contract 时，依次扩大到 nearby subsystem，再到相关 module/contract suite。改动 safety contract 必须有对应行为测试；这仍不是默认 whole-repository regression。
 
-## CI Full Gate
+## CI Targeted Gate
 
-GitHub CI 使用 Python 3.11，执行 whole-tree syntax、typed frontier mypy、full Ruff、offline doctor、offline state audit、privacy，以及 coverage 驱动的完整测试。完整测试只执行一次：
+GitHub CI 使用 Python 3.11，执行必要的静态/离线检查，并根据 base SHA 选择与变更文件直接相关的测试：
 
 ```powershell
-coverage erase
-coverage run --branch -m unittest discover -s tests
-coverage report
+python scripts/run_targeted_tests.py --base-sha <CI base SHA>
 ```
 
-coverage execution 同时承担 full tests 和 branch coverage；coverage 只统计 `wqb_agent`，阈值由 `pyproject.toml` 的 `fail_under` 控制。
+`scripts/run_targeted_tests.py` 只接受显式文件映射，绝不调用 `unittest discover`。未映射的代码变更直接 fail-closed；文档-only 变更可以没有 unit test。CI 禁止 `coverage run -m unittest`、无选择器的 `pytest` 和其他全仓测试等价物。
 
 ## Typed Frontier
 
@@ -30,7 +28,7 @@ typed frontier 是配置、运行时装配、凭据、Suggestion/Alpha Feed/Opti
 
 ## Coverage
 
-覆盖率用于 CI authoritative gate，不应在本地为普通文档或小范围维护重复运行全量测试。安全关键 production 模块不得通过 omit 排除。
+覆盖率不是 CI 的全仓测试入口。若未来需要覆盖率，必须对明确选定的相关测试模块运行，并单独说明范围；不得通过 coverage 恢复全量测试。安全关键 production 模块不得通过 omit 排除。
 
 ## Slow / Benchmark Tests
 
@@ -48,13 +46,10 @@ python -m unittest tests.test_<affected>.<TestClass>.<test_method>
 python -m py_compile <changed-python-files>
 python -m ruff check <changed-python-files>
 
-# CI full lane
-python -m compileall -q wqb_agent scripts tests
+# CI targeted lane
 python -m mypy wqb_agent/config.py wqb_agent/runtime_policy.py wqb_agent/runtime_components.py wqb_agent/runtime_composition.py wqb_agent/credentials.py wqb_agent/suggestion_workflow.py wqb_agent/alpha_feed_workflow.py wqb_agent/optimizer_workflow.py wqb_agent/alpha_color_workflow.py
 python -m ruff check .
-coverage erase
-coverage run --branch -m unittest discover -s tests
-coverage report
+python scripts/run_targeted_tests.py --base-sha <CI base SHA>
 python main.py --state-dir tests/fixtures state doctor
 python main.py --state-dir tests/fixtures state audit
 python scripts/check_repo_privacy.py

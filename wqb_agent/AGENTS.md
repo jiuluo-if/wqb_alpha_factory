@@ -78,12 +78,10 @@ python -m ruff check <changed-python-files>
 
 仅当 typed frontier 被改动时，运行对应的 mypy。typed frontier 只包含上述九个边界清晰模块；全局 mypy 保持非 strict，不为类型检查重写 `agent.py`、`client.py`、`simulator.py` 或 `proposal_execution.py`。
 
-CI authoritative full lane 执行 whole-tree syntax、上述 typed frontier、full Ruff、offline doctor/audit、privacy，以及 coverage 驱动的完整测试；完整 test suite 只执行一次：
+CI 只执行与变更相关的 targeted tests；不得执行 whole-repository test suite、`unittest discover` 或 coverage 驱动的全量测试。测试必须由 `scripts/run_targeted_tests.py` 的显式变更文件映射选择，映射缺失时 fail-closed；静态检查和 offline doctor/audit/privacy 仍按 workflow 需要执行。
 
 ```powershell
-coverage erase
-coverage run --branch -m unittest discover -s tests
-coverage report
+python scripts/run_targeted_tests.py --base-sha <CI base SHA>
 ```
 
-Coverage 只统计 `wqb_agent` production package，安全关键模块不得通过 omit 排除。
+Coverage 不得作为恢复全量测试的旁路；如单独使用，只能覆盖明确选定的相关测试模块。

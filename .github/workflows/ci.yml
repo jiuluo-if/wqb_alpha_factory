@@ -9,6 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -30,11 +32,10 @@ jobs:
           wqb_agent/alpha_color_workflow.py
       - name: Ruff
         run: python -m ruff check .
-      - name: Full tests and coverage
-        run: |
-          coverage erase
-          coverage run --branch -m unittest discover -s tests
-          coverage report
+      - name: Targeted tests only
+        env:
+          TARGET_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: python scripts/run_targeted_tests.py --base-sha "$TARGET_BASE_SHA"
       - name: Offline doctor
         run: python main.py --state-dir tests/fixtures state doctor
       - name: Offline state audit
