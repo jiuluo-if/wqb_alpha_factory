@@ -14,11 +14,13 @@
 提交资格判定。
 """
 
+import hashlib
 import re
 from collections import Counter
 
 from .expression import analyze_expression, canonical_expression
 from .metrics import score_of
+from .search_policy import research_arm_key
 
 _FIELD_TOKEN_RE = re.compile(r"[a-z0-9_]+")
 _BUDGET_PRIORITY_ORDER = {"HIGH": 0, "NORMAL": 1, "LOW": 2}
@@ -308,7 +310,8 @@ def derive_budget_priority(proposal, *, context=None, saturation=None):
     }
 
 
-def select_budget_candidates(candidates, *, target, context=None):
+def select_budget_candidates(candidates, *, target, context=None,
+                            max_pending_per_arm=None, seed=None):
     """Select pure Probe candidates with deterministic diversity ordering."""
     try:
         target = max(0, int(target))
@@ -392,9 +395,40 @@ def select_budget_candidates(candidates, *, target, context=None):
         if isinstance(item, dict)
         and str(item.get("semantic_status") or "").upper() == "UNKNOWN"
     )
-    selected_exploration = interleave(
-        exploration_items, target, group_by_lineage=False,
-    )
+    if max_pending_per_arm is None:
+        arm_cap = None
+    else:
+        try:
+            arm_cap = max(1, int(max_pending_per_arm))
+        except (TypeError, ValueError):
+            arm_cap = 1
+    ordered = interleave(exploration_items, len(exploration_items), group_by_lineage=False)
+    if seed is not None:
+        levels = {"CONCRETE": [], "PARTIAL_OPERATOR": []}
+        for candidate in ordered:
+            mode = str(candidate.get("template_mode") or "CONCRETE").upper()
+            levels["PARTIAL_OPERATOR" if mode == "PARTIAL_OPERATOR" else "CONCRETE"].append(candidate)
+        if levels["CONCRETE"] and levels["PARTIAL_OPERATOR"]:
+            turn = int(hashlib.sha256(str(seed).encode()).hexdigest()[-1], 16) % 2
+            balanced = []
+            while levels["CONCRETE"] or levels["PARTIAL_OPERATOR"]:
+                preferred = "PARTIAL_OPERATOR" if turn else "CONCRETE"
+                fallback = "CONCRETE" if turn else "PARTIAL_OPERATOR"
+                source = levels[preferred] or levels[fallback]
+                if source:
+                    balanced.append(source.pop(0))
+                turn = 1 - turn
+            ordered = balanced
+    selected_exploration = []
+    selected_arm_counts = Counter()
+    for candidate in ordered:
+        arm = research_arm_key(candidate)
+        if arm_cap is not None and selected_arm_counts[arm] >= arm_cap:
+            continue
+        selected_exploration.append(candidate)
+        selected_arm_counts[arm] += 1
+        if len(selected_exploration) >= target:
+            break
     selected = selected_exploration
     priority_counts = Counter(item.get("budget_priority") for item in selected)
     selected_mechanisms = Counter(item.get("semantic_mechanism_key") for item in selected)
@@ -405,6 +439,8 @@ def select_budget_candidates(candidates, *, target, context=None):
         "shortage_count": max(0, target - len(selected)),
         "shortage_reason": (
             "SEMANTIC_GATE_SCARCITY" if unknown_count and len(selected) < target
+            else "ARM_CAP_SCARCITY" if arm_cap is not None and len(selected) < target
+            and selected_arm_counts
             else "ELIGIBLE_CANDIDATE_SHORTAGE" if len(selected) < target else None
         ),
         "unknown_rejected": unknown_count,
@@ -435,6 +471,12 @@ def select_budget_candidates(candidates, *, target, context=None):
         },
         "selected_mechanisms": dict(selected_mechanisms),
         "selected_lineages": dict(selected_lineages),
+        "unique_research_arm_count": len({research_arm_key(item) for item in exploration_items}),
+        "selected_arm_count": len(selected_arm_counts),
+        "arm_cap_rejected_or_deprioritized_count": max(
+            0, len(ordered) - len(selected_exploration)
+        ),
+        "selected_research_arms": dict(selected_arm_counts),
     }
 def extract_fields(expression, known_fields):
     r"""返回表达式里实际出现的 known_fields 子集。

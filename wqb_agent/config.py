@@ -144,6 +144,7 @@ class FactoryConfig:
     max_runtime_sec: int = 86400
     daily_simulation_cap: int = 1600
     weekly_simulation_cap: int = 11200
+    include_partial_operator_branches: bool = True
 
 
 @dataclass(frozen=True)
@@ -419,6 +420,10 @@ def parse_config(raw):
         ),
         daily_simulation_cap=daily_factory_max,
         weekly_simulation_cap=factory_max,
+        include_partial_operator_branches=_as_bool(
+            factory_raw.get("include_partial_operator_branches"), True,
+            "config.agent.factory.include_partial_operator_branches",
+        ),
     )
     if search.max_simulations + search.validation_max_simulations > factory.max_simulations:
         raise ValueError("discovery + validation 预算不得超过 factory.max_simulations")
@@ -432,6 +437,7 @@ def parse_config(raw):
     factory_settings["max_runtime_sec"] = factory.max_runtime_sec
     factory_settings["daily_simulation_cap"] = daily_factory_max
     factory_settings["weekly_simulation_cap"] = factory_max
+    factory_settings["include_partial_operator_branches"] = factory.include_partial_operator_branches
     if "max_rounds" in factory_settings:
         factory_settings["max_rounds"] = _int_in_range(
             factory_settings["max_rounds"],

@@ -57,6 +57,7 @@ def build_agent_runtime_policy(config: AppConfig) -> AgentRuntimePolicy:
             "max_runtime_sec": config.factory.max_runtime_sec,
             "daily_simulation_cap": config.factory.daily_simulation_cap,
             "weekly_simulation_cap": config.factory.weekly_simulation_cap,
+            "include_partial_operator_branches": config.factory.include_partial_operator_branches,
         },
         max_rounds=runtime.max_rounds,
         candidates_per_round=runtime.candidates_per_round,

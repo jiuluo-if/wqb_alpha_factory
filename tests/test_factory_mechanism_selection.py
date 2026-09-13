@@ -125,6 +125,34 @@ class TestFactoryMechanismSelection(unittest.TestCase):
         self.assertTrue(decision["information_gain"])
         self.assertIn("semantic_change", decision["information_changes"])
 
+    def test_route_treats_partial_operator_realization_as_no_information_gain(self):
+        base = {
+            "candidate_expression_fingerprints": ["rank(ts_corr(a,b,20))"],
+            "semantic_mechanism_fingerprints": ["synthetic-mechanism"],
+            "structural_family_fingerprints": ["synthetic-family"],
+            "field_concept_fingerprints": ["synthetic-concept"],
+            "relationship_fingerprints": ["synthetic-relationship"],
+            "dataset_route": ["synthetic-ds"],
+            "research_question_fingerprints": ["synthetic-contrast"],
+        }
+        changed = dict(
+            base,
+            candidate_expression_fingerprints=["rank(ts_covariance(a,b,20))"],
+        )
+        decision = AIFactoryRunner.route_decision(
+            base, changed, route_attempt=0, no_gain_attempts=1,
+        )
+        self.assertFalse(decision["information_gain"])
+        self.assertEqual(decision["change_type"], "candidate_change_only")
+
+    def test_selection_probe_uses_abstract_partial_question_key(self):
+        probe = AIFactoryRunner._selection_probe([
+            {"template_mode": "PARTIAL_OPERATOR",
+             "operator_contrast_question_key": "branch::ROLE",
+             "experiment_question": "uses op_a?"},
+        ], {}, {})
+        self.assertEqual(probe["research_question_fingerprints"], ["branch::role"])
+
     def test_route_accepts_new_relationship_family_as_information_gain(self):
         previous = {
             "semantic_mechanism_fingerprints": ["fundamental:level:slow_moving"],

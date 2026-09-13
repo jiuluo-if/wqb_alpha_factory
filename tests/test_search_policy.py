@@ -1,16 +1,41 @@
 import unittest
 
+from wqb_agent.diversity import select_budget_candidates
 from wqb_agent.search_policy import (
     BudgetAllocator,
     SearchPolicy,
     empirical_pool_summary,
     incremental_novelty,
     pareto_front,
+    research_arm_key,
     structural_fingerprint,
 )
 
 
 class TestStructuralAndEmpiricalDiversity(unittest.TestCase):
+    def test_research_arm_key_is_shared_and_ignores_operator_realization(self):
+        concrete = {"datasets": ["synthetic_ds"], "template_family": "synthetic_mechanism",
+                    "operator_realization_fingerprint": "concrete"}
+        partial = {**concrete, "operator_realization_fingerprint": "partial-a"}
+        self.assertEqual(research_arm_key(concrete), research_arm_key(partial))
+        self.assertEqual(BudgetAllocator.arm_key(partial), research_arm_key(partial))
+
+    def test_budget_selection_respects_max_pending_per_arm_before_target(self):
+        candidates = []
+        for realization in ("baseline", "alternative-a", "alternative-b"):
+            candidates.append({
+                "expression": f"rank({realization})", "datasets": ["synthetic_ds"],
+                "template_family": "synthetic_mechanism", "semantic_status": "KNOWN",
+                "proposal_origin": "factory", "research_layer": "exploration",
+                "research_role": "EXPLORE", "experiment_stage": "BASELINE",
+                "operator_realization_fingerprint": realization,
+            })
+        selected, audit = select_budget_candidates(
+            candidates, target=3, max_pending_per_arm=1
+        )
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(audit["shortage_reason"], "ARM_CAP_SCARCITY")
+        self.assertEqual(audit["selected_arm_count"], 1)
     def test_structural_fingerprint_anonymizes_fields_and_windows(self):
         left = structural_fingerprint("rank(ts_mean(close, 20))", ["close"])
         right = structural_fingerprint("rank(ts_mean(volume, 60))", ["volume"])

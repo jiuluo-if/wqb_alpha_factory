@@ -613,6 +613,7 @@ class AlphaFactory:
                     "fields_used": used_ids,
                     "field_refs": field_refs,
                     "template_id": template.template_id,
+                    "template_mode": template.template_mode,
                     "template_version": template.version,
                     "template_fingerprint": template.fingerprint,
                     "template_structural_fingerprint": template.structural_fingerprint,
@@ -630,7 +631,6 @@ class AlphaFactory:
                     "template_bindings": dict(slot_values),
                     "template_ref": ref,
                     "template_slots": slot_values,
-                    "template_mode": template.template_mode,
                     "template_branch_of": template.branch_of,
                     "operator_role": (
                         template.operator_slots[0].role
@@ -1896,6 +1896,11 @@ class AlphaFactory:
                     if template.template_mode == "PARTIAL_OPERATOR" else
                     f"字段 {field_id} 的 {template.template_id} 结构是否提供可复现的增量信号？"
                 ),
+                "operator_contrast_question_key": (
+                    f"{template.branch_of or template.template_id}::"
+                    f"{candidate.get('operator_role') or 'operator'}"
+                    if template.template_mode == "PARTIAL_OPERATOR" else None
+                ),
                 "expected_failure_modes": [
                     "字段覆盖不足或缺失导致有效持仓减少",
                     "信号集中或换手异常导致健康检查失败",
@@ -1928,7 +1933,7 @@ class AlphaFactory:
             }
             proposal.update({
                 key: candidate[key]
-                for key in ("mutation", "template_id", "template_family",
+                for key in ("mutation", "template_id", "template_mode", "template_family",
                             "template_stage_path", "template_ref", "template_slots",
                             "relationship_audit", "factory_version",
                             "template_version", "template_fingerprint",
@@ -1996,7 +2001,7 @@ class AlphaFactory:
 
     def generate_factory_batch(self, hypothesis, fields, operator_reference,
                                target=100, excluded_expressions=None, seed=None,
-                               research_context=None):
+                               research_context=None, max_pending_per_arm=1):
         """Generate one large, structurally diverse factory batch.
 
         The factory owns breadth.  It cycles verified field profiles through
@@ -2032,16 +2037,11 @@ class AlphaFactory:
         explicit_template_ids = hypothesis.get("template_ids") or []
         if isinstance(explicit_template_ids, str):
             explicit_template_ids = [explicit_template_ids]
-        partial_opt_in = (
-            hypothesis.get("include_partial_operator_branches") is True
-            or any(
-                self.registry.get(template_id) is not None
-                and self.registry.get(template_id).template_mode == "PARTIAL_OPERATOR"
-                for template_id in explicit_template_ids
-                if isinstance(template_id, str)
-            )
-        )
-        if not partial_opt_in:
+        include_partial = hypothesis.get("include_partial_operator_branches", True) is not False
+        if explicit_template_ids:
+            requested = set(explicit_template_ids)
+            templates = [item for item in templates if item.template_id in requested]
+        if not include_partial:
             templates = [template for template in templates
                          if template.template_mode == "CONCRETE"]
         if not templates:
@@ -2134,8 +2134,26 @@ class AlphaFactory:
                     excluded.add(canonical_expression(proposal["expression"]))
                     if len(exploration_pool) >= pool_limit:
                         break
+        automatic_mixed_mode = (
+            not explicit_template_ids
+            and hypothesis.get("include_partial_operator_branches", True) is not False
+        )
+        if automatic_mixed_mode:
+            concrete_expressions = {
+                canonical_expression(item["expression"])
+                for item in exploration_pool
+                if item.get("template_mode") == "CONCRETE"
+            }
+            exploration_pool = [
+                item for item in exploration_pool
+                if not (
+                    item.get("template_mode") == "PARTIAL_OPERATOR"
+                    and canonical_expression(item["expression"]) in concrete_expressions
+                )
+            ]
         result, self.last_budget_audit = select_budget_candidates(
-            exploration_pool, target=limit, context=research_context
+            exploration_pool, target=limit, context=research_context,
+            max_pending_per_arm=max_pending_per_arm, seed=seed,
         )
         return result
 

@@ -179,6 +179,14 @@ class TestRuntimeConfigBoundary(unittest.TestCase):
         self.assertEqual(config.factory.weekly_simulation_cap, 12)
         self.assertEqual(config.runtime.max_rounds, 8)
 
+    def test_factory_partial_operator_policy_defaults_on_and_supports_kill_switch(self):
+        self.assertTrue(parse_config({"simulation": {}, "agent": {}}).factory.include_partial_operator_branches)
+        disabled = parse_config({"simulation": {}, "agent": {
+            "factory": {"include_partial_operator_branches": False},
+        }})
+        self.assertFalse(disabled.factory.include_partial_operator_branches)
+        self.assertFalse(disabled.runtime.factory["include_partial_operator_branches"])
+
     def test_factory_weekly_and_daily_caps_are_typed_and_validated(self):
         config = parse_config({"simulation": {}, "agent": {
             "factory": {

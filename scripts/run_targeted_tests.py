@@ -68,6 +68,15 @@ DIRECT_TESTS = {
         "tests/test_proposal_execution.py",
         "tests/test_research_loop.py",
     ),
+    "wqb_agent/config.py": (
+        "tests/test_runtime_config_boundary.py",
+        "tests/test_runtime_safety.py",
+    ),
+    "wqb_agent/runtime_policy.py": (
+        "tests/test_runtime_config_boundary.py",
+        "tests/test_runtime_composition.py",
+        "tests/test_runtime_safety.py",
+    ),
     "wqb_agent/proposal_contract.py": (
         "tests/test_factory_batch_contract.py",
         "tests/test_factory_provenance_persistence.py",
@@ -85,6 +94,11 @@ DIRECT_TESTS = {
     "wqb_agent/diversity.py": (
         "tests/test_factory_mechanism_selection.py",
         "tests/test_research_loop.py",
+    ),
+    "wqb_agent/search_policy.py": (
+        "tests/test_search_policy.py",
+        "tests/test_search_calibration.py",
+        "tests/test_recovery.py",
     ),
     "wqb_agent/alpha_templates/model.py": ("tests/test_alpha_template_catalog.py",),
     "wqb_agent/alpha_templates/loader.py": (

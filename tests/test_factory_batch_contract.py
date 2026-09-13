@@ -155,6 +155,38 @@ class TestFactoryBatchContract(unittest.TestCase):
         ok, errors = validate_factory_batch(proposals)
         self.assertTrue(ok, errors)
 
+    def test_normal_factory_mode_reaches_partial_alternative_without_explicit_ids(self):
+        from tests.helpers import operator_reference
+
+        fields = [
+            {"id": f"field_{index}", "description": "verified economic field",
+             "type": "MATRIX", "semantic_status": "KNOWN", "frequency": "daily",
+             "category": "market", "dataset": "fundamental6"}
+            for index in range(30)
+        ]
+        proposals = AlphaFactory().generate_factory_batch(
+            {"id": "normal-factory", "include_partial_operator_branches": True},
+            fields, operator_reference(), target=100, seed="partial-normal",
+            max_pending_per_arm=1,
+        )
+        self.assertTrue(any(item.get("template_mode") == "PARTIAL_OPERATOR" for item in proposals))
+        self.assertTrue(any(item.get("template_mode") == "CONCRETE" for item in proposals))
+
+    def test_factory_partial_kill_switch_excludes_partial_templates(self):
+        from tests.helpers import operator_reference
+
+        fields = [{
+            "id": f"field_{index}", "description": "verified economic field", "type": "MATRIX",
+            "semantic_status": "KNOWN", "frequency": "daily", "category": "market",
+            "dataset": "fundamental6",
+        } for index in range(10)]
+        proposals = AlphaFactory().generate_factory_batch(
+            {"id": "disabled-factory", "include_partial_operator_branches": False},
+            fields, operator_reference(), target=1, seed="partial-disabled",
+        )
+        self.assertTrue(proposals)
+        self.assertTrue(all(item.get("template_mode") == "CONCRETE" for item in proposals))
+
     def test_factory_exploration_is_seeded_and_marked_as_signal_discovery(self):
         root = os.path.dirname(os.path.dirname(__file__))
         from tests.helpers import operator_reference

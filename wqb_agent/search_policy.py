@@ -63,6 +63,15 @@ def _field_ids(record):
     return result
 
 
+def research_arm_key(proposal):
+    """Return the sole economic arm identity, excluding operator realization."""
+    dataset = _get(proposal, "dataset_family") or _get(proposal, "datasets") or "unknown-dataset"
+    mechanism = _get(proposal, "mechanism_family") or _get(proposal, "template_family") or "unknown-mechanism"
+    if isinstance(dataset, (list, tuple)):
+        dataset = "+".join(sorted(str(item) for item in dataset))
+    return f"{dataset}::{mechanism}"
+
+
 def _window_bucket(value):
     try:
         value = float(value)
@@ -250,11 +259,7 @@ class BudgetAllocator:
 
     @staticmethod
     def arm_key(proposal):
-        dataset = _get(proposal, "dataset_family") or _get(proposal, "datasets") or "unknown-dataset"
-        mechanism = _get(proposal, "mechanism_family") or _get(proposal, "template_family") or "unknown-mechanism"
-        if isinstance(dataset, (list, tuple)):
-            dataset = "+".join(sorted(str(item) for item in dataset))
-        return f"{dataset}::{mechanism}"
+        return research_arm_key(proposal)
 
     @staticmethod
     def proposal_key(proposal):
