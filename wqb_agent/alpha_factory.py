@@ -1410,7 +1410,7 @@ class AlphaFactory:
                     "operator_mapping": rationale,
                     "economic_mechanism": child_mechanism,
                     "operator_evidence": {
-                        "sha256": operator_reference.get("sha256"),
+                        "sha256": operator_reference.get("capability_fingerprint") or operator_reference.get("sha256"),
                         "operators": actual_ops,
                         "rationale": rationale,
                     },
@@ -1546,7 +1546,7 @@ class AlphaFactory:
                 "operator_mapping": reason,
                 "economic_mechanism": mechanism,
                 "operator_evidence": {
-                    "sha256": operator_reference.get("sha256"),
+                    "sha256": operator_reference.get("capability_fingerprint") or operator_reference.get("sha256"),
                     "operators": actual_ops,
                     "rationale": reason,
                 },
@@ -1840,7 +1840,7 @@ class AlphaFactory:
                 },
                 "operator_mapping": candidate["rationale"],
                 "operator_evidence": {
-                    "sha256": operator_reference.get("sha256"),
+                    "sha256": operator_reference.get("capability_fingerprint") or operator_reference.get("sha256"),
                     "operators": actual_ops,
                     "rationale": candidate["rationale"],
                 },
@@ -1913,6 +1913,13 @@ class AlphaFactory:
         # Do not expose the previous round's derived audit when this call
         # exits before candidate selection (invalid input or an empty pool).
         self.last_budget_audit = {}
+        if not self._live_operator_capability(operator_reference):
+            self.last_budget_audit = {
+                "status": "OPERATOR_CAPABILITY_UNKNOWN",
+                "selected_count": 0,
+                "shortage_count": 0,
+            }
+            return []
         try:
             limit = max(0, int(target))
         except (TypeError, ValueError):
@@ -2019,3 +2026,14 @@ class AlphaFactory:
             exploration_pool, target=limit, context=research_context
         )
         return result
+
+    @staticmethod
+    def _live_operator_capability(reference):
+        """Require current BRAIN evidence before Probe realization."""
+        return (
+            isinstance(reference, dict)
+            and reference.get("status") == "LIVE_VERIFIED"
+            and reference.get("availability") == "AVAILABLE"
+            and reference.get("source") == "BRAIN_LIVE_ONLY"
+            and isinstance(reference.get("operators"), list)
+        )

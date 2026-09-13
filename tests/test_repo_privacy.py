@@ -139,6 +139,19 @@ class TestRepositoryPrivacyGuard(unittest.TestCase):
         codes = {item.code for item in GUARD._scan_text("sample.py", text)}
         self.assertEqual(codes, set())
 
+    def test_operator_reference_research_history_is_detected(self):
+        root = self._synthetic_root()
+        name = "docs/reference/OPERATORS_CHEATSHEET.md"
+        (root / "docs/reference").mkdir(parents=True)
+        (root / name).write_text(
+            "`rank(x)` usage " + "count: 12\n", encoding="utf-8"
+        )
+        findings, _ = GUARD.scan(root, [name])
+        self.assertIn(
+            "OPERATOR_REFERENCE_RESEARCH_HISTORY",
+            {item.code for item in findings},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

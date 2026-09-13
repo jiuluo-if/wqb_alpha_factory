@@ -21,6 +21,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OPERATOR_REFERENCE = _operator_reference(
     os.path.join(ROOT, "docs", "reference", "OPERATORS_CHEATSHEET.md")
 )
+OPERATOR_REFERENCE.update({
+    "source": "BRAIN_LIVE_ONLY", "status": "LIVE_VERIFIED",
+    "availability": "AVAILABLE", "valid": True,
+    "capability_fingerprint": OPERATOR_REFERENCE["sha256"],
+})
 
 
 class TestResearchLoopIntegration(unittest.TestCase):

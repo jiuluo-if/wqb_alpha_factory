@@ -63,11 +63,26 @@ class StateMutationDelegation:
         if lock_path != self._lock_path:
             raise OwnerBusyError(lock_path)
         with _REGISTRY_LOCK:
-            state = _OWNER_STATES.get(self._lock_path)
-            valid = state is not None and state.delegation_marker is self._owner_marker
+            valid = _delegation_is_live(self)
         if not valid:
             raise OwnerBusyError(lock_path)
         return self
+
+    @contextmanager
+    def authorization(self, state_dir):
+        """Hold the live-owner check across one approved durable mutation."""
+        lock_path = _normalized_lock_path(state_dir)
+        if lock_path != self._lock_path:
+            raise OwnerBusyError(lock_path)
+        with _REGISTRY_LOCK:
+            if not _delegation_is_live(self):
+                raise OwnerBusyError(lock_path)
+            yield self
+
+
+def _delegation_is_live(delegation):
+    state = _OWNER_STATES.get(delegation._lock_path)
+    return state is not None and state.delegation_marker is delegation._owner_marker
 
 
 def _normalized_lock_path(state_dir):
@@ -95,7 +110,8 @@ def _acquire_owner(state_dir, operation, *, metadata):
     thread_id = threading.get_ident()
     if not guard.acquire(blocking=False):
         raise OwnerBusyError(lock_path)
-    state = _OWNER_STATES.get(lock_path)
+    with _REGISTRY_LOCK:
+        state = _OWNER_STATES.get(lock_path)
     if state is not None:
         if state.thread_id != thread_id:
             guard.release()
@@ -126,24 +142,28 @@ def _release_owner(token):
     if token.thread_id != threading.get_ident():
         raise RuntimeError("state owner must be released by its owning thread")
     lock_path = token.lock_path
-    state = _OWNER_STATES.get(lock_path)
-    if state is None or state.thread_id != token.thread_id:
-        raise RuntimeError("state owner is not held by the current thread")
-    token.released = True
-    state.depth -= 1
     guard = _path_guard(lock_path)
     try:
-        if state.depth == 0:
+        with _REGISTRY_LOCK:
+            state = _OWNER_STATES.get(lock_path)
+            if state is None or state.thread_id != token.thread_id:
+                raise RuntimeError("state owner is not held by the current thread")
+            token.released = True
+            state.depth -= 1
+            if state.depth != 0:
+                return
             _OWNER_STATES.pop(lock_path, None)
-            if state.metadata:
-                try:
-                    with open(lock_path, encoding="utf-8") as handle_file:
-                        data = json.load(handle_file)
-                    if int(data.get("pid") or 0) == os.getpid():
-                        os.remove(lock_path)
-                except Exception:
-                    pass
-            _release_os_lock(state.os_handle)
+            handle = state.os_handle
+            metadata = state.metadata
+        if metadata:
+            try:
+                with open(lock_path, encoding="utf-8") as handle_file:
+                    data = json.load(handle_file)
+                if int(data.get("pid") or 0) == os.getpid():
+                    os.remove(lock_path)
+            except Exception:
+                pass
+        _release_os_lock(handle)
     finally:
         guard.release()
 

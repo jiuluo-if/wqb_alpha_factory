@@ -49,6 +49,7 @@ class TestSuggestionWorkflow(unittest.TestCase):
             facade_agent.discovery.discover = discover
             direct_agent.discovery.discover = discover
             facade_bundle = facade_agent.run_suggestion_round(round_no=1)
+            direct_agent.refresh_operator_capability()
             direct_bundle = direct_agent.suggestion_workflow.run(round_no=1)
             with open(
                 os.path.join(direct_tmp, "suggestions.json"), encoding="utf-8"

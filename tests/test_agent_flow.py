@@ -138,6 +138,20 @@ class FakeClient:
         self._lock = threading.Lock()
         self.datafield_calls = []
 
+    def get_operator_capability(self):
+        from wqb_agent.proposal_contract import load_operator_syntax_reference
+
+        root = os.path.dirname(os.path.dirname(__file__))
+        reference = load_operator_syntax_reference(
+            os.path.join(root, "docs", "reference", "OPERATORS_CHEATSHEET.md")
+        )
+        reference.update({
+            "source": "BRAIN_LIVE_ONLY", "status": "LIVE_VERIFIED",
+            "availability": "AVAILABLE", "valid": True,
+            "capability_fingerprint": reference["sha256"],
+        })
+        return reference
+
     def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
         self.datafield_calls.append((dataset_id, limit, offset))
         all_fields = FAKE_FIELDS.get(dataset_id, [])

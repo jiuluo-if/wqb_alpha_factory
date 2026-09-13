@@ -34,12 +34,9 @@ from wqb_agent.weekly_quota import QuotaExceeded, WeeklySimulationQuota
 
 class TestFactoryProvenancePersistence(unittest.TestCase):
     def test_code_screen_precedes_agent_economic_gate(self):
-        root = os.path.dirname(os.path.dirname(__file__))
-        from wqb_agent.proposal_contract import _operator_reference
+        from tests.helpers import operator_reference
 
-        reference = _operator_reference(
-            os.path.join(root, "docs", "reference", "OPERATORS_CHEATSHEET.md")
-        )
+        reference = operator_reference()
         complete_parent = {
             "status": "DONE",
             "expression": "rank(field)",
@@ -140,12 +137,9 @@ class TestFactoryProvenancePersistence(unittest.TestCase):
         })
 
     def test_factory_batch_prefers_cross_dataset_companions_and_reports_stats(self):
-        root = os.path.dirname(os.path.dirname(__file__))
-        from wqb_agent.proposal_contract import _operator_reference
+        from tests.helpers import operator_reference
 
-        reference = _operator_reference(
-            os.path.join(root, "docs", "reference", "OPERATORS_CHEATSHEET.md")
-        )
+        reference = operator_reference()
         datasets = ["pv1", "pv13", "option8"]
         fields = [
             {

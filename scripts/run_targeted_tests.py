@@ -21,6 +21,20 @@ COMMON_CONTRACT_TESTS = (
 DIRECT_TESTS = {
     "main.py": ("tests/test_cli.py",),
     "scripts/run_targeted_tests.py": ("tests/test_targeted_ci.py",),
+    "scripts/check_repo_privacy.py": ("tests/test_repo_privacy.py",),
+    "wqb_agent/client.py": (
+        "tests/test_client_refactor.py",
+        "tests/test_protocol_truth.py",
+    ),
+    "wqb_agent/protocol.py": ("tests/test_protocol_truth.py",),
+    "wqb_agent/__init__.py": (
+        "tests/test_runtime_composition.py",
+        "tests/test_research_api.py",
+    ),
+    "wqb_agent/candidate.py": (
+        "tests/test_alpha_template_catalog.py",
+        "tests/test_runtime_composition.py",
+    ),
     "wqb_agent/agent.py": (
         "tests/test_agent_flow.py",
         "tests/test_proposal_execution.py",
@@ -133,7 +147,10 @@ def select_tests(changed_files: list[str]) -> tuple[str, ...]:
         if not path:
             continue
         if path.startswith("tests/") and path.endswith(".py"):
-            selected.add(path)
+            # A deleted test is itself the intentional cleanup; do not try
+            # to import a path that no longer exists in the checkout.
+            if (ROOT / path).is_file():
+                selected.add(path)
             continue
         if path in DIRECT_TESTS:
             selected.update(DIRECT_TESTS[path])

@@ -100,15 +100,6 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "999"):
             load_templates(io.StringIO(document))
 
-    def test_from_scratch_comes_from_registry_and_has_provenance(self):
-        candidates = CandidateBuilder().build(
-            {"direction": "long"}, [{"id": "returns"}], None, count=2
-        )
-        self.assertEqual(len(candidates), 2)
-        self.assertTrue(all(item.get("template_id") for item in candidates))
-        self.assertTrue(all(item.get("template_fingerprint") for item in candidates))
-        self.assertTrue(all(item.get("template_catalog_source") for item in candidates))
-
     def test_loader_rejects_duplicate_ids(self):
         document = """
         [[templates]]

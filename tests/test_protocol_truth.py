@@ -44,8 +44,29 @@ class TestProtocolTruth(unittest.TestCase):
             "operators", 200, {"operators": [{"name": "rank"}]}
         )
         self.assertEqual(result["status"], "LIVE_VERIFIED")
+        self.assertEqual(result["availability"], "AVAILABLE")
         unavailable = probe_capability_response("pnl", 404, {})
-        self.assertEqual(unavailable["status"], "COMMUNITY_OBSERVED")
+        self.assertNotEqual(unavailable["availability"], "AVAILABLE")
+        self.assertEqual(unavailable["status"], "UNKNOWN")
+
+    def test_fixture_and_static_operator_evidence_cannot_claim_availability(self):
+        fixture = fixture_capability("operators", {"operators": [{"name": "rank"}]})
+        self.assertEqual(fixture["status"], "FIXTURE_VERIFIED")
+        self.assertNotEqual(fixture["availability"], "AVAILABLE")
+
+        from wqb_agent.proposal_contract import load_operator_syntax_reference
+
+        static = load_operator_syntax_reference(
+            os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                         "docs", "reference", "OPERATORS_CHEATSHEET.md")
+        )
+        self.assertEqual(static["source"], "STATIC_SYNTAX_REFERENCE")
+        self.assertEqual(static["availability"], "UNKNOWN")
+
+    def test_malformed_live_operator_response_is_not_available(self):
+        result = probe_capability_response("operators", 200, {"operators": ["rank"]})
+        self.assertNotEqual(result["status"], "LIVE_VERIFIED")
+        self.assertNotEqual(result["availability"], "AVAILABLE")
 
 
 class TestYearlyEvidence(unittest.TestCase):

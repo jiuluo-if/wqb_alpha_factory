@@ -874,6 +874,23 @@ class AIFactoryRunner:
                     )
                 ).lower(),
             }
+            operator_reference = bundle.get("operator_reference")
+            if not self._operator_capability_ready(operator_reference):
+                session["status"] = "OPERATOR_CAPABILITY_BLOCKED"
+                session["last_action"] = "STOP_OPERATOR_CAPABILITY"
+                session["last_result"] = {
+                    "round_no": round_no,
+                    "proposals": 0,
+                    "status": "OPERATOR_CAPABILITY_UNKNOWN",
+                    "operator_capability": self._operator_capability_status(
+                        operator_reference
+                    ),
+                }
+                self._remember_blocker(
+                    session, "OPERATOR_CAPABILITY", session["last_result"], self._clock()
+                )
+                self._save_session(session)
+                break
             try:
                 batch_size = FACTORY_BATCH_SIZE
                 if remaining_budget < batch_size:
@@ -1289,6 +1306,26 @@ class AIFactoryRunner:
 
     def _load_checkpoint_payload(self, round_no):
         return self.agent.checkpoints.load(round_no)
+
+    @staticmethod
+    def _operator_capability_ready(reference):
+        return (
+            isinstance(reference, dict)
+            and reference.get("status") == "LIVE_VERIFIED"
+            and reference.get("availability") == "AVAILABLE"
+            and reference.get("source") == "BRAIN_LIVE_ONLY"
+            and isinstance(reference.get("operators"), list)
+        )
+
+    @staticmethod
+    def _operator_capability_status(reference):
+        if not isinstance(reference, dict):
+            return {"status": "UNKNOWN", "availability": "UNKNOWN"}
+        return {
+            key: reference.get(key)
+            for key in ("status", "availability", "source", "valid", "errors")
+            if key in reference
+        }
 
     def _accepted_count(self, proposal_count):
         stats = getattr(self.agent, "last_run_stats", {})

@@ -128,7 +128,8 @@ def __getattr__(name):
         return HighSignalValidator
     if name in {
         "ExperimentSpec", "inspect_state", "discover_fields",
-        "get_operator_reference", "run_experiment", "get_experiment",
+        "get_operator_reference", "get_operator_syntax_reference",
+        "run_experiment", "get_experiment",
         "compare_experiments", "search_history", "reconcile",
     }:
         from . import research_api

@@ -7,7 +7,6 @@ import os
 import re
 import threading
 import time
-from contextlib import nullcontext
 
 from .artifacts import atomic_write_json_if_changed
 from .locking import StateMutationDelegation, single_instance_scope
@@ -38,8 +37,7 @@ class CheckpointStore:
         else:
             if not isinstance(delegation, StateMutationDelegation):
                 raise TypeError("delegation must be a StateMutationDelegation")
-            delegation.validate(state_dir)
-            owner_scope = nullcontext()
+            owner_scope = delegation.authorization(state_dir)
         with owner_scope:
             return self._write_owned(round_no, hypothesis, experiments, complete)
 

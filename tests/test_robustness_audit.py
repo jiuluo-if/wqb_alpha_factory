@@ -22,10 +22,10 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from wqb_agent.agent import Agent
-from wqb_agent.candidate import _swap_field
 from wqb_agent.client import WQBClient
 from wqb_agent.discovery import FieldDiscovery
 from wqb_agent.memory import ExperienceMemory
+from wqb_agent.mutations import _swap_field
 from wqb_agent.reflection import Reflector
 from wqb_agent.simulator import _check_health
 from wqb_agent.state import Experiment

@@ -37,7 +37,7 @@ from .optimization_decision import OptimizationDecision, optimization_decision_i
 from .proposal_contract import (
     TARGETED_BATCH_TTL_SEC,
     TARGETED_BATCH_TYPE,
-    _operator_reference,
+    load_operator_syntax_reference,
     validate_targeted_batch,
 )
 from .state import Trajectory
@@ -207,11 +207,34 @@ def discover_fields(query, *, agent=None, client=None, config=None, state_dir=No
     }
 
 
-def get_operator_reference(path=None) -> dict[str, Any]:
-    """Return the checked-in operator snapshot used by proposal validation."""
+def get_operator_syntax_reference(path=None) -> dict[str, Any]:
+    """Return evergreen syntax hints, never current capability truth."""
     if path is None:
         path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs", "reference", "OPERATORS_CHEATSHEET.md")
-    return _operator_reference(path)
+    return load_operator_syntax_reference(path)
+
+
+def get_operator_reference(*, agent=None, client=None, config=None) -> dict[str, Any]:
+    """Return a bounded current operator view from the existing BRAIN client."""
+    if agent is None and client is None:
+        raise RuntimeError("LIVE_OPERATOR_CAPABILITY_REQUIRED")
+    runtime = _agent(agent=agent, client=client, config=config)
+    capability = getattr(runtime, "operator_capability", None)
+    if callable(capability):
+        capability = capability()
+    if capability is None:
+        capability = getattr(runtime.client, "get_operator_capability", None)
+        if not callable(capability):
+            raise RuntimeError("LIVE_OPERATOR_CAPABILITY_REQUIRED")
+        capability = capability()
+    return {
+        key: capability[key]
+        for key in (
+            "key", "status", "availability", "source", "valid", "errors",
+            "operators", "capability_fingerprint", "endpoint",
+        )
+        if key in capability
+    }
 
 
 def _suggestion_context(state_dir: str) -> dict[str, Any]:
@@ -602,7 +625,8 @@ def _active_targeted_batch(payload, now):
 
 __all__ = [
     "ExperimentSpec", "inspect_state", "discover_fields",
-    "get_operator_reference", "run_experiment", "get_experiment",
+    "get_operator_reference", "get_operator_syntax_reference",
+    "run_experiment", "get_experiment",
     "compare_experiments", "search_history", "reconcile",
     "inspect_optimizer_parents", "inspect_optimizer_context",
     "propose_optimization", "materialize_targeted_batch",

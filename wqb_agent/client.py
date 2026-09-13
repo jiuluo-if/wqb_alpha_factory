@@ -43,7 +43,7 @@ from .credentials import (
     resolve_credentials,
 )
 from .failures import FailureKind, classify_error
-from .protocol import retry_after_seconds
+from .protocol import probe_capability_response, retry_after_seconds
 
 BASE_URL = "https://api.worldquantbrain.com"
 
@@ -478,6 +478,27 @@ class WQBClient:
             context="GET /data-sets",
         )
         return resp.json().get("results", [])
+
+    def get_operator_capability(self):
+        """Read the current account's operators through the sole GET path."""
+        resp = self._request(
+            "GET",
+            f"{self.base_url}/operators",
+            accepted=(200, 201, 202, 204),
+            context="GET /operators",
+        )
+        try:
+            payload = resp.json()
+        except (TypeError, ValueError):
+            payload = None
+        capability = probe_capability_response(
+            "operators", resp.status_code, payload
+        )
+        if not capability.get("valid"):
+            # _request accepted only 2xx; preserve a schema failure as an
+            # explicit capability result without persisting the raw response.
+            return capability
+        return capability
 
     def get_user_alphas(
         self, *, status=None, limit=100, offset=0,

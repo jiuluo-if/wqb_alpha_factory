@@ -81,6 +81,27 @@ class TestFactoryBatchContract(unittest.TestCase):
                 {"id": "probe"}, [], {}, target=1, optimized=[]
             )
 
+    def test_factory_does_not_realize_from_static_operator_syntax_only(self):
+        from wqb_agent.proposal_contract import load_operator_syntax_reference
+
+        root = os.path.dirname(os.path.dirname(__file__))
+        static = load_operator_syntax_reference(
+            os.path.join(root, "docs", "reference", "OPERATORS_CHEATSHEET.md")
+        )
+        fields = [{
+            "id": "field", "description": "synthetic verified field",
+            "type": "MATRIX", "semantic_status": "KNOWN", "frequency": "daily",
+            "category": "market", "dataset": "fundamental6",
+        }]
+        factory = AlphaFactory()
+        self.assertEqual(
+            factory.generate_factory_batch(
+                {"id": "static-only"}, fields, static, target=1
+            ),
+            [],
+        )
+        self.assertEqual(factory.last_budget_audit["status"], "OPERATOR_CAPABILITY_UNKNOWN")
+
     def test_factory_batch_can_require_real_multi_dataset_coverage(self):
         single_dataset = [
             {
@@ -114,11 +135,9 @@ class TestFactoryBatchContract(unittest.TestCase):
 
     def test_factory_generates_a_full_batch_from_mechanism_templates(self):
         root = os.path.dirname(os.path.dirname(__file__))
-        from wqb_agent.proposal_contract import _operator_reference
+        from tests.helpers import operator_reference
 
-        reference = _operator_reference(
-            os.path.join(root, "docs", "reference", "OPERATORS_CHEATSHEET.md")
-        )
+        reference = operator_reference()
         fields = [
             {"id": f"field_{index}", "description": "已核验经济字段", "type": "MATRIX",
              "semantic_status": "KNOWN", "frequency": "daily", "category": "market",
@@ -138,11 +157,9 @@ class TestFactoryBatchContract(unittest.TestCase):
 
     def test_factory_exploration_is_seeded_and_marked_as_signal_discovery(self):
         root = os.path.dirname(os.path.dirname(__file__))
-        from wqb_agent.proposal_contract import _operator_reference
+        from tests.helpers import operator_reference
 
-        reference = _operator_reference(
-            os.path.join(root, "docs", "reference", "OPERATORS_CHEATSHEET.md")
-        )
+        reference = operator_reference()
         fields = [
             {
                 "id": f"field_{index}", "description": f"verified field {index}",
@@ -202,12 +219,9 @@ class TestFactoryBatchContract(unittest.TestCase):
             self.assertFalse(os.path.exists(os.path.join(tmp, "round_1.checkpoint.json")))
 
     def test_factory_batch_passes_normal_preflight_as_one_hundred_atomic_jobs(self):
-        root = os.path.dirname(os.path.dirname(__file__))
-        from wqb_agent.proposal_contract import _operator_reference
+        from tests.helpers import operator_reference
 
-        reference = _operator_reference(
-            os.path.join(root, "docs", "reference", "OPERATORS_CHEATSHEET.md")
-        )
+        reference = operator_reference()
         fields = [
             {"id": f"field_{index}", "description": "已核验经济字段", "type": "MATRIX",
              "semantic_status": "KNOWN", "frequency": "daily", "category": "market",
@@ -219,7 +233,8 @@ class TestFactoryBatchContract(unittest.TestCase):
             fields, reference, target=100,
         )
         with tempfile.TemporaryDirectory() as tmp:
-            agent = Agent(object(), {"simulation": {}, "agent": {"state_dir": tmp}})
+            client = SimpleNamespace(get_operator_capability=lambda: reference)
+            agent = Agent(client, {"simulation": {}, "agent": {"state_dir": tmp}})
             agent.simulator.run = Mock()
             path = os.path.join(tmp, "proposals.json")
             with open(path, "w", encoding="utf-8") as handle:

@@ -77,8 +77,7 @@ class TrialLedger:
         if delegation is not None:
             if not isinstance(delegation, StateMutationDelegation):
                 raise TypeError("delegation must be a StateMutationDelegation")
-            delegation.validate(state_dir)
-            return nullcontext()
+            return delegation.authorization(state_dir)
         return single_instance_scope(state_dir, operation)
 
     def _history_completeness_unlocked(self, trajectory_path):

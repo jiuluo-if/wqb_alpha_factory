@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
 
 from wqb_agent.research_api import (
     ExperimentSpec,
@@ -110,10 +111,26 @@ class TestResearchApi(unittest.TestCase):
         self.assertEqual(result["status"], "RUNNING")
         self.assertEqual(client.urls, [("https://brain.example/progress/1", 12)])
 
-    def test_operator_reference_is_read_from_the_checked_in_table(self):
-        reference = get_operator_reference()
+    def test_operator_reference_requires_a_live_client(self):
+        with self.assertRaises(RuntimeError):
+            get_operator_reference()
+
+    def test_operator_syntax_reference_is_explicitly_static(self):
+        from wqb_agent.research_api import get_operator_syntax_reference
+
+        reference = get_operator_syntax_reference()
         self.assertTrue(reference["sha256"])
         self.assertIn("rank", reference["operators"])
+        self.assertEqual(reference["source"], "STATIC_SYNTAX_REFERENCE")
+        self.assertEqual(reference["availability"], "UNKNOWN")
+
+    def test_operator_reference_uses_client_capability(self):
+        client = SimpleNamespace(get_operator_capability=lambda: {
+            "key": "operators", "status": "LIVE_VERIFIED",
+            "availability": "AVAILABLE", "source": "BRAIN_LIVE_ONLY",
+            "operators": ["rank"], "capability_fingerprint": "fp",
+        })
+        self.assertEqual(get_operator_reference(client=client)["operators"], ["rank"])
 
     def test_state_queries_are_small_and_composable(self):
         with tempfile.TemporaryDirectory() as directory:

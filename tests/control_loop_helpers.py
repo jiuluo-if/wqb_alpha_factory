@@ -181,7 +181,10 @@ def _factory_agent(tmp):
                 "id": "h1", "statement": "test", "datasets": ["d1"]
             },
             "fields": [],
-            "operator_reference": {},
+            "operator_reference": {
+                "operators": ["rank"], "status": "LIVE_VERIFIED",
+                "availability": "AVAILABLE", "source": "BRAIN_LIVE_ONLY",
+            },
             "field_source": {"kind": "brain_api", "snapshot_date": "today"},
         }),
         run_proposals=Mock(return_value=None),

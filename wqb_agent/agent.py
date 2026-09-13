@@ -44,7 +44,7 @@ from .pre_correlation import (
 )
 from .proposal_contract import (
     SETTING_OVERRIDES,
-    _operator_reference,
+    load_operator_syntax_reference,
 )
 from .proposal_execution import ProposalExecutionHooks
 from .research_evidence import ResearchEvidenceBundle, classify_research
@@ -147,7 +147,7 @@ class Agent:
                 "OPERATORS_CHEATSHEET.md",
             )
         )
-        self.operator_reference = _operator_reference(operator_path)
+        self.operator_reference = load_operator_syntax_reference(operator_path)
         self._init_workflows()
 
     def _mutation_scope(self, operation):
@@ -324,6 +324,20 @@ class Agent:
         )
         return (max(rounds) + 1) if rounds else 1
 
+    def refresh_operator_capability(self):
+        """Refresh the transient operator view through the existing client GET."""
+        reader = getattr(getattr(self, "client", None), "get_operator_capability", None)
+        if not callable(reader):
+            return getattr(self, "operator_reference", None)
+        capability = reader()
+        reference = getattr(self, "operator_reference", None)
+        if not isinstance(reference, dict):
+            return capability
+        if isinstance(capability, dict):
+            reference.clear()
+            reference.update(capability)
+        return reference
+
     EPOCH_START = 619  # r619 起启用新纪元标签（用户 2026-08-22 政策）
 
     def epoch_label(self, round_no):
@@ -336,6 +350,7 @@ class Agent:
 
     def run_suggestion_round(self, round_no=None):
         """Compatibility facade for read-only suggestion generation."""
+        self.refresh_operator_capability()
         return self.suggestion_workflow.run(round_no=round_no)
 
     def optimizable_signal_records(self, limit=128):
@@ -471,6 +486,9 @@ class Agent:
         """Compatibility facade for the guarded proposal workflow."""
         try:
             with self._mutation_scope("run-proposals") as owner:
+                # Refresh before new validation; checkpoint recovery remains
+                # read-only and never creates a second Simulation submission.
+                self.refresh_operator_capability()
                 self.proposal_execution.update_agent_config(
                     factory_batch_size=self.factory_batch_size,
                     min_factory_datasets=self.min_factory_datasets,

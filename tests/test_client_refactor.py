@@ -156,6 +156,17 @@ class TestPollProgressRejectsErrorStatus(unittest.TestCase):
                 c.poll_progress("/simulations/abc", timeout_sec=60)
 
 
+class TestOperatorCapabilityClient(unittest.TestCase):
+    def test_operator_capability_uses_get_request_and_live_truth(self):
+        c = make_client()
+        c._local.session = FakeSession([
+            FakeResponse(200, headers={}, payload={"operators": [{"name": "rank"}]})
+        ])
+        result = c.get_operator_capability()
+        self.assertEqual(result["status"], "LIVE_VERIFIED")
+        self.assertEqual(result["availability"], "AVAILABLE")
+
+
 class TestFetchCorrelations(unittest.TestCase):
     """The diagnostic script must use the client's public correlation adapter."""
 

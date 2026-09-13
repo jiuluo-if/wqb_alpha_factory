@@ -8,6 +8,8 @@ as probes/fixtures only and never become production dependencies implicitly.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -139,8 +141,17 @@ def validate_fixture_payload(key, payload):
             yearly = payload["is"].get("yearlyData")
         if not isinstance(yearly, list):
             return False, ["yearlyData 必须是数组"]
-    if key == "operators" and not isinstance(payload.get("operators"), list):
-        return False, ["operators 必须是数组"]
+    if key == "operators":
+        operators = payload.get("operators")
+        if not isinstance(operators, list):
+            return False, ["operators 必须是数组"]
+        if any(
+            not isinstance(item, dict)
+            or not isinstance(item.get("name"), str)
+            or not item["name"].strip()
+            for item in operators
+        ):
+            return False, ["operators 每项必须包含非空 name"]
     if key == "alpha_check" and not isinstance(payload.get("checks"), list):
         return False, ["checks 必须是数组"]
     if key == "pnl" and not isinstance(payload.get("pnl"), list):
@@ -160,7 +171,8 @@ def fixture_capability(key, payload):
         "key": key,
         "status": CapabilityStatus.FIXTURE_VERIFIED.value if ok else CapabilityStatus.UNKNOWN.value,
         "evidence_status": "INCONCLUSIVE" if ok else EvidenceStatus.UNAVAILABLE.value,
-        "availability": "AVAILABLE" if ok else "UNAVAILABLE",
+        # Fixtures can verify a shape, never the current account capability.
+        "availability": "UNKNOWN" if ok else "UNAVAILABLE",
         "quality": "VERIFIED" if ok else None,
         "decision": "INCONCLUSIVE" if ok else "INCONCLUSIVE",
         "source": "fixture",
@@ -189,28 +201,36 @@ def probe_capability_response(key, status_code, payload=None):
         code = 0
     if 200 <= code < 300:
         valid, errors = validate_fixture_payload(key, payload or {})
-        return {
+        result = {
             "key": key,
             "status": CapabilityStatus.LIVE_VERIFIED.value if valid else CapabilityStatus.UNKNOWN.value,
             "evidence_status": "INCONCLUSIVE" if valid else EvidenceStatus.UNAVAILABLE.value,
             "availability": "AVAILABLE" if valid else "UNAVAILABLE",
             "quality": "VERIFIED" if valid else None,
             "decision": "INCONCLUSIVE",
-            "source": "live_probe",
+            "source": "BRAIN_LIVE_ONLY",
             "valid": valid,
             "errors": errors,
             "endpoint": truth.path,
         }
+        if valid and key == "operators":
+            names = sorted({item["name"].strip() for item in payload["operators"]})
+            result["operators"] = names
+            result["capability_fingerprint"] = hashlib.sha256(
+                json.dumps(names, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            result["sha256"] = result["capability_fingerprint"]
+        return result
+    # A community-observed endpoint describes provenance only.  A rejected
+    # response is not evidence that the current account has the capability.
     return {
         "key": key,
-        "status": (truth.status.value if truth.status == CapabilityStatus.COMMUNITY_OBSERVED
-                   else CapabilityStatus.UNKNOWN.value),
-        "evidence_status": (EvidenceStatus.APPROXIMATE.value if truth.status == CapabilityStatus.COMMUNITY_OBSERVED
-                             else EvidenceStatus.UNAVAILABLE.value),
-        "availability": "AVAILABLE" if truth.status == CapabilityStatus.COMMUNITY_OBSERVED else "UNAVAILABLE",
-        "quality": "APPROXIMATE" if truth.status == CapabilityStatus.COMMUNITY_OBSERVED else None,
+        "status": CapabilityStatus.UNKNOWN.value,
+        "evidence_status": EvidenceStatus.UNAVAILABLE.value,
+        "availability": "UNKNOWN",
+        "quality": None,
         "decision": "INCONCLUSIVE",
-        "source": "live_probe",
+        "source": "BRAIN_LIVE_ONLY",
         "valid": False,
         "errors": [f"HTTP {code}"],
         "endpoint": truth.path,

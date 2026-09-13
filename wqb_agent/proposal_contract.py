@@ -349,8 +349,8 @@ def factory_batch_stats(proposals, feasibility=None, budget=None):
     return stats
 
 
-def _operator_reference(path):
-    """Read the checked-in operator table and produce proposal evidence."""
+def load_operator_syntax_reference(path):
+    """Load evergreen syntax hints; never assert current availability."""
     with open(path, encoding="utf-8") as handle:
         text = handle.read()
     operators = sorted(set(re.findall(r"`([a-z][a-z0-9_]*)\s*\(", text)))
@@ -358,7 +358,16 @@ def _operator_reference(path):
         "path": os.path.abspath(path),
         "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
         "operators": operators,
+        "source": "STATIC_SYNTAX_REFERENCE",
+        "availability": "UNKNOWN",
+        "status": "UNKNOWN",
+        "evidence_status": "UNAVAILABLE",
     }
+
+
+def _operator_reference(path):
+    """Compatibility alias for the static syntax reference loader."""
+    return load_operator_syntax_reference(path)
 
 
 def _expression_operators(expression):
@@ -534,6 +543,15 @@ def validate_proposal(p, discovered_fields=None, strict_experiment=False,
             if unknown:
                 problems.append(f"表达式含本轮 discovery 未确认的字段/标识符: {unknown}")
             if require_research_evidence:
+                if isinstance(operator_reference, dict) and "source" in operator_reference:
+                    if not (
+                        operator_reference.get("status") == "LIVE_VERIFIED"
+                        and operator_reference.get("availability") == "AVAILABLE"
+                        and operator_reference.get("source") == "BRAIN_LIVE_ONLY"
+                    ):
+                        problems.append(
+                            "operator_reference 必须来自当前 BRAIN LIVE capability，静态/fixture evidence 不足"
+                        )
                 basis = p.get("field_hypothesis_basis")
                 if not isinstance(basis, dict):
                     problems.append("field_hypothesis_basis 必须逐字段引用真实 description 并说明机制")

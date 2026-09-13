@@ -58,9 +58,15 @@ def operator_reference():
     root = os.path.dirname(os.path.dirname(__file__))
     from wqb_agent.proposal_contract import _operator_reference
 
-    return _operator_reference(
+    reference = _operator_reference(
         os.path.join(root, "docs", "reference", "OPERATORS_CHEATSHEET.md")
     )
+    reference.update({
+        "source": "BRAIN_LIVE_ONLY", "status": "LIVE_VERIFIED",
+        "availability": "AVAILABLE", "valid": True,
+        "capability_fingerprint": reference["sha256"],
+    })
+    return reference
 
 
 def semantic_field(field_id, description, *, dataset="research1",
@@ -195,6 +201,9 @@ class FakeClient:
         self._active = 0
         self._lock = threading.Lock()
         self.datafield_calls = []
+
+    def get_operator_capability(self):
+        return operator_reference()
 
     def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
         self.datafield_calls.append((dataset_id, limit, offset))

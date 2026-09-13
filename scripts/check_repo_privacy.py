@@ -81,6 +81,12 @@ CONTENT_RULES: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ),
 )
 
+OPERATOR_REFERENCE_HISTORY_RULES: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)\b(?:trajectory|campaign|round[_ -]?\d+|historical|usage\s+count|real\s+simulation)\b"),
+    re.compile(r"(?i)\b(?:sharpe|fitness|turnover)\s*[:=]\s*\d"),
+    re.compile(r"(?:甜点|充分探索|历史失败样本|使用状态|可探索)"),
+)
+
 _PLACEHOLDER_MARKERS = (
     "os.environ",
     "getenv",
@@ -162,6 +168,19 @@ def _scan_line(relative: str, number: int, line: str) -> list[Finding]:
                 excerpt=match.group(0)[:120],
             )
         )
+    if relative.replace("\\", "/") == "docs/reference/OPERATORS_CHEATSHEET.md":
+        for pattern in OPERATOR_REFERENCE_HISTORY_RULES:
+            if pattern.search(line):
+                findings.append(
+                    Finding(
+                        code="OPERATOR_REFERENCE_RESEARCH_HISTORY",
+                        path=relative,
+                        line=number,
+                        detail="tracked operator reference must contain syntax only",
+                        excerpt=line[:120],
+                    )
+                )
+                break
     return findings
 
 
