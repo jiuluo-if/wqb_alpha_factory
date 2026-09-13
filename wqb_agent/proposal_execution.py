@@ -115,6 +115,20 @@ class ProposalExecutionWorkflow:
         """Refresh compatibility configuration changed after composition."""
         self.context = replace(self.context, **values)
 
+    @staticmethod
+    def _rejection_reason_counts(rejected, skipped, diversity_rejected,
+                                 settings_rejected, budget_rejected):
+        """Return a bounded transient histogram using existing public categories."""
+        return {
+            key: count for key, count in {
+                "PREFLIGHT_REJECTED": len(rejected),
+                "DUPLICATE_LOCAL": len(skipped),
+                "DIVERSITY_REJECTED": len(diversity_rejected),
+                "INVALID_SETTINGS": len(settings_rejected),
+                "BATCH_CAP": len(budget_rejected),
+            }.items() if count
+        }
+
     @property
     def _ctx(self):
         return self.context
@@ -272,6 +286,13 @@ class ProposalExecutionWorkflow:
                 print("[FACTORY BATCH BLOCKED] 整批不满足 100 题案契约：")
                 for problem in batch_errors:
                     print(f"  - {problem}")
+                self.last_run_stats = {
+                    "accepted": 0,
+                    "rejected": len(batch_errors),
+                    "skipped": 0,
+                    "status": "FACTORY_BATCH_BLOCKED",
+                    "rejection_reason_counts": {"FACTORY_BATCH_REJECTED": len(batch_errors)},
+                }
                 return None
         targeted_batch = payload.get("batch_type") == TARGETED_BATCH_TYPE
         if targeted_batch:
@@ -637,6 +658,9 @@ class ProposalExecutionWorkflow:
                     "diversity": len(diversity_rejected), "settings": len(settings_rejected),
                     "budget": len(budget_rejected),
                 },
+                "rejection_reason_counts": self._rejection_reason_counts(
+                    rejected, skipped, diversity_rejected, settings_rejected, budget_rejected
+                ),
             }
             return None
 
@@ -684,6 +708,9 @@ class ProposalExecutionWorkflow:
                     "diversity": len(diversity_rejected), "settings": len(settings_rejected),
                     "budget": len(budget_rejected),
                 },
+                "rejection_reason_counts": self._rejection_reason_counts(
+                    rejected, skipped, diversity_rejected, settings_rejected, budget_rejected
+                ),
             }
             if rejected and not skipped:
                 print("所有提案均未通过生产预检；请补齐字段、字段画像、算子证据、实验阶段和谱系元数据后重试。")

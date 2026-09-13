@@ -200,6 +200,20 @@ class TestRuntimeConfigBoundary(unittest.TestCase):
                 },
             }})
 
+    def test_factory_retry_governance_parameters_are_typed_and_validated(self):
+        config = parse_config({"simulation": {}, "agent": {"factory": {
+            "max_route_attempts": 0,
+            "max_no_gain_attempts": 1,
+            "blocker_recheck_sec": 12.5,
+        }}})
+        self.assertEqual(config.runtime.factory["max_route_attempts"], 0)
+        self.assertEqual(config.runtime.factory["max_no_gain_attempts"], 1)
+        self.assertEqual(config.runtime.factory["blocker_recheck_sec"], 12.5)
+        for key, value in (("max_route_attempts", -1), ("max_no_gain_attempts", 0),
+                           ("blocker_recheck_sec", "NaN"), ("blocker_recheck_sec", -1)):
+            with self.assertRaises(ValueError):
+                parse_config({"simulation": {}, "agent": {"factory": {key: value}}})
+
     def test_agent_typed_config_does_not_round_trip_through_legacy_dict(self):
         typed = parse_config({"simulation": {"neutralization": "SUBINDUSTRY"}, "agent": {}})
         agent = Agent(object(), typed)

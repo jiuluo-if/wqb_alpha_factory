@@ -13,6 +13,7 @@ day-long process reuses the same canonical artifacts instead of creating one
 control file per pass.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -51,6 +52,127 @@ class AIFactoryRunner:
 
     SESSION_FILE = "factory_session.json"
     CHECKPOINT_CACHE_MAX = 512
+    BLOCKER_RECHECK_SEC = 3600.0
+
+    @staticmethod
+    def _safe_control_token(value, default="UNKNOWN"):
+        """Keep blocker fingerprints to bounded public control-plane tokens."""
+        if isinstance(value, dict):
+            value = value.get("status") or value.get("state") or value.get("availability")
+        if not isinstance(value, (str, int, float, bool)):
+            return default
+        token = str(value).strip().upper()
+        return token[:80] if token else default
+
+    @staticmethod
+    def _safe_nonnegative_count(value):
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError, OverflowError):
+            return 0
+
+    def _blocker_signature(kind, probe):
+        """Hash only bounded control-plane classes, never research payloads."""
+        probe = probe if isinstance(probe, dict) else {}
+        raw_counts = probe.get("rejection_reason_counts")
+        counts = raw_counts if isinstance(raw_counts, dict) else {}
+        safe = {
+            "kind": AIFactoryRunner._safe_control_token(kind),
+            "failure_taxonomy": AIFactoryRunner._safe_control_token(
+                probe.get("failure_taxonomy")
+            ),
+            "frequency_evidence": AIFactoryRunner._safe_control_token(
+                probe.get("frequency_evidence")
+            ),
+            "capability_status": AIFactoryRunner._safe_control_token(
+                probe.get("capability_status")
+            ),
+            "shortage_reason": AIFactoryRunner._safe_control_token(
+                probe.get("budget_shortage_reason"), default="NONE"
+            ),
+            "shortage_count": AIFactoryRunner._safe_nonnegative_count(
+                probe.get("budget_shortage_count")
+            ),
+            "rejection_reason_counts": dict(sorted(
+                (AIFactoryRunner._safe_control_token(key),
+                 AIFactoryRunner._safe_nonnegative_count(value))
+                for key, value in counts.items()
+                if AIFactoryRunner._safe_nonnegative_count(value) > 0
+            )),
+        }
+        return hashlib.sha256(
+            json.dumps(safe, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
+    @classmethod
+    def _blocker_projection(cls, kind, probe, *, now, previous=None, recheck_sec=None):
+        previous = previous if isinstance(previous, dict) else {}
+        signature = cls._blocker_signature(kind, probe)
+        same = previous.get("signature") == signature and previous.get("kind") == kind
+        try:
+            consecutive = int(previous.get("consecutive_same_count", 0)) if same else 0
+        except (TypeError, ValueError):
+            consecutive = 0
+        interval = cls.BLOCKER_RECHECK_SEC if recheck_sec is None else float(recheck_sec)
+        return {
+            "kind": str(kind),
+            "signature": signature,
+            "consecutive_same_count": consecutive + 1,
+            "first_seen_at": previous.get("first_seen_at", now) if same else now,
+            "last_seen_at": now,
+            "next_recheck_at": now + max(0.0, interval),
+            "resume_hint": "等待上游 control-plane evidence 更新后重试一次",
+        }
+
+    @staticmethod
+    def _control_probe(probe, stats=None):
+        result = dict(probe) if isinstance(probe, dict) else {}
+        if isinstance(stats, dict):
+            result["rejection_reason_counts"] = dict(stats.get("rejection_reason_counts") or {})
+            result["failure_taxonomy"] = stats.get("status") or result.get("failure_taxonomy")
+        bounded = {
+            "failure_taxonomy": AIFactoryRunner._safe_control_token(
+                result.get("failure_taxonomy")
+            ),
+            "frequency_evidence": AIFactoryRunner._safe_control_token(
+                result.get("frequency_evidence")
+            ),
+            "capability_status": AIFactoryRunner._safe_control_token(
+                result.get("capability_status")
+            ),
+            "budget_shortage_reason": AIFactoryRunner._safe_control_token(
+                result.get("budget_shortage_reason"), default="NONE"
+            ),
+            "budget_shortage_count": AIFactoryRunner._safe_nonnegative_count(
+                result.get("budget_shortage_count")
+            ),
+            "rejection_reason_counts": {
+                AIFactoryRunner._safe_control_token(key):
+                AIFactoryRunner._safe_nonnegative_count(value)
+                for key, value in (
+                    result.get("rejection_reason_counts")
+                    if isinstance(result.get("rejection_reason_counts"), dict)
+                    else {}
+                ).items()
+                if AIFactoryRunner._safe_nonnegative_count(value) > 0
+            },
+        }
+        return {
+            key: bounded[key]
+            for key in (
+                "failure_taxonomy", "frequency_evidence", "capability_status",
+                "budget_shortage_reason", "budget_shortage_count",
+                "rejection_reason_counts",
+            )
+            if key in result or key == "failure_taxonomy"
+        }
+
+    def _remember_blocker(self, session, kind, probe, now):
+        config = getattr(self.agent, "factory_config", {}) or {}
+        session["blocker"] = self._blocker_projection(
+            kind, probe, now=now, previous=session.get("blocker"),
+            recheck_sec=config.get("blocker_recheck_sec", self.BLOCKER_RECHECK_SEC),
+        )
 
     @staticmethod
     def route_decision(previous_probe, current_probe, *, route_attempt,
@@ -78,11 +200,18 @@ class AIFactoryRunner:
         ):
             if set(current_probe.get(key) or ()) != set(previous_probe.get(key) or ()):
                 changes.append(name)
+        for key in ("failure_taxonomy", "frequency_evidence", "capability_status",
+                    "rejection_reason_counts", "budget_shortage_reason", "budget_shortage_count"):
+            if key in previous_probe and key in current_probe:
+                if current_probe.get(key) != previous_probe.get(key):
+                    changes.append(key)
         if candidate_changed:
             changes.insert(0, "candidate_change")
         information_gain = bool(
             any(item in changes for item in
-                ("semantic_change", "relationship_change", "dataset_change", "question_change"))
+                ("semantic_change", "relationship_change", "dataset_change", "question_change",
+                 "failure_taxonomy", "frequency_evidence", "capability_status",
+                 "rejection_reason_counts", "budget_shortage_reason", "budget_shortage_count"))
             if new_metadata else changes
         )
         next_no_gain = 0 if information_gain else int(no_gain_attempts) + 1
@@ -203,6 +332,7 @@ class AIFactoryRunner:
             "schema_version", "session_id", "started_at", "deadline", "status",
             "stop_requested", "rounds_completed", "simulations_reserved",
             "simulation_cap", "quota", "last_round", "last_action", "last_result",
+            "blocker",
         )
         view = {key: session[key] for key in keys if key in session}
         if isinstance(view.get("quota"), dict):
@@ -220,6 +350,14 @@ class AIFactoryRunner:
                 for key in ("round_no", "proposals", "summary_round", "verdicts", "best",
                             "status", "error_type", "message")
                 if key in view["last_result"]
+            }
+        if isinstance(view.get("blocker"), dict):
+            view["blocker"] = {
+                key: view["blocker"].get(key)
+                for key in (
+                    "kind", "consecutive_same_count", "next_recheck_at", "resume_hint",
+                )
+                if key in view["blocker"]
             }
         return view
 
@@ -357,6 +495,48 @@ class AIFactoryRunner:
                 "last_action": "INVALID_SESSION",
                 "last_result": {"status": "INVALID_SESSION"},
             }
+        if session and session.get("status") == "STOPPED" and isinstance(session.get("blocker"), dict):
+            blocker = session["blocker"]
+            try:
+                recheck_at = float(blocker.get("next_recheck_at"))
+            except (TypeError, ValueError):
+                recheck_at = now
+            if now < recheck_at:
+                session["last_action"] = "BLOCKER_COOLDOWN"
+                session["last_result"] = {
+                    "status": "BLOCKED_RECHECK_NOT_DUE",
+                    "blocker_kind": blocker.get("kind"),
+                    "next_recheck_at": blocker.get("next_recheck_at"),
+                    "resume_hint": blocker.get("resume_hint"),
+                }
+                self._save_session(session)
+                return session
+            recheck = self._recheck_blocker(blocker)
+            if not recheck.get("changed"):
+                updated = dict(blocker)
+                updated["consecutive_same_count"] = int(
+                    blocker.get("consecutive_same_count", 0)
+                ) + 1
+                updated["last_seen_at"] = now
+                updated["next_recheck_at"] = now + max(
+                    0.0, float((getattr(self.agent, "factory_config", {}) or {}).get(
+                        "blocker_recheck_sec", self.BLOCKER_RECHECK_SEC
+                    ))
+                )
+                session["blocker"] = updated
+                session["status"] = "STOPPED"
+                session["last_action"] = f"STOP_{blocker.get('kind', 'BLOCKER')}"
+                session["last_result"] = {
+                    "status": "BLOCKER_UNCHANGED",
+                    "blocker_kind": updated["kind"],
+                    "next_recheck_at": updated["next_recheck_at"],
+                }
+                self._save_session(session)
+                return session
+            session.pop("blocker", None)
+            session["status"] = "RUNNING"
+            session["route_attempt"] = 0
+            session["no_gain_attempts"] = 0
         # A transport-reconciliation terminal state is a safety boundary, not
         # an invitation to silently mint a new session. Starting over here
         # could re-POST an operation whose outcome was never reconciled.
@@ -731,6 +911,7 @@ class AIFactoryRunner:
                         }
                         self._save_session(session)
                         if decision["action"] == "STOP":
+                            self._remember_blocker(session, "FEASIBILITY", feasibility, self._clock())
                             session["status"] = "STOPPED"
                             self._save_session(session)
                             break
@@ -812,6 +993,7 @@ class AIFactoryRunner:
                     }
                     self._save_session(session)
                     if decision["action"] == "STOP":
+                        self._remember_blocker(session, "BUDGET_SHORTAGE", budget_probe, self._clock())
                         session["status"] = "STOPPED"
                         self._save_session(session)
                         break
@@ -916,6 +1098,36 @@ class AIFactoryRunner:
                 # candidate set.  Counting this as a completed round used to
                 # busy-loop on the same proposals and falsely consume the
                 # factory's round budget.
+                stats = getattr(self.agent, "last_run_stats", {}) or {}
+                agent_status = stats.get("status") if isinstance(stats, dict) else None
+                if agent_status in {"PREFLIGHT_BLOCKED", "FACTORY_BATCH_BLOCKED"}:
+                    preflight_probe = self._control_probe({}, stats)
+                    config = getattr(self.agent, "factory_config", {}) or {}
+                    decision = self.route_decision(
+                        session.get("last_preflight_probe"), preflight_probe,
+                        route_attempt=session.get("route_attempt", 0),
+                        no_gain_attempts=session.get("no_gain_attempts", 0),
+                        max_route_attempts=config.get("max_route_attempts", 3),
+                        max_no_gain_attempts=config.get("max_no_gain_attempts", 2),
+                    )
+                    session["last_preflight_probe"] = preflight_probe
+                    session["route_attempt"] = decision["route_attempt"] + 1
+                    session["no_gain_attempts"] = decision["no_gain_attempts"]
+                    if decision["action"] == "STOP":
+                        self._quota_release(session, quota, len(proposals))
+                        self._remember_blocker(session, "PREFLIGHT", preflight_probe, self._clock())
+                        session["status"] = "STOPPED"
+                        session["last_action"] = "STOP_PREFLIGHT_BLOCKER"
+                        session["last_result"] = {
+                            "round_no": round_no,
+                            "proposals": len(proposals),
+                            "status": agent_status,
+                            "agent_status": agent_status,
+                            "rejection_reason_counts": preflight_probe.get("rejection_reason_counts", {}),
+                            "route_decision": decision,
+                        }
+                        self._save_session(session)
+                        break
                 self._quota_release(session, quota, len(proposals))
                 session["probe_offset"] = probe_offset + 1
                 session["last_action"] = "WAIT_RUN_PROPOSALS"
@@ -923,12 +1135,13 @@ class AIFactoryRunner:
                     "round_no": round_no,
                     "proposals": len(proposals),
                     "status": "RUN_PROPOSALS_NOT_EXECUTED",
-                    "agent_status": (
-                        getattr(self.agent, "last_run_stats", {}) or {}
-                    ).get("status"),
+                    "agent_status": agent_status,
                     "rejection_counts": (
                         getattr(self.agent, "last_run_stats", {}) or {}
-                    ).get("rejection_counts"),
+                    ).get("rejection_counts") if isinstance(stats, dict) else None,
+                    "rejection_reason_counts": (
+                        stats.get("rejection_reason_counts") if isinstance(stats, dict) else None
+                    ),
                 }
                 self._save_session(session)
                 self._bounded_sleep(idle, session["deadline"])
@@ -947,6 +1160,24 @@ class AIFactoryRunner:
         session["finished_at"] = self._clock()
         self._save_session(session)
         return session
+
+    def _recheck_blocker(self, blocker):
+        """Perform one optional bounded control-plane recheck, never a POST."""
+        hook = getattr(self.agent, "recheck_factory_blocker", None)
+        if not callable(hook):
+            hook = getattr(self.factory, "recheck_blocker", None)
+        if not callable(hook):
+            return {"changed": False, "probe": {}}
+        result = hook({
+            "kind": blocker.get("kind"),
+            "signature": blocker.get("signature"),
+        })
+        if not isinstance(result, dict):
+            return {"changed": False, "probe": {}}
+        return {
+            "changed": bool(result.get("changed")),
+            "probe": self._control_probe(result.get("probe")),
+        }
 
     @staticmethod
     def _checkpoint_round(path):

@@ -449,6 +449,18 @@ def parse_config(raw):
         )
     else:
         factory_settings["idle_sleep_sec"] = 30.0
+    factory_settings["max_route_attempts"] = _int_in_range(
+        factory_settings.get("max_route_attempts", 3),
+        key="config.agent.factory.max_route_attempts", minimum=0,
+    )
+    factory_settings["max_no_gain_attempts"] = _int_in_range(
+        factory_settings.get("max_no_gain_attempts", 2),
+        key="config.agent.factory.max_no_gain_attempts", minimum=1,
+    )
+    factory_settings["blocker_recheck_sec"] = _finite_float(
+        factory_settings.get("blocker_recheck_sec", 3600.0),
+        key="config.agent.factory.blocker_recheck_sec", minimum=0.0,
+    )
     research_allocation_raw = dict(agent.get("research_allocation") or {})
     statistical_policy = dict(agent.get("statistical_policy") or {})
     robustness_policy = dict(agent.get("robustness_policy") or {})

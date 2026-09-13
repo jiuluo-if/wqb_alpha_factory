@@ -10,7 +10,7 @@
 | 原始证据 | `trajectory.jsonl`（Trajectory owner 的 append-only canonical 证据）；`trial_ledger` 仍是进程内视图 | 已确认 Experiment 的研究证据：metrics、checks、field audit、hypothesis、economic mechanism；同一 `id` 可有 canonical 首行 + `RESEARCH_SETTLED` 结算 revision | `trajectory.jsonl` 由既有 owner 追加 revision 并在新进程只读 rehydrate（latest valid revision wins）；ledger 不落盘；远程未完成状态只由 checkpoint 恢复 |
 | 执行恢复 | `round_*.checkpoint.json`、`run.lock`（POSIX 另有 OS guard） | 提交状态、progress URL、锁和崩溃恢复依据 | OS owner 存活或存在未完成 checkpoint 时禁止新轮和移动 |
 | 当前工作项 | `suggestions.json`、`proposals.json` | 当前 discovery 证据包与待执行提案；长时工厂复用同一 inbox | 只由规定流程生成/审阅；逻辑内容不变不重写 |
-| 工厂控制面 | `factory_session.json` | 单个长时 session 的 deadline、最近动作、`stop_requested` 和本地配额控制元数据 | 固定单文件；阶段配额为每周 11200、每日 1600（纽约本地日刷新）；`factory status` 只读，`factory stop` 原子请求安全停止；不按轮次复制 session/log |
+| 工厂控制面 | `factory_session.json` | 单个长时 session 的 deadline、最近动作、`stop_requested`、本地配额和 bounded blocker retry guard | 固定单文件；blocker 仅为去私有化 control-plane projection，不保存研究 payload，也不创建第二 state store；阶段配额为每周 11200、每日 1600（纽约本地日刷新）；`factory status` 只读，`factory stop` 原子请求安全停止；不按轮次复制 session/log |
 | 当日结果视图 | 进程内 `DailyResearchCache` | 当前进程内的模拟结果、Alpha 和颜色视图 | 跨纽约本地日自动清空；不写研究状态 |
 | 滚动 7 日 Alpha 元数据缓存 | `.alpha_feed_cache/weekly.json` | 远端提交/模拟 Alpha 的轻量 ID、状态、时间戳，按纽约本地日分桶 | 保留当前工作日前推 7 个自然日；`updated_at`/`expires_at`；模拟元数据上限 `11200（7*1600）`；每次同步清理窗口外和过期资源 |
 | 结果/提交侧车 | 不再生成 `sims_results.json`、`submission_pool.json`、`evidence_cache.json`、颜色 evidence | 模拟结果、提交证据和颜色判定的临时视图 | 只在当日进程内存中存在；远端 Alpha 轻量元数据另按滚动 7 日缓存保存 |

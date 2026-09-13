@@ -390,18 +390,20 @@ class TestFactoryRunnerAccounting(unittest.TestCase):
                 agent, factory=agent.alpha_factory, quiet=True,
                 clock=lambda: now[0], sleeper=sleep,
             ).run(
-                duration_sec=1, idle_sleep_sec=1, max_simulations=11200,
+                duration_sec=3, idle_sleep_sec=1, max_simulations=11200,
                 daily_simulation_cap=1600, weekly_simulation_cap=11200,
             )
 
         self.assertEqual(result["rounds_completed"], 0)
         self.assertEqual(result["simulations_reserved"], 0)
-        self.assertEqual(result["last_action"], "WAIT_RUN_PROPOSALS")
-        self.assertEqual(result["last_result"]["status"], "RUN_PROPOSALS_NOT_EXECUTED")
+        self.assertEqual(result["last_action"], "STOP_PREFLIGHT_BLOCKER")
+        self.assertEqual(result["last_result"]["status"], "PREFLIGHT_BLOCKED")
         self.assertEqual(result["last_result"]["agent_status"], "PREFLIGHT_BLOCKED")
+        self.assertEqual(result["blocker"]["kind"], "PREFLIGHT")
+        self.assertNotIn("expression", result["blocker"])
         self.assertEqual(result["quota"]["daily_cap"], 1600)
         self.assertEqual(result["quota"]["weekly_cap"], 11200)
-        agent.run_proposals.assert_called_once()
+        self.assertEqual(agent.run_proposals.call_count, 2)
 
     def test_checkpoint_recovery_records_the_checkpoint_round_in_session(self):
         with tempfile.TemporaryDirectory() as tmp:
