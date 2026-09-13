@@ -60,6 +60,7 @@ class ExperimentSpec:
     experiment_question: str = ""
     parent_id: str | None = None
     change: Any = None
+    external_evidence_refs: tuple[str, ...] = field(default_factory=tuple)
 
     def __post_init__(self):
         if not isinstance(self.hypothesis, str) or not self.hypothesis.strip():
@@ -70,6 +71,10 @@ class ExperimentSpec:
             self,
             "fields",
             tuple(str(value) for value in (self.fields or ()) if str(value).strip()),
+        )
+        object.__setattr__(
+            self, "external_evidence_refs",
+            tuple(str(value).strip() for value in (self.external_evidence_refs or ()) if str(value).strip()),
         )
         object.__setattr__(self, "settings", dict(self.settings or {}))
 
@@ -87,6 +92,7 @@ class ExperimentSpec:
             experiment_question=value.get("experiment_question", "") or "",
             parent_id=value.get("parent_id"),
             change=value.get("change"),
+            external_evidence_refs=tuple(value.get("external_evidence_refs") or ()),
         )
 
     def to_proposal(self, *, round_no: int = 1, context: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -119,6 +125,7 @@ class ExperimentSpec:
             "round": int(round_no),
             "experiment_stage": context.get("experiment_stage") or ("CHILD" if self.parent_id else "BASELINE"),
             "research_role": context.get("research_role") or ("EXPLOIT" if self.parent_id else "EXPLORE"),
+            "external_evidence_refs": list(self.external_evidence_refs),
         }
         operator_mapping = context.get("operator_mapping") or self.operator_mapping.strip()
         experiment_question = context.get("experiment_question") or self.experiment_question.strip()
@@ -130,6 +137,8 @@ class ExperimentSpec:
             proposal["expected_failure_modes"] = list(context.get("expected_failure_modes") or [])
         if "tuning_risk" in context:
             proposal["tuning_risk"] = bool(context["tuning_risk"])
+        if "external_evidence_refs" in context:
+            proposal["external_evidence_refs"] = list(context.get("external_evidence_refs") or [])
         for key in (
             "datasets", "field_source", "field_understanding", "field_analysis",
             "field_hypothesis_basis", "operator_evidence", "validation_plan",

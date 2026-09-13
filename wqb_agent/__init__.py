@@ -31,7 +31,15 @@ from .optimization_interfaces import (
     diagnose_optimization,
     record_optimization_trial,
 )
-from .research_evidence import ResearchEvidenceBundle, classify_research
+from .research_evidence import (
+    AuthoritativeEvidenceItem,
+    AuthoritativeEvidencePack,
+    ResearchEvidenceBundle,
+    classify_research,
+    stable_source_identity,
+    validate_authoritative_evidence_item,
+    validate_authoritative_evidence_pack,
+)
 from .robustness import RobustnessEvidence, evaluate_robustness, retention
 from .search_calibration import SearchPolicyReplay, build_search_calibration, reward_v2
 from .search_outcome import (
@@ -78,6 +86,11 @@ __all__ = [
     "extract_behavior_series",
     "DiagnosticEvent",
     "ResearchEvidenceBundle",
+    "AuthoritativeEvidenceItem",
+    "AuthoritativeEvidencePack",
+    "stable_source_identity",
+    "validate_authoritative_evidence_item",
+    "validate_authoritative_evidence_pack",
     "classify_research",
     "ClientOptimizationEvidenceProvider",
     "OptimizationEvidenceProvider",

@@ -146,6 +146,11 @@ python main.py run-proposals
 
 ## 修改与验证
 
+### 用户强约束：写入后不执行 CI 全量测试
+
+- 任何会写入仓库或推送的修改，均不得触发或主动等待 CI 全量测试，包括 full suite、coverage、offline doctor、state audit 和 privacy 全量流水线。
+- 写入/推送前只执行与改动直接相关的定向测试、编译、Ruff、`git diff --check` 和必要的离线隐私检查；除非用户另行明确授权，不得以 CI 全量测试作为本轮完成条件。
+
 ### Optimization Agent 专项接口约束
 
 优化 Agent 必须遵循 [`docs/RESEARCH_POLICY.md`](docs/RESEARCH_POLICY.md) 和
@@ -171,7 +176,7 @@ python main.py run-proposals
 
 本地默认采用增量验证：审查 diff，识别直接受影响的行为，运行 1–5 个相关测试方法或测试类、一个最近邻回归、changed Python files 的 `py_compile` 和 Ruff；只有 typed frontier 被改动时才运行对应的 mypy。失败时按 targeted → nearby subsystem → broader contract progressive expansion，普通本地修改默认不跑 whole suite。
 
-改动跨多个 owner、shared helper、proposal/schema、state merge semantics 或 safety contract 时，扩大到相关 module/contract suite；改动 safety contract 必须增加对应行为测试。是否执行本地 full gate 由任务明确要求决定；push 后由 CI 承担 authoritative whole-repository regression。
+改动跨多个 owner、shared helper、proposal/schema、state merge semantics 或 safety contract 时，扩大到相关 module/contract suite；改动 safety contract 必须增加对应行为测试。是否执行本地 full gate 由任务明确要求决定；受“写入后不执行 CI 全量测试”约束时，不触发或等待 CI 全量流水线。
 
 CI authoritative full lane 执行：
 
@@ -192,3 +197,12 @@ CI 中完整测试只在 coverage execution 中运行一次；coverage 与 full 
 质量门采用 Python 3.11 单矩阵。Coverage 只统计 `wqb_agent`，初始 `fail_under=76.0`，阈值只能逐步提高。mypy 仅检查配置、运行时装配、凭据、Suggestion/Alpha Feed/Optimizer/Alpha Color 九个 typed frontier 模块，不对全仓开启 strict。Ruff 在现有规则上增加 import sorting、选定安全 UP 规则和 `B007/B904`，不启用 `ALL`、`SIM` 或 `RUF`。这些质量命令不得触发 live BRAIN、Simulation POST 或 Alpha submission。
 
 提交或推送必须得到用户明确授权；获授权时 Git 邮箱必须为 `2966684515@qq.com`，提交信息必须以 `fix：` 或其他前缀加中文内容。
+
+## 维护与交付强约束
+
+- 维护 Agent 必须先读取本文件、当前任务目标、直接依赖和相关测试；涉及模板或优化时，还必须读取对应目录的局部 `AGENTS.md` 与专项接口约束。
+- 修改完成后按“用户强约束：写入后不执行 CI 全量测试”执行定向离线质量门；不得默认执行 `compileall`、typed frontier `mypy`、全量 `unittest`、coverage 或完整 CI lane。质量命令不得触发 live BRAIN、Simulation POST 或 Alpha submission。
+- 提交前必须复核暂存区，确认真实 Alpha、字段 ID/配对、表达式、指标、轨迹、ExperienceMemory、报告、凭据和私有路径未进入提交；本地研究脚本和状态文件必须保持 ignored。
+- 不得改写 Git 历史、force-push、删除远端分支或把历史研究材料重新放入公开 archive。当前树清理不等于历史清除，历史策略固定为 `HISTORY_REWRITE = NO`。
+- 只有用户明确授权后才能 commit/push。授权推送时必须确认 `git config --local user.email` 为 `2966684515@qq.com`，提交说明使用“英文前缀：中文内容”，推送后复核 `git status`、最新提交和 `git ls-remote origin main`。
+- 若全仓静态检查只命中用户明确保留的本地研究脚本，不得为通过质量门而修改、删除或提交这些脚本；必须在交付报告中列出文件、规则和未修复原因。
