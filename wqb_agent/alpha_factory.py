@@ -35,7 +35,6 @@ __all__ = [
 ]
 
 MAX_TEMPLATE_FAMILY_PER_BATCH = 2
-MAX_TEMPLATE_FAMILY_PER_BATCH = 2
 
 # 参数验证只复用既有 change_type 词表：window / decay / truncation / universe
 # 的变化不是新经济机制，只能进入 ROBUSTNESS。
@@ -419,7 +418,7 @@ class AlphaFactory:
                         for slot, profile in zip(template.required_slots, selected)
                     }
                     values["g"] = self.neutralization
-                    expression = canonical_expression(template.expression.format(**values))
+                    expression = canonical_expression(template.render(values))
                 except (KeyError, ValueError):
                     counts["proposal_contract_rejection_count"] += 1
                     continue
@@ -489,7 +488,8 @@ class AlphaFactory:
             or hypothesis.get("template_ref")
         )
 
-    def generate(self, hypothesis, fields, count=6):
+    def generate(self, hypothesis, fields, count=6, *, operator_mapping=None,
+                 operator_capability=None):
         """Fill a bounded template set from verified field slots.
 
         Field descriptions and type checks remain the responsibility of the
@@ -530,6 +530,10 @@ class AlphaFactory:
         candidates = []
         seen = set()
         for template in self.registry.select(hypothesis):
+            if (template.template_mode == "PARTIAL_OPERATOR"
+                    and (operator_mapping is None
+                         or not self._operator_mappings(template, operator_capability))):
+                continue
             values = {
                 "p": primary,
                 "data_field": primary,
@@ -551,7 +555,7 @@ class AlphaFactory:
             else:
                 relation = None
             try:
-                expression = template.expression.format(**values)
+                expression = template.render(values, operator_mapping)
             except (KeyError, ValueError):
                 continue
             identity = canonical_expression(expression)
@@ -626,6 +630,24 @@ class AlphaFactory:
                     "template_bindings": dict(slot_values),
                     "template_ref": ref,
                     "template_slots": slot_values,
+                    "template_mode": template.template_mode,
+                    "template_branch_of": template.branch_of,
+                    "operator_role": (
+                        template.operator_slots[0].role
+                        if template.operator_slots else None
+                    ),
+                    "operator_role_mapping": (
+                        {template.operator_slots[0].role: next(iter(operator_mapping.values()))}
+                        if template.operator_slots and operator_mapping else {}
+                    ),
+                    "operator_realization_fingerprint": (
+                        template.operator_realization_fingerprint(operator_mapping or {})
+                        if template.operator_slots else None
+                    ),
+                    "operator_capability_fingerprint": (
+                        (operator_capability or {}).get("capability_fingerprint")
+                        if template.operator_slots and isinstance(operator_capability, dict) else None
+                    ),
                     "relationship_audit": relationship_audit,
                     "factory_version": "alpha-factory-v1",
                     "economic_mechanism": self._field_mechanism(
@@ -650,6 +672,17 @@ class AlphaFactory:
 
     def catalog(self):
         return self.registry.catalog()
+
+    @staticmethod
+    def _operator_mappings(template, reference):
+        if template.template_mode != "PARTIAL_OPERATOR":
+            return [{}]
+        if not isinstance(reference, dict) or not AlphaFactory._live_operator_capability(reference):
+            return []
+        live = {str(value) for value in reference.get("operators") or []}
+        slot = template.operator_slots[0]
+        return [{slot.name: operator} for operator in slot.allowed_operators
+                if operator in live]
 
     def operator_coverage(self, available=None):
         """Expose registry coverage without inventing operator usage."""
@@ -1718,11 +1751,20 @@ class AlphaFactory:
                     relation = self._relationship_gate(slot_profiles, template)
                     if relation["admission"] != "ALLOW":
                         continue
-                generated = self.generate(
-                    dict(hypothesis, template_ids=[template_id]),
-                    slot_profiles,
-                    count=1,
-                )
+                mappings = self._operator_mappings(template, operator_reference)
+                generated = []
+                selected_mapping = None
+                for mapping in mappings:
+                    generated = self.generate(
+                        dict(hypothesis, template_ids=[template_id]),
+                        slot_profiles,
+                        count=1,
+                        operator_mapping=mapping,
+                        operator_capability=operator_reference,
+                    )
+                    if generated:
+                        selected_mapping = mapping
+                        break
                 if not generated:
                     continue
                 generated_candidate = generated[0]
@@ -1741,12 +1783,12 @@ class AlphaFactory:
                     continue
                 selected = (
                     template, generated_candidate, actual_ops, slot_profiles,
-                    compatibility, relation,
+                    compatibility, relation, selected_mapping,
                 )
                 break
             if selected is None:
                 continue
-            template, candidate, actual_ops, slot_profiles, compatibility, relation = selected
+            template, candidate, actual_ops, slot_profiles, compatibility, relation, selected_mapping = selected
             field_source = profile.get("field_source") or source_default
             if not isinstance(field_source, dict):
                 field_source = {"kind": "unknown", "path": None, "snapshot_date": None}
@@ -1891,11 +1933,56 @@ class AlphaFactory:
                             "template_allowed_settings_arms",
                             "template_allowed_horizon_profiles")
             })
+            if template.template_mode == "PARTIAL_OPERATOR":
+                slot = template.operator_slots[0]
+                proposal.update({
+                    "template_mode": "PARTIAL_OPERATOR",
+                    "template_branch_of": template.branch_of,
+                    "operator_role": slot.role,
+                    "operator_role_mapping": {
+                        slot.role: next(iter((selected_mapping or {}).values()))
+                    },
+                    "operator_realization_fingerprint": candidate.get(
+                        "operator_realization_fingerprint"
+                    ),
+                    "operator_capability_fingerprint": candidate.get(
+                        "operator_capability_fingerprint"
+                    ),
+                })
             proposal["proposal_origin"] = "factory"
-            assembled.append(proposal)
-            excluded.add(canonical_expression(proposal["expression"]))
+            realization_proposals = [proposal]
+            if template.template_mode == "PARTIAL_OPERATOR":
+                for mapping in self._operator_mappings(template, operator_reference):
+                    if mapping == selected_mapping:
+                        continue
+                    alternative_expression = template.render(
+                        candidate["template_bindings"], mapping
+                    )
+                    alternative = dict(proposal)
+                    alternative["expression"] = alternative_expression
+                    alternative["operator_role_mapping"] = {
+                        slot.role: next(iter(mapping.values()))
+                    }
+                    alternative["operator_realization_fingerprint"] = (
+                        template.operator_realization_fingerprint(mapping)
+                    )
+                    alternative["operator_evidence"] = dict(proposal["operator_evidence"])
+                    alternative["operator_evidence"]["operators"] = list(
+                        analyze_expression(alternative_expression).operators
+                    )
+                    realization_proposals.append(alternative)
+            for realization in realization_proposals:
+                if len(assembled) >= limit:
+                    break
+                if family_counts.get(template.family, 0) >= family_cap:
+                    break
+                expression_key = canonical_expression(realization["expression"])
+                if expression_key in excluded:
+                    continue
+                assembled.append(realization)
+                excluded.add(expression_key)
+                family_counts[template.family] = family_counts.get(template.family, 0) + 1
             used_fields.add(primary_key)
-            family_counts[template.family] = family_counts.get(template.family, 0) + 1
             if len(assembled) >= limit:
                 break
         return assembled
@@ -1935,6 +2022,21 @@ class AlphaFactory:
         }
 
         templates = list(self.registry.economic_templates())
+        explicit_template_ids = hypothesis.get("template_ids") or []
+        if isinstance(explicit_template_ids, str):
+            explicit_template_ids = [explicit_template_ids]
+        partial_opt_in = (
+            hypothesis.get("include_partial_operator_branches") is True
+            or any(
+                self.registry.get(template_id) is not None
+                and self.registry.get(template_id).template_mode == "PARTIAL_OPERATOR"
+                for template_id in explicit_template_ids
+                if isinstance(template_id, str)
+            )
+        )
+        if not partial_opt_in:
+            templates = [template for template in templates
+                         if template.template_mode == "CONCRETE"]
         if not templates:
             self.last_budget_audit = {}
             return []
@@ -2002,26 +2104,29 @@ class AlphaFactory:
                 generated = self.assemble_proposals(
                     dict(hypothesis, template_mode="economic",
                          template_ids=[template.template_id]),
-                    slots, operator_reference, max_candidates=1,
+                    slots, operator_reference, max_candidates=3,
                     excluded_expressions=excluded,
                 )
                 if not generated:
                     continue
-                proposal = generated[0]
-                slot_scope = (
-                    proposal.get("template_id"),
-                    tuple(sorted(str(field) for field in proposal.get("fields", []))),
-                )
-                if slot_scope in seen_slot_scopes:
-                    continue
-                seen_slot_scopes.add(slot_scope)
-                proposal["proposal_origin"] = "factory"
-                proposal["research_layer"] = "exploration"
-                proposal["exploration_objective"] = "signal_discovery"
-                proposal["research_role"] = "EXPLORE"
-                proposal["experiment_stage"] = "BASELINE"
-                exploration_pool.append(proposal)
-                excluded.add(canonical_expression(proposal["expression"]))
+                for proposal in generated:
+                    slot_scope = (
+                        proposal.get("template_id"),
+                        tuple(sorted(str(field) for field in proposal.get("fields", []))),
+                        proposal.get("operator_realization_fingerprint"),
+                    )
+                    if slot_scope in seen_slot_scopes:
+                        continue
+                    seen_slot_scopes.add(slot_scope)
+                    proposal["proposal_origin"] = "factory"
+                    proposal["research_layer"] = "exploration"
+                    proposal["exploration_objective"] = "signal_discovery"
+                    proposal["research_role"] = "EXPLORE"
+                    proposal["experiment_stage"] = "BASELINE"
+                    exploration_pool.append(proposal)
+                    excluded.add(canonical_expression(proposal["expression"]))
+                    if len(exploration_pool) >= pool_limit:
+                        break
         result, self.last_budget_audit = select_budget_candidates(
             exploration_pool, target=limit, context=research_context
         )

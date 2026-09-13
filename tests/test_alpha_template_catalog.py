@@ -3,7 +3,9 @@
 import io
 import unittest
 import zipfile
+from unittest.mock import patch
 
+from wqb_agent.alpha_factory import AlphaFactory
 from wqb_agent.alpha_templates.loader import load_templates
 from wqb_agent.alpha_templates.registry import (
     AlphaTemplateRegistry,
@@ -13,6 +15,85 @@ from wqb_agent.candidate import CandidateBuilder
 
 
 class TestAlphaTemplateCatalog(unittest.TestCase):
+    def test_legacy_concrete_defaults_and_renders_through_owner(self):
+        template = AlphaTemplateRegistry().get("toy_control_rank")
+        self.assertEqual(template.template_mode, "CONCRETE")
+        self.assertEqual(template.render({"p": "toy_field"}), "rank(toy_field)")
+
+    def test_partial_operator_branch_renders_baseline_and_alternative(self):
+        document = _partial_document()
+        loaded = load_templates(io.StringIO(document))
+        branch = next(item for item in loaded if item.template_id == "toy_sync_corr_operator")
+        self.assertEqual(branch.template_mode, "PARTIAL_OPERATOR")
+        self.assertEqual(branch.operator_count, 4)
+        bindings = {"p": "field_a", "s": "field_b"}
+        self.assertEqual(
+            branch.render(bindings, {"relation": "ts_corr"}),
+            "rank(ts_corr(ts_zscore(field_a, 5), ts_zscore(field_b, 5), 22))",
+        )
+        self.assertEqual(branch.mechanism_fingerprint,
+                         loaded[0].mechanism_fingerprint)
+        self.assertNotEqual(
+            branch.operator_realization_fingerprint({"relation": "ts_corr"}),
+            branch.operator_realization_fingerprint({"relation": "ts_covariance"}),
+        )
+        self.assertIn("ts_covariance", branch.operator_slots[0].allowed_operators)
+
+    def test_partial_operator_contract_rejects_missing_parent_or_multiple_slots(self):
+        document = _partial_document().replace(
+            'branch_of = "toy_sync_corr"', 'branch_of = "missing"'
+        ).replace(
+            'allowed_operators = ["ts_corr", "ts_covariance"]',
+            'allowed_operators = ["ts_corr", "ts_covariance", "ts_covariance"]',
+        )
+        with self.assertRaises(ValueError):
+            load_templates(io.StringIO(document))
+
+    def test_factory_uses_only_live_intersection_and_keeps_realizations_linear(self):
+        templates = load_templates(io.StringIO(_partial_document()))
+        factory = AlphaFactory(registry=AlphaTemplateRegistry(templates=templates))
+        fields = [
+            {"id": "field_a", "dataset": "d1", "description": "toy signal",
+             "semantic_status": "KNOWN"},
+            {"id": "field_b", "dataset": "d2", "description": "toy signal",
+             "semantic_status": "KNOWN"},
+        ]
+        live = {"status": "LIVE_VERIFIED", "availability": "AVAILABLE",
+                "source": "BRAIN_LIVE_ONLY",
+                "operators": ["rank", "ts_zscore", "ts_corr"],
+                "capability_fingerprint": "live-1"}
+        with patch.object(factory, "_select_companion_profiles", return_value=[fields[1]]), \
+             patch.object(factory, "_template_semantic_compatibility",
+                          return_value={"admission": "ALLOW", "score": 1}), \
+             patch.object(factory, "_relationship_gate",
+                          return_value={"admission": "ALLOW", "relationship_type": "toy",
+                                        "reasons": [], "slot_assignment_reason": "",
+                                        "frequency_compatibility": {}, "symmetric": True}):
+            one = factory.assemble_proposals(
+                {"id": "toy", "template_ids": ["toy_sync_corr_operator"]},
+                fields, live, max_candidates=8,
+            )
+        self.assertEqual(len(one), 1)
+        self.assertEqual(one[0]["operator_role_mapping"],
+                         {"CO_MOVEMENT_ESTIMATOR": "ts_corr"})
+        self.assertEqual(one[0]["operator_capability_fingerprint"], "live-1")
+        live["operators"].append("ts_covariance")
+        with patch.object(factory, "_select_companion_profiles", return_value=[fields[1]]), \
+             patch.object(factory, "_template_semantic_compatibility",
+                          return_value={"admission": "ALLOW", "score": 1}), \
+             patch.object(factory, "_relationship_gate",
+                          return_value={"admission": "ALLOW", "relationship_type": "toy",
+                                        "reasons": [], "slot_assignment_reason": "",
+                                        "frequency_compatibility": {}, "symmetric": True}):
+            two = factory.assemble_proposals(
+                {"id": "toy", "template_ids": ["toy_sync_corr_operator"]},
+                fields, live, max_candidates=8,
+            )
+        self.assertEqual(len(two), 2)
+        self.assertEqual(
+            {item["operator_role_mapping"]["CO_MOVEMENT_ESTIMATOR"] for item in two},
+            {"ts_corr", "ts_covariance"},
+        )
     def test_builtin_catalog_loads_from_package_resource(self):
         registry = AlphaTemplateRegistry()
         self.assertGreaterEqual(len(registry.catalog()), 5)
@@ -38,6 +119,7 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
             ["toy_confirmation", "toy_dispersion_rank", "toy_pair_spread",
              "toy_quality_backfill", "toy_regression_residual", "toy_relative_change",
              "toy_scale_surprise", "toy_signed_power_risk", "toy_sync_corr",
+             "toy_sync_corr_operator",
              "toy_triple_confirmation"],
         )
         self.assertEqual(
@@ -146,3 +228,114 @@ class TestAlphaTemplatePackaging(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _partial_document():
+    return """
+[[templates]]
+id = "toy_sync_corr"
+version = "2"
+role = "PROBE_ALPHA"
+kind = "economic"
+family = "toy_synchrony"
+expression = "rank(ts_corr(ts_zscore({p}, 5), ts_zscore({s}, 5), 22))"
+required_slots = ["p", "s"]
+stage_path = "toy"
+economic_mechanism = "TOY synchronization probe."
+field_roles = ["signal", "confirmation"]
+allowed_field_families = ["TOY_ONLY"]
+field_relationship = "synchronized toy information"
+direction = "long"
+direction_reason = "TOY direction."
+direction_transform = "identity"
+expected_horizon = "toy horizon"
+falsification = "Toy relation fails."
+self_correlation_impact = "UNKNOWN"
+allowed_horizon_profiles = [[5, 22]]
+allowed_settings_arms = ["BASE"]
+mechanism_tags = ["TOY"]
+novelty_family = "TOY_RELATION"
+selection_groups = ["relationship"]
+[[templates.numeric_slots]]
+name = "fast"
+kind = "RESEARCH_HORIZON"
+default = 5
+allowed_values = [5, 22, 66, 120, 255]
+economic_role = "toy"
+token = "5"
+occurrence = 0
+[[templates.numeric_slots]]
+name = "fast2"
+kind = "RESEARCH_HORIZON"
+default = 5
+allowed_values = [5, 22, 66, 120, 255]
+economic_role = "toy"
+token = "5"
+occurrence = 1
+[[templates.numeric_slots]]
+name = "slow"
+kind = "RESEARCH_HORIZON"
+default = 22
+allowed_values = [5, 22, 66, 120, 255]
+economic_role = "toy"
+token = "22"
+occurrence = 0
+
+[[templates]]
+id = "toy_sync_corr_operator"
+version = "2"
+role = "PROBE_ALPHA"
+kind = "economic"
+family = "toy_synchrony"
+template_mode = "PARTIAL_OPERATOR"
+branch_of = "toy_sync_corr"
+expression = "rank({op_relation}(ts_zscore({p}, 5), ts_zscore({s}, 5), 22))"
+required_slots = ["p", "s"]
+stage_path = "toy"
+economic_mechanism = "TOY synchronization probe."
+field_roles = ["signal", "confirmation"]
+allowed_field_families = ["TOY_ONLY"]
+field_relationship = "synchronized toy information"
+direction = "long"
+direction_reason = "TOY direction."
+direction_transform = "identity"
+expected_horizon = "toy horizon"
+falsification = "Toy relation fails."
+self_correlation_impact = "UNKNOWN"
+allowed_horizon_profiles = [[5, 22]]
+allowed_settings_arms = ["BASE"]
+mechanism_tags = ["TOY"]
+novelty_family = "TOY_RELATION"
+selection_groups = ["relationship"]
+[[templates.operator_slots]]
+name = "relation"
+role = "CO_MOVEMENT_ESTIMATOR"
+placeholder = "{op_relation}"
+baseline_operator = "ts_corr"
+allowed_operators = ["ts_corr", "ts_covariance"]
+semantic_contract = "same toy co-movement role"
+[[templates.numeric_slots]]
+name = "fast"
+kind = "RESEARCH_HORIZON"
+default = 5
+allowed_values = [5, 22, 66, 120, 255]
+economic_role = "toy"
+token = "5"
+occurrence = 0
+[[templates.numeric_slots]]
+name = "fast2"
+kind = "RESEARCH_HORIZON"
+default = 5
+allowed_values = [5, 22, 66, 120, 255]
+economic_role = "toy"
+token = "5"
+occurrence = 1
+[[templates.numeric_slots]]
+name = "slow"
+kind = "RESEARCH_HORIZON"
+default = 22
+allowed_values = [5, 22, 66, 120, 255]
+economic_role = "toy"
+token = "22"
+occurrence = 0
+"""

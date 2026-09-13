@@ -146,6 +146,8 @@ def _audit_subset(proposals):
     unknown_concepts = 0
     datasets = set()
     lineage_keys = set()
+    operator_roles = Counter()
+    operator_realizations = Counter()
     for proposal in proposals:
         traits = _proposal_traits(proposal)
         known_traits = [item for item in traits if _is_known_traits(item)]
@@ -157,6 +159,12 @@ def _audit_subset(proposals):
         lineage = _lineage_key(proposal)
         if lineage is not None:
             lineage_keys.add(lineage)
+        role = proposal.get("operator_role")
+        realization = proposal.get("operator_realization_fingerprint")
+        if role:
+            operator_roles[str(role)] += 1
+        if realization:
+            operator_realizations[str(realization)] += 1
     warnings = []
     if _share(known_mechanisms) is not None and _share(known_mechanisms) > 0.4:
         warnings.append("MECHANISM_CONCENTRATED")
@@ -184,6 +192,12 @@ def _audit_subset(proposals):
         "lineages": {"unique_independent_count": len(lineage_keys),
                       "unknown_count": len(proposals) - sum(lineage_counter.values()),
                       "dominant_lineage_share": _share(lineage_counter)},
+        "operator_realization": {
+            "unique_role_count": len(operator_roles),
+            "unique_realization_count": len(operator_realizations),
+            "dominant_role": _dominant(operator_roles),
+            "dominant_realization_share": _share(operator_realizations),
+        },
         "warnings": warnings,
     }
     result["dominant_mechanism"] = result["semantic"]["dominant_mechanism"]

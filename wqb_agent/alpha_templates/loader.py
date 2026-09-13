@@ -7,11 +7,13 @@ import tomllib
 from pathlib import Path
 
 from .model import (
+    FASTEXPR_IDENTIFIER_RE,
     FIXED_NUMERICS,
     HORIZON_LATTICE,
     NUMBER_TOKEN_RE,
     AlphaTemplate,
     TemplateNumericSlot,
+    TemplateOperatorSlot,
 )
 
 _KINDS = {"baseline", "economic"}
@@ -61,6 +63,27 @@ def _slot(raw, template_id):
     )
 
 
+def _operator_slot(raw, template_id):
+    if not isinstance(raw, dict):
+        raise ValueError(f"{template_id}: operator slot must be a table")
+    values = {}
+    for key in ("name", "role", "placeholder", "baseline_operator", "semantic_contract"):
+        values[key] = _text(raw.get(key), f"operator slot {key}")
+    if not values["placeholder"].startswith("{") or not values["placeholder"].endswith("}"):
+        raise ValueError(f"{template_id}: operator placeholder must be explicit")
+    allowed = raw.get("allowed_operators")
+    if not isinstance(allowed, list) or not 2 <= len(allowed) <= 3:
+        raise ValueError(f"{template_id}: allowed operators must contain 2-3 items")
+    allowed = tuple(_text(item, "allowed operator") for item in allowed)
+    if len(set(allowed)) != len(allowed) or any(
+        not FASTEXPR_IDENTIFIER_RE.fullmatch(item) for item in allowed
+    ):
+        raise ValueError(f"{template_id}: invalid allowed operator identifier")
+    if values["baseline_operator"] not in allowed:
+        raise ValueError(f"{template_id}: baseline operator is not allowed")
+    return TemplateOperatorSlot(allowed_operators=allowed, **values)
+
+
 def _parse(document, *, strict_schema=False):
     if not isinstance(document, dict) or not isinstance(document.get("templates"), list):
         raise ValueError("catalog must contain [[templates]] entries")
@@ -98,6 +121,22 @@ def _parse(document, *, strict_schema=False):
         if direction not in _DIRECTIONS:
             raise ValueError(f"{template_id}: invalid direction {direction}")
         numeric_slots = tuple(_slot(item, template_id) for item in raw.get("numeric_slots", []))
+        template_mode = str(raw.get("template_mode", "CONCRETE")).upper()
+        if template_mode not in {"CONCRETE", "PARTIAL_OPERATOR"}:
+            raise ValueError(f"{template_id}: invalid template_mode")
+        raw_operator_slots = raw.get("operator_slots", raw.get("operator_slot", []))
+        if isinstance(raw_operator_slots, dict):
+            raw_operator_slots = [raw_operator_slots]
+        operator_slots = tuple(
+            _operator_slot(item, template_id) for item in raw_operator_slots
+        )
+        if template_mode == "CONCRETE" and operator_slots:
+            raise ValueError(f"{template_id}: CONCRETE cannot declare operator slots")
+        if template_mode == "PARTIAL_OPERATOR":
+            if not raw.get("branch_of"):
+                raise ValueError(f"{template_id}: PARTIAL_OPERATOR requires branch_of")
+            if len(operator_slots) != 1:
+                raise ValueError(f"{template_id}: PARTIAL_OPERATOR requires one operator slot")
         if len({slot.name for slot in numeric_slots}) != len(numeric_slots):
             raise ValueError(f"{template_id}: duplicate numeric slot name")
         horizon_profiles = tuple(
@@ -140,6 +179,9 @@ def _parse(document, *, strict_schema=False):
             allowed_settings_arms=tuple(raw.get("allowed_settings_arms", ["BASE"])),
             mechanism_tags=tuple(raw.get("mechanism_tags", raw.get("tags", []))),
             novelty_family=_text(raw.get("novelty_family", raw["family"]), "novelty_family"),
+            template_mode=template_mode,
+            branch_of=raw.get("branch_of"),
+            operator_slots=operator_slots,
         ))
     result = tuple(templates)
     if strict_schema:
@@ -174,6 +216,27 @@ def _parse(document, *, strict_schema=False):
             raise ValueError(
                 f"{template.template_id}: numeric slot {missing.name} not present in expression"
             )
+    by_id = {template.template_id: template for template in result}
+    for template in result:
+        if template.template_mode != "PARTIAL_OPERATOR":
+            continue
+        parent = by_id.get(template.branch_of)
+        if parent is None:
+            raise ValueError(f"{template.template_id}: ABSTRACT_BRANCH_PARENT_MISSING")
+        if parent.template_mode != "CONCRETE" or parent.role != "PROBE_ALPHA":
+            raise ValueError(f"{template.template_id}: ABSTRACT_BRANCH_PARENT_INVALID")
+        slot = template.operator_slots[0]
+        if template.expression.count(slot.placeholder) != 1:
+            raise ValueError(f"{template.template_id}: operator placeholder must occur once")
+        try:
+            bindings = {name: "{" + name + "}" for name in
+                        ("p", "s", "t", "g", "data_field")}
+            baseline = template.render(bindings, {slot.name: slot.baseline_operator})
+            parent_expr = parent.render(bindings)
+        except (KeyError, ValueError):
+            baseline = parent_expr = None
+        if baseline != parent_expr:
+            raise ValueError(f"{template.template_id}: ABSTRACT_BRANCH_BASELINE_MISMATCH")
     return result
 
 

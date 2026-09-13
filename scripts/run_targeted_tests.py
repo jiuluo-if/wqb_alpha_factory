@@ -80,6 +80,25 @@ DIRECT_TESTS = {
         "tests/test_factory_mechanism_selection.py",
         "tests/test_research_loop.py",
     ),
+    "wqb_agent/alpha_templates/model.py": ("tests/test_alpha_template_catalog.py",),
+    "wqb_agent/alpha_templates/loader.py": (
+        "tests/test_alpha_template_catalog.py",
+        "tests/test_private_template_contract.py",
+    ),
+    "wqb_agent/alpha_templates/validation.py": (
+        "tests/test_alpha_template_catalog.py",
+        "tests/test_private_template_contract.py",
+    ),
+    "wqb_agent/alpha_templates/registry.py": (
+        "tests/test_alpha_template_catalog.py",
+        "tests/test_private_template_contract.py",
+    ),
+    "wqb_agent/alpha_templates/__init__.py": ("tests/test_alpha_template_catalog.py",),
+    "wqb_agent/alpha_templates/catalog/builtin.toml": (
+        "tests/test_alpha_template_catalog.py",
+        "tests/test_private_template_contract.py",
+    ),
+    "wqb_agent/alpha_templates/AGENTS.md": ("tests/test_alpha_template_catalog.py",),
     "wqb_agent/locking.py": (
         "tests/test_locking.py",
         "tests/test_proposal_execution.py",

@@ -7,7 +7,7 @@ from .loader import (
     load_templates,
     resolve_private_catalog_path,
 )
-from .model import AlphaTemplate, TemplateNumericSlot
+from .model import AlphaTemplate, TemplateNumericSlot, TemplateOperatorSlot
 from .registry import (
     DEFAULT_TEMPLATES,
     ECONOMIC_TEMPLATES,
@@ -20,6 +20,7 @@ from .validation import validate_single_variable_change, validate_template_contr
 __all__ = [
     "AlphaTemplate",
     "TemplateNumericSlot",
+    "TemplateOperatorSlot",
     "AlphaTemplateRegistry",
     "DEFAULT_TEMPLATES",
     "ECONOMIC_TEMPLATES",

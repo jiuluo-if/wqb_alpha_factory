@@ -38,3 +38,18 @@ loader 使用 `importlib.resources`/`tomllib`，对重复 ID、缺字段、非�
 structural、mechanism、instantiation 三类身份；窗口变化不是新经济 Alpha。
 
 新增模板规则详见同目录 [`AGENTS.md`](../wqb_agent/alpha_templates/AGENTS.md)。
+
+## Concrete and partial-operator branches
+
+模板默认 `template_mode = "CONCRETE"`；旧 v2 catalog 不需要迁移。只有显式声明
+`PARTIAL_OPERATOR` 的 `PROBE_ALPHA` 才能引用同一 catalog 中的 concrete parent，且
+只能声明一个 `operator_slots`。slot 的 allowed operators 固定为 2–3 个合法
+FASTEXPR identifier，baseline realization 渲染后必须与 parent 的 canonical expression
+一致。`AlphaTemplate.render()` 是唯一 renderer：branch 只替换该 slot，numeric slots、
+fields、direction、settings 与 mechanism 均保持 parent 不变。
+
+Factory 只 materialize `declared allowed operators ∩ LIVE_VERIFIED BRAIN operators`，
+每个 branch 只沿这一条 operator axis 线性展开；静态语法 reference、fixture 和未知
+capability 不能使 operator 可用。concrete parent 与 branch 共享 family cap。branch 的
+`mechanism_fingerprint` 与 parent 相同，`operator_realization_fingerprint` 单独记录
+abstract structural fingerprint 与 chosen mapping，不进入 candidate identity。

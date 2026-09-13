@@ -14,4 +14,11 @@ Every private template declares `role`, field roles/relationships, mechanism, di
 
 Operator coverage is a diversity objective, never a reason to add an operator without an explicit economic mechanism. Prefer broad coverage of verified operators across independent mechanisms, while preserving arity, semantic relation, novelty, and complexity gates. Numeric literals are classified fail-closed; only declared `RESEARCH_HORIZON` slots may rotate.
 
+Templates default to `CONCRETE`. Only explicit `PARTIAL_OPERATOR` probe siblings may
+declare exactly one bounded `TemplateOperatorSlot`; the sibling must retain its concrete
+parent's mechanism, field relationship, direction, numeric profiles, settings arms and
+family. Materialization uses only declared operators intersected with the current
+`LIVE_VERIFIED` BRAIN capability. Static syntax and fixture data are never availability
+truth, and recovery never re-renders an already materialized proposal.
+
 `AlphaFactory` and `CandidateBuilder` consume this owner. Do not add skeletons, fixed field combinations, parameter grids, or historical success rationale elsewhere.

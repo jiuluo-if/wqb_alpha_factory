@@ -222,6 +222,65 @@ token = "22"
 occurrence = 0
 
 [[templates]]
+id = "toy_sync_corr_operator"
+version = "2"
+role = "PROBE_ALPHA"
+kind = "economic"
+family = "toy_synchrony"
+template_mode = "PARTIAL_OPERATOR"
+branch_of = "toy_sync_corr"
+expression = "rank({op_relation}(ts_zscore({p}, 5), ts_zscore({s}, 5), 22))"
+required_slots = ["p", "s"]
+stage_path = "toy:two-stream -> partial co-movement -> rank"
+economic_mechanism = "TOY synchronization probe for two complementary streams."
+field_roles = ["toy_signal", "toy_confirmation"]
+allowed_field_families = ["TOY_ONLY"]
+field_relationship = "synchronized toy information"
+direction = "long"
+direction_reason = "Positive synchronization is the stated toy direction."
+direction_transform = "identity"
+expected_horizon = "one declared lattice profile"
+falsification = "The relation is unstable outside the construction sample."
+self_correlation_impact = "UNKNOWN"
+allowed_horizon_profiles = [[5, 22], [22, 66]]
+allowed_settings_arms = ["BASE"]
+mechanism_tags = ["TOY", "SYNCHRONY", "CORRELATION"]
+novelty_family = "TOY_RELATION"
+selection_groups = ["relationship", "candidate_scratch", "economic", "factory_default"]
+selection_order = 61
+[[templates.operator_slots]]
+name = "relation"
+role = "CO_MOVEMENT_ESTIMATOR"
+placeholder = "{op_relation}"
+baseline_operator = "ts_corr"
+allowed_operators = ["ts_corr", "ts_covariance"]
+semantic_contract = "same toy co-movement role"
+[[templates.numeric_slots]]
+name = "fast_horizon_1"
+kind = "RESEARCH_HORIZON"
+default = 5
+allowed_values = [5, 22, 66, 120, 255]
+economic_role = "first stream horizon"
+token = "5"
+occurrence = 0
+[[templates.numeric_slots]]
+name = "fast_horizon_2"
+kind = "RESEARCH_HORIZON"
+default = 5
+allowed_values = [5, 22, 66, 120, 255]
+economic_role = "second stream horizon"
+token = "5"
+occurrence = 1
+[[templates.numeric_slots]]
+name = "correlation_horizon"
+kind = "RESEARCH_HORIZON"
+default = 22
+allowed_values = [5, 22, 66, 120, 255]
+economic_role = "synchrony horizon"
+token = "22"
+occurrence = 0
+
+[[templates]]
 id = "toy_dispersion_rank"
 version = "2"
 role = "PROBE_ALPHA"

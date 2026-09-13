@@ -23,6 +23,11 @@
 
 先调用 `wqb_agent.research_api.inspect_state()` 查看有限状态；需要平台事实时调用 `discover_fields()` 和 `get_operator_reference()`。不要把 cache、旧文档或记忆当成当前 BRAIN 事实。
 
+Probe bundle 可以同时包含 concrete templates 与显式 partial-operator branch 的
+materialized proposals。你可以解释 operator-role experiment question，但不能自行
+发明或扩展 allowed operator mapping；mapping 由 template contract 与当前 live BRAIN
+capability 的交集决定。
+
 优化专项真实证据只能由外层通过 `ClientOptimizationEvidenceProvider.collect(alpha_id)`
 提供 bounded snapshot；其中 `get_alpha`、`get_aggregates`、`get_pnl`、
 `get_self_correlation` 全部是只读接口，PnL recordset 按 schema 名称解析。你不得自行发

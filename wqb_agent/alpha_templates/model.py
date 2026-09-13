@@ -7,6 +7,8 @@ from dataclasses import dataclass
 
 NUMBER_TOKEN_RE = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)(?![\w.])")
 OPERATOR_OCCURRENCE_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+OPERATOR_PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}\s*\(")
+FASTEXPR_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 HORIZON_LATTICE = (5, 22, 66, 120, 255)
 
@@ -57,6 +59,18 @@ class TemplateNumericSlot:
         )
 
 
+@dataclass(frozen=True)
+class TemplateOperatorSlot:
+    """One explicitly bounded operator-role branch point."""
+
+    name: str
+    role: str
+    placeholder: str
+    baseline_operator: str
+    allowed_operators: tuple
+    semantic_contract: str
+
+
 @dataclass(frozen=True, init=False)
 class AlphaTemplate:
     """One bounded expression skeleton loaded from the catalog."""
@@ -88,6 +102,9 @@ class AlphaTemplate:
     allowed_settings_arms: tuple
     mechanism_tags: tuple
     novelty_family: str
+    template_mode: str
+    branch_of: str | None
+    operator_slots: tuple
 
     def __init__(self, template_id, family=None, expression=None,
                  required_slots=("p",),
@@ -102,7 +119,8 @@ class AlphaTemplate:
                  allowed_field_families=(), field_relationship="",
                  direction_reason="", allowed_horizon_profiles=(),
                  allowed_settings_arms=("BASE",), mechanism_tags=(),
-                 novelty_family=""):
+                 novelty_family="", template_mode="CONCRETE", branch_of=None,
+                 operator_slots=()):
         object.__setattr__(self, "template_id", str(template_id))
         object.__setattr__(self, "family", family or "")
         object.__setattr__(self, "expression", expression or "")
@@ -131,6 +149,9 @@ class AlphaTemplate:
         object.__setattr__(self, "allowed_settings_arms", tuple(allowed_settings_arms))
         object.__setattr__(self, "mechanism_tags", tuple(mechanism_tags))
         object.__setattr__(self, "novelty_family", novelty_family or self.family)
+        object.__setattr__(self, "template_mode", str(template_mode or "CONCRETE").upper())
+        object.__setattr__(self, "branch_of", str(branch_of) if branch_of else None)
+        object.__setattr__(self, "operator_slots", tuple(operator_slots))
 
     @property
     def rationale(self):
@@ -143,11 +164,14 @@ class AlphaTemplate:
 
     @property
     def operator_count(self):
-        return len(OPERATOR_OCCURRENCE_RE.findall(self.expression))
+        return (len(OPERATOR_OCCURRENCE_RE.findall(self.expression))
+                + len(OPERATOR_PLACEHOLDER_RE.findall(self.expression)))
 
     @property
     def operator_names(self):
-        return tuple(OPERATOR_OCCURRENCE_RE.findall(self.expression))
+        return tuple(OPERATOR_OCCURRENCE_RE.findall(self.expression)) + tuple(
+            slot.baseline_operator for slot in self.operator_slots
+        )
 
     @property
     def fingerprint(self):
@@ -165,6 +189,36 @@ class AlphaTemplate:
             "expression": self.expression,
             "required_slots": self.required_slots,
             "horizon_slots": tuple(slot.name for slot in self.numeric_slots),
+        })
+
+    def render(self, bindings, operator_mapping=None):
+        """Render one concrete expression through the sole template owner."""
+        values = dict(bindings or {})
+        expression = self.expression
+        if self.template_mode == "PARTIAL_OPERATOR":
+            if len(self.operator_slots) != 1:
+                raise ValueError("PARTIAL_OPERATOR requires exactly one operator slot")
+            slot = self.operator_slots[0]
+            mapping = operator_mapping or {}
+            chosen = mapping.get(slot.name, mapping.get(slot.role, slot.baseline_operator))
+            if chosen not in slot.allowed_operators:
+                raise ValueError(f"operator {chosen} is not allowed for {slot.name}")
+            expression = expression.replace(slot.placeholder, chosen)
+            if OPERATOR_PLACEHOLDER_RE.search(expression):
+                raise ValueError("unresolved operator placeholder")
+        return expression.format(**values)
+
+    def operator_realization_fingerprint(self, operator_mapping):
+        if self.template_mode != "PARTIAL_OPERATOR" or len(self.operator_slots) != 1:
+            raise ValueError("operator realization requires one partial operator slot")
+        slot = self.operator_slots[0]
+        chosen = (operator_mapping or {}).get(slot.name,
+                                              (operator_mapping or {}).get(slot.role))
+        if chosen not in slot.allowed_operators:
+            raise ValueError(f"operator {chosen} is not allowed for {slot.name}")
+        return self._digest({
+            "abstract_structural": self.structural_fingerprint,
+            "operator_mapping": {slot.role: chosen},
         })
 
     @property
@@ -216,6 +270,16 @@ class AlphaTemplate:
             "allowed_settings_arms": list(self.allowed_settings_arms),
             "mechanism_tags": list(self.mechanism_tags),
             "novelty_family": self.novelty_family,
+            "template_mode": self.template_mode,
+            "branch_of": self.branch_of,
+            "operator_slots": [
+                {"name": slot.name, "role": slot.role,
+                 "placeholder": slot.placeholder,
+                 "baseline_operator": slot.baseline_operator,
+                 "allowed_operators": list(slot.allowed_operators),
+                 "semantic_contract": slot.semantic_contract}
+                for slot in self.operator_slots
+            ],
         }
 
     @property

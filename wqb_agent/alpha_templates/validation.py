@@ -1,6 +1,6 @@
 """Pure validation gates for public synthetic and local private templates."""
 
-from .model import HORIZON_LATTICE
+from .model import FASTEXPR_IDENTIFIER_RE, HORIZON_LATTICE
 
 SETTINGS_ARMS = {
     "BASE", "UNIVERSE_ARM", "DECAY_DOWN", "DECAY_UP",
@@ -14,6 +14,25 @@ RESEARCH_VARIABLES = {
 def validate_template_contract(template):
     """Return an auditable gate report; never infer missing research semantics."""
     errors = []
+    mode = str(getattr(template, "template_mode", "CONCRETE") or "CONCRETE").upper()
+    slots = tuple(getattr(template, "operator_slots", ()) or ())
+    if mode not in {"CONCRETE", "PARTIAL_OPERATOR"}:
+        errors.append("INVALID_TEMPLATE_MODE")
+    if mode == "CONCRETE" and slots:
+        errors.append("CONCRETE_OPERATOR_SLOT")
+    if mode == "PARTIAL_OPERATOR":
+        if not getattr(template, "branch_of", None):
+            errors.append("ABSTRACT_BRANCH_PARENT_MISSING")
+        if len(slots) != 1:
+            errors.append("OPERATOR_SLOT_COUNT")
+        elif (
+            len(slots[0].allowed_operators) < 2
+            or len(slots[0].allowed_operators) > 3
+            or slots[0].baseline_operator not in slots[0].allowed_operators
+            or any(not FASTEXPR_IDENTIFIER_RE.fullmatch(name)
+                   for name in slots[0].allowed_operators)
+        ):
+            errors.append("INVALID_OPERATOR_SLOT")
     role = str(template.role or "")
     if role == "CONTROL_ALPHA":
         if not 1 <= template.operator_count <= 3 or len(template.required_slots) != 1:
