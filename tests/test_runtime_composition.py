@@ -10,6 +10,7 @@ from unittest import mock
 from wqb_agent.agent import Agent
 from wqb_agent.config import normalize_config
 from wqb_agent.incremental_policy import IncrementalValuePolicy
+from wqb_agent.optimization_decision import OptimizationDecision
 from wqb_agent.runtime_components import (
     CheckpointStore,
     Simulator,
@@ -133,6 +134,25 @@ class TestAgentRuntimeComposition(unittest.TestCase):
         self.assertIs(agent.optimizer_workflow.trajectory, agent.trajectory)
         self.assertIs(agent.optimizer_workflow.alpha_feed_cache, agent.alpha_feed_cache)
         self.assertIs(agent.optimizer_workflow.alpha_factory, agent.alpha_factory)
+        self.assertTrue(agent.trial_ledger.persist)
+
+    def test_selection_accounting_survives_rebuilt_agent_runtime(self):
+        decision = OptimizationDecision(parent_id="parent", decision="STOP")
+        first = Agent(object(), _config(self.state_dir))
+        first.trial_ledger.record_optimization_selection(
+            decision, outcome="STOP", emitted=False, timestamp=1
+        )
+        first.trial_ledger.record(
+            {"candidate_id": "candidate", "expression": "rank(signal)"},
+            "candidate_generated", timestamp=2,
+        )
+
+        second = Agent(object(), _config(self.state_dir))
+        summary = second.trial_ledger.summarize()
+        self.assertEqual(summary["optimization_selection_count"], 1)
+        self.assertEqual(summary["non_emitted_optimization_selection_count"], 1)
+        self.assertEqual(summary["selection_trial_count"], 2)
+        self.assertEqual(summary["history_completeness"], "COMPLETE_FROM_START")
 
     def test_domain_component_constructors_are_not_duplicated(self):
         constructors = {

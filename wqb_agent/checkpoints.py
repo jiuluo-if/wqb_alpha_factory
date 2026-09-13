@@ -44,6 +44,7 @@ class CheckpointStore:
                 "schema_version", "created_by_version", "id", "round",
                 "hypothesis_id", "expression", "settings", "fields_used",
                 "status", "proposal_id", "submission_fingerprint",
+                "optimization_decision_id",
                 "submission_started_at", "progress_url", "experiment_stage",
                 "research_role", "change_type", "lineage_id", "template_id",
                 "template_family", "proposal_origin", "research_layer",

@@ -545,6 +545,11 @@ def build_validation_report(parent, robustness_children, plan, *, yearly_evidenc
         "raw_trial_count": selection,
         "effective_trial_count": max(1, int((trial_summary or {}).get("effective_trial_count", selection) or selection or 1)),
     }
+    if (trial_summary or {}).get("history_completeness") == "INCOMPLETE_LEGACY":
+        stats["dsr"] = annotate_evidence(
+            {"status": "UNAVAILABLE", "reason_code": "INCOMPLETE_TRIAL_HISTORY",
+             "n_trials": selection}, status="UNAVAILABLE"
+        )
     statistical_policy = (plan or {}).get("statistical_policy", "required_when_available")
     if isinstance(statistical_policy, dict):
         statistical_mode = str(statistical_policy.get("mode", "required_when_available"))

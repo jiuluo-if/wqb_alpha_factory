@@ -87,6 +87,15 @@ class TestValidationReport(unittest.TestCase):
         )
         self.assertEqual(report["statistical_evidence"]["dsr"]["n_trials"], 6)
 
+    def test_dsr_is_unavailable_when_selection_history_is_incomplete(self):
+        report = build_validation_report(
+            self.parent, [], self.plan,
+            trial_summary={"selection_trial_count": 6, "history_completeness": "INCOMPLETE_LEGACY"},
+        )
+        self.assertEqual(report["statistical_evidence"]["dsr"]["status"], "UNAVAILABLE")
+        self.assertEqual(report["statistical_evidence"]["dsr"]["reason_code"],
+                         "INCOMPLETE_TRIAL_HISTORY")
+
     def test_more_searches_reduce_selection_adjusted_confidence(self):
         returns = [-0.01, 0.02, 0.01, 0.03, -0.02, 0.01, 0.015, -0.005, 0.01, 0.02]
         one = deflated_sharpe_ratio(returns, observed_sharpe=1.2, n_trials=1)

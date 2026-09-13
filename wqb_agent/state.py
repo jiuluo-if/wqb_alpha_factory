@@ -36,6 +36,7 @@ IDENTITY_FIELDS = (
     "id", "round", "hypothesis_id", "expression", "settings", "fields_used",
     "datasets", "candidate_id", "proposal_id", "submission_fingerprint",
     "submission_started_at", "parent_expression", "lineage_id", "created_at",
+    "optimization_decision_id",
 )
 
 # One Experiment occupies a bounded number of rows in the append-only file
@@ -182,6 +183,7 @@ class Experiment:
     validation_status: object = None
     elapsed_sec: object = None
     created_at: float = field(default_factory=time.time)
+    optimization_decision_id: object = None
 
     def __post_init__(self):
         self.settings = dict(self.settings)

@@ -33,6 +33,7 @@ PHASES = {
     "simulation_committed", "simulation_submitted", "simulation_settled",
     "research_outcome_settled",
     "optimization_selection",
+    "history_completeness",
 }
 
 SIMULATION_LIFECYCLE_PHASES = (
@@ -66,6 +67,37 @@ class TrialLedger:
         self._events = []
         self._append_lock = threading.Lock()
 
+    def initialize_history_completeness(self, trajectory_path):
+        """Record the one-time completeness boundary in this ledger owner."""
+        if not self.path or not self.persist:
+            return "COMPLETE_FROM_START"
+        existing = list(iter_jsonl_objects(self.path)) if os.path.exists(self.path) else []
+        for row in existing:
+            if row.get("phase") == "history_completeness":
+                return str(row.get("outcome") or "UNKNOWN")
+        trajectory_has_rows = False
+        if trajectory_path and os.path.exists(trajectory_path):
+            try:
+                with open(trajectory_path, encoding="utf-8") as handle:
+                    trajectory_has_rows = any(line.strip() for line in handle)
+            except OSError:
+                trajectory_has_rows = True
+        outcome = "INCOMPLETE_LEGACY" if trajectory_has_rows or existing else "COMPLETE_FROM_START"
+        row = {
+            "schema_version": self.SCHEMA_VERSION,
+            "created_by_version": CREATED_BY_VERSION,
+            "event_id": hashlib.sha256(
+                f"history_completeness|{outcome}".encode()
+            ).hexdigest(),
+            "phase": "history_completeness",
+            "event_type": "history_completeness",
+            "outcome": outcome,
+            "status": outcome,
+            "recorded_at": time.time(),
+        }
+        append_jsonl_if_unique(self.path, row, ("event_id",), lock=self._append_lock)
+        return outcome
+
     @staticmethod
     def _trial_id(trial):
         if isinstance(trial, dict):
@@ -95,7 +127,7 @@ class TrialLedger:
         selection_identity = self._value(trial, "selection_identity") if phase == "optimization_selection" else None
         identity = (f"settlement|{stable_settlement}" if stable_settlement else
                     selection_identity or
-                    f"{candidate_id}|{self._value(trial, 'proposal_id') or ''}|{phase}|{state}|{outcome or ''}|{reason_code or ''}|{reason or ''}|{timestamp or ''}|{reward}")
+                    f"{candidate_id}|{self._value(trial, 'proposal_id') or ''}|{phase}|{state}|{outcome or ''}|{reason_code or ''}|{reason or ''}|{reward}")
         event_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
         fields = self._value(trial, "fields_used", [])
         if not isinstance(fields, (list, tuple)):
@@ -110,6 +142,7 @@ class TrialLedger:
             "phase": phase,
             "event_type": phase,
             "selection_identity": selection_identity,
+            "optimization_decision_id": self._value(trial, "optimization_decision_id"),
             "optimization_candidate_emitted": self._value(trial, "optimization_candidate_emitted"),
             "optimization_decision": self._value(trial, "optimization_decision"),
             "outcome": outcome or state,
@@ -157,6 +190,7 @@ class TrialLedger:
         settled_at = timestamp if timestamp is not None else time.time()
         settlement = {
             "proposal_id": self._value(trial, "proposal_id"),
+            "optimization_decision_id": self._value(trial, "optimization_decision_id"),
             "reward": reward,
             "reward_version": reward_version,
             "reward_quality": reward_quality,
@@ -191,6 +225,7 @@ class TrialLedger:
             "candidate_id": selection_identity,
             "proposal_id": selection_identity,
             "selection_identity": selection_identity,
+            "optimization_decision_id": selection_identity,
             "optimization_candidate_emitted": emitted,
             "optimization_decision": str(payload.get("decision") or "STOP").upper(),
             "status": str(outcome or payload.get("decision") or "SELECTED").upper(),
@@ -232,7 +267,11 @@ class TrialLedger:
         selection_ids = set()
         non_emitted_selection_ids = set()
         rows = self._events if not self.path or not self.persist else iter_jsonl_objects(self.path)
+        history_completeness = None
         for row in rows:
+            if row.get("phase") == "history_completeness":
+                history_completeness = row.get("outcome") or row.get("status")
+                continue
             events += 1
             is_selection = row.get("phase") == "optimization_selection"
             if is_selection:
@@ -311,6 +350,9 @@ class TrialLedger:
             proposal["final_outcome"] = settlement.get("settlement")
         return {
             "schema_version": self.SCHEMA_VERSION,
+            "history_completeness": history_completeness or (
+                "COMPLETE_FROM_START" if not self.path or not self.persist else "UNKNOWN"
+            ),
             "events": events,
             "trial_count": len(trial_ids),
             "generated_trials": len(generated_trials),

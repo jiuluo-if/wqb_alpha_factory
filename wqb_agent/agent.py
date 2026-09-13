@@ -34,7 +34,6 @@ from .metrics import (
     num,
 )
 from .optimization_decision import optimization_decision_identity
-from .optimization_interfaces import OptimizationTrial, record_optimization_trial
 from .optimizer_workflow import OptimizerHooks
 from .pre_correlation import (
     delay_metric_thresholds,
@@ -393,25 +392,9 @@ class Agent:
                 outcome = "PRUNED" if any(
                     "PRUNE" in str(reason).upper() for reason in rejected.get(decision.parent_id, ())
                 ) else "REJECTED"
-            inserted = self.trial_ledger.record_optimization_selection(
+            self.trial_ledger.record_optimization_selection(
                 decision, outcome=outcome, emitted=outcome == "GENERATED"
             )
-            memory = getattr(self, "memory", None)
-            if inserted and memory is not None and callable(getattr(memory, "add_short_term", None)):
-                try:
-                    record_optimization_trial(
-                        memory,
-                        OptimizationTrial(
-                            parent_id=decision.parent_id,
-                            outcome=outcome,
-                            mechanism=decision.economic_mechanism or decision.reason or decision.decision,
-                            changed_variable=decision.changed_variable or decision.validation_variable,
-                        ),
-                        round_no=getattr(self, "round_no", 0) or 0,
-                    )
-                except Exception:
-                    # The ledger is the fact owner; a lossy projection must not erase it.
-                    pass
 
     def refresh_remote_alpha_feed(self, *, limit=100):
         """兼容 facade：执行 Alpha Feed 的只读同步。"""

@@ -115,6 +115,19 @@ class TestSettledEvidenceDurability(unittest.TestCase):
         self.assertIsNotNone(reader.find_completed_expression("rank(field_a)"))
         self.assertIsNone(reader.find_completed_expression("rank(other_field)"))
 
+    def test_case_b3_settlement_cannot_change_optimization_decision_identity(self):
+        writer = Trajectory(max_len=25, path=self.path)
+        experiment = done_experiment()
+        experiment.optimization_decision_id = "decision-a"
+        writer.add(experiment)
+        tampered = done_experiment()
+        tampered.id = experiment.id
+        tampered.optimization_decision_id = "decision-b"
+        settle_evidence(tampered)
+
+        with self.assertRaises(ValueError):
+            writer.settle(tampered)
+
     def test_case_b2_revision_requires_a_persisted_canonical_row(self):
         writer = Trajectory(max_len=25, path=self.path)
         orphan = done_experiment()

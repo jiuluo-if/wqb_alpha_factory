@@ -1,7 +1,11 @@
+import json
+import os
 import tempfile
 import unittest
 
+from wqb_agent.checkpoints import CheckpointStore
 from wqb_agent.optimization_decision import OptimizationDecision
+from wqb_agent.state import Experiment
 from wqb_agent.trial_ledger import SIMULATION_LIFECYCLE_PHASES, TrialLedger
 
 
@@ -64,3 +68,66 @@ class TestOptimizationSelectionAccounting(unittest.TestCase):
             self.assertTrue(ledger.record_optimization_selection(decision, timestamp=1))
             self.assertFalse(ledger.record_optimization_selection(decision, timestamp=2))
             self.assertEqual(ledger.summarize()["selection_trial_count"], 1)
+
+    def test_selection_survives_restart_and_generic_replay_ignores_timestamp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "trial_ledger.jsonl")
+            first = TrialLedger(path, persist=True)
+            decision = OptimizationDecision(parent_id="p-cross", decision="STOP")
+            self.assertTrue(first.record_optimization_selection(decision, timestamp=1))
+            self.assertTrue(first.record({"candidate_id": "c1", "expression": "rank(x)"},
+                                         "candidate_generated", timestamp=2))
+
+            second = TrialLedger(path, persist=True)
+            self.assertFalse(second.record_optimization_selection(decision, timestamp=99))
+            self.assertFalse(second.record({"candidate_id": "c1", "expression": "rank(x)"},
+                                          "candidate_generated", timestamp=100))
+            summary = second.summarize()
+            self.assertEqual(summary["optimization_selection_count"], 1)
+            self.assertEqual(summary["selection_trial_count"], 2)
+
+    def test_legacy_trajectory_marks_incomplete_history_without_inventing_selections(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            trajectory_path = os.path.join(tmp, "trajectory.jsonl")
+            with open(trajectory_path, "w", encoding="utf-8") as handle:
+                json.dump(Experiment(1, "h", "rank(x)", {}, ["x"]).to_dict(), handle)
+                handle.write("\n")
+            ledger = TrialLedger(os.path.join(tmp, "trial_ledger.jsonl"), persist=True)
+            self.assertEqual(
+                ledger.initialize_history_completeness(trajectory_path),
+                "INCOMPLETE_LEGACY",
+            )
+            summary = ledger.summarize()
+            self.assertEqual(summary["history_completeness"], "INCOMPLETE_LEGACY")
+            self.assertEqual(summary["selection_trial_count"], 0)
+
+    def test_empty_workspace_marks_history_complete_from_start(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = TrialLedger(os.path.join(tmp, "trial_ledger.jsonl"), persist=True)
+            self.assertEqual(
+                ledger.initialize_history_completeness(os.path.join(tmp, "trajectory.jsonl")),
+                "COMPLETE_FROM_START",
+            )
+            self.assertEqual(ledger.summarize()["history_completeness"], "COMPLETE_FROM_START")
+
+    def test_decision_id_is_carried_by_experiment_and_lifecycle_row(self):
+        decision_id = "decision-123"
+        experiment = Experiment(1, "h", "rank(x)", {}, ["x"])
+        experiment.optimization_decision_id = decision_id
+        restored = Experiment.from_dict(experiment.to_dict())
+        self.assertEqual(restored.optimization_decision_id, decision_id)
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = TrialLedger(os.path.join(tmp, "ledger.jsonl"), persist=True)
+            ledger.record(restored, "simulation_committed")
+            with open(os.path.join(tmp, "ledger.jsonl"), encoding="utf-8") as handle:
+                row = json.loads(handle.readline())
+            self.assertEqual(row["optimization_decision_id"], decision_id)
+
+    def test_decision_id_survives_checkpoint_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            experiment = Experiment(1, "h", "rank(x)", {}, ["x"])
+            experiment.optimization_decision_id = "decision-checkpoint"
+            experiment.status = "PENDING"
+            CheckpointStore(tmp).write(1, {"id": "h"}, [experiment], complete=False)
+            restored = CheckpointStore(tmp).load(1)["experiments"][0]
+            self.assertEqual(restored["optimization_decision_id"], "decision-checkpoint")

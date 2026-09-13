@@ -130,4 +130,4 @@ class TestAgentOptimizationSelectionBridge(unittest.TestCase):
         Agent.propose_optimization(agent, [decision])
 
         self.assertEqual(agent.trial_ledger.summarize()["selection_trial_count"], 1)
-        agent.memory.add_short_term.assert_called_once()
+        agent.memory.add_short_term.assert_not_called()
