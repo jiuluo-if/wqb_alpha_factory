@@ -169,6 +169,32 @@ def normalize_frequency(field):
     return evidence["frequency"] if evidence["status"] in {"KNOWN", "INFERRED"} else None
 
 
+def dataset_description_frequency(description):
+    """Fail-closed dataset-level frequency fallback from platform text.
+
+    The live platform does not expose per-field frequency; its *dataset*
+    descriptions do state cadence ("comprehensive daily volatility metrics",
+    "capturing daily snapshots").  When field-level evidence is unknown, a
+    dataset description that names exactly one unambiguous cadence bucket
+    supplies an auditable, platform-sourced value.  Anything ambiguous
+    (two buckets) or empty stays ``None`` (UNKNOWN) -- never a guess.
+    """
+    text = str(description or "").lower()
+    if not text.strip():
+        return None
+    matches = _description_frequency_matches(text)
+    if len(matches) != 1:
+        return None
+    bucket = matches[0]
+    return {
+        "frequency": bucket,
+        "source": "DATASET_DESCRIPTION_INFERRED",
+        "status": "INFERRED",
+        "matched_evidence": ["dataset_description:" + bucket],
+        "confidence": "MEDIUM",
+    }
+
+
 def normalize_coverage(field):
     """Return coverage as a bounded 0.0-1.0 value, or None when unusable.
 
@@ -252,6 +278,7 @@ class FieldDiscovery:
         self._platform_usage_status = {}
         self.last_dataset_selection = {}
         self._field_completeness = {}
+        self._dataset_description_cache = None
         self._catalog_status = "UNKNOWN"
         self._catalog_has_legacy_unverified = False
         self._dataset_universe_provenance = {
@@ -926,6 +953,31 @@ class FieldDiscovery:
         }
         return dataset_ids
 
+    def _dataset_description_map(self):
+        """Cached dataset-id -> description map from the live listing.
+
+        Read-only; fails closed to an empty map when the client or the
+        listing is unavailable so the frequency fallback simply stays UNKNOWN.
+        """
+        if self._dataset_description_cache is not None:
+            return self._dataset_description_cache
+        mapping = {}
+        getter = getattr(self.client, "get_datasets", None)
+        if callable(getter):
+            try:
+                payload = getter()
+            except Exception:
+                payload = []
+            if isinstance(payload, list):
+                for item in payload:
+                    if isinstance(item, dict) and item.get("id") is not None:
+                        mapping[str(item["id"])] = str(item.get("description") or "")
+        self._dataset_description_cache = mapping
+        return mapping
+
+    def _dataset_description(self, dataset_id):
+        return self._dataset_description_map().get(str(dataset_id))
+
     def _select_active_dataset_ids(self, dataset_ids, categories, keywords, round_no):
         """Bound dynamic dataset work before any field pagination starts."""
         dataset_ids = self._normalize_dataset_ids(dataset_ids)
@@ -1234,14 +1286,29 @@ class FieldDiscovery:
     ):
         field_id = str(field.get("id"))
         alpha_count = self._alpha_count(field)
+        freq_ev = frequency_evidence(field)
+        frequency = (
+            freq_ev["frequency"]
+            if freq_ev["status"] in {"KNOWN", "INFERRED"} else None
+        )
+        if frequency is None and freq_ev.get("source") == "UNKNOWN":
+            # No field-level evidence at all: fall back to the platform's
+            # dataset-level cadence statement.  A field-level CONFLICT or
+            # ambiguous inference is never overridden (fail-closed).
+            dataset_evidence = dataset_description_frequency(
+                self._dataset_description(dataset_id)
+            )
+            if dataset_evidence is not None:
+                frequency = dataset_evidence["frequency"]
+                freq_ev = dataset_evidence
         return {
             "id": field_id,
             "name": field.get("name") or field.get("description") or field_id,
             "description": field.get("description") or "",
             "coverage": normalize_coverage(field),
             "alpha_count": alpha_count,
-            "frequency": normalize_frequency(field),
-            "frequency_evidence": frequency_evidence(field),
+            "frequency": frequency,
+            "frequency_evidence": freq_ev,
             "semantic_status": "KNOWN" if field.get("description") else "UNKNOWN",
             "category": category or "preferred",
             "dataset": str(dataset_id),

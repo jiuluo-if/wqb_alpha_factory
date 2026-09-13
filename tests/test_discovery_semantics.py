@@ -23,6 +23,7 @@ from wqb_agent.artifacts import atomic_write_json_if_changed
 from wqb_agent.candidate import CandidateBuilder
 from wqb_agent.discovery import (
     FieldDiscovery,
+    dataset_description_frequency,
     frequency_evidence,
     normalize_coverage,
     normalize_frequency,
@@ -155,3 +156,77 @@ class TestDiscoveryFieldSemantics(TmpStateMixin, unittest.TestCase):
                     "random_exploration_contribution",
                 },
             )
+
+    def test_dataset_description_frequency_is_fail_closed(self):
+        self.assertEqual(
+            dataset_description_frequency("comprehensive daily volatility metrics"),
+            {"frequency": "daily", "source": "DATASET_DESCRIPTION_INFERRED",
+             "status": "INFERRED",
+             "matched_evidence": ["dataset_description:daily"],
+             "confidence": "MEDIUM"},
+        )
+        # "daily" + "end-of-day" collapse to one bucket -> daily.
+        self.assertEqual(
+            dataset_description_frequency("updated daily using end-of-day data"),
+            {"frequency": "daily", "source": "DATASET_DESCRIPTION_INFERRED",
+             "status": "INFERRED",
+             "matched_evidence": ["dataset_description:daily"],
+             "confidence": "MEDIUM"},
+        )
+        # Two buckets -> ambiguous -> None.
+        self.assertIsNone(
+            dataset_description_frequency("daily snapshots and annual restatements"))
+        # Empty / no marker -> None.
+        self.assertIsNone(dataset_description_frequency(""))
+        self.assertIsNone(dataset_description_frequency(None))
+        self.assertIsNone(dataset_description_frequency("no cadence stated"))
+
+    def test_profile_falls_back_to_dataset_cadence_only_when_field_unknown(self):
+        self.discovery._dataset_description_cache = {
+            "opt8": "comprehensive daily volatility metrics",
+        }
+        # Field has no cadence evidence -> dataset daily applies.
+        profile = self.discovery._profile_from_field(
+            "opt8", {"id": "iv", "description": "model score"}, 1.0, "option")
+        self.assertEqual(profile["frequency"], "daily")
+        self.assertEqual(profile["frequency_evidence"]["source"],
+                         "DATASET_DESCRIPTION_INFERRED")
+        # Field-level inferred cadence wins over the dataset fallback.
+        profile2 = self.discovery._profile_from_field(
+            "opt8",
+            {"id": "qv", "description": "quarterly estimate"}, 1.0, "option")
+        self.assertEqual(profile2["frequency"], "quarterly")
+        self.assertEqual(profile2["frequency_evidence"]["source"],
+                         "DESCRIPTION_INFERRED")
+
+    def test_profile_dataset_fallback_never_overrides_field_conflict(self):
+        self.discovery._dataset_description_cache = {
+            "opt8": "comprehensive daily volatility metrics",
+        }
+        # Field-level CONFLICT (daily key vs quarterly description) stays
+        # unresolved; the dataset fallback must not paper over it.
+        profile = self.discovery._profile_from_field(
+            "opt8",
+            {"id": "x", "frequency": "daily",
+             "description": "quarterly estimate"}, 1.0, "option")
+        self.assertIsNone(profile["frequency"])
+        self.assertEqual(profile["frequency_evidence"]["status"], "CONFLICT")
+
+    def test_dataset_description_map_caches_and_fails_closed(self):
+        self.discovery._dataset_description_cache = None
+        calls = []
+
+        def fake_get_datasets():
+            calls.append(1)
+            return [{"id": "opt8", "description": "daily option data"}]
+
+        self.client.get_datasets = fake_get_datasets
+        mapping = self.discovery._dataset_description_map()
+        self.assertEqual(mapping, {"opt8": "daily option data"})
+        # Second call is served from cache, no second fetch.
+        self.discovery._dataset_description_map()
+        self.assertEqual(len(calls), 1)
+        # Without a get_datasets capability the map fails closed to empty.
+        del self.client.get_datasets
+        self.discovery._dataset_description_cache = None
+        self.assertEqual(self.discovery._dataset_description_map(), {})

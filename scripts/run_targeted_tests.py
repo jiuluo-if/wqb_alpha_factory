@@ -27,6 +27,11 @@ DIRECT_TESTS = {
         "tests/test_protocol_truth.py",
     ),
     "wqb_agent/protocol.py": ("tests/test_protocol_truth.py",),
+    "wqb_agent/discovery.py": (
+        "tests/test_discovery.py",
+        "tests/test_discovery_selection.py",
+        "tests/test_discovery_semantics.py",
+    ),
     "wqb_agent/__init__.py": (
         "tests/test_runtime_composition.py",
         "tests/test_research_api.py",
