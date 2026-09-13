@@ -21,16 +21,6 @@
 
 ## 指标驱动的优化顺序
 
-## 权威外部证据边界
-
-外部网页证据只用于 bounded hypothesis/mechanism provenance，不参与
-`PROMISING`、`STABLE` 或 `PORTFOLIO_CANDIDATE` 的平台绩效判定。BRAIN live
-platform truth 始终高于外部网页；网页不能填充 `UNKNOWN`/`UNAVAILABLE`，也不能
-确认 BRAIN field semantics、operator syntax 或当前账户 capability。外部来源必须
-经过 outer agent 搜索、打开、验证、sanitise 后以稳定 `source_id` 和短 claim
-交给 inner agent；原始网页不得持久化，私有 Alpha/field/expression/指标不得进入
-公开搜索查询。冲突来源保持 `CONFLICTED`/`UNRESOLVED`，不得静默选择一方。
-
 先根据 `Sharpe`、`Fitness`、`Returns`、`Turnover`、`Drawdown`、`Margin`、checks、health、yearly evidence 和 correlation 诊断问题，再选择研究动作：
 
 - 低 Sharpe：优先审查信号质量、经济机制、年度稳定性、coverage、子 Universe 和语义字段替换，不先调 decay。

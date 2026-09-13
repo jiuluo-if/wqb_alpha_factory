@@ -201,6 +201,20 @@ class TestTrajectory(TmpStateMixin, unittest.TestCase):
         self.assertEqual(restored.self_correlation["status"], "PENDING")
         self.assertEqual(restored.to_dict(), experiment.to_dict())
 
+    def test_legacy_unknown_experiment_metadata_is_ignored_on_read(self):
+        experiment = Experiment(1, "h", "rank(close)", {"decay": 4}, ["close"])
+        experiment.proposal_id = "proposal-1"
+        experiment.submission_fingerprint = "fingerprint-1"
+        experiment.status = "DONE"
+        row = experiment.to_dict()
+        row["external_evidence_refs"] = ["legacy"]
+        restored = Experiment.from_dict(row)
+        self.assertEqual(restored.id, experiment.id)
+        self.assertEqual(restored.proposal_id, experiment.proposal_id)
+        self.assertEqual(restored.submission_fingerprint, experiment.submission_fingerprint)
+        self.assertEqual(restored.status, experiment.status)
+        self.assertNotIn("external_evidence_refs", restored.to_dict())
+
     def test_datasets_dict_entries_normalized(self):
         """proposal datasets 允许 {"id":...} 字典形态；Experiment 入口必须
         归一化为字符串 id，保证 trajectory/ResearchState 聚合可哈希。"""

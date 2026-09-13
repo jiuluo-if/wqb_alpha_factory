@@ -724,7 +724,7 @@ class ProposalExecutionWorkflow:
             for name in (
                 "field_source", "field_understanding", "field_analysis", "field_hypothesis_basis",
                 "operator_evidence", "template_id", "template_family", "template_stage_path",
-                "template_ref", "template_slots", "search_evidence", "external_evidence_refs", "novelty_score",
+                "template_ref", "template_slots", "search_evidence", "novelty_score",
             ):
                 setattr(exp, name, proposal.get(name))
             exp.allocation_arm = ctx.search_policy.allocator.arm_key(proposal)

@@ -193,6 +193,17 @@ class TestOptimizationDecisionContract(unittest.TestCase):
         with self.assertRaises(TypeError):
             OptimizationDecision.from_mapping(["not", "a", "mapping"])
 
+    def test_legacy_extra_metadata_is_ignored_without_changing_identity(self):
+        decision = OptimizationDecision.from_mapping({
+            "parent_id": "p1", "decision": "STOP",
+            "external_evidence_refs": ["legacy"],
+        })
+        plain = OptimizationDecision(parent_id="p1", decision="STOP")
+        self.assertFalse(hasattr(decision, "external_evidence_refs"))
+        self.assertNotIn("external_evidence_refs", decision.as_dict())
+        self.assertEqual(optimization_decision_identity(decision),
+                         optimization_decision_identity(plain))
+
     def test_parent_opportunity_and_summary_stay_evidence_derived(self):
         self.assertIn(parent_opportunity(self.parent), OPPORTUNITY_CATEGORIES)
         self.assertEqual(

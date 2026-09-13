@@ -111,7 +111,6 @@ class OptimizationDecision:
     old_value: object = None
     new_value: object = None
     reason: str = ""
-    external_evidence_refs: tuple[str, ...] = field(default_factory=tuple)
 
     def __post_init__(self):
         decision = _text(self.decision).upper() or "STOP"
@@ -124,10 +123,6 @@ class OptimizationDecision:
         if not isinstance(impact, Mapping):
             raise ValueError("self_correlation_impact must be a mapping")
         object.__setattr__(self, "self_correlation_impact", dict(impact))
-        object.__setattr__(
-            self, "external_evidence_refs",
-            tuple(str(value).strip() for value in (self.external_evidence_refs or ()) if str(value).strip()),
-        )
 
     @property
     def is_child(self):
@@ -173,7 +168,6 @@ class OptimizationDecision:
             ),
             "self_correlation_impact": dict(self.self_correlation_impact or {}),
             "why_not_parameter_tuning": self.why_not_parameter_tuning,
-            "external_evidence_refs": list(self.external_evidence_refs),
         }
 
     @classmethod
@@ -211,14 +205,13 @@ class OptimizationDecision:
             expected_effect=_text(payload.get("expected_effect")),
             falsification=_text(payload.get("falsification")),
             direction=_text(payload.get("direction")),
-            direction_transform=_transform(payload.get("direction_transform")),
+            direction_transform=_transform(payload.get("direction_transform")) or {},
             self_correlation_impact=dict(payload.get("self_correlation_impact") or {}),
             why_not_parameter_tuning=_text(payload.get("why_not_parameter_tuning")),
             validation_variable=_text(payload.get("validation_variable")),
             old_value=payload.get("old_value"),
             new_value=payload.get("new_value"),
             reason=_text(payload.get("reason")),
-            external_evidence_refs=tuple(payload.get("external_evidence_refs") or ()),
         )
 
     def as_dict(self):

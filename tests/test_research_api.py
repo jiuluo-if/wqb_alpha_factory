@@ -79,6 +79,14 @@ class TestResearchApi(unittest.TestCase):
         self.assertNotIn("expected_failure_modes", proposal)
         self.assertNotIn("tuning_risk", proposal)
 
+    def test_legacy_spec_metadata_is_ignored(self):
+        spec = ExperimentSpec.from_mapping({
+            "hypothesis": "test", "expression": "rank(close)",
+            "external_evidence_refs": ["legacy"],
+        })
+        self.assertFalse(hasattr(spec, "external_evidence_refs"))
+        self.assertNotIn("external_evidence_refs", spec.to_proposal())
+
     def test_discovery_facade_uses_existing_discovery_component(self):
         result = discover_fields("price reversal", agent=_FakeAgent(tempfile.gettempdir()))
         self.assertEqual(result["fields"][0]["id"], "close")

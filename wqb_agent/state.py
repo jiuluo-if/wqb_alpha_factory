@@ -136,7 +136,6 @@ class Experiment:
     template_ref: object = None
     template_slots: object = None
     search_evidence: object = None
-    external_evidence_refs: list = field(default_factory=list)
     search_outcome: object = None
     provisional_outcome: object = None
     final_outcome: object = None
@@ -192,7 +191,6 @@ class Experiment:
             if ref
         ]
         self.expected_failure_modes = list(self.expected_failure_modes or [])
-        self.external_evidence_refs = list(self.external_evidence_refs or [])
 
     def to_dict(self):
         data = {

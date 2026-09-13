@@ -362,12 +362,6 @@ def validate_proposal(p, discovered_fields=None, strict_experiment=False,
     if not isinstance(p, dict):
         return False, ["proposal 必须是对象"]
     problems = []
-    refs = p.get("external_evidence_refs", [])
-    if not isinstance(refs, list) or not all(isinstance(ref, str) and ref.strip() for ref in refs):
-        problems.append("external_evidence_refs 必须是 source_id 字符串数组")
-    elif (len(refs) > 8 or len(set(refs)) != len(refs)
-          or any(not ref.startswith("evidence-source|") for ref in refs)):
-        problems.append("external_evidence_refs 必须是去重的稳定 source_id 且至多 8 个")
     expression = (p.get("expression") or "").strip()
     if require_economic_integrity:
         mechanism = p.get("economic_mechanism")
