@@ -15,7 +15,12 @@ from .registry import (
     AlphaTemplateRegistry,
     template_numeric_audit,
 )
-from .validation import validate_single_variable_change, validate_template_contract
+from .validation import (
+    RELATIONSHIP_CONTRACTS,
+    effective_relationship_contract,
+    validate_single_variable_change,
+    validate_template_contract,
+)
 
 __all__ = [
     "AlphaTemplate",
@@ -33,4 +38,6 @@ __all__ = [
     "load_templates",
     "validate_template_contract",
     "validate_single_variable_change",
+    "RELATIONSHIP_CONTRACTS",
+    "effective_relationship_contract",
 ]

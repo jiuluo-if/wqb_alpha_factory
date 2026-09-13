@@ -9,6 +9,26 @@ SETTINGS_ARMS = {
 RESEARCH_VARIABLES = {
     "HORIZON", "FIELD", "MECHANISM", "UNIVERSE", "DECAY", "TRUNCATION",
 }
+RELATIONSHIP_CONTRACTS = frozenset({
+    "SINGLE_FIELD", "COMPARABLE_SPREAD", "DIRECTIONAL_RATIO",
+    "CO_MOVEMENT", "MULTI_FIELD_CONFIRMATION", "UNDECLARED",
+})
+
+
+def effective_relationship_contract(template):
+    """Return the bounded machine contract without inferring legacy semantics."""
+    model_contract = getattr(template, "effective_relationship_contract", None)
+    if model_contract is not None:
+        return model_contract
+    field_count = getattr(template, "economic_field_count", None)
+    if field_count is None:
+        slots = tuple(getattr(template, "required_slots", ()) or ())
+        field_count = len({"primary" if slot in {"p", "data_field"} else slot
+                           for slot in slots if slot in {"p", "data_field", "s", "t"}})
+    if field_count == 1:
+        return "SINGLE_FIELD"
+    return str(getattr(template, "relationship_contract", "UNDECLARED")
+               or "UNDECLARED").upper()
 
 
 def validate_template_contract(template):
@@ -34,6 +54,14 @@ def validate_template_contract(template):
         ):
             errors.append("INVALID_OPERATOR_SLOT")
     role = str(template.role or "")
+    contract = str(getattr(template, "relationship_contract", "UNDECLARED")
+                   or "UNDECLARED").upper()
+    if contract not in RELATIONSHIP_CONTRACTS:
+        errors.append("UNSUPPORTED_RELATIONSHIP_CONTRACT")
+    if template.economic_field_count == 1 and contract not in {"SINGLE_FIELD", "UNDECLARED"}:
+        errors.append("SINGLE_FIELD_RELATIONSHIP_CONTRACT")
+    if template.economic_field_count > 1 and contract == "SINGLE_FIELD":
+        errors.append("MULTI_FIELD_SINGLE_FIELD_CONTRACT")
     if PRIMARY_FIELD_SLOT_ALIASES.issubset(template.field_slots):
         errors.append("PRIMARY_FIELD_SLOT_ALIAS_CONFLICT")
     if role == "CONTROL_ALPHA":
@@ -65,7 +93,11 @@ def validate_template_contract(template):
     for profile in template.allowed_horizon_profiles:
         if any(value not in HORIZON_LATTICE for value in profile):
             errors.append("NON_LATTICE_HORIZON")
-    return {"ok": not errors, "errors": errors, "role": role}
+    return {"ok": not errors, "errors": errors, "role": role,
+            "relationship_contract": effective_relationship_contract(template),
+            "relationship_contract_status": (
+                "DECLARED" if contract != "UNDECLARED" else "LEGACY_UNDECLARED"
+            )}
 
 
 def validate_single_variable_change(changed_variable):

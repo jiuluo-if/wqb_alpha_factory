@@ -177,12 +177,12 @@ class TestResearchConstraints(unittest.TestCase):
         )
         proposals = AlphaFactory().assemble_proposals(
             {"id": "h", "datasets": ["fundamental6"], "template_ids": ["toy_pair_spread"]},
-            [{"id": "cashflow_op", "description": "经营现金流",
+            [{"id": "cashflow_op", "description": "daily close price",
               "type": "MATRIX", "semantic_status": "KNOWN", "frequency": "daily",
-              "category": "fundamental", "dataset": "fundamental6"},
-             {"id": "cashflow_fin", "description": "融资现金流",
+              "category": "market", "dataset": "pv1"},
+             {"id": "cashflow_fin", "description": "daily high price",
               "type": "MATRIX", "semantic_status": "KNOWN", "frequency": "daily",
-              "category": "fundamental", "dataset": "fundamental6"}],
+              "category": "market", "dataset": "pv1"}],
             reference,
             max_candidates=1,
         )

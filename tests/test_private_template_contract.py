@@ -9,6 +9,7 @@ from wqb_agent.alpha_templates.loader import (
     resolve_private_catalog_path,
 )
 from wqb_agent.alpha_templates.model import HORIZON_LATTICE
+from wqb_agent.alpha_factory import AlphaFactory
 from wqb_agent.alpha_templates.registry import AlphaTemplateRegistry
 from wqb_agent.alpha_templates.validation import validate_single_variable_change
 
@@ -74,6 +75,38 @@ class TestPrivateTemplateContract(unittest.TestCase):
             loaded = load_private_templates(path)
             self.assertEqual([item.template_id for item in loaded], ["private-probe"])
             self.assertEqual(AlphaTemplateRegistry(private_catalog=path).get("private-probe").operator_count, 4)
+
+    def test_legacy_multi_field_contract_is_undeclared_and_not_admitted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "legacy.toml"
+            path.write_text(PRIVATE_TOML, encoding="utf-8")
+            template = AlphaTemplateRegistry(private_catalog=path).get("private-probe")
+            self.assertEqual(template.relationship_contract, "UNDECLARED")
+            self.assertEqual(template.catalog_entry()["relationship_contract_status"], "LEGACY_UNDECLARED")
+            profiles = [
+                {"id": "price", "description": "daily close price", "dataset": "d1",
+                 "frequency": "daily", "category": "market", "semantic_status": "KNOWN"},
+                {"id": "volume", "description": "daily trading volume", "dataset": "d2",
+                 "frequency": "daily", "category": "market", "semantic_status": "KNOWN"},
+            ]
+            decision = AlphaFactory()._relationship_gate(profiles, template)
+            self.assertNotEqual(decision["admission"], "ALLOW")
+            self.assertIn("RELATIONSHIP_CONTRACT_UNDECLARED", decision["reasons"])
+
+            declared_path = Path(tmp) / "declared.toml"
+            declared_path.write_text(
+                PRIVATE_TOML.replace(
+                    'field_relationship = "complementary test signals"',
+                    'field_relationship = "complementary test signals"\n'
+                    'relationship_contract = "CO_MOVEMENT"',
+                ),
+                encoding="utf-8",
+            )
+            declared = AlphaTemplateRegistry(private_catalog=declared_path).get("private-probe")
+            self.assertEqual(
+                AlphaFactory()._relationship_gate(profiles, declared)["admission"],
+                "ALLOW",
+            )
 
     def test_public_catalog_is_synthetic_and_horizons_are_lattice(self):
         registry = AlphaTemplateRegistry()

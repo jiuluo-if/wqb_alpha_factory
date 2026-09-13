@@ -175,6 +175,7 @@ def _parse(document, *, strict_schema=False):
             fixed_field_bindings=tuple(raw.get("fixed_field_bindings", [])),
             allowed_field_families=tuple(raw.get("allowed_field_families", [])),
             field_relationship=_text(raw.get("field_relationship", "synthetic example"), "field_relationship"),
+            relationship_contract=raw.get("relationship_contract", "UNDECLARED"),
             direction_reason=_text(raw.get("direction_reason", raw["economic_mechanism"]), "direction_reason"),
             allowed_horizon_profiles=horizon_profiles,
             allowed_settings_arms=tuple(raw.get("allowed_settings_arms", ["BASE"])),

@@ -1,6 +1,7 @@
 """Relationship gate and multi-field template assembly contracts."""
 
 import datetime as dt
+import inspect
 import json
 import os
 import tempfile
@@ -34,6 +35,49 @@ from wqb_agent.weekly_quota import QuotaExceeded, WeeklySimulationQuota
 
 
 class TestFactoryRelationshipGate(unittest.TestCase):
+    def test_relationship_evaluator_has_no_template_identity_dispatch(self):
+        source = inspect.getsource(AlphaFactory._relationship_gate)
+        self.assertNotIn("template.family", source)
+        self.assertNotIn("template.template_id", source)
+        self.assertNotIn("startswith(\"toy_\")", source)
+
+    def test_relationship_admission_is_invariant_to_template_identity(self):
+        factory = AlphaFactory()
+        left = semantic_field("left", "daily close price")
+        right = semantic_field("right", "daily trading volume")
+        first = SimpleNamespace(
+            template_id="synthetic-a", family="family-a",
+            required_slots=("p", "s"), relationship_contract="CO_MOVEMENT",
+        )
+        renamed = SimpleNamespace(
+            template_id="synthetic-b", family="family-b",
+            required_slots=("p", "s"), relationship_contract="CO_MOVEMENT",
+        )
+        self.assertEqual(
+            factory._relationship_gate([left, right], first),
+            factory._relationship_gate([left, right], renamed),
+        )
+
+    def test_relationship_contract_changes_admission_without_family_dispatch(self):
+        factory = AlphaFactory()
+        earnings = semantic_field("earnings", "daily earnings")
+        assets = semantic_field("assets", "daily total assets")
+        ratio = SimpleNamespace(
+            template_id="synthetic-a", family="same-family",
+            required_slots=("p", "s"), relationship_contract="DIRECTIONAL_RATIO",
+        )
+        spread = SimpleNamespace(
+            template_id="synthetic-b", family="same-family",
+            required_slots=("p", "s"), relationship_contract="COMPARABLE_SPREAD",
+        )
+        self.assertEqual(
+            factory._relationship_gate([earnings, assets], ratio)["admission"],
+            "ALLOW",
+        )
+        self.assertNotEqual(
+            factory._relationship_gate([earnings, assets], spread)["admission"],
+            "ALLOW",
+        )
     def test_pair_relationship_gate_rejects_social_count_and_total_assets(self):
         fields = [
             {
@@ -121,9 +165,10 @@ class TestFactoryRelationshipGate(unittest.TestCase):
             dataset="fundamental6", frequency="daily", category="fundamental",
         )
         template = SimpleNamespace(
-            template_id="live_operating_profit_asset_intensity",
-            family="live-operating-profit-asset-intensity",
+            template_id="synthetic-ratio",
+            family="renamed-family",
             required_slots=("p", "s"),
+            relationship_contract="DIRECTIONAL_RATIO",
         )
         decision = factory._relationship_gate([earnings, assets], template)
         self.assertEqual(decision["admission"], "ALLOW")
@@ -156,7 +201,7 @@ class TestFactoryRelationshipGate(unittest.TestCase):
             [daily, annual], factory.registry.get("toy_sync_corr")
         )
         self.assertEqual(
-            decision["frequency_compatibility"]["status"], "REVIEW"
+            decision["frequency_compatibility"]["status"], "INCOMPATIBLE"
         )
         self.assertEqual(decision["admission"], "REJECT")
 
@@ -285,6 +330,7 @@ class TestFactoryRelationshipGate(unittest.TestCase):
                 field_roles=("toy_primary", "toy_confirmation", "toy_context"),
                 allowed_field_families=("TOY_ONLY",),
                 field_relationship="three complementary toy signals",
+                relationship_contract="MULTI_FIELD_CONFIRMATION",
                 economic_mechanism="TOY three-stream confirmation fixture.",
                 direction_reason="Aligned toy streams define the fixture direction.",
                 expected_horizon="one declared lattice profile",

@@ -17,6 +17,7 @@ from .alpha_templates import (
     TemplateNumericSlot,
     template_numeric_audit,
 )
+from .alpha_templates.validation import effective_relationship_contract
 from .discovery import frequency_evidence, normalize_coverage
 from .diversity import (
     extract_fields,
@@ -621,6 +622,7 @@ class AlphaFactory:
                     "template_operator_count": template.operator_count,
                     "template_field_roles": list(template.field_roles),
                     "template_field_relationship": template.field_relationship,
+                    "relationship_contract": effective_relationship_contract(template),
                     "template_novelty_family": template.novelty_family,
                     "template_allowed_settings_arms": list(template.allowed_settings_arms),
                     "template_allowed_horizon_profiles": [list(profile) for profile in template.allowed_horizon_profiles],
@@ -872,7 +874,7 @@ class AlphaFactory:
         return "unknown"
 
     @classmethod
-    def _frequency_compatibility(cls, traits, family):
+    def _frequency_compatibility(cls, traits, relationship_contract):
         """Classify only obvious frequency conflicts for a relation."""
         buckets = [cls._frequency_bucket(item.get("frequency")) for item in traits]
         if any(bucket == "unknown" for bucket in buckets):
@@ -894,7 +896,7 @@ class AlphaFactory:
         spread = max(rank[bucket] for bucket in buckets) - min(
             rank[bucket] for bucket in buckets
         )
-        direct_dependence = family in {"relative_covariance", "relative_correlation"}
+        direct_dependence = relationship_contract == "CO_MOVEMENT"
         if direct_dependence and spread >= 2:
             return {
                 "status": "INCOMPATIBLE",
@@ -941,29 +943,8 @@ class AlphaFactory:
     def _relationship_gate(cls, profiles, template):
         """Return an auditable relation decision for pair/triple slots."""
         traits = [_derive_field_semantic_traits(profile) for profile in profiles]
-        family = {
-            "toy_confirmation": "relative_correlation",
-            "toy_relative_change": "relationship_spread",
-            "toy_scale_surprise": "relative_ratio",
-            "toy_sync_corr": "relative_correlation",
-            # Private catalog families declare economic names for provenance;
-            # reuse the existing relationship contracts instead of creating a
-            # second gate for each catalog family.
-            "live-risk-decomposition": "relative_ratio",
-            "live-beta-correlation-shift": "relative_correlation",
-            "live-skew-scaled-change": "relationship_spread",
-            "live-iv-term-structure-shift": "relationship_spread",
-            "live-sales-estimate-revision": "relationship_spread",
-            "live-eps-forecast-dispersion": "relationship_spread",
-            "live-operating-profit-asset-intensity": "relative_ratio",
-            "live-cashflow-debt-coverage": "relationship_spread",
-            "live-equity-asset-structure": "relationship_spread",
-            "live-option-positioning-term-slope": "relationship_spread",
-            "live-forward-breakeven-dislocation": "relationship_spread",
-            "live-news-novelty-sentiment": "relative_correlation",
-            "live-social-attention-sentiment": "relationship_spread",
-        }.get(template.family, template.family)
-        frequency = cls._frequency_compatibility(traits, family)
+        relationship_contract = effective_relationship_contract(template)
+        frequency = cls._frequency_compatibility(traits, relationship_contract)
 
         def result(admission, score, labels, relationship_type="unknown",
                    *, symmetric=False, preferred=None, assignment_reason="",
@@ -983,29 +964,14 @@ class AlphaFactory:
                 "asymmetric": not bool(symmetric),
                 "frequency_compatibility": frequency,
                 "confirmation_mechanism": confirmation_mechanism,
+                "contract": relationship_contract,
             }
 
-        # Synthetic catalog probes may be exercised with generic offline
-        # fixture profiles that intentionally lack private semantic evidence.
-        # Admit only the narrow, explicitly marked market/fundamental fixture
-        # case; real runtime still requires the private catalog and real
-        # semantic admission.
-        categories = {
-            str(profile.get("category") or "").lower()
-            for profile in profiles if isinstance(profile, dict)
-        }
-        if (template.template_id.startswith("toy_")
-                and categories <= {"market", "fundamental"}
-                and categories
-                and all(item.get("semantic_admission") == "REVIEW" for item in traits)
-                and frequency["status"] == "COMPATIBLE"):
+        if relationship_contract == "UNDECLARED" and len(profiles) > 1:
             return result(
-                "ALLOW", 1, set(), "synthetic_fixture", symmetric=True,
-                preferred={slot: "EITHER" for slot in ("p", "s", "t")
-                           if slot in template.field_slots},
-                assignment_reason="offline synthetic fixture relationship",
-                evidence_strength="LOW",
-                reasons=("synthetic fixture has no private economic evidence",),
+                "REVIEW", 0, [], reasons=(
+                    "RELATIONSHIP_CONTRACT_UNDECLARED",
+                )
             )
 
         if any(item.get("semantic_admission") != "ALLOW" for item in traits):
@@ -1022,7 +988,7 @@ class AlphaFactory:
         labels = set().union(*pair_labels) if pair_labels else set()
 
         if len(profiles) >= 3:
-            if family != "generic_multi_field_confirmation":
+            if relationship_contract != "MULTI_FIELD_CONFIRMATION":
                 return result(
                     "REJECT", -30, labels, reasons=(
                         "该模板只支持两个字段，不能把三条槽位压成 pair 关系",
@@ -1067,7 +1033,7 @@ class AlphaFactory:
                 "REJECT", -40, labels, relationship_type,
                 reasons=("frequency incompatibility blocks this relationship",),
             )
-        if family in {"relationship_spread", "relative_spread_change", "generic_multi_field_spread"}:
+        if relationship_contract == "COMPARABLE_SPREAD":
             if relationship_type == "same_economic_concept":
                 if traits[0].get("measurement") != traits[1].get("measurement"):
                     return result(
@@ -1080,7 +1046,7 @@ class AlphaFactory:
                     "REJECT", -30, labels, relationship_type,
                     reasons=("spread requires comparable quantities or an explicit differential",),
                 )
-        elif family in {"relative_ratio", "generic_multi_field_ratio"}:
+        elif relationship_contract == "DIRECTIONAL_RATIO":
             if relationship_type == "option_pair":
                 preferred = {"p": "EITHER", "s": "EITHER"}
                 symmetric = True
@@ -1102,7 +1068,7 @@ class AlphaFactory:
                     "REJECT", -30, labels, relationship_type,
                     reasons=("ratio requires a directional numerator/denominator or put/call pair",),
                 )
-        elif family in {"relative_covariance", "relative_correlation"}:
+        elif relationship_contract == "CO_MOVEMENT":
             allowed = {
                 "same_economic_concept", "option_pair", "revision_dispersion",
                 "price_volume", "complementary_expectations",
@@ -1126,7 +1092,7 @@ class AlphaFactory:
                 assignment_reason=assignment_reason,
                 reasons=("frequency compatibility is REVIEW; auto Factory cannot use it",),
             )
-        if family in {"relative_ratio", "generic_multi_field_ratio"}:
+        if relationship_contract == "DIRECTIONAL_RATIO":
             return result(
                 "ALLOW", 70 if relationship_type == "numerator_denominator" else 60,
                 labels, relationship_type,
@@ -1224,12 +1190,13 @@ class AlphaFactory:
                 continue
             if template is not None:
                 candidate_traits = _derive_field_semantic_traits(candidate)
-                if template.family == "generic_multi_field_confirmation":
+                if effective_relationship_contract(template) == "MULTI_FIELD_CONFIRMATION":
                     analyst_family = {
                         "analyst_revision", "analyst_dispersion", "sentiment",
                     }
                     frequency = self._frequency_compatibility(
-                        [primary_traits, candidate_traits], template.family
+                        [primary_traits, candidate_traits],
+                        effective_relationship_contract(template),
                     )
                     relation = {
                         "admission": (

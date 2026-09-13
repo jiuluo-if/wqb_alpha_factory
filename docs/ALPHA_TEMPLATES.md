@@ -48,6 +48,16 @@ structural、mechanism、instantiation 三类身份；窗口变化不是新经�
 
 新增模板规则详见同目录 [`AGENTS.md`](../wqb_agent/alpha_templates/AGENTS.md)。
 
+## Relationship admission contract
+
+`family` 与 `template_id` 只用于 provenance/grouping，不能路由关系准入；
+`field_relationship` 只提供人类可读说明，也不会被解析。多字段模板必须由
+`relationship_contract` 声明有限 enum：`SINGLE_FIELD`、`COMPARABLE_SPREAD`、
+`DIRECTIONAL_RATIO`、`CO_MOVEMENT` 或 `MULTI_FIELD_CONFIRMATION`。单字段有效
+contract 是 `SINGLE_FIELD`，不进入关系 gate。旧 private catalog 缺少该字段时仍
+可读取和审计，但保持 `UNDECLARED`，自动 Factory 只返回 review/block；用户需在
+私有 catalog 中显式补充 contract 才能恢复自动准入。不会自动迁移私有文件。
+
 ## Concrete and partial-operator branches
 
 模板默认 `template_mode = "CONCRETE"`；旧 v2 catalog 不需要迁移。只有显式声明

@@ -91,7 +91,7 @@ class TestFactoryBatchContract(unittest.TestCase):
         fields = [{
             "id": "field", "description": "synthetic verified field",
             "type": "MATRIX", "semantic_status": "KNOWN", "frequency": "daily",
-            "category": "market", "dataset": "fundamental6",
+            "category": "market", "dataset": "pv1",
         }]
         factory = AlphaFactory()
         self.assertEqual(
@@ -139,9 +139,9 @@ class TestFactoryBatchContract(unittest.TestCase):
 
         reference = operator_reference()
         fields = [
-            {"id": f"field_{index}", "description": "已核验经济字段", "type": "MATRIX",
+            {"id": f"field_{index}", "description": "daily close price", "type": "MATRIX",
              "semantic_status": "KNOWN", "frequency": "daily", "category": "market",
-             "dataset": "fundamental6"}
+             "dataset": "pv1"}
             for index in range(30)
         ]
         proposals = AlphaFactory().generate_factory_batch(
@@ -159,9 +159,9 @@ class TestFactoryBatchContract(unittest.TestCase):
         from tests.helpers import operator_reference
 
         fields = [
-            {"id": f"field_{index}", "description": "verified economic field",
+            {"id": f"field_{index}", "description": "daily close price",
              "type": "MATRIX", "semantic_status": "KNOWN", "frequency": "daily",
-             "category": "market", "dataset": "fundamental6"}
+             "category": "market", "dataset": "pv1"}
             for index in range(30)
         ]
         proposals = AlphaFactory().generate_factory_batch(
@@ -176,9 +176,9 @@ class TestFactoryBatchContract(unittest.TestCase):
         from tests.helpers import operator_reference
 
         fields = [{
-            "id": f"field_{index}", "description": "verified economic field", "type": "MATRIX",
+            "id": f"field_{index}", "description": "daily close price", "type": "MATRIX",
             "semantic_status": "KNOWN", "frequency": "daily", "category": "market",
-            "dataset": "fundamental6",
+            "dataset": "pv1",
         } for index in range(10)]
         proposals = AlphaFactory().generate_factory_batch(
             {"id": "disabled-factory", "include_partial_operator_branches": False},
@@ -194,9 +194,9 @@ class TestFactoryBatchContract(unittest.TestCase):
         reference = operator_reference()
         fields = [
             {
-                "id": f"field_{index}", "description": f"verified field {index}",
+                "id": f"field_{index}", "description": f"daily close price {index}",
                 "type": "MATRIX", "semantic_status": "KNOWN", "frequency": "daily",
-                "category": "market", "dataset": "fundamental6",
+                "category": "market", "dataset": "pv1",
             }
             for index in range(30)
         ]
@@ -255,9 +255,9 @@ class TestFactoryBatchContract(unittest.TestCase):
 
         reference = operator_reference()
         fields = [
-            {"id": f"field_{index}", "description": "已核验经济字段", "type": "MATRIX",
+            {"id": f"field_{index}", "description": "daily close price", "type": "MATRIX",
              "semantic_status": "KNOWN", "frequency": "daily", "category": "market",
-             "dataset": "fundamental6"}
+             "dataset": "pv1"}
             for index in range(30)
         ]
         proposals = AlphaFactory().generate_factory_batch(

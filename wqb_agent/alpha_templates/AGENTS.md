@@ -8,6 +8,12 @@ tracked catalog 只能包含 TOY/SYNTHETIC/NON-RESEARCH 示例；真实模板、
 
 This directory owns the template schema, fail-closed loaders, registry, and numeric/operator audits. The tracked catalog is public synthetic material only; it must never contain production expressions, private field IDs, fixed private pairings, research evidence, or learned priors.
 
+`family` and `template_id` are provenance/grouping metadata only and never
+dispatch relationship admission. `field_relationship` is human-readable text;
+the sole machine selector is the bounded `relationship_contract` enum owned by
+this package. Legacy multi-field templates may load with `UNDECLARED`, but remain
+review-only until the user explicitly declares a supported contract.
+
 Private templates are loaded only from an explicit absolute constructor path, `WQB_ALPHA_TEMPLATE_CATALOG`, or `~/.wqb_alpha_factory/private/alpha_templates.toml`. Missing private input is `PRIVATE_TEMPLATE_CATALOG_MISSING`; never search cwd/parents or fall back to the public package catalog.
 
 Every private template declares `role`, field roles/relationships, mechanism, direction and reason, expected horizon, falsification, self-correlation impact, novelty family, settings arms, and horizon profiles. `required_slots` contains every render binding: `p`/`data_field`, `s`, and `t` are economic field slots, while `g` is a control binding. `p` and `data_field` are aliases and cannot coexist. Probe templates require 4–6 operator occurrences and 2–4 conceptual economic fields; controls are the only 1–3 operator / single-field exception. Horizon values are restricted to `[5, 22, 66, 120, 255]`; multi-window profiles are ordered adjacent lattice periods and are not Cartesian products.

@@ -101,6 +101,7 @@ class AlphaTemplate:
     fixed_field_bindings: tuple
     allowed_field_families: tuple
     field_relationship: str
+    relationship_contract: str
     direction_reason: str
     allowed_horizon_profiles: tuple
     allowed_settings_arms: tuple
@@ -121,6 +122,7 @@ class AlphaTemplate:
                  selection_groups=(), selection_order=1000, role=None,
                  field_roles=(), fixed_field_bindings=(),
                  allowed_field_families=(), field_relationship="",
+                 relationship_contract="UNDECLARED",
                  direction_reason="", allowed_horizon_profiles=(),
                  allowed_settings_arms=("BASE",), mechanism_tags=(),
                  novelty_family="", template_mode="CONCRETE", branch_of=None,
@@ -148,6 +150,8 @@ class AlphaTemplate:
         object.__setattr__(self, "fixed_field_bindings", tuple(fixed_field_bindings))
         object.__setattr__(self, "allowed_field_families", tuple(allowed_field_families))
         object.__setattr__(self, "field_relationship", field_relationship)
+        object.__setattr__(self, "relationship_contract",
+                           str(relationship_contract or "UNDECLARED").upper())
         object.__setattr__(self, "direction_reason", direction_reason or self.economic_mechanism)
         object.__setattr__(self, "allowed_horizon_profiles", tuple(allowed_horizon_profiles))
         object.__setattr__(self, "allowed_settings_arms", tuple(allowed_settings_arms))
@@ -189,6 +193,13 @@ class AlphaTemplate:
         """Economic slots after the primary p/data_field alias."""
         return tuple(slot for slot in self.field_slots
                      if slot not in PRIMARY_FIELD_SLOT_ALIASES)
+
+    @property
+    def effective_relationship_contract(self):
+        """Bounded contract used by admission; unary templates are implicit singletons."""
+        if self.economic_field_count == 1:
+            return "SINGLE_FIELD"
+        return self.relationship_contract
 
     @property
     def operator_count(self):
@@ -296,6 +307,11 @@ class AlphaTemplate:
             "fixed_field_bindings": list(self.fixed_field_bindings),
             "allowed_field_families": list(self.allowed_field_families),
             "field_relationship": self.field_relationship,
+            "relationship_contract": self.effective_relationship_contract,
+            "relationship_contract_status": (
+                "DECLARED" if self.effective_relationship_contract != "UNDECLARED"
+                else "LEGACY_UNDECLARED"
+            ),
             "direction_reason": self.direction_reason,
             "allowed_horizon_profiles": [list(v) if isinstance(v, tuple) else v for v in self.allowed_horizon_profiles],
             "allowed_settings_arms": list(self.allowed_settings_arms),
