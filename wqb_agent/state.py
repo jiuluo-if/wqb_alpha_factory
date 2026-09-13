@@ -39,6 +39,14 @@ IDENTITY_FIELDS = (
     "optimization_decision_id",
 )
 
+OPERATOR_PROVENANCE_FIELDS = (
+    "template_version", "template_mode", "template_branch_of",
+    "template_fingerprint", "template_structural_fingerprint",
+    "template_mechanism_fingerprint", "operator_role",
+    "operator_role_mapping", "operator_realization_fingerprint",
+    "operator_capability_fingerprint",
+)
+
 # One Experiment occupies a bounded number of rows in the append-only file
 # (canonical first append plus settlement revisions), so a restart only needs
 # to read enough tail lines to reconstruct the recent in-memory window.
@@ -133,6 +141,16 @@ class Experiment:
     operator_evidence: object = None
     template_id: object = None
     template_family: object = None
+    template_version: object = None
+    template_mode: object = None
+    template_branch_of: object = None
+    template_fingerprint: object = None
+    template_structural_fingerprint: object = None
+    template_mechanism_fingerprint: object = None
+    operator_role: object = None
+    operator_role_mapping: object = None
+    operator_realization_fingerprint: object = None
+    operator_capability_fingerprint: object = None
     template_stage_path: object = None
     template_ref: object = None
     template_slots: object = None
@@ -356,6 +374,21 @@ class Trajectory:
                     "settlement revision cannot change execution identity: "
                     f"{experiment.id}"
                 )
+            has_provenance = any(
+                reference.get(name) not in (None, "", {}, [])
+                for name in OPERATOR_PROVENANCE_FIELDS
+            )
+            if has_provenance:
+                for name in OPERATOR_PROVENANCE_FIELDS:
+                    if reference.get(name) != row.get(name):
+                        raise ValueError(
+                            "settlement revision cannot change provenance: "
+                            f"{experiment.id} ({name})"
+                        )
+            else:
+                for name in OPERATOR_PROVENANCE_FIELDS:
+                    setattr(experiment, name, None)
+                row = experiment.to_dict()
             row[TRAJECTORY_REVISION_KEY] = RESEARCH_SETTLED_REVISION
             if latest.get(experiment.id) == row:
                 continue

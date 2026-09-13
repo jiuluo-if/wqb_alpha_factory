@@ -28,11 +28,51 @@ from wqb_agent.diversity import (
 from wqb_agent.factory_runner import AIFactoryRunner
 from wqb_agent.proposal_contract import factory_batch_stats, validate_factory_batch
 from wqb_agent.research_guard import parameter_only_change_reason
-from wqb_agent.state import Experiment
+from wqb_agent.state import Experiment, Trajectory
 from wqb_agent.weekly_quota import QuotaExceeded, WeeklySimulationQuota
 
 
 class TestFactoryProvenancePersistence(unittest.TestCase):
+    def test_partial_operator_provenance_round_trips_through_checkpoint(self):
+        experiment = Experiment(1, "h", "rank(ts_corr(a, b, 20))", {}, ["a", "b"])
+        experiment.status = "UNKNOWN"
+        experiment.template_version = "v1"
+        experiment.template_mode = "PARTIAL_OPERATOR"
+        experiment.template_branch_of = "toy_base"
+        experiment.template_fingerprint = "template-fp"
+        experiment.template_structural_fingerprint = "struct-fp"
+        experiment.template_mechanism_fingerprint = "mechanism-fp"
+        experiment.operator_role = "CO_MOVEMENT_ESTIMATOR"
+        experiment.operator_role_mapping = {"CO_MOVEMENT_ESTIMATOR": "ts_corr"}
+        experiment.operator_realization_fingerprint = "realization-fp"
+        experiment.operator_capability_fingerprint = "capability-fp"
+        with tempfile.TemporaryDirectory() as tmp:
+            store = CheckpointStore(tmp)
+            store.write(1, {"id": "h"}, [experiment], complete=False)
+            restored = Experiment.from_dict(store.load(1)["experiments"][0])
+        for name in (
+            "template_version", "template_mode", "template_branch_of",
+            "template_fingerprint", "template_structural_fingerprint",
+            "template_mechanism_fingerprint", "operator_role",
+            "operator_role_mapping", "operator_realization_fingerprint",
+            "operator_capability_fingerprint",
+        ):
+            self.assertEqual(getattr(restored, name), getattr(experiment, name))
+
+    def test_settlement_cannot_mutate_operator_provenance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "trajectory.jsonl")
+            trajectory = Trajectory(path=path)
+            original = Experiment(1, "h", "rank(x)", {}, ["x"])
+            original.template_mode = "PARTIAL_OPERATOR"
+            original.operator_role = "ROLE"
+            original.operator_role_mapping = {"ROLE": "op_a"}
+            original.operator_realization_fingerprint = "real-a"
+            trajectory.add(original)
+            changed = Experiment.from_dict(original.to_dict())
+            changed.operator_role_mapping = {"ROLE": "op_b"}
+            with self.assertRaises(ValueError):
+                trajectory.settle(changed)
     def test_code_screen_precedes_agent_economic_gate(self):
         from tests.helpers import operator_reference
 

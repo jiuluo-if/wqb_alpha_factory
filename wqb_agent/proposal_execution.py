@@ -33,6 +33,7 @@ from .proposal_contract import (
 )
 from .research_guard import ResearchLoopGuard, structural_family_key
 from .state import (
+    OPERATOR_PROVENANCE_FIELDS,
     RECOVERABLE_STATUSES,
     UNKNOWN_STATUSES,
     UNRESOLVED_STATUSES,
@@ -739,6 +740,16 @@ class ProposalExecutionWorkflow:
         experiments = []
         known_ids = list(discovered_profiles)
         for proposal in fresh:
+            if proposal.get("template_mode") == "PARTIAL_OPERATOR":
+                missing = [
+                    name for name in OPERATOR_PROVENANCE_FIELDS
+                    if proposal.get(name) in (None, "", {}, [])
+                ]
+                if missing:
+                    raise ValueError(
+                        "PARTIAL_OPERATOR provenance incomplete: "
+                        + ", ".join(missing)
+                    )
             fields = proposal.get("fields") or known_ids
             if fields:
                 fields = extract_fields(proposal["expression"], fields)
@@ -758,6 +769,7 @@ class ProposalExecutionWorkflow:
                 "field_source", "field_understanding", "field_analysis", "field_hypothesis_basis",
                 "operator_evidence", "template_id", "template_family", "template_stage_path",
                 "template_ref", "template_slots", "search_evidence", "novelty_score",
+                *OPERATOR_PROVENANCE_FIELDS,
             ):
                 setattr(exp, name, proposal.get(name))
             exp.allocation_arm = ctx.search_policy.allocator.arm_key(proposal)

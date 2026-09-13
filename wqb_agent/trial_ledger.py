@@ -185,6 +185,13 @@ class TrialLedger:
             "template_id": self._value(trial, "template_id") or "unknown",
             "dataset_family": self._value(trial, "dataset_family") or self._value(trial, "datasets") or "unknown",
             "structural_fingerprint": structural_fingerprint(expression, fields),
+            "template_mode": self._value(trial, "template_mode") or "LEGACY",
+            "template_branch_of": self._value(trial, "template_branch_of") or "LEGACY",
+            "operator_role": self._value(trial, "operator_role") or "UNKNOWN",
+            "operator_realization_fingerprint": self._value(
+                trial, "operator_realization_fingerprint"
+            ) or "UNKNOWN",
+            "operator_realization": self._operator_realization(trial),
             "fields": sorted({_text(field) for field in fields if field is not None}),
             "alpha_id": self._value(trial, "alpha_id"),
             "reward": reward if reward is not None else self._value(trial, "reward") or (
@@ -211,6 +218,13 @@ class TrialLedger:
             if self.trajectory_path and not exists:
                 self._write_history_completeness_unlocked(outcome)
             return written
+
+    @classmethod
+    def _operator_realization(cls, trial):
+        mapping = cls._value(trial, "operator_role_mapping")
+        if not isinstance(mapping, dict) or len(mapping) != 1:
+            return "UNKNOWN"
+        return _text(next(iter(mapping.values())), "UNKNOWN")
 
     def record_outcome_settled(self, trial, *, reward, reward_version="reward_v1",
                                base_quality=None, robustness=None,
@@ -275,7 +289,8 @@ class TrialLedger:
         phase_counts = Counter()
         status_counts = Counter()
         groups = {key: defaultdict(Counter) for key in
-                  ("template_family", "lineage_id", "template_id", "field")}
+                  ("template_family", "lineage_id", "template_id", "field",
+                   "operator_role", "operator_realization", "operator_realization_group")}
         events = 0
         trial_ids = set()
         generated_trials = set()
@@ -361,6 +376,15 @@ class TrialLedger:
             status_counts[row.get("status", "UNKNOWN")] += 1
             for key in ("template_family", "lineage_id", "template_id"):
                 groups[key][row.get(key, "unknown")][row.get("phase", "unknown")] += 1
+            for key in ("operator_role", "operator_realization"):
+                groups[key][row.get(key, "UNKNOWN")][row.get("phase", "unknown")] += 1
+            realization_group = (
+                f"{row.get('operator_role', 'UNKNOWN')}::"
+                f"{row.get('operator_realization', 'UNKNOWN')}"
+            )
+            groups["operator_realization_group"][realization_group][
+                row.get("phase", "unknown")
+            ] += 1
             for field in row.get("fields") or []:
                 groups["field"][field][row.get("phase", "unknown")] += 1
         lifecycle_proposals = self._lifecycle_proposals(lifecycle_rows)
@@ -430,6 +454,10 @@ class TrialLedger:
             "trial_counts": {
                 key: {group: dict(counts) for group, counts in values.items()}
                 for key, values in groups.items()
+            },
+            "operator_realization_accounting": {
+                group: dict(counts)
+                for group, counts in groups["operator_realization_group"].items()
             },
         }
 

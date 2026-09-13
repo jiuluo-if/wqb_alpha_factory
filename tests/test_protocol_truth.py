@@ -113,6 +113,29 @@ class TestYearlyEvidence(unittest.TestCase):
 
 
 class TestTrialLedger(unittest.TestCase):
+    def test_operator_realization_fields_are_counted_without_identity_change(self):
+        ledger = TrialLedger(None, persist=False)
+        trial = {
+            "id": "trial-op", "candidate_id": "candidate-op", "proposal_id": "proposal-op",
+            "round": 1, "expression": "rank(ts_corr(a, b, 20))", "fields_used": ["a", "b"],
+            "template_mode": "PARTIAL_OPERATOR", "template_branch_of": "toy_base",
+            "operator_role": "CO_MOVEMENT_ESTIMATOR",
+            "operator_role_mapping": {"CO_MOVEMENT_ESTIMATOR": "ts_corr"},
+            "operator_realization_fingerprint": "realization-fp", "status": "FAILED",
+        }
+        for phase in ("candidate_generated", "candidate_admitted", "simulation_committed"):
+            ledger.record(trial, phase, outcome="FAILED")
+        summary = ledger.summarize()
+        self.assertEqual(summary["trial_counts"]["operator_role"]["CO_MOVEMENT_ESTIMATOR"]["candidate_generated"], 1)
+        self.assertEqual(summary["trial_counts"]["operator_realization"]["ts_corr"]["simulation_committed"], 1)
+        self.assertEqual(
+            summary["operator_realization_accounting"][
+                "CO_MOVEMENT_ESTIMATOR::ts_corr"
+            ]["candidate_generated"],
+            1,
+        )
+        self.assertEqual(summary["phase_counts"]["candidate_admitted"], 1)
+        self.assertEqual(len(ledger._events), 3)
     def test_durable_append_requires_explicit_worker_delegation(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "trial_ledger.jsonl")

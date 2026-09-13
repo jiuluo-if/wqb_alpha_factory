@@ -45,6 +45,12 @@ DIRECT_TESTS = {
         "tests/test_checkpoint_store.py",
         "tests/test_recovery.py",
     ),
+    "wqb_agent/state.py": (
+        "tests/test_state.py",
+        "tests/test_recovery.py",
+        "tests/test_settled_evidence_durability.py",
+        "tests/test_factory_provenance_persistence.py",
+    ),
     "wqb_agent/proposal_execution.py": (
         "tests/test_proposal_execution.py",
         "tests/test_recovery.py",

@@ -60,6 +60,11 @@ class CheckpointStore:
                 "submission_started_at", "progress_url", "experiment_stage",
                 "research_role", "change_type", "lineage_id", "template_id",
                 "template_family", "proposal_origin", "research_layer",
+                "template_version", "template_mode", "template_branch_of",
+                "template_fingerprint", "template_structural_fingerprint",
+                "template_mechanism_fingerprint", "operator_role",
+                "operator_role_mapping", "operator_realization_fingerprint",
+                "operator_capability_fingerprint",
             }
             row = {key: value for key, value in row.items() if key in keep}
             checkpoint_experiments.append(row)

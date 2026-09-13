@@ -1887,6 +1887,13 @@ class AlphaFactory:
                     "rationale": candidate["rationale"],
                 },
                 "experiment_question": (
+                    (
+                        "在机制、字段关系、horizon 和 settings 保持不变时，"
+                        f"{candidate.get('operator_role') or 'operator'} 使用 "
+                        f"{next(iter((candidate.get('operator_role_mapping') or {}).values()), 'REALIZATION')} "
+                        "是否改变可复现结果？"
+                    )
+                    if template.template_mode == "PARTIAL_OPERATOR" else
                     f"字段 {field_id} 的 {template.template_id} 结构是否提供可复现的增量信号？"
                 ),
                 "expected_failure_modes": [
