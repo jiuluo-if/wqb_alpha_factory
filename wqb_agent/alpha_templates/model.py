@@ -10,6 +10,10 @@ OPERATOR_OCCURRENCE_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 OPERATOR_PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}\s*\(")
 FASTEXPR_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+ECONOMIC_FIELD_SLOTS = ("p", "data_field", "s", "t")
+CONTROL_BINDING_SLOTS = ("g",)
+PRIMARY_FIELD_SLOT_ALIASES = frozenset({"p", "data_field"})
+
 HORIZON_LATTICE = (5, 22, 66, 120, 255)
 
 FIXED_NUMERICS = {
@@ -163,6 +167,30 @@ class AlphaTemplate:
         return self.kind == "economic"
 
     @property
+    def field_slots(self):
+        """Binding slots that consume economic field profiles."""
+        return tuple(slot for slot in self.required_slots
+                     if slot in ECONOMIC_FIELD_SLOTS)
+
+    @property
+    def control_slots(self):
+        """Binding slots required for rendering but not economic fields."""
+        return tuple(slot for slot in self.required_slots
+                     if slot in CONTROL_BINDING_SLOTS)
+
+    @property
+    def economic_field_count(self):
+        """Conceptual economic field count; p and data_field are aliases."""
+        return len({"primary" if slot in PRIMARY_FIELD_SLOT_ALIASES else slot
+                    for slot in self.field_slots})
+
+    @property
+    def companion_field_slots(self):
+        """Economic slots after the primary p/data_field alias."""
+        return tuple(slot for slot in self.field_slots
+                     if slot not in PRIMARY_FIELD_SLOT_ALIASES)
+
+    @property
     def operator_count(self):
         return (len(OPERATOR_OCCURRENCE_RE.findall(self.expression))
                 + len(OPERATOR_PLACEHOLDER_RE.findall(self.expression)))
@@ -246,6 +274,9 @@ class AlphaTemplate:
             "family": self.family,
             "expression": self.expression,
             "required_slots": list(self.required_slots),
+            "economic_field_slots": list(self.field_slots),
+            "control_slots": list(self.control_slots),
+            "economic_field_count": self.economic_field_count,
             "stage_path": self.stage_path,
             "fingerprint": self.fingerprint,
             "source": "synthetic_catalog",

@@ -372,7 +372,7 @@ class AlphaFactory:
         }
         combinations_seen = 0
         for template in templates:
-            slots = len(template.required_slots)
+            slots = template.economic_field_count
             if slots < 2:
                 continue
             iterator = itertools.combinations(profiles, slots)
@@ -415,7 +415,7 @@ class AlphaFactory:
                 try:
                     values = {
                         slot: str(profile.get("id"))
-                        for slot, profile in zip(template.required_slots, selected)
+                        for slot, profile in zip(template.field_slots, selected)
                     }
                     values["g"] = self.neutralization
                     expression = canonical_expression(template.render(values))
@@ -542,13 +542,12 @@ class AlphaFactory:
                 "g": self.neutralization,
             }
             if any(
-                slot in {"p", "data_field", "s", "t"}
-                and not values.get(slot)
-                for slot in template.required_slots
+                slot in template.field_slots and not values.get(slot)
+                for slot in template.field_slots
             ):
                 continue
-            slot_profiles = list(normalized_profiles[:len(template.required_slots)])
-            if len(template.required_slots) > 1:
+            slot_profiles = list(normalized_profiles[:template.economic_field_count])
+            if template.economic_field_count > 1:
                 relation = self._relationship_gate(slot_profiles, template)
                 if relation["admission"] != "ALLOW":
                     continue
@@ -578,7 +577,7 @@ class AlphaFactory:
                 relationship_audit = {
                     "slot_assignment": {
                         slot: values[slot]
-                        for slot in template.required_slots
+                        for slot in template.field_slots
                         if slot in values and values[slot]
                     },
                     "relationship_type": relation["relationship_type"],
@@ -814,7 +813,7 @@ class AlphaFactory:
         if concept == "analyst_revision" and family == "data_quality_penalty":
             return {"admission": "REJECT", "score": -30, "reasons": ["修正字段不能冒充数据质量"]}
         if not known:
-            if vector_family or template.required_slots != ("p",):
+            if vector_family or template.field_slots != ("p",):
                 return {"admission": "REVIEW", "score": score - 15, "reasons": ["语义 UNKNOWN，仅可审阅"]}
             return {"admission": "REVIEW", "score": score - 10, "reasons": ["语义 UNKNOWN，仅可作语法基线"]}
         if not reasons:
@@ -1003,7 +1002,7 @@ class AlphaFactory:
             return result(
                 "ALLOW", 1, set(), "synthetic_fixture", symmetric=True,
                 preferred={slot: "EITHER" for slot in ("p", "s", "t")
-                           if slot in template.required_slots},
+                           if slot in template.field_slots},
                 assignment_reason="offline synthetic fixture relationship",
                 evidence_strength="LOW",
                 reasons=("synthetic fixture has no private economic evidence",),
@@ -1154,7 +1153,7 @@ class AlphaFactory:
             compatibility = self._template_semantic_compatibility(template, profile)
             if compatibility["admission"] == "REJECT":
                 continue
-            if len(template.required_slots) > 1:
+            if template.economic_field_count > 1:
                 compatibility = dict(compatibility)
                 compatibility["admission"] = "REVIEW"
                 compatibility["score"] -= 5
@@ -1737,8 +1736,7 @@ class AlphaFactory:
                 if family_counts.get(template.family, 0) >= family_cap:
                     continue
                 companion_slots = [
-                    slot for slot in template.required_slots
-                    if slot not in {"p", "data_field"}
+                    slot for slot in template.companion_field_slots
                 ]
                 slot_profiles = [profile]
                 slot_profiles.extend(self._select_companion_profiles(
@@ -2080,7 +2078,7 @@ class AlphaFactory:
             ][:7]
             relationship_pool = [
                 item for item in ranked
-                if len(item["template"].required_slots) > 1
+                if item["template"].economic_field_count > 1
             ][:6]
             rng.shuffle(high_score_pool)
             rng.shuffle(lower_score_pool)
@@ -2097,8 +2095,7 @@ class AlphaFactory:
                 # field.  The normal assemble path remains the single source
                 # of proposal metadata and operator evidence.
                 companion_slots = [
-                    slot for slot in template.required_slots
-                    if slot not in {"p", "data_field"}
+                    slot for slot in template.companion_field_slots
                 ]
                 if companion_slots:
                     # Give assemble_proposals the full rotated pool so its

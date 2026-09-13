@@ -7,14 +7,97 @@ from unittest.mock import patch
 
 from wqb_agent.alpha_factory import AlphaFactory
 from wqb_agent.alpha_templates.loader import load_templates
+from wqb_agent.alpha_templates.model import AlphaTemplate
 from wqb_agent.alpha_templates.registry import (
     AlphaTemplateRegistry,
     template_numeric_audit,
 )
+from wqb_agent.alpha_templates.validation import validate_template_contract
 from wqb_agent.candidate import CandidateBuilder
 
 
 class TestAlphaTemplateCatalog(unittest.TestCase):
+    def test_required_slots_are_distinguished_from_economic_field_slots(self):
+        template = AlphaTemplate(
+            "slot-semantics", family="synthetic", expression="rank({p})",
+            required_slots=("p", "s", "g"), role="PROBE_ALPHA", economic=True,
+            economic_mechanism="synthetic mechanism", field_relationship="synthetic relation",
+            direction_reason="synthetic direction", expected_horizon="short-term",
+            falsification="synthetic falsification",
+        )
+        self.assertEqual(template.field_slots, ("p", "s"))
+        self.assertEqual(template.control_slots, ("g",))
+        self.assertEqual(template.economic_field_count, 2)
+        self.assertEqual(template.companion_field_slots, ("s",))
+
+    def test_probe_with_only_primary_and_control_slot_fails_field_gate(self):
+        template = AlphaTemplate(
+            "invalid-probe", family="synthetic", expression="rank(ts_mean({p}, 5))",
+            required_slots=("p", "g"), role="PROBE_ALPHA", economic=True,
+            economic_mechanism="synthetic mechanism", field_relationship="synthetic relation",
+            direction_reason="synthetic direction", expected_horizon="short-term",
+            falsification="synthetic falsification",
+        )
+        contract = validate_template_contract(template)
+        self.assertFalse(contract["ok"])
+        self.assertIn("PROBE_ECONOMIC_FIELD_COUNT", contract["errors"])
+
+    def test_primary_alias_slots_cannot_be_declared_together(self):
+        template = AlphaTemplate(
+            "alias-conflict", family="synthetic", expression="rank({p})",
+            required_slots=("p", "data_field"), role="PROBE_ALPHA", economic=True,
+            economic_mechanism="synthetic mechanism", field_relationship="synthetic relation",
+            direction_reason="synthetic direction", expected_horizon="short-term",
+            falsification="synthetic falsification",
+        )
+        contract = validate_template_contract(template)
+        self.assertFalse(contract["ok"])
+        self.assertIn("PRIMARY_FIELD_SLOT_ALIAS_CONFLICT", contract["errors"])
+
+    def test_control_can_render_with_a_non_economic_group_binding(self):
+        template = AlphaTemplate(
+            "control-group", family="synthetic", expression="group_neutralize({p}, {g})",
+            required_slots=("p", "g"), role="CONTROL_ALPHA",
+            economic_mechanism="control neutralization", field_relationship="single field",
+            direction_reason="control direction", expected_horizon="short-term",
+            falsification="control fails",
+        )
+        contract = validate_template_contract(template)
+        self.assertTrue(contract["ok"], contract)
+        self.assertEqual(template.economic_field_count, 1)
+
+    def test_generate_excludes_control_binding_from_relationship_and_field_refs(self):
+        template = AlphaTemplate(
+            "probe-group", family="synthetic", expression=(
+                "group_neutralize(rank(ts_zscore(add({p}, ts_mean({s}, 5)), 5)), {g})"
+            ), required_slots=("p", "s", "g"), role="PROBE_ALPHA", economic=True,
+            economic_mechanism="synthetic mechanism", field_relationship="synthetic relation",
+            direction_reason="synthetic direction", expected_horizon="short-term",
+            falsification="synthetic falsification",
+        )
+        registry = AlphaTemplateRegistry([template])
+        factory = AlphaFactory(registry=registry)
+        fields = [
+            {"id": "primary", "dataset": "d1", "category": "market",
+             "frequency": "daily", "type": "MATRIX"},
+            {"id": "secondary", "dataset": "d2", "category": "market",
+             "frequency": "daily", "type": "MATRIX"},
+        ]
+        relation = {
+            "admission": "ALLOW", "relationship_type": "synthetic",
+            "reasons": [], "slot_assignment_reason": "test",
+            "frequency_compatibility": {}, "symmetric": True,
+        }
+        with patch.object(factory, "_relationship_gate", return_value=relation) as gate:
+            candidates = factory.generate({"template_ids": ["probe-group"]}, fields, count=1)
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(gate.call_args.args[0], fields)
+        self.assertEqual(set(candidates[0]["fields_used"]), {"primary", "secondary"})
+        self.assertEqual(
+            [item["id"] for item in candidates[0]["field_refs"]],
+            ["primary", "secondary"],
+        )
+        self.assertEqual(candidates[0]["template_slots"]["g"], factory.neutralization)
     def test_legacy_concrete_defaults_and_renders_through_owner(self):
         template = AlphaTemplateRegistry().get("toy_control_rank")
         self.assertEqual(template.template_mode, "CONCRETE")

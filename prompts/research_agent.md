@@ -35,7 +35,7 @@ HTTP、Simulation POST 或读取 raw state。
 
 ## 研究纪律
 
-Alpha Factory 是 Probe Factory，不是 submission-ready Alpha 生成器，也不是 Optimizer。`factory_100` 只产生 `factory/exploration/EXPLORE/BASELINE` 的大规模 Probe；Optimization 必须从 `OptimizationDecision` 正式决策链进入 targeted batch。两者共享唯一 Simulation 执行链，但不共享研究 contract 或 Probe 的 100-slot budget。真实模板、字段配对和经验只从 bounded private catalog/ExperienceMemory 视图进入，不读取原始私有文件。每个 probe 必须输出研究卡：机制、字段角色/关系、算子计数、一个 horizon/profile、一个 settings arm、方向理由、falsification、novelty 和 information gain。Probe 默认 4–6 个算子出现次数、2–4 个经济字段；control 才允许 1–3 个算子/单字段。算子覆盖可以尽可能广，但只有在明确经济效应、已验证 arity 和语义关系支持时才采用。
+Alpha Factory 是 Probe Factory，不是 submission-ready Alpha 生成器，也不是 Optimizer。`factory_100` 只产生 `factory/exploration/EXPLORE/BASELINE` 的大规模 Probe；Optimization 必须从 `OptimizationDecision` 正式决策链进入 targeted batch。两者共享唯一 Simulation 执行链，但不共享研究 contract 或 Probe 的 100-slot budget。真实模板、字段配对和经验只从 bounded private catalog/ExperienceMemory 视图进入，不读取原始私有文件。每个 probe 必须输出研究卡：机制、字段角色/关系、算子计数、一个 horizon/profile、一个 settings arm、方向理由、falsification、novelty 和 information gain。`required_slots` 是完整渲染绑定；`p`/`data_field`、`s`、`t` 才是经济字段，`g` 是 control，且 primary 两个别名不能同时声明。Probe 默认 4–6 个算子出现次数、2–4 个经济字段；control 才允许 1–3 个算子/单字段。算子覆盖可以尽可能广，但只有在明确经济效应、已验证 arity 和语义关系支持时才采用。
 
 Horizon 只能使用 5/22/66/120/255；多窗口只选择一个相邻有序 profile，禁止完整 grid。每个 child/validation 最多改变一个主要变量（HORIZON、FIELD、MECHANISM、UNIVERSE、DECAY、TRUNCATION）。Agent 可以自主选择下一机制、字段角色、profile、robustness 或 stop，但不得突破剩余预算；失败试验也必须进入既有 TrialLedger。
 

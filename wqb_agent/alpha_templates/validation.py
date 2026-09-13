@@ -1,6 +1,6 @@
 """Pure validation gates for public synthetic and local private templates."""
 
-from .model import FASTEXPR_IDENTIFIER_RE, HORIZON_LATTICE
+from .model import FASTEXPR_IDENTIFIER_RE, HORIZON_LATTICE, PRIMARY_FIELD_SLOT_ALIASES
 
 SETTINGS_ARMS = {
     "BASE", "UNIVERSE_ARM", "DECAY_DOWN", "DECAY_UP",
@@ -34,14 +34,18 @@ def validate_template_contract(template):
         ):
             errors.append("INVALID_OPERATOR_SLOT")
     role = str(template.role or "")
+    if PRIMARY_FIELD_SLOT_ALIASES.issubset(template.field_slots):
+        errors.append("PRIMARY_FIELD_SLOT_ALIAS_CONFLICT")
     if role == "CONTROL_ALPHA":
-        if not 1 <= template.operator_count <= 3 or len(template.required_slots) != 1:
-            errors.append("CONTROL_COMPLEXITY_OR_FIELD_COUNT")
+        if not 1 <= template.operator_count <= 3:
+            errors.append("CONTROL_OPERATOR_COUNT")
+        if template.economic_field_count != 1:
+            errors.append("CONTROL_ECONOMIC_FIELD_COUNT")
     elif role == "PROBE_ALPHA":
         if not 4 <= template.operator_count <= 6:
             errors.append("PROBE_OPERATOR_COUNT")
-        if not 2 <= len(template.required_slots) <= 4:
-            errors.append("PROBE_FIELD_COUNT")
+        if not 2 <= template.economic_field_count <= 4:
+            errors.append("PROBE_ECONOMIC_FIELD_COUNT")
     else:
         errors.append("UNKNOWN_TEMPLATE_ROLE")
     if not template.economic_mechanism.strip():

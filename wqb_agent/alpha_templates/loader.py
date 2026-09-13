@@ -15,6 +15,7 @@ from .model import (
     TemplateNumericSlot,
     TemplateOperatorSlot,
 )
+from .validation import validate_template_contract
 
 _KINDS = {"baseline", "economic"}
 _DIRECTIONS = {"long", "reversal"}
@@ -186,16 +187,12 @@ def _parse(document, *, strict_schema=False):
     result = tuple(templates)
     if strict_schema:
         for template in result:
-            if template.role == "CONTROL_ALPHA":
-                valid = 1 <= template.operator_count <= 3 and len(template.required_slots) == 1
-            elif template.role == "PROBE_ALPHA":
-                valid = 4 <= template.operator_count <= 6 and 2 <= len(template.required_slots) <= 4
-            else:
-                valid = False
-            if not valid:
-                raise ValueError(f"{template.template_id}: invalid role complexity/field gate")
-            if not template.economic_mechanism.strip() or not template.falsification.strip():
-                raise ValueError(f"{template.template_id}: economic mechanism and falsification required")
+            contract = validate_template_contract(template)
+            if not contract["ok"]:
+                raise ValueError(
+                    f"{template.template_id}: invalid template contract: "
+                    + ", ".join(contract["errors"])
+                )
     for template in result:
         declared = {
             (str(slot.token or slot.default), int(slot.occurrence)): slot

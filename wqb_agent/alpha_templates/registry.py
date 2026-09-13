@@ -135,7 +135,8 @@ class AlphaTemplateRegistry:
 
     def economic_templates(self):
         return [self._templates[key] for key in sorted(self._templates)
-                if self._templates[key].economic]
+                if self._templates[key].economic
+                and self._templates[key].role == "PROBE_ALPHA"]
 
     def select(self, hypothesis=None):
         if not isinstance(hypothesis, dict):

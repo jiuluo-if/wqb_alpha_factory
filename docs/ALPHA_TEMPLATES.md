@@ -4,6 +4,15 @@
 operator coverage 的唯一 owner。tracked `catalog/builtin.toml` 仅含明确的
 TOY/SYNTHETIC/NON-RESEARCH 示例，绝不是 production fallback。
 
+## Binding slot semantics
+
+`required_slots` 保留完整渲染绑定；字段计数使用模板模型派生的
+`field_slots`、`control_slots`、`economic_field_count` 和
+`companion_field_slots`。`p` 与 `data_field` 是同一个 primary 字段的别名，
+`g` 是运行时 neutralization control，不进入 `fields`、`field_refs`、关系字段
+计数或 companion 选择。Probe 必须有 2–4 个概念经济字段，Control 必须恰好有
+1 个；因此 `p,g` Probe 会 fail closed，而不是按两个 required slots 放行。
+
 模板新增或拓展必须先阅读并遵守模板目录最近的 [`AGENTS.md`](../wqb_agent/alpha_templates/AGENTS.md)，同时确认根 `AGENTS.md` 的模板变更门禁。
 
 ## Private catalog
