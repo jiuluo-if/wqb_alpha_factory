@@ -10,7 +10,7 @@ import time
 from contextlib import nullcontext
 
 from .artifacts import atomic_write_json_if_changed
-from .locking import single_instance_scope, state_owner_held
+from .locking import StateMutationDelegation, single_instance_scope
 from .schema import CHECKPOINT_VERSION, CREATED_BY_VERSION, migrate_artifact
 
 _CHECKPOINT_NAME = re.compile(r"round_(\d+)\.checkpoint\.json")
@@ -30,14 +30,16 @@ class CheckpointStore:
     def path(self, round_no):
         return os.path.join(self.state_dir, f"round_{int(round_no)}.checkpoint.json")
 
-    def write(self, round_no, hypothesis, experiments, complete):
+    def write(self, round_no, hypothesis, experiments, complete, *, delegation=None):
         """Atomically persist one checkpoint and return whether bytes changed."""
         state_dir = os.path.abspath(self.state_dir)
-        owner_scope = (
-            nullcontext()
-            if state_owner_held(state_dir)
-            else single_instance_scope(state_dir, operation="checkpoint-write")
-        )
+        if delegation is None:
+            owner_scope = single_instance_scope(state_dir, operation="checkpoint-write")
+        else:
+            if not isinstance(delegation, StateMutationDelegation):
+                raise TypeError("delegation must be a StateMutationDelegation")
+            delegation.validate(state_dir)
+            owner_scope = nullcontext()
         with owner_scope:
             return self._write_owned(round_no, hypothesis, experiments, complete)
 

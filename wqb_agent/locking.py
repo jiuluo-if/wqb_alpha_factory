@@ -31,6 +31,7 @@ class _OwnerState:
     depth: int
     os_handle: object
     metadata: bool
+    delegation_marker: object
 
 
 @dataclass
@@ -40,6 +41,34 @@ class _OwnerToken:
     metadata: bool
     released: bool = False
 
+    def delegate_simulation_worker(self):
+        """Issue a transient capability for one Simulation worker callback."""
+        if self.released or self.thread_id != threading.get_ident():
+            raise RuntimeError("state owner token is not live on its owning thread")
+        state = _OWNER_STATES.get(self.lock_path)
+        if state is None or state.thread_id != self.thread_id:
+            raise RuntimeError("state owner is not held by the current thread")
+        return StateMutationDelegation(self.lock_path, state.delegation_marker)
+
+
+@dataclass(frozen=True)
+class StateMutationDelegation:
+    """Transient, in-memory authorization for a Simulation worker update."""
+
+    _lock_path: str
+    _owner_marker: object
+
+    def validate(self, state_dir):
+        lock_path = _normalized_lock_path(state_dir)
+        if lock_path != self._lock_path:
+            raise OwnerBusyError(lock_path)
+        with _REGISTRY_LOCK:
+            state = _OWNER_STATES.get(self._lock_path)
+            valid = state is not None and state.delegation_marker is self._owner_marker
+        if not valid:
+            raise OwnerBusyError(lock_path)
+        return self
+
 
 def _normalized_lock_path(state_dir):
     return os.path.abspath(os.path.join(state_dir, "run.lock"))
@@ -48,13 +77,6 @@ def _normalized_lock_path(state_dir):
 def _path_guard(lock_path):
     with _REGISTRY_LOCK:
         return _PATH_GUARDS.setdefault(lock_path, threading.RLock())
-
-
-def state_owner_held(state_dir):
-    """Return whether this process currently holds the state-dir owner."""
-    lock_path = _normalized_lock_path(state_dir)
-    with _REGISTRY_LOCK:
-        return lock_path in _OWNER_STATES
 
 
 def _write_owner_metadata(lock_path, operation):
@@ -88,7 +110,8 @@ def _acquire_owner(state_dir, operation, *, metadata):
         if metadata:
             _write_owner_metadata(lock_path, operation)
         _OWNER_STATES[lock_path] = _OwnerState(
-            thread_id=thread_id, depth=1, os_handle=handle, metadata=metadata
+            thread_id=thread_id, depth=1, os_handle=handle, metadata=metadata,
+            delegation_marker=object(),
         )
     except Exception:
         _release_os_lock(handle)

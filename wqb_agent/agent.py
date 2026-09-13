@@ -470,7 +470,7 @@ class Agent:
     def run_proposals(self, path=None, allow_unresolved_checkpoint=False):
         """Compatibility facade for the guarded proposal workflow."""
         try:
-            with self._mutation_scope("run-proposals"):
+            with self._mutation_scope("run-proposals") as owner:
                 self.proposal_execution.update_agent_config(
                     factory_batch_size=self.factory_batch_size,
                     min_factory_datasets=self.min_factory_datasets,
@@ -481,6 +481,9 @@ class Agent:
                     research_integrity=self.research_integrity,
                     max_field_alpha_count=self.max_field_alpha_count,
                     require_platform_alpha_count=self.require_platform_alpha_count,
+                    simulation_delegation=(
+                        owner.delegate_simulation_worker() if owner is not None else None
+                    ),
                 )
                 result = self.proposal_execution.run(
                     path=path,
@@ -525,9 +528,10 @@ class Agent:
     def _unfinished_checkpoint_except(self, round_no):
         return self.proposal_execution._unfinished_checkpoint_except(round_no)
 
-    def _write_proposal_checkpoint(self, round_no, hypothesis, experiments, complete):
+    def _write_proposal_checkpoint(self, round_no, hypothesis, experiments, complete,
+                                    delegation=None):
         return self.proposal_execution._write_proposal_checkpoint(
-            round_no, hypothesis, experiments, complete
+            round_no, hypothesis, experiments, complete, delegation=delegation
         )
 
     def _load_proposal_checkpoint(self, round_no):
@@ -956,12 +960,14 @@ class Agent:
 
     # ------------------------------------------------------------ helpers
 
-    def _record_trial_phase(self, experiment, phase, outcome=None, reason=None, reason_code=None):
+    def _record_trial_phase(self, experiment, phase, outcome=None, reason=None,
+                            reason_code=None, delegation=None):
         """Best-effort audit only; never changes Simulation safety semantics."""
         try:
             self.trial_ledger.record(
                 experiment, phase, outcome=outcome, reason=reason,
                 reason_code=reason_code,
+                delegation=delegation,
             )
         except Exception as exc:
             print(f"[TRIAL_LEDGER_WARN] {type(exc).__name__}: {exc}")
@@ -1013,7 +1019,8 @@ class Agent:
         except (TypeError, ValueError):
             pass
 
-    def _on_simulation_update(self, experiment, round_no, hypothesis, experiments):
+    def _on_simulation_update(self, experiment, round_no, hypothesis, experiments,
+                              delegation=None):
         if hasattr(self, "heartbeat"):
             statuses = [str(item.status).upper() for item in experiments]
             self.heartbeat.emit_stage(
@@ -1027,14 +1034,17 @@ class Agent:
             )
         if experiment.status in {"RUNNING", "SUBMIT_UNKNOWN"}:
             self._record_trial_phase(
-                experiment, "submitted", outcome=experiment.status
+                experiment, "submitted", outcome=experiment.status,
+                delegation=delegation,
             )
             self._record_trial_phase(
-                experiment, "simulation_submitted", outcome=experiment.status
+                experiment, "simulation_submitted", outcome=experiment.status,
+                delegation=delegation,
             )
             self._update_search_lifecycle(experiment)
         self._write_proposal_checkpoint(
-            round_no, hypothesis, experiments, complete=False
+            round_no, hypothesis, experiments, complete=False,
+            delegation=delegation,
         )
 
     def emit_heartbeat(self, stage, **metadata):

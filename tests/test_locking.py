@@ -53,6 +53,60 @@ class TestSingleInstanceScope(unittest.TestCase):
 
         self.assertEqual(entered, ["busy"])
 
+    def test_owner_can_delegate_only_to_explicit_simulation_worker(self):
+        with tempfile.TemporaryDirectory() as state_dir:
+            with single_instance_scope(state_dir, operation="outer") as owner:
+                delegation = owner.delegate_simulation_worker()
+                result = []
+
+                def use_delegation():
+                    try:
+                        delegation.validate(state_dir)
+                    except OwnerBusyError:
+                        result.append("busy")
+                    else:
+                        result.append("authorized")
+
+                thread = threading.Thread(target=use_delegation)
+                thread.start()
+                thread.join()
+
+            self.assertEqual(result, ["authorized"])
+
+    def test_delegation_expires_when_owner_is_released(self):
+        with tempfile.TemporaryDirectory() as state_dir:
+            with single_instance_scope(state_dir, operation="outer") as owner:
+                delegation = owner.delegate_simulation_worker()
+            with self.assertRaises(OwnerBusyError):
+                delegation.validate(state_dir)
+
+    def test_delegation_is_bound_to_state_dir(self):
+        with tempfile.TemporaryDirectory() as state_dir:
+            with tempfile.TemporaryDirectory() as other_state_dir:
+                with single_instance_scope(state_dir, operation="outer") as owner:
+                    delegation = owner.delegate_simulation_worker()
+                    with self.assertRaises(OwnerBusyError):
+                        delegation.validate(other_state_dir)
+
+    def test_delegation_is_not_a_general_owner_reentry(self):
+        with tempfile.TemporaryDirectory() as state_dir:
+            with single_instance_scope(state_dir, operation="outer") as owner:
+                delegation = owner.delegate_simulation_worker()
+                result = []
+
+                def attempt():
+                    try:
+                        with single_instance_scope(state_dir, operation="worker"):
+                            result.append("entered")
+                    except OwnerBusyError:
+                        result.append("busy")
+
+                thread = threading.Thread(target=attempt)
+                thread.start()
+                thread.join()
+
+            self.assertEqual(result, ["busy"])
+
     def test_direct_factory_run_is_blocked_before_session_mutation(self):
         with tempfile.TemporaryDirectory() as state_dir:
             agent = SimpleNamespace(state_dir=state_dir, alpha_factory=Mock())

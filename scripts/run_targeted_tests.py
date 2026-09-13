@@ -31,6 +31,16 @@ DIRECT_TESTS = {
         "tests/test_checkpoint_store.py",
         "tests/test_recovery.py",
     ),
+    "wqb_agent/proposal_execution.py": (
+        "tests/test_proposal_execution.py",
+        "tests/test_recovery.py",
+        "tests/test_simulator.py",
+    ),
+    "wqb_agent/simulator.py": (
+        "tests/test_simulator.py",
+        "tests/test_proposal_execution.py",
+        "tests/test_recovery.py",
+    ),
     "wqb_agent/factory_runner.py": (
         "tests/test_factory_boundaries.py",
         "tests/test_factory_blocker_control.py",

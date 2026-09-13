@@ -11,7 +11,7 @@ from wqb_agent.locking import OwnerBusyError, single_instance_scope
 
 
 class TestCheckpointStore(unittest.TestCase):
-    def test_write_reuses_outer_state_owner_for_execution_worker(self):
+    def test_write_from_unrelated_thread_is_blocked_by_outer_owner(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = CheckpointStore(tmp)
             outcomes = []
@@ -22,13 +22,42 @@ class TestCheckpointStore(unittest.TestCase):
                 thread.start()
                 thread.join()
 
+            self.assertEqual(outcomes, ["busy"])
+            self.assertFalse(os.path.exists(store.path(1)))
+
+    def test_write_from_delegated_simulation_worker_succeeds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = CheckpointStore(tmp)
+            outcomes = []
+            with single_instance_scope(tmp, operation="outer") as owner:
+                delegation = owner.delegate_simulation_worker()
+                thread = threading.Thread(
+                    target=lambda: self._write_from_thread(store, outcomes, delegation)
+                )
+                thread.start()
+                thread.join()
+
             self.assertEqual(outcomes, ["written"])
             self.assertTrue(os.path.exists(store.path(1)))
 
+    def test_released_owner_delegation_cannot_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = CheckpointStore(tmp)
+            with single_instance_scope(tmp, operation="outer") as owner:
+                delegation = owner.delegate_simulation_worker()
+            outcomes = []
+            thread = threading.Thread(
+                target=lambda: self._write_from_thread(store, outcomes, delegation)
+            )
+            thread.start()
+            thread.join()
+            self.assertEqual(outcomes, ["busy"])
+            self.assertFalse(os.path.exists(store.path(1)))
+
     @staticmethod
-    def _write_from_thread(store, outcomes):
+    def _write_from_thread(store, outcomes, delegation=None):
         try:
-            store.write(1, {"id": "h"}, [], complete=False)
+            store.write(1, {"id": "h"}, [], complete=False, delegation=delegation)
         except OwnerBusyError:
             outcomes.append("busy")
         else:

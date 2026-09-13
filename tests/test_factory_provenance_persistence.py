@@ -185,9 +185,13 @@ class TestFactoryProvenancePersistence(unittest.TestCase):
             # (Trajectory -> trajectory.jsonl) so a fresh process can rehydrate
             # a legal optimizer parent; derived result/submission/color
             # sidecars stay in the in-memory day view.
-            self.assertEqual(
-                set(os.listdir(tmp)), {"trajectory.jsonl", "trial_ledger.jsonl"}
-            )
+            durable = set(os.listdir(tmp))
+            self.assertTrue({"trajectory.jsonl", "trial_ledger.jsonl"}.issubset(durable))
+            unexpected = {
+                name for name in durable
+                if name not in {"trajectory.jsonl", "trial_ledger.jsonl", "run.lock", "run.lock.guard"}
+            }
+            self.assertEqual(unexpected, set())
             self.assertEqual(len(agent.daily_cache.simulations()), 1)
 
     def test_runtime_rehydrates_trajectory_evidence_without_result_sidecars(self):

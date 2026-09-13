@@ -1,8 +1,10 @@
 import json
 import os
 import tempfile
+import threading
 import unittest
 
+from wqb_agent.locking import OwnerBusyError, single_instance_scope
 from wqb_agent.protocol import (
     CapabilityStatus,
     endpoint_catalog,
@@ -90,6 +92,31 @@ class TestYearlyEvidence(unittest.TestCase):
 
 
 class TestTrialLedger(unittest.TestCase):
+    def test_durable_append_requires_explicit_worker_delegation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "trial_ledger.jsonl")
+            ledger = TrialLedger(path)
+            trial = {"id": "trial-1", "round": 1, "expression": "rank(field)"}
+            outcomes = []
+            with single_instance_scope(tmp, operation="outer") as owner:
+                delegation = owner.delegate_simulation_worker()
+
+                def attempt(capability=None):
+                    try:
+                        ledger.record(trial, "submitted", delegation=capability)
+                    except OwnerBusyError:
+                        outcomes.append("busy")
+                    else:
+                        outcomes.append("written")
+
+                thread = threading.Thread(target=attempt)
+                thread.start()
+                thread.join()
+                thread = threading.Thread(target=attempt, args=(delegation,))
+                thread.start()
+                thread.join()
+
+            self.assertEqual(outcomes, ["busy", "written"])
     def test_lifecycle_and_group_counts_are_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
             ledger = TrialLedger(os.path.join(tmp, "trial_ledger.jsonl"))

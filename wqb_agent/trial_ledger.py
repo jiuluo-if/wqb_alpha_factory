@@ -23,7 +23,7 @@ from .artifacts import (
 )
 from .expression import canonical_expression
 from .identity import candidate_identity
-from .locking import single_instance_scope, state_owner_held
+from .locking import StateMutationDelegation, single_instance_scope
 from .optimization_decision import optimization_decision_identity
 from .schema import CREATED_BY_VERSION, TRIAL_LEDGER_VERSION
 from .search_policy import structural_fingerprint
@@ -70,11 +70,14 @@ class TrialLedger:
         self._events = []
         self._append_lock = threading.Lock()
 
-    def _durable_scope(self, operation):
+    def _durable_scope(self, operation, delegation=None):
         if not self.persist or not self.path:
             return nullcontext()
         state_dir = os.path.dirname(os.path.abspath(self.path))
-        if state_owner_held(state_dir):
+        if delegation is not None:
+            if not isinstance(delegation, StateMutationDelegation):
+                raise TypeError("delegation must be a StateMutationDelegation")
+            delegation.validate(state_dir)
             return nullcontext()
         return single_instance_scope(state_dir, operation)
 
@@ -132,7 +135,8 @@ class TrialLedger:
         return getattr(trial, key, default)
 
     def record(self, trial, phase, *, outcome=None, reason=None, reason_code=None,
-               stage=None, timestamp=None, reward=None, settlement=None):
+               stage=None, timestamp=None, reward=None, settlement=None,
+               delegation=None):
         if phase not in PHASES:
             raise ValueError(f"未知 trial phase: {phase}")
         candidate_id = self._value(trial, "candidate_id") or candidate_identity(trial, round_no=self._value(trial, "round"))
@@ -197,7 +201,7 @@ class TrialLedger:
                 return False
             self._events.append(row)
             return True
-        with self._durable_scope("trial-ledger-record"):
+        with self._durable_scope("trial-ledger-record", delegation=delegation):
             if self.trajectory_path:
                 outcome, exists = self._history_completeness_unlocked(self.trajectory_path)
             else:

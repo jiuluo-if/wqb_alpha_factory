@@ -13,13 +13,11 @@ Safety semantics (rolling executor, three windows):
 
 - A definite rejection (syntax/settings, 400/422) marks the experiment FAILED
   and does NOT pause dispatch — it is a property of the expression.
-- A rate-limit rejection (429 budget exhausted) and polling timeout /
-  platform 5xx / network errors are handled by REPLACEMENT: the experiment is
-  re-submitted (a fresh simulation replaces the stalled one) and re-polled,
-  up to `replace_attempts` times with growing backoff. Only after the budget
-  is exhausted does the experiment settle as FAILED (system-level: no pause,
-  no learning, dedupe-exempt for a later round) — a single-instance round
-  never stalls because of transient platform busyness.
+- Polling timeout / platform 5xx / network errors for a known progress URL are
+  handled by REPOLL: the same remote Simulation is polled again, up to
+  `replace_attempts` times with growing backoff. No replacement POST is made;
+  an exhausted poll budget settles as UNKNOWN and remains eligible for
+  read-only reconciliation.
 - An authentication rejection (401/403) marks FAILED and PAUSES dispatch:
   retrying the same window is pointless until credentials are fixed.
 - Any other local exception (network / read error) marks UNKNOWN too — a
@@ -104,7 +102,7 @@ class Simulator:
                             on_complete(exp)
                         except Exception as callback_error:
                             # Reporting must never turn a valid platform result
-                            # into an UNKNOWN simulation or stop replacement.
+                            # into an UNKNOWN simulation or stop repolling.
                             print(
                                 f"[CALLBACK_ERROR] {exp.id}: "
                                 f"{type(callback_error).__name__}: {callback_error}"
@@ -287,14 +285,13 @@ class Simulator:
                     if attempt < self.replace_attempts:
                         delay = self.replace_backoff_sec * attempt
                         print(
-                            f"[REPLACE] {experiment.id} 第{attempt}/{self.replace_attempts}"
+                            f"[REPOLL] {experiment.id} 第{attempt}/{self.replace_attempts}"
                             f"次轮询失败，{delay}s 后重试同一 simulation：{last_error[:90]}"
                         )
                         time.sleep(delay)
                         continue
-                    # 替换预算耗尽：系统级失败。不暂停派发（Reflection 按
-                    # RATE_LIMIT/TIMEOUT/INFRA 处理，不学习），去重豁免允许
-                    # 下轮重试；单实例轮次因此不会因平台繁忙停摆。
+                    # 同一远程任务的重轮询预算耗尽：保留 UNKNOWN，等待
+                    # 只读对账；不把轮询失败误写成新的 Simulation。
                     experiment.error = last_error
                     experiment.status = "UNKNOWN"
                     persist()

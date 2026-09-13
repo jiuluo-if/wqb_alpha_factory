@@ -60,7 +60,7 @@ class ProposalExecutionHooks:
     completed_parent: Callable[[str | None, dict | None], Any]
     record_trial_phase: Callable[..., None]
     record_candidate_rejection: Callable[..., None]
-    on_simulation_update: Callable[[Experiment, int, dict, list[Experiment]], None]
+    on_simulation_update: Callable[..., None]
     record_live_result: Callable[[Experiment], None]
     refresh_self_correlation_evidence: Callable[[list[Experiment]], None]
     mark_robustness_stability: Callable[[list[Experiment]], None]
@@ -97,6 +97,7 @@ class ProposalExecutionContext:
     research_integrity: bool = False
     max_field_alpha_count: int | None = None
     require_platform_alpha_count: bool = False
+    simulation_delegation: Any = None
 
 
 class ProposalExecutionWorkflow:
@@ -136,8 +137,11 @@ class ProposalExecutionWorkflow:
     def _proposal_checkpoint_path(self, round_no):
         return self._ctx.checkpoints.path(round_no)
 
-    def _write_proposal_checkpoint(self, round_no, hypothesis, experiments, complete):
-        return self._ctx.checkpoints.write(round_no, hypothesis, experiments, complete)
+    def _write_proposal_checkpoint(self, round_no, hypothesis, experiments, complete,
+                                   delegation=None):
+        return self._ctx.checkpoints.write(
+            round_no, hypothesis, experiments, complete, delegation=delegation
+        )
 
     def _load_proposal_checkpoint(self, round_no):
         return self._ctx.checkpoints.load(round_no)
@@ -145,9 +149,9 @@ class ProposalExecutionWorkflow:
     def _unfinished_checkpoint_except(self, round_no):
         return self._ctx.checkpoints.unfinished_except(round_no)
 
-    def _on_update(self, experiment, round_no, hypothesis, experiments):
+    def _on_update(self, experiment, round_no, hypothesis, experiments, delegation):
         self._ctx.hooks.on_simulation_update(
-            experiment, round_no, hypothesis, experiments
+            experiment, round_no, hypothesis, experiments, delegation
         )
 
     def _run_simulator(self, experiments, round_no, hypothesis, all_experiments):
@@ -157,7 +161,8 @@ class ProposalExecutionWorkflow:
                 experiments,
                 on_complete=self._ctx.hooks.record_live_result,
                 on_update=lambda exp: self._on_update(
-                    exp, round_no, hypothesis, all_experiments
+                    exp, round_no, hypothesis, all_experiments,
+                    self._ctx.simulation_delegation,
                 ),
             )
         finally:
