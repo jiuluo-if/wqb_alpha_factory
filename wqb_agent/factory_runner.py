@@ -1231,6 +1231,8 @@ class AIFactoryRunner:
         result = hook({
             "kind": blocker.get("kind"),
             "signature": blocker.get("signature"),
+            "last_seen_at": blocker.get("last_seen_at"),
+            "field_cache_path": os.path.join(self.state_dir, "fields_cache.json"),
         })
         if not isinstance(result, dict):
             return {"changed": False, "probe": {}}

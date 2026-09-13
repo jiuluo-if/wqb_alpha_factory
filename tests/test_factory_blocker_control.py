@@ -3,10 +3,12 @@
 import json
 import os
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+from wqb_agent.alpha_factory import AlphaFactory
 from wqb_agent.factory_runner import AIFactoryRunner
 
 
@@ -92,6 +94,42 @@ class TestFactoryBlockerControl(unittest.TestCase):
             self.assertEqual(result["status"], "STOPPED")
             self.assertEqual(result["last_result"]["status"], "BLOCKER_UNCHANGED")
             recheck.assert_called_once()
+
+    def test_recheck_blocker_passes_control_plane_context(self):
+        captured = {}
+
+        def recheck(context):
+            captured.update(context)
+            return {"changed": False, "probe": {}}
+
+        with tempfile.TemporaryDirectory() as directory:
+            factory = SimpleNamespace(recheck_blocker=recheck)
+            agent = SimpleNamespace(state_dir=directory, alpha_factory=factory)
+            runner = AIFactoryRunner(agent, factory=factory,
+                                     clock=lambda: 20.0, sleeper=Mock())
+            blocker = {"kind": "BUDGET_SHORTAGE", "signature": "abc",
+                       "last_seen_at": 15.0}
+            runner._recheck_blocker(blocker)
+            self.assertEqual(captured["kind"], "BUDGET_SHORTAGE")
+            self.assertEqual(captured["signature"], "abc")
+            self.assertEqual(captured["last_seen_at"], 15.0)
+            self.assertEqual(
+                captured["field_cache_path"],
+                os.path.join(directory, "fields_cache.json"),
+            )
+
+    def test_alpha_factory_recheck_detects_catalog_update(self):
+        with tempfile.TemporaryDirectory() as directory:
+            catalog = os.path.join(directory, "catalog.toml")
+            with open(catalog, "w", encoding="utf-8") as handle:
+                handle.write("[[templates]]\nid = \"x\"\n")
+            factory = AlphaFactory(registry=object(), catalog_path=catalog)
+            now = time.time()
+            self.assertTrue(factory.recheck_blocker(
+                {"kind": "BUDGET_SHORTAGE", "last_seen_at": now - 100.0})["changed"])
+            self.assertFalse(factory.recheck_blocker(
+                {"kind": "BUDGET_SHORTAGE", "last_seen_at": now + 100.0})["changed"])
+            self.assertFalse(factory.recheck_blocker({"kind": "BUDGET_SHORTAGE"})["changed"])
 
 
 if __name__ == "__main__":

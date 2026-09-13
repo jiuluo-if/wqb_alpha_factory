@@ -7,6 +7,7 @@ keeps the skeleton visible to the later proposal and diversity gates.
 """
 
 import itertools
+import os
 import random
 
 from .alpha_templates import (
@@ -324,8 +325,41 @@ class AlphaFactory:
             AlphaTemplateRegistry.from_private(catalog_path)
             if require_private else AlphaTemplateRegistry(private_catalog=catalog_path)
         )
+        self.catalog_path = catalog_path
         self.last_feasibility = None
         self.last_budget_audit = {}
+
+    def recheck_blocker(self, context):
+        """Bounded, read-only control-plane freshness recheck.
+
+        The factory runner calls this once after a blocker recheck is due.
+        It only asks whether the upstream control-plane evidence that a
+        budget/feasibility blocker depends on (the private template catalog
+        that owns relationship contracts, plus the field cache) has moved
+        past the recorded blocker's ``last_seen_at``.  It never POSTs, never
+        reassembles candidates, and never writes state: ``changed=True``
+        simply permits the runner to retry the probe once.
+        """
+        context = context if isinstance(context, dict) else {}
+        try:
+            last_seen = float(context.get("last_seen_at"))
+        except (TypeError, ValueError):
+            return {"changed": False, "probe": {}}
+        if last_seen <= 0:
+            return {"changed": False, "probe": {}}
+        paths = []
+        if self.catalog_path:
+            paths.append(str(self.catalog_path))
+        field_cache = context.get("field_cache_path")
+        if field_cache:
+            paths.append(str(field_cache))
+        for path in paths:
+            try:
+                if os.path.getmtime(path) > last_seen:
+                    return {"changed": True, "probe": {}}
+            except OSError:
+                continue
+        return {"changed": False, "probe": {}}
 
     def assess_feasibility(self, hypothesis, fields, operator_reference,
                            *, excluded_expressions=(), probe_id=None,
