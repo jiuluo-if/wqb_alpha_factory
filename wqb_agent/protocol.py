@@ -128,21 +128,15 @@ def retry_after_seconds(response_or_headers, now=None, default=5.0):
 
 def validate_fixture_payload(key, payload):
     """Validate only stable envelope facts; unknown vendor fields are allowed."""
-    if not isinstance(payload, dict):
-        return False, ["payload 必须是对象"]
+    if not isinstance(payload, (dict, list)):
+        return False, ["payload 必须是对象或数组"]
     truth = endpoint_truth(key)
     if truth is None:
         return False, [f"未知 capability: {key}"]
-    if key in {"data_sets", "data_fields"} and not isinstance(payload.get("results"), list):
-        return False, ["results 必须是数组"]
-    if key == "aggregates":
-        yearly = payload.get("yearlyData")
-        if yearly is None and isinstance(payload.get("is"), dict):
-            yearly = payload["is"].get("yearlyData")
-        if not isinstance(yearly, list):
-            return False, ["yearlyData 必须是数组"]
     if key == "operators":
-        operators = payload.get("operators")
+        # Live BRAIN /operators serves a bare operator array; the envelope
+        # object form ({"operators": [...]}) remains a valid probe shape.
+        operators = payload if isinstance(payload, list) else payload.get("operators")
         if not isinstance(operators, list):
             return False, ["operators 必须是数组"]
         if any(
@@ -152,6 +146,17 @@ def validate_fixture_payload(key, payload):
             for item in operators
         ):
             return False, ["operators 每项必须包含非空 name"]
+        return True, []
+    if not isinstance(payload, dict):
+        return False, ["payload 必须是对象"]
+    if key in {"data_sets", "data_fields"} and not isinstance(payload.get("results"), list):
+        return False, ["results 必须是数组"]
+    if key == "aggregates":
+        yearly = payload.get("yearlyData")
+        if yearly is None and isinstance(payload.get("is"), dict):
+            yearly = payload["is"].get("yearlyData")
+        if not isinstance(yearly, list):
+            return False, ["yearlyData 必须是数组"]
     if key == "alpha_check" and not isinstance(payload.get("checks"), list):
         return False, ["checks 必须是数组"]
     if key == "pnl" and not isinstance(payload.get("pnl"), list):
@@ -214,7 +219,8 @@ def probe_capability_response(key, status_code, payload=None):
             "endpoint": truth.path,
         }
         if valid and key == "operators":
-            names = sorted({item["name"].strip() for item in payload["operators"]})
+            operators = payload if isinstance(payload, list) else payload.get("operators")
+            names = sorted({item["name"].strip() for item in operators})
             result["operators"] = names
             result["capability_fingerprint"] = hashlib.sha256(
                 json.dumps(names, separators=(",", ":")).encode("utf-8")

@@ -68,6 +68,30 @@ class TestProtocolTruth(unittest.TestCase):
         self.assertNotEqual(result["status"], "LIVE_VERIFIED")
         self.assertNotEqual(result["availability"], "AVAILABLE")
 
+    def test_bare_operator_array_is_a_valid_live_envelope(self):
+        # Live BRAIN /operators serves a bare JSON array, not an envelope object.
+        result = probe_capability_response(
+            "operators", 200, [{"name": "rank"}, {"name": "ts_mean"}]
+        )
+        self.assertEqual(result["status"], "LIVE_VERIFIED")
+        self.assertEqual(result["availability"], "AVAILABLE")
+        self.assertEqual(result["operators"], ["rank", "ts_mean"])
+        self.assertIn("capability_fingerprint", result)
+
+    def test_bare_operator_array_fixture_shape_is_accepted(self):
+        fixture = fixture_capability("operators", [{"name": "rank"}])
+        self.assertEqual(fixture["status"], "FIXTURE_VERIFIED")
+        self.assertNotEqual(fixture["availability"], "AVAILABLE")
+
+    def test_malformed_bare_operator_array_is_not_available(self):
+        result = probe_capability_response("operators", 200, [{"name": "rank"}, {"description": "no name"}])
+        self.assertNotEqual(result["status"], "LIVE_VERIFIED")
+        self.assertNotEqual(result["availability"], "AVAILABLE")
+
+    def test_list_payload_is_rejected_for_non_operator_keys(self):
+        result = probe_capability_response("data_sets", 200, [])
+        self.assertNotEqual(result["availability"], "AVAILABLE")
+
 
 class TestYearlyEvidence(unittest.TestCase):
     def test_builds_compact_stability_evidence(self):
