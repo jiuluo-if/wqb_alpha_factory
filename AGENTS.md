@@ -136,12 +136,12 @@ python main.py run-proposals
 - 周模拟元数据上限固定为 `11200（7*1600）`；超限时优先清理更早本地日，当前日优先保留。每次同步清理跨周缓存和超时临时资源。
 - 只有预检 `READY` 才能继续 `python main.py factory run --hours 3`；`BLOCKED`、未完成 checkpoint、`SUBMIT_UNKNOWN` 或 stop 请求时只读对账并保持暂停。
 
-## 自主模拟双层研究约束
+## Probe 与 Optimization 研究约束
 
-- 每个自主 factory round 同时区分优化层（`research_layer=optimization`）与探索层（`research_layer=exploration`）；两层共享同一 100 题案原子批次、同一预算和 `Agent.run_proposals()` 安全入口。
-- 优化层候选顺序为云端 Alpha 轻量元数据命中的本地完成证据优先、本轮完成证据其次。云端缓存只用于优先级、去重和谱系，不含指标/表达式/证据，不能单独生成优化题案。
-- 优化层先由代码筛选 `DONE`、有限指标、健康状态、字段/数据集画像、有限换手和有限表达式；再由 Agent 提供新的经济机制、变化类型和反过拟合判断。参数、窗口、权重、符号或方向扫描不得进入优化层。
-- 探索层由工厂进行大批量、带轮次稳定种子的随机字段/经济模板组合，目标是定位信号（`exploration_objective=signal_discovery`），不是调参；候选必须保持 `EXPLORE/BASELINE`、唯一表达式和完整字段证据。
+- `factory_100` 是纯 Probe Round，只产生 `factory/exploration/EXPLORE/BASELINE` 的 exact-100 BASELINE proposals；`targeted_optimization` 是唯一自主 Optimization Round，只接受正式 `OptimizationDecision` 生成的 ≤4 CHILD + ≤4 ROBUSTNESS。
+- Probe 与 Optimization 继续共享唯一 `proposals.json → Agent.run_proposals() → ProposalExecutionWorkflow → Simulator → WQBClient` 执行链，但不共享研究准入、selection 或 100-slot diversity budget。Optimization 必须先经过 inspect → authored `OptimizationDecision` → selection accounting → materialize。
+- Probe 只做 breadth / mechanism / field / structural diversity；不得因 Probe shortage 填入 optimizer candidate。Optimization 只消费既有 `DONE` evidence、Agent-authored decision、incremental evidence 与 generation bound。
+- Probe 由工厂进行大批量、带轮次稳定种子的随机字段/经济模板组合，目标是定位信号（`exploration_objective=signal_discovery`），不是调参；候选必须保持 `factory/exploration/EXPLORE/BASELINE`、唯一表达式和完整字段证据。
 - `factory_batch_stats` 必须记录两层数量、优化来源和探索目标；层级元数据是当前 proposals 的审计视图，不建立第二套状态或结果存储。
 
 ## 修改与验证

@@ -116,11 +116,9 @@ class TestResearchLoopIntegration(unittest.TestCase):
         self.assertEqual(len(children), 1)
         self.assertEqual(children[0]["lineage_id"], "lineage-parent")
         self.assertEqual(children[0]["research_layer"], "optimization")
-        selected, audit = select_budget_candidates(
-            children, [], target=1, optimization_cap=1
-        )
-        self.assertEqual(selected[0]["lineage_key"], "lineage-parent")
-        self.assertEqual(audit["optimization"]["unique_lineages"], 1)
+        selected, audit = select_budget_candidates(children, target=1)
+        self.assertEqual(selected, [])
+        self.assertEqual(audit["selected_count"], 0)
 
     def test_real_multifield_relationship_reaches_budget_with_audit(self):
         factory = AlphaFactory()
@@ -145,9 +143,14 @@ class TestResearchLoopIntegration(unittest.TestCase):
         self.assertEqual(relationship["slot_assignment"], {
             "p": "put_iv", "s": "call_iv",
         })
-        selected, audit = select_budget_candidates(
-            proposals, [], target=1, optimization_cap=1,
-        )
+        for item in proposals:
+            item.update({
+                "proposal_origin": "factory",
+                "research_layer": "exploration",
+                "research_role": "EXPLORE",
+                "experiment_stage": "BASELINE",
+            })
+        selected, audit = select_budget_candidates(proposals, target=1)
         self.assertEqual(len(selected), 1)
         self.assertEqual(
             selected[0]["relationship_audit"], relationship
@@ -199,17 +202,12 @@ class TestResearchLoopIntegration(unittest.TestCase):
                 OPERATOR_REFERENCE,
                 max_candidates=1,
             )
-            selected = AlphaFactory().generate_factory_batch(
-                {"id": "h-real"}, [], OPERATOR_REFERENCE, target=1,
-                optimized=children, research_context=context,
-            )
+            selected = children
 
         self.assertTrue(context["next_discriminating_questions"])
         self.assertEqual(context["next_discriminating_questions"][0], question)
         self.assertEqual(len(selected), 1)
-        self.assertEqual(selected[0]["budget_priority"], "HIGH")
-        self.assertEqual(selected[0]["priority_reason"],
-                         "MATCHES_UNRESOLVED_OR_DISCRIMINATING_QUESTION")
+        self.assertEqual(selected[0]["research_layer"], "optimization")
 
     def test_priority_selection_orders_normal_before_low(self):
         def candidate(expression, **metadata):
@@ -228,9 +226,12 @@ class TestResearchLoopIntegration(unittest.TestCase):
             confirmation_status="INDEPENDENT_CONFIRMED",
         )
         normal = candidate("rank(normal)")
-        selected, _audit = select_budget_candidates(
-            [], [low, normal], target=1
-        )
+        for item in (low, normal):
+            item.update({
+                "proposal_origin": "factory", "research_layer": "exploration",
+                "research_role": "EXPLORE", "experiment_stage": "BASELINE",
+            })
+        selected, _audit = select_budget_candidates([low, normal], target=1)
         self.assertEqual(selected[0]["expression"], "rank(normal)")
 
     def test_route_comparison_ignores_order_but_accepts_new_question(self):
@@ -272,10 +273,13 @@ class TestResearchLoopIntegration(unittest.TestCase):
                 "lineage_id": "same-lineage",
             }
 
-        selected, audit = select_budget_candidates(
-            [], [candidate("rank(a)"), candidate("rank(b)"), candidate("rank(c)")],
-            target=2,
-        )
+        candidates = [candidate("rank(a)"), candidate("rank(b)"), candidate("rank(c)")]
+        for item in candidates:
+            item.update({
+                "proposal_origin": "factory", "research_layer": "exploration",
+                "research_role": "EXPLORE", "experiment_stage": "BASELINE",
+            })
+        selected, audit = select_budget_candidates(candidates, target=2)
         self.assertEqual(len(selected), 2)
         self.assertEqual(audit["saturation"]["mechanism_groups"], 1)
         self.assertEqual(audit["saturation"]["lineage_groups"], 1)

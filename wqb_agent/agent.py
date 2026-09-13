@@ -462,7 +462,7 @@ class Agent:
                 "last_attempt_status": "FEED_REFRESH_OK"}
 
     def generate_optimized_proposals(self, parents=None, *, max_candidates=4):
-        """兼容 facade：生成受限的 evidence-backed CHILD proposals。"""
+        """兼容 facade；Probe Factory 永远不会调用此 Optimization 入口。"""
         return self.optimizer_workflow.generate(
             parents, max_candidates=max_candidates
         )

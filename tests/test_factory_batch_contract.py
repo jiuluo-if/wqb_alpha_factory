@@ -59,6 +59,28 @@ class TestFactoryBatchContract(unittest.TestCase):
         self.assertFalse(ok)
         self.assertTrue(any("来源" in error for error in errors))
 
+    def test_factory_batch_rejects_non_probe_layer_role_or_stage(self):
+        mixed = [proposal(index) for index in range(99)]
+        mixed.append({
+            **proposal(99),
+            "proposal_origin": "agent_optimizer",
+            "research_layer": "optimization",
+            "research_role": "EXPLOIT",
+            "experiment_stage": "CHILD",
+        })
+        ok, errors = validate_factory_batch(mixed)
+        self.assertFalse(ok)
+        joined = " ".join(errors)
+        self.assertIn("exploration", joined)
+        self.assertIn("EXPLORE", joined)
+        self.assertIn("BASELINE", joined)
+
+    def test_factory_generator_does_not_accept_an_optimization_pool(self):
+        with self.assertRaises(TypeError):
+            AlphaFactory().generate_factory_batch(
+                {"id": "probe"}, [], {}, target=1, optimized=[]
+            )
+
     def test_factory_batch_can_require_real_multi_dataset_coverage(self):
         single_dataset = [
             {

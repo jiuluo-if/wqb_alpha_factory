@@ -120,23 +120,21 @@ class TestFactoryProvenancePersistence(unittest.TestCase):
         self.assertEqual(records[0]["optimization_source"], "cloud")
         self.assertEqual(records[1]["optimization_source"], "current_run")
 
-    def test_factory_batch_stats_separate_layers_and_sources(self):
+    def test_factory_batch_stats_reports_probe_contract_only(self):
         stats = factory_batch_stats([
             {
-                "expression": "rank(cloud_field)",
-                "research_layer": "optimization",
-                "optimization_source": "cloud",
-            },
-            {
                 "expression": "rank(new_field)",
+                "proposal_origin": "factory",
                 "research_layer": "exploration",
+                "research_role": "EXPLORE",
+                "experiment_stage": "BASELINE",
                 "exploration_objective": "signal_discovery",
             },
         ])
-        self.assertEqual(stats["layer_counts"], {
-            "optimization": 1, "exploration": 1, "unknown": 0,
+        self.assertEqual(stats["probe_counts"], {
+            "factory": 1, "exploration": 1, "EXPLORE": 1, "BASELINE": 1,
         })
-        self.assertEqual(stats["optimization_source_counts"]["cloud"], 1)
+        self.assertNotIn("optimization_source_counts", stats)
         self.assertEqual(stats["exploration_objective_counts"], {
             "signal_discovery": 1,
         })

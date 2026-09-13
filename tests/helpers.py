@@ -46,6 +46,10 @@ def proposal(index, origin="factory"):
     return {
         "expression": f"rank(field_{index})",
         "proposal_origin": origin,
+        "research_layer": "exploration" if origin == "factory" else "optimization",
+        "research_role": "EXPLORE" if origin == "factory" else "EXPLOIT",
+        "experiment_stage": "BASELINE" if origin == "factory" else "CHILD",
+        "exploration_objective": "signal_discovery" if origin == "factory" else None,
         "fields": [f"field_{index}"],
     }
 

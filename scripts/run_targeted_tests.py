@@ -44,7 +44,27 @@ DIRECT_TESTS = {
     "wqb_agent/factory_runner.py": (
         "tests/test_factory_boundaries.py",
         "tests/test_factory_blocker_control.py",
+        "tests/test_factory_feasibility.py",
         "tests/test_proposal_execution.py",
+        "tests/test_research_loop.py",
+    ),
+    "wqb_agent/proposal_contract.py": (
+        "tests/test_factory_batch_contract.py",
+        "tests/test_factory_provenance_persistence.py",
+        "tests/test_targeted_batch_contract.py",
+    ),
+    "wqb_agent/alpha_factory.py": (
+        "tests/test_factory_batch_contract.py",
+        "tests/test_factory_mechanism_selection.py",
+        "tests/test_factory_relationship_gate.py",
+        "tests/test_factory_semantic_traits.py",
+        "tests/test_factory_provenance_persistence.py",
+        "tests/test_factory_feasibility.py",
+        "tests/test_research_loop.py",
+    ),
+    "wqb_agent/diversity.py": (
+        "tests/test_factory_mechanism_selection.py",
+        "tests/test_research_loop.py",
     ),
     "wqb_agent/locking.py": (
         "tests/test_locking.py",

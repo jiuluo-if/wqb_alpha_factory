@@ -103,8 +103,22 @@ def validate_factory_batch(proposals, target=FACTORY_BATCH_SIZE,
             errors.append(f"第 {index + 1} 个题案缺 expression")
             continue
         origin = str(proposal.get("proposal_origin") or "").strip().lower()
-        if origin not in {"factory", "agent_optimizer"}:
-            errors.append(f"第 {index + 1} 个题案来源必须是 factory/agent_optimizer")
+        if origin != "factory":
+            errors.append(f"第 {index + 1} 个题案来源必须是 factory")
+        layer = str(proposal.get("research_layer") or "").strip().lower()
+        if layer != "exploration":
+            errors.append(f"第 {index + 1} 个题案 research_layer 必须是 exploration")
+        role = str(proposal.get("research_role") or "").strip().upper()
+        if role != "EXPLORE":
+            errors.append(f"第 {index + 1} 个题案 research_role 必须是 EXPLORE")
+        stage = str(proposal.get("experiment_stage") or "").strip().upper()
+        if stage != "BASELINE":
+            errors.append(f"第 {index + 1} 个题案 experiment_stage 必须是 BASELINE")
+        objective = str(proposal.get("exploration_objective") or "").strip().lower()
+        if objective != "signal_discovery":
+            errors.append(
+                f"第 {index + 1} 个题案 exploration_objective 必须是 signal_discovery"
+            )
         settings = proposal.get("settings") or {}
         identity = submission_fingerprint(expression, settings)
         if identity in identities:
@@ -267,8 +281,7 @@ def factory_batch_stats(proposals, feasibility=None, budget=None):
 
     stats = {
         "proposal_count": len(proposals) if isinstance(proposals, list) else 0,
-        "layer_counts": {"optimization": 0, "exploration": 0, "unknown": 0},
-        "optimization_source_counts": {"cloud": 0, "current_run": 0, "unknown": 0},
+        "probe_counts": {"factory": 0, "exploration": 0, "EXPLORE": 0, "BASELINE": 0},
         "exploration_objective_counts": {},
         "dataset_counts": {},
         "field_dataset_counts": {},
@@ -282,25 +295,23 @@ def factory_batch_stats(proposals, feasibility=None, budget=None):
     if isinstance(budget, dict):
         stats["budget"] = dict(budget)
     if isinstance(feasibility, dict):
-        stats["feasibility_probe"] = dict(feasibility)
+        stats["feasibility_check"] = dict(feasibility)
     for proposal in proposals or []:
         if not isinstance(proposal, dict):
             continue
-        layer = str(proposal.get("research_layer") or "").strip().lower()
-        if layer not in stats["layer_counts"]:
-            layer = "unknown"
-        stats["layer_counts"][layer] += 1
-        if layer == "optimization":
-            source = str(proposal.get("optimization_source") or "").strip().lower()
-            if source not in stats["optimization_source_counts"]:
-                source = "unknown"
-            stats["optimization_source_counts"][source] += 1
-        if layer == "exploration":
-            objective = str(proposal.get("exploration_objective") or "").strip()
-            if objective:
-                stats["exploration_objective_counts"][objective] = (
-                    stats["exploration_objective_counts"].get(objective, 0) + 1
-                )
+        if str(proposal.get("proposal_origin") or "").strip().lower() == "factory":
+            stats["probe_counts"]["factory"] += 1
+        if str(proposal.get("research_layer") or "").strip().lower() == "exploration":
+            stats["probe_counts"]["exploration"] += 1
+        if str(proposal.get("research_role") or "").strip().upper() == "EXPLORE":
+            stats["probe_counts"]["EXPLORE"] += 1
+        if str(proposal.get("experiment_stage") or "").strip().upper() == "BASELINE":
+            stats["probe_counts"]["BASELINE"] += 1
+        objective = str(proposal.get("exploration_objective") or "").strip()
+        if objective:
+            stats["exploration_objective_counts"][objective] = (
+                stats["exploration_objective_counts"].get(objective, 0) + 1
+            )
         datasets = []
         for value in proposal.get("datasets") or []:
             value = value.get("id") or value.get("name") if isinstance(value, dict) else value

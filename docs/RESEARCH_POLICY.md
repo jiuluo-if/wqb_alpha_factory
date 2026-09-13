@@ -21,6 +21,8 @@
 
 ## 指标驱动的优化顺序
 
+研究轮次严格分离：`factory_100` 是纯 Probe Round，只筛选独立 BASELINE 信号；`targeted_optimization` 是唯一 Optimization Round，只能由正式 `OptimizationDecision` 生成。两者共享唯一 Simulation 执行链，但不共享研究准入或 Probe 的 100-slot diversity budget。
+
 先根据 `Sharpe`、`Fitness`、`Returns`、`Turnover`、`Drawdown`、`Margin`、checks、health、yearly evidence 和 correlation 诊断问题，再选择研究动作：
 
 - 低 Sharpe：优先审查信号质量、经济机制、年度稳定性、coverage、子 Universe 和语义字段替换，不先调 decay。

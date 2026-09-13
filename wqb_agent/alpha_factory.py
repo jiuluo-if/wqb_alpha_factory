@@ -330,7 +330,7 @@ class AlphaFactory:
     def assess_feasibility(self, hypothesis, fields, operator_reference,
                            *, excluded_expressions=(), probe_id=None,
                            max_combinations=256):
-        """Run a bounded control-plane feasibility probe before assembly."""
+        """Run a bounded control-plane feasibility check before assembly."""
         profiles = [field for field in (fields or []) if (
             isinstance(field, dict)
             and field.get("id") is not None
@@ -1901,17 +1901,14 @@ class AlphaFactory:
         return assembled
 
     def generate_factory_batch(self, hypothesis, fields, operator_reference,
-                               target=100, optimized=(),
-                               excluded_expressions=None, seed=None,
+                               target=100, excluded_expressions=None, seed=None,
                                research_context=None):
         """Generate one large, structurally diverse factory batch.
 
         The factory owns breadth.  It cycles verified field profiles through
         the bounded economic template catalog; it does not scan arbitrary
-        windows, weights, signs, or other numeric parameters.  Optimizer
-        proposals are accepted as a separately marked prefix so the caller
-        can retain provenance while the factory still owns the 100-slot
-        envelope.
+        windows, weights, signs, or other numeric parameters.  Optimization
+        proposals are never accepted by this API.
         """
         # Do not expose the previous round's derived audit when this call
         # exits before candidate selection (invalid input or an empty pool).
@@ -1922,56 +1919,18 @@ class AlphaFactory:
             return []
         if limit <= 0 or not isinstance(fields, list):
             return []
-        result = []
-        optimized_pool = []
         exploration_pool = []
-        seen_slot_scopes = {
-            (
-                proposal.get("template_id"),
-                tuple(sorted(str(field) for field in proposal.get("fields", []))),
-            )
-            for proposal in (optimized or ())
-            if isinstance(proposal, dict)
-        }
+        seen_slot_scopes = set()
         excluded = {
             canonical_expression(value)
             for value in (excluded_expressions or [])
             if isinstance(value, str) and value.strip()
         }
-        for proposal in optimized or ():
-            if not isinstance(proposal, dict):
-                continue
-            expression = proposal.get("expression")
-            if not isinstance(expression, str) or not expression.strip():
-                continue
-            fields_used = proposal.get("fields") or proposal.get("fields_used") or []
-            if isinstance(fields_used, (list, tuple)) and len(fields_used) > 1:
-                relationship_audit = proposal.get("relationship_audit") or {}
-                admission = str(
-                    proposal.get("relationship_admission")
-                    or relationship_audit.get("relationship_admission")
-                    or ""
-                ).upper()
-                if admission != "ALLOW":
-                    continue
-            identity = canonical_expression(expression)
-            if identity in excluded:
-                continue
-            item = dict(proposal)
-            item.setdefault("proposal_origin", "agent_optimizer")
-            item.setdefault("research_layer", "optimization")
-            optimized_pool.append(item)
-            excluded.add(identity)
-            if len(optimized_pool) >= limit:
-                break
 
         templates = list(self.registry.economic_templates())
         if not templates:
-            result, self.last_budget_audit = select_budget_candidates(
-                optimized_pool, [], target=limit, context=research_context,
-                optimization_cap=min(4, len(optimized_pool)),
-            )
-            return result
+            self.last_budget_audit = {}
+            return []
         verified = [
             field for field in fields
             if isinstance(field, dict)
@@ -1989,7 +1948,7 @@ class AlphaFactory:
         rng.shuffle(verified)
         pool_limit = max(limit, min(limit * 2, FACTORY_BATCH_SIZE * 2))
         for offset, profile in enumerate(verified):
-            if len(optimized_pool) + len(exploration_pool) >= pool_limit:
+            if len(exploration_pool) >= pool_limit:
                 break
             ranked = self.rank_compatible_templates(profile, templates)
             if not ranked:
@@ -2015,7 +1974,7 @@ class AlphaFactory:
                 if item not in pool:
                     pool.append(item)
             for ranked_template in pool:
-                if len(optimized_pool) + len(exploration_pool) >= pool_limit:
+                if len(exploration_pool) >= pool_limit:
                     break
                 template = ranked_template["template"]
                 # Pair templates require a semantically reviewed secondary
@@ -2057,7 +2016,6 @@ class AlphaFactory:
                 exploration_pool.append(proposal)
                 excluded.add(canonical_expression(proposal["expression"]))
         result, self.last_budget_audit = select_budget_candidates(
-            optimized_pool, exploration_pool, target=limit, context=research_context,
-            optimization_cap=min(4, len(optimized_pool)),
+            exploration_pool, target=limit, context=research_context
         )
         return result

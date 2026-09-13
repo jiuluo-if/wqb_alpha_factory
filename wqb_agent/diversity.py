@@ -294,26 +294,22 @@ def derive_budget_priority(proposal, *, context=None, saturation=None):
     }
 
 
-def select_budget_candidates(optimization, exploration, *, target,
-                             context=None, optimization_cap=None):
-    """Select candidates with deterministic ordinal priority and round-robin groups."""
+def select_budget_candidates(candidates, *, target, context=None):
+    """Select pure Probe candidates with deterministic diversity ordering."""
     try:
         target = max(0, int(target))
     except (TypeError, ValueError):
         target = 0
-    try:
-        optimization_cap = max(0, int(optimization_cap)) if optimization_cap is not None else len(optimization or [])
-    except (TypeError, ValueError):
-        optimization_cap = 0
-
-    optimization_items_raw = [
-        item for item in (optimization or ()) if isinstance(item, dict)
-    ]
     exploration_items_raw = [
-        item for item in (exploration or ()) if isinstance(item, dict)
+        item for item in (candidates or ())
+        if isinstance(item, dict)
+        and str(item.get("proposal_origin") or "").strip().lower() == "factory"
+        and str(item.get("research_layer") or "").strip().lower() == "exploration"
+        and str(item.get("research_role") or "").strip().upper() == "EXPLORE"
+        and str(item.get("experiment_stage") or "").strip().upper() == "BASELINE"
     ]
     eligible_raw = [
-        item for item in optimization_items_raw + exploration_items_raw
+        item for item in exploration_items_raw
         if str(item.get("semantic_status") or "").upper() != "UNKNOWN"
     ]
     saturation = {
@@ -376,26 +372,21 @@ def select_budget_candidates(optimization, exploration, *, target,
             ordered_groups = next_groups
         return result
 
-    optimization_items = prepare(optimization_items_raw)
     exploration_items = prepare(exploration_items_raw)
     unknown_count = sum(
-        1 for item in list(optimization or []) + list(exploration or [])
+        1 for item in list(candidates or [])
         if isinstance(item, dict)
         and str(item.get("semantic_status") or "").upper() == "UNKNOWN"
     )
-    selected_optimization = interleave(
-        optimization_items, min(target, optimization_cap), group_by_lineage=True
-    )
     selected_exploration = interleave(
-        exploration_items, max(0, target - len(selected_optimization)),
-        group_by_lineage=False,
+        exploration_items, target, group_by_lineage=False,
     )
-    selected = selected_optimization + selected_exploration
+    selected = selected_exploration
     priority_counts = Counter(item.get("budget_priority") for item in selected)
     selected_mechanisms = Counter(item.get("semantic_mechanism_key") for item in selected)
     selected_lineages = Counter(item.get("lineage_key") for item in selected)
     return selected[:target], {
-        "eligible_count": len(optimization_items) + len(exploration_items),
+        "eligible_count": len(exploration_items),
         "selected_count": len(selected[:target]),
         "shortage_count": max(0, target - len(selected)),
         "shortage_reason": (
@@ -415,19 +406,16 @@ def select_budget_candidates(optimization, exploration, *, target,
             key.lower(): priority_counts.get(key, 0)
             for key in ("HIGH", "NORMAL", "LOW")
         },
-        "optimization": {"eligible": len(optimization_items), "selected": len(selected_optimization),
-                          "unique_lineages": len({item.get("lineage_key") for item in selected_optimization}),
-                          "unique_mechanisms": len({item.get("semantic_mechanism_key") for item in selected_optimization})},
         "exploration": {"eligible": len(exploration_items), "selected": len(selected_exploration),
                          "unique_mechanisms": len({item.get("semantic_mechanism_key") for item in selected_exploration}),
                          "unique_concepts": len({key for item in selected_exploration for key in field_concept_keys(item)})},
         "saturation_dropped_or_deprioritized": {
             "mechanism": sum(
-                1 for item in (exploration_items + optimization_items)
+                1 for item in exploration_items
                 if item[0]["saturation"]["mechanism_count"] > 1
             ),
             "lineage": sum(
-                1 for item in (exploration_items + optimization_items)
+                1 for item in exploration_items
                 if item[0]["saturation"]["lineage_count"] > 1
             ),
         },

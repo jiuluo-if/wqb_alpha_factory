@@ -354,6 +354,10 @@ class TestFactoryRunnerAccounting(unittest.TestCase):
                 {
                     "expression": f"rank(field_{index})",
                     "proposal_origin": "factory",
+                    "research_layer": "exploration",
+                    "research_role": "EXPLORE",
+                    "experiment_stage": "BASELINE",
+                    "exploration_objective": "signal_discovery",
                     "datasets": ["d1"],
                 }
                 for index in range(100)

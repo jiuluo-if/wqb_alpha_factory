@@ -29,7 +29,7 @@
 
 运行时装配的 owner 关系是：`AppConfig` → `AgentRuntimePolicy` → `RuntimeComponents` → `AgentWorkflows`。`build_agent_runtime_policy()` 集中解析 Agent 实际消费的配置投影；`RuntimeComponents` 只拥有基础领域对象；`runtime_composition.py` 只用既有组件和显式 hooks 创建 `SuggestionWorkflow`、`ProposalExecutionWorkflow`、`AlphaFeedWorkflow` 与 `OptimizerWorkflow`，不得反向导入 `Agent` 或重复构造组件。Agent 的旧 public attributes 可以继续保留，但必须集中投影自这套唯一对象图。
 
-`AlphaFeedWorkflow` 是 `AgentWorkflows` 的第三个成员，负责 BRAIN 用户 Alpha 的只读分页、`America/New_York` 七个自然日窗口、去重、bucket 以及 `DailyResearchCache`/`WeeklyAlphaFeedCache` 更新。它只接收 `get_all_user_alphas` 操作，不接收整个 Client，不依赖 Agent、Simulator、proposal/suggestion/optimizer workflow，不产生 POST、PATCH、submission 或 checkpoint 写入。`OptimizerWorkflow` 是第四个成员，拥有 `_cloud_alpha_ids()` 消费逻辑、已有证据筛选、Agent hypothesis gate 和 AlphaFactory CHILD 编排；cloud metadata 只作排序提示。
+`AlphaFeedWorkflow` 是 `AgentWorkflows` 的第三个成员，负责 BRAIN 用户 Alpha 的只读分页、`America/New_York` 七个自然日窗口、去重、bucket 以及 `DailyResearchCache`/`WeeklyAlphaFeedCache` 更新。它只接收 `get_all_user_alphas` 操作，不接收整个 Client，不依赖 Agent、Simulator、proposal/suggestion/optimizer workflow，不产生 POST、PATCH、submission 或 checkpoint 写入。`OptimizerWorkflow` 是第四个成员，拥有 `_cloud_alpha_ids()` 消费逻辑、已有证据筛选、Agent hypothesis gate 和 AlphaFactory CHILD 编排；cloud metadata 只作排序提示。Optimizer 只通过正式 `OptimizationDecision` 进入 targeted batch，不进入 Probe Factory。
 
 `alpha_colors.py` 是纯 derived color domain owner：保留 `classify_alpha_color()`、`has_research_signal()`、轻量 evidence summary 与 `load_color_candidates()`，不执行远端写入。`AlphaColorWorkflow` 是独立的 CLI control/write workflow，不属于四个 `AgentWorkflows`；它通过窄的 `get_alpha` / `set_alpha_color` hooks 编排远端读取、ownership fail-closed、dry-run、verified PATCH 和结果摘要。`main.py` 继续拥有锁、lazy Client、CLI JSON 与 exit code；只有显式 `alpha sync-colors` 才允许颜色 metadata 写入。
 
@@ -49,11 +49,11 @@
 - 远端 Alpha 轻量元数据写入 `.alpha_feed_cache/weekly.json`：每 3 小时与提交 Alpha 同批刷新，按纽约本地日分桶，仅保留当前工作日前推 7 个自然日和 `11200（7*1600）` 条模拟元数据上限；每次刷新清理滚动窗口外和超时临时资源，并保留 `updated_at`/`expires_at`。不得写入指标、表达式、trajectory 或证据。
 - Alpha submission 始终手工完成。
 
-## 自主模拟双层边界
+## Probe 与 Optimization round 边界
 
-- `OptimizerWorkflow` 先调用 `AlphaFactory.screen_optimization_parents()` 做代码初筛，再验证 Agent 已提供的经济机制/反过拟合 gate；`Agent.optimizable_signal_records()`、`optimizer_gate_report()` 和 `generate_optimized_proposals()` 仅为兼容 facade。云端 Alpha 轻量缓存只提升已有本地证据的优先级，不作为独立性能证据。
+- `OptimizerWorkflow` 先调用 `AlphaFactory.screen_optimization_parents()` 做代码初筛，再验证 Agent 已提供的经济机制/反过拟合 gate；`Agent.optimizable_signal_records()`、`optimizer_gate_report()` 和 `generate_optimized_proposals()` 仅为兼容 facade，factory 不调用它们。云端 Alpha 轻量缓存只提升已有本地证据的优先级，不作为独立性能证据。
 - 优化题案标记 `research_layer=optimization`、`research_role=EXPLOIT`；来源按 `cloud`、`current_run` 审计。探索题案由 `AlphaFactory.generate_factory_batch()` 以稳定种子随机化已核验字段和经济模板，标记 `research_layer=exploration`、`research_role=EXPLORE`、`experiment_stage=BASELINE`、`exploration_objective=signal_discovery`。
-- 双层不增加执行入口：完整批次仍须通过 100 题案 gate、正常 Agent preflight 和 `Agent.run_proposals()`；代码/Agent 任一层不足或失败都不能用重复题案填充。
+- `factory_100` 是纯 Probe：仅允许 `proposal_origin=factory`、`research_layer=exploration`、`research_role=EXPLORE`、`experiment_stage=BASELINE`，必须 exact-100 且 all-or-nothing。Optimization 仅由正式决策链生成 ≤4 CHILD + ≤4 ROBUSTNESS，并复用同一 `proposals.json` → `Agent.run_proposals()` → `ProposalExecutionWorkflow` → `Simulator` 链；两者不共享研究准入或 100-slot diversity budget。
 
 ## 配置边界
 
@@ -78,7 +78,7 @@ python -m ruff check <changed-python-files>
 
 仅当 typed frontier 被改动时，运行对应的 mypy。typed frontier 只包含上述九个边界清晰模块；全局 mypy 保持非 strict，不为类型检查重写 `agent.py`、`client.py`、`simulator.py` 或 `proposal_execution.py`。
 
-CI 只执行与变更相关的 targeted tests；不得执行 whole-repository test suite、`unittest discover` 或 coverage 驱动的全量测试。测试必须由 `scripts/run_targeted_tests.py` 的显式变更文件映射选择，映射缺失时 fail-closed；静态检查和 offline doctor/audit/privacy 仍按 workflow 需要执行。
+CI 先执行由 `scripts/run_targeted_tests.py` 显式映射选择的 targeted Fast Lane，映射缺失时 fail-closed；随后执行 whole-repository test 作为最终回归门禁。静态检查和 offline doctor/audit/privacy 仍按 workflow 需要执行。
 
 ```powershell
 python scripts/run_targeted_tests.py --base-sha <CI base SHA>

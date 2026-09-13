@@ -267,19 +267,12 @@ class TestFactoryRelationshipGate(unittest.TestCase):
         })
         self.assertEqual(audit["frequency_compatibility"]["status"], "COMPATIBLE")
 
-    def test_factory_drops_review_multi_field_optimized_prefix(self):
-        optimized = [{
-            "expression": "rank(a - b)",
-            "fields": ["a", "b"],
-            "proposal_origin": "agent_optimizer",
-            "relationship_audit": {
-                "relationship_admission": "REVIEW",
-            },
-        }]
-        batch = AlphaFactory().generate_factory_batch(
-            {"id": "optimized-review"}, [], {}, target=1, optimized=optimized,
-        )
-        self.assertEqual(batch, [])
+    def test_factory_has_no_optimization_prefix_api(self):
+        with self.assertRaises(TypeError):
+            AlphaFactory().generate_factory_batch(
+                {"id": "optimized-review"}, [], {}, target=1,
+                optimized=[],
+            )
 
     def test_generic_data_field_template_supports_multiple_slots_and_field_refs(self):
         registry = AlphaTemplateRegistry([

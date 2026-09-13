@@ -32,8 +32,8 @@ from wqb_agent.state import Experiment
 from wqb_agent.weekly_quota import QuotaExceeded, WeeklySimulationQuota
 
 
-class TestFactoryFeasibilityProbe(unittest.TestCase):
-    def test_factory_stats_retains_feasibility_probe_without_result_payload(self):
+class TestFactoryFeasibilityCheck(unittest.TestCase):
+    def test_factory_stats_retains_feasibility_check_without_result_payload(self):
         stats = factory_batch_stats([], {
             "probe_id": "p1",
             "failure_taxonomy": "RELATIONSHIP_REVIEW",
@@ -41,12 +41,12 @@ class TestFactoryFeasibilityProbe(unittest.TestCase):
         })
 
         self.assertEqual(
-            stats["feasibility_probe"]["failure_taxonomy"],
+            stats["feasibility_check"]["failure_taxonomy"],
             "RELATIONSHIP_REVIEW",
         )
-        self.assertNotIn("metrics", stats["feasibility_probe"])
+        self.assertNotIn("metrics", stats["feasibility_check"])
 
-    def test_feasibility_probe_exposes_separate_semantic_and_structural_fingerprints(self):
+    def test_feasibility_check_exposes_separate_semantic_and_structural_fingerprints(self):
         fields = [
             {"id": "eps_revision", "dataset": "analyst4", "type": "MATRIX",
              "description": "analyst EPS estimate revision", "frequency": "daily",
@@ -62,7 +62,7 @@ class TestFactoryFeasibilityProbe(unittest.TestCase):
         self.assertIn("structural_family_fingerprints", probe)
         self.assertIn("field_concept_fingerprints", probe)
 
-    def test_feasibility_probe_reports_bounded_cross_dataset_diagnosis(self):
+    def test_feasibility_check_reports_bounded_cross_dataset_diagnosis(self):
         root = os.path.dirname(os.path.dirname(__file__))
         from wqb_agent.proposal_contract import _operator_reference
 

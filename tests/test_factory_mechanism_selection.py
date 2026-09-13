@@ -83,14 +83,23 @@ class TestFactoryMechanismSelection(unittest.TestCase):
         self.assertEqual(stats["lineages"]["unique_independent_count"], 1)
         self.assertEqual(stats["lineages"]["unknown_count"], 0)
 
-    def test_batch_stats_contains_diversity_audit_and_layer_counts(self):
+    def test_batch_stats_contains_probe_diversity_audit(self):
         proposals = [
-            diversity_proposal("rank(a)", layer="optimization", lineage_id="p"),
+            diversity_proposal("rank(a)", layer="exploration", lineage_id="p"),
             diversity_proposal("rank(b)", layer="exploration", lineage_id="e"),
         ]
+        for item in proposals:
+            item.update({
+                "proposal_origin": "factory",
+                "research_layer": "exploration",
+                "research_role": "EXPLORE",
+                "experiment_stage": "BASELINE",
+                "exploration_objective": "signal_discovery",
+            })
         stats = factory_batch_stats(proposals)
-        self.assertEqual(stats["diversity_layers"]["optimization"]["count"], 1)
         self.assertEqual(stats["diversity_layers"]["exploration"]["mechanism_count"], 1)
+        self.assertNotIn("layer_counts", stats)
+        self.assertNotIn("optimization_source_counts", stats)
 
     def test_route_ignores_expression_only_change_but_accepts_semantic_or_relationship_change(self):
         base = {
@@ -147,13 +156,20 @@ class TestFactoryMechanismSelection(unittest.TestCase):
                                      measurement="change", behavior="event_driven",
                                      dataset="d3"),
         ]
-        selected, audit = select_budget_candidates([], candidates, target=10)
+        for item in candidates:
+            item.update({
+                "proposal_origin": "factory",
+                "research_layer": "exploration",
+                "research_role": "EXPLORE",
+                "experiment_stage": "BASELINE",
+            })
+        selected, audit = select_budget_candidates(candidates, target=10)
         keys = [semantic_mechanism_key(item) for item in selected]
         self.assertGreaterEqual(len(set(keys[:3])), 3)
         self.assertEqual(audit["selected_count"], 10)
         self.assertEqual(audit["priority_counts"]["normal"], 10)
 
-    def test_same_parent_optimization_children_are_interleaved_by_lineage(self):
+    def test_optimization_children_are_excluded_from_probe_selection(self):
         optimization = [
             diversity_proposal(f"rank(child_a{i})", lineage_id="parent-a",
                                      layer="optimization")
@@ -164,11 +180,9 @@ class TestFactoryMechanismSelection(unittest.TestCase):
             diversity_proposal("rank(child_c)", lineage_id="parent-c",
                                      layer="optimization"),
         ]
-        selected, audit = select_budget_candidates(
-            optimization, [], target=4, optimization_cap=4,
-        )
-        self.assertEqual(audit["optimization"]["selected"], 4)
-        self.assertGreaterEqual(len({item["lineage_id"] for item in selected}), 3)
+        selected, audit = select_budget_candidates(optimization, target=4)
+        self.assertEqual(selected, [])
+        self.assertEqual(audit["selected_count"], 0)
 
     def test_question_and_outcome_context_drive_ordinal_priority(self):
         context = {
@@ -197,7 +211,11 @@ class TestFactoryMechanismSelection(unittest.TestCase):
     def test_explicit_unknown_candidates_are_not_selected_to_fill_budget(self):
         unknown = diversity_proposal("rank(unknown)", concept="fundamental")
         unknown["semantic_status"] = "UNKNOWN"
-        selected, audit = select_budget_candidates([], [unknown], target=1)
+        unknown.update({
+            "proposal_origin": "factory", "research_layer": "exploration",
+            "research_role": "EXPLORE", "experiment_stage": "BASELINE",
+        })
+        selected, audit = select_budget_candidates([unknown], target=1)
         self.assertEqual(selected, [])
         self.assertEqual(audit["shortage_reason"], "SEMANTIC_GATE_SCARCITY")
         self.assertEqual(audit["unknown_rejected"], 1)
