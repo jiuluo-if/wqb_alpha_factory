@@ -21,9 +21,10 @@ from wqb_agent.agent import (
     SEED_HYPOTHESES,
     Agent,
 )
-from wqb_agent.artifacts import atomic_write_json_if_changed
+from wqb_agent.artifacts import atomic_write_json_if_changed, iter_jsonl_objects
 from wqb_agent.candidate import CandidateBuilder
 from wqb_agent.discovery import FieldDiscovery
+from wqb_agent.expression import submission_fingerprint
 from wqb_agent.memory import ExperienceMemory
 from wqb_agent.proposal_contract import validate_proposal, validate_vector_inputs
 from wqb_agent.reflection import Reflector
@@ -33,6 +34,36 @@ from wqb_agent.submission import SubmissionPool, self_correlation_evidence
 
 
 class TestProposalExecutionSafety(TmpStateMixin, unittest.TestCase):
+
+    @staticmethod
+    def _force_round_proposal(agent, *, settings=None):
+        proposal = {
+            "expression": "rank(returns)",
+            "hypothesis": "return signal",
+            "rationale": "execution identity fence regression",
+            "direction": "long",
+            "expected_horizon": "63 days",
+            "falsification": "S<1",
+            "fields": ["returns"],
+            "datasets": ["pv1"],
+            "field_understanding": {"returns": "daily return"},
+            "field_hypothesis_basis": {"returns": {
+                "description": "daily return", "mechanism": "return signal",
+            }},
+            "operator_mapping": "rank creates a cross-section",
+            "operator_evidence": {
+                "sha256": agent.operator_reference["sha256"],
+                "operators": ["rank"], "rationale": "documented rank",
+            },
+            "experiment_question": "does return predict future return?",
+            "field_analysis": {"returns": {"semantic": "daily return",
+                "coverage": None, "frequency": None, "data_type": "MATRIX"}},
+            "expected_failure_modes": ["sharpe"], "tuning_risk": False,
+            "experiment_stage": "BASELINE",
+        }
+        if settings is not None:
+            proposal["settings"] = settings
+        return proposal
 
     def test_run_proposals_executes_llm_candidates(self):
         agent, client = make_agent(self._tmp, rounds=1)
@@ -197,6 +228,7 @@ class TestProposalExecutionSafety(TmpStateMixin, unittest.TestCase):
         agent, client = make_agent(self._tmp, rounds=1)
         exp = Experiment(1797, "h-1797", "rank(put_iv)", BASE_CONFIG["simulation"], ["put_iv"], ["option8"])
         exp.status = "UNKNOWN"
+        exp.proposal_id = "p-stale-1797"
         exp.progress_url = "https://api.worldquantbrain.com/simulations/remote-1797"
         agent._write_proposal_checkpoint(1797, {"id": "h-1797"}, [exp], complete=False)
         history_path = os.path.join(self._tmp, "reconcile_history.jsonl")
@@ -217,6 +249,14 @@ class TestProposalExecutionSafety(TmpStateMixin, unittest.TestCase):
             self.assertTrue(json.load(f)["complete"])
         self.assertTrue(os.path.exists(os.path.join(self._tmp, "stale_skip_log.jsonl")))
         self.assertEqual(client.sim_calls, [])
+        lifecycle = agent.trial_ledger.summarize()["lifecycle_proposals"]
+        self.assertEqual(lifecycle[skipped.proposal_id]["status"], "SKIPPED_STALE")
+        before = len(list(iter_jsonl_objects(agent.trial_ledger.path)))
+        self.assertEqual(
+            agent.skip_stale_reconciled(1797, "remote-1797").status,
+            "SKIPPED_STALE",
+        )
+        self.assertEqual(len(list(iter_jsonl_objects(agent.trial_ledger.path))), before)
 
     def test_skip_submit_unknown_rejects_known_url_unknown_and_pending(self):
         """A URL-bearing UNKNOWN is read-only recoverable and a PENDING item was
@@ -255,6 +295,8 @@ class TestProposalExecutionSafety(TmpStateMixin, unittest.TestCase):
             self.assertTrue(json.load(f)["complete"])
         self.assertTrue(os.path.exists(os.path.join(self._tmp, "stale_skip_log.jsonl")))
         self.assertEqual(client.sim_calls, [])
+        lifecycle = agent.trial_ledger.summarize()["lifecycle_proposals"]
+        self.assertEqual(lifecycle[skipped.proposal_id]["status"], "SKIPPED_UNKNOWN")
 
     def test_skip_submit_unknown_authorized_still_accepts_submit_unknown(self):
         """SUBMIT_UNKNOWN keeps its legacy audit semantics unchanged."""
@@ -326,6 +368,60 @@ class TestProposalExecutionSafety(TmpStateMixin, unittest.TestCase):
         with open(os.path.join(self._tmp, "round_7.checkpoint.json"),
                   encoding="utf-8") as f:
             self.assertFalse(json.load(f)["complete"])
+
+    def test_force_new_round_blocks_unresolved_submission_fingerprint(self):
+        agent, client = make_agent(self._tmp, rounds=1)
+        unresolved = Experiment(
+            7, "h-7", "rank(returns)", BASE_CONFIG["simulation"],
+            ["returns"], ["pv1"],
+        )
+        unresolved.status = "SUBMIT_UNKNOWN"
+        unresolved.progress_url = "https://api.worldquantbrain.com/simulations/remote-7"
+        unresolved.submission_fingerprint = submission_fingerprint(
+            unresolved.expression, unresolved.settings
+        )
+        agent._write_proposal_checkpoint(7, {"id": "h-7"}, [unresolved], complete=False)
+        path = os.path.join(self._tmp, "proposals.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({
+                "round_no": 8,
+                "fields": [{"id": "returns", "dataset": "pv1", "type": "MATRIX",
+                            "description": "daily return", "semantic_status": "KNOWN"}],
+                "proposals": [self._force_round_proposal(agent)],
+            }, handle)
+
+        self.assertIsNone(agent.run_proposals(path, allow_unresolved_checkpoint=True))
+        self.assertEqual(client.sim_calls, [])
+        rows = list(agent.trial_ledger._events) if not agent.trial_ledger.path else list(
+            iter_jsonl_objects(agent.trial_ledger.path)
+        )
+        self.assertTrue(any(
+            row.get("reason_code") == "UNRESOLVED_SUBMISSION_IDENTITY"
+            for row in rows
+        ))
+
+    def test_force_new_round_allows_same_expression_with_different_settings(self):
+        agent, client = make_agent(self._tmp, rounds=1)
+        unresolved = Experiment(
+            7, "h-7", "rank(returns)", BASE_CONFIG["simulation"],
+            ["returns"], ["pv1"],
+        )
+        unresolved.status = "UNKNOWN"
+        unresolved.submission_fingerprint = submission_fingerprint(
+            unresolved.expression, unresolved.settings
+        )
+        agent._write_proposal_checkpoint(7, {"id": "h-7"}, [unresolved], complete=False)
+        path = os.path.join(self._tmp, "proposals.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({
+                "round_no": 8,
+                "fields": [{"id": "returns", "dataset": "pv1", "type": "MATRIX",
+                            "description": "daily return", "semantic_status": "KNOWN"}],
+                "proposals": [self._force_round_proposal(agent, settings={"decay": 1})],
+            }, handle)
+
+        agent.run_proposals(path, allow_unresolved_checkpoint=True)
+        self.assertEqual(client.sim_calls, ["rank(returns)"])
 
     def test_proposal_priority_cap_never_spends_over_budget(self):
         agent, client = make_agent(self._tmp, rounds=1)

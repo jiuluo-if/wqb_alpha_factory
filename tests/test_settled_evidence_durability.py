@@ -217,7 +217,6 @@ class TestProductionSettlementPersistence(unittest.TestCase):
         agent.trajectory.add(experiment)
         final = agent._settle_research_outcome(experiment, self._report())
         self.assertIsInstance(final, dict)
-
         settled = [
             row for row in _rows(os.path.join(self.tmp, "trajectory.jsonl"))
             if row.get("id") == experiment.id
@@ -228,6 +227,71 @@ class TestProductionSettlementPersistence(unittest.TestCase):
         self.assertEqual(
             settled[0]["research_classification"], experiment.research_classification
         )
+
+    def test_finalize_round_closes_existing_checkpoint_from_durable_trajectory(self):
+        agent = self._agent()
+        experiment = done_experiment(round_no=333)
+        experiment.id = "finalize-e1"
+        agent.trajectory.add(experiment)
+        agent._write_proposal_checkpoint(
+            333, {"id": "h-1"}, [experiment], complete=False
+        )
+
+        agent.finalize_recorded_round(333)
+
+        checkpoint = agent._load_proposal_checkpoint(333)
+        self.assertTrue(checkpoint["complete"])
+        self.assertEqual(
+            {row["id"] for row in checkpoint["experiments"]},
+            {"finalize-e1"},
+        )
+        before = Path(agent.trajectory.path).read_text(encoding="utf-8")
+        agent.finalize_recorded_round(333)
+        self.assertEqual(Path(agent.trajectory.path).read_text(encoding="utf-8"), before)
+
+    def test_finalize_round_rejects_unresolved_durable_execution(self):
+        agent = self._agent()
+        experiment = done_experiment(round_no=334)
+        experiment.id = "finalize-unresolved"
+        experiment.status = "UNKNOWN"
+        experiment.metrics = None
+        agent.trajectory.add(experiment)
+        agent._write_proposal_checkpoint(
+            334, {"id": "h-1"}, [experiment], complete=False
+        )
+
+        with self.assertRaisesRegex(ValueError, "FINALIZE_UNRESOLVED_EXECUTION"):
+            agent.finalize_recorded_round(334)
+        self.assertFalse(agent._load_proposal_checkpoint(334)["complete"])
+
+    def test_finalize_without_checkpoint_does_not_create_one(self):
+        agent = self._agent()
+        experiment = done_experiment(round_no=335)
+        experiment.id = "finalize-no-checkpoint"
+        agent.trajectory.add(experiment)
+
+        agent.finalize_recorded_round(335)
+
+        self.assertFalse(os.path.exists(agent._proposal_checkpoint_path(335)))
+        log_rows = _rows(os.path.join(self.tmp, "round_finalization_log.jsonl"))
+        self.assertEqual(log_rows[-1]["checkpoint_status"], "NO_CHECKPOINT_TO_CLOSE")
+
+    def test_finalize_rejects_checkpoint_execution_set_mismatch_without_rewrite(self):
+        agent = self._agent()
+        durable = done_experiment(round_no=336)
+        durable.id = "durable-336"
+        checkpoint_row = done_experiment(round_no=336)
+        checkpoint_row.id = "checkpoint-336"
+        agent.trajectory.add(durable)
+        agent._write_proposal_checkpoint(
+            336, {"id": "h-1"}, [checkpoint_row], complete=False
+        )
+        path = agent._proposal_checkpoint_path(336)
+        before = Path(path).read_bytes()
+
+        with self.assertRaisesRegex(ValueError, "FINALIZE_EXECUTION_SET_MISMATCH"):
+            agent.finalize_recorded_round(336)
+        self.assertEqual(Path(path).read_bytes(), before)
 
     def test_restarted_agent_sees_final_settled_evidence(self):
         agent = self._agent()

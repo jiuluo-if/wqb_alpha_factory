@@ -13,7 +13,7 @@ import uuid
 from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
 
-from .expression import canonical_expression
+from .expression import canonical_expression, submission_fingerprint
 from .schema import CREATED_BY_VERSION, TRAJECTORY_VERSION
 
 ACTIVE_EXECUTION_STATUSES = frozenset({"PENDING", "RUNNING", "SUBMITTING"})
@@ -55,8 +55,19 @@ _LOAD_LINES_PER_EXPERIMENT = 4
 
 def same_execution_identity(left, right):
     """True when two trajectory rows describe the same executed Experiment."""
-    return {key: left.get(key) for key in IDENTITY_FIELDS} == {
-        key: right.get(key) for key in IDENTITY_FIELDS
+    def identity_value(row, key):
+        value = row.get(key)
+        if key == "submission_fingerprint" and not value:
+            expression = row.get("expression")
+            settings = row.get("settings")
+            if isinstance(expression, str) and isinstance(settings, dict):
+                return submission_fingerprint(expression, settings)
+        return value
+
+    return {
+        key: identity_value(left, key) for key in IDENTITY_FIELDS
+    } == {
+        key: identity_value(right, key) for key in IDENTITY_FIELDS
     }
 
 
@@ -552,7 +563,7 @@ class Trajectory:
                 merge_canonical_candidate(references, latest, proposal_id, row)
         return {target: latest.get(target) for target in targets}
 
-    def iter_canonical_rows(self, *, since=None, until=None):
+    def iter_canonical_rows(self, *, since=None, until=None, stats=None):
         """Stream the latest valid canonical row per experiment identity.
 
         ``iter_rows`` intentionally yields the append-only revisions (an early
@@ -567,7 +578,8 @@ class Trajectory:
         if not self.persist or not self.path or not os.path.exists(self.path):
             return
         merged = {}
-        for row in self.iter_rows() or ():
+        read_stats = stats if isinstance(stats, dict) else {}
+        for row in self.iter_rows(stats=read_stats) or ():
             row_id = row.get("id")
             if not row_id:
                 continue
@@ -581,9 +593,59 @@ class Trajectory:
                     continue
             reference = merged.get(row_id)
             if reference is not None and not same_execution_identity(reference, row):
+                read_stats["identity_mismatch_rows"] = read_stats.get(
+                    "identity_mismatch_rows", 0
+                ) + 1
                 continue
             merged[row_id] = row
         for row in merged.values():
+            yield row
+
+    def iter_canonical_round(self, round_no, *, stats=None):
+        """Stream one durable round as canonical Experiment revisions.
+
+        The append-only trajectory is the evidence owner.  This helper makes
+        one pass over the full file, keeps the first legal execution identity
+        for each Experiment id, and lets the latest legal revision update the
+        evidence view.  The bounded ``experiments`` window is deliberately not
+        consulted.
+        """
+        target_round = int(round_no)
+        result_stats = stats if isinstance(stats, dict) else {}
+        references = {}
+        latest = {}
+        for row in self.iter_rows(stats=result_stats) or ():
+            if row.get("round") != target_round:
+                continue
+            row_id = row.get("id")
+            if row_id in (None, "") or not isinstance(row.get("expression"), str):
+                result_stats["malformed_round_rows"] = result_stats.get(
+                    "malformed_round_rows", 0
+                ) + 1
+                continue
+            if not isinstance(row.get("settings"), dict) or not isinstance(
+                row.get("fields_used"), (list, tuple)
+            ):
+                result_stats["malformed_round_rows"] = result_stats.get(
+                    "malformed_round_rows", 0
+                ) + 1
+                continue
+            normalized = dict(row)
+            if not normalized.get("submission_fingerprint"):
+                normalized["submission_fingerprint"] = submission_fingerprint(
+                    normalized["expression"], normalized["settings"]
+                )
+            reference = references.get(row_id)
+            if reference is not None and not same_execution_identity(
+                reference, normalized
+            ):
+                result_stats["identity_mismatch_rows"] = result_stats.get(
+                    "identity_mismatch_rows", 0
+                ) + 1
+                continue
+            references.setdefault(row_id, normalized)
+            latest[row_id] = normalized
+        for row in latest.values():
             yield row
 
     def find_completed_expressions(self, expressions):

@@ -123,6 +123,43 @@ class TestFindRowsBatch(unittest.TestCase):
             {"e0", "e1"},
         )
 
+    def test_canonical_round_reads_beyond_bounded_memory_and_keeps_settings_identity(self):
+        experiments = []
+        for identity, settings in (
+            ("round-a", {"decay": 4}),
+            ("round-b", {"decay": 5}),
+        ):
+            experiment = Experiment(
+                77, "h-77", "rank(field_a)", settings, ["field_a"], ["pv1"]
+            )
+            experiment.id = identity
+            experiment.status = "DONE"
+            experiments.append(experiment)
+        third = _experiment("round-c")
+        third.round = 76
+        experiments.append(third)
+        _write(self.path, experiments)
+
+        trajectory = Trajectory(max_len=1, path=self.path).load()
+        stats = {}
+        rows = list(trajectory.iter_canonical_round(77, stats=stats))
+
+        self.assertEqual({row["id"] for row in rows}, {"round-a", "round-b"})
+        self.assertEqual(stats.get("identity_mismatch_rows", 0), 0)
+
+    def test_canonical_round_reports_identity_conflicting_revision(self):
+        early = _experiment("round-conflict")
+        early.round = 78
+        conflicting = _experiment("round-conflict", expression="rank(field_b)")
+        conflicting.round = 78
+        _write(self.path, [early, conflicting], revision=RESEARCH_SETTLED_REVISION)
+
+        stats = {}
+        rows = list(Trajectory(path=self.path).iter_canonical_round(78, stats=stats))
+
+        self.assertEqual([row["expression"] for row in rows], ["rank(field_a)"])
+        self.assertEqual(stats["identity_mismatch_rows"], 1)
+
     def test_iter_rows_decodes_escaped_lines_instead_of_skipping(self):
         row = _experiment("e0").to_dict()
         row["proposal_id"] = None

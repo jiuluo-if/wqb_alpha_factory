@@ -493,6 +493,7 @@ class TrialLedger:
         result = defaultdict(lambda: {
             "admitted": 0, "submitted": 0, "evaluated": 0, "done": 0,
             "failed_research": 0, "failed_infra": 0, "skipped_local": 0,
+            "skipped_stale": 0, "skipped_unknown": 0,
             "completed": 0, "pending": 0, "running": 0, "unknown": 0,
             "reserved": 0, "reward_sum": 0.0, "reward_count": 0, "reward": 0.0,
         })
@@ -528,6 +529,14 @@ class TrialLedger:
                 result[arm]["running"] += 1
             elif status in {"UNKNOWN", "SUBMIT_UNKNOWN"}:
                 result[arm]["unknown"] += 1
+            elif status in {"SKIPPED_STALE", "SKIPPED_UNKNOWN", "SKIPPED_LOCAL"}:
+                result[arm]["completed"] += 1
+                if status == "SKIPPED_STALE":
+                    result[arm]["skipped_stale"] += 1
+                elif status == "SKIPPED_UNKNOWN":
+                    result[arm]["skipped_unknown"] += 1
+                else:
+                    result[arm]["skipped_local"] += 1
             elif status == "FAILED":
                 result[arm]["completed"] += 1
                 if str(row.get("reason_code") or row.get("reason") or "").upper() in {"INFRA", "RATE_LIMIT", "AUTH", "TIMEOUT"}:
@@ -549,7 +558,10 @@ class TrialLedger:
         phase = latest.get("phase")
         if phase == "simulation_settled":
             outcome = str(latest.get("outcome") or latest.get("status") or "").upper()
-            if outcome in {"DONE", "FAILED", "SKIPPED", "SKIPPED_LOCAL"}:
+            if outcome in {
+                "DONE", "FAILED", "SKIPPED", "SKIPPED_LOCAL",
+                "SKIPPED_STALE", "SKIPPED_UNKNOWN",
+            }:
                 return outcome
         if phase == "simulation_submitted":
             outcome = str(latest.get("outcome") or "RUNNING").upper()
@@ -578,6 +590,7 @@ class TrialLedger:
         result = defaultdict(lambda: {
             "admitted": 0, "submitted": 0, "evaluated": 0, "done": 0,
             "failed_research": 0, "failed_infra": 0, "skipped_local": 0,
+            "skipped_stale": 0, "skipped_unknown": 0,
             "completed": 0, "pending": 0, "running": 0, "unknown": 0,
             "reserved": 0, "reward_sum": 0.0, "reward_count": 0, "reward": 0.0,
         })
@@ -606,9 +619,14 @@ class TrialLedger:
                     reward = 0.0
                 state["reward"] += reward
                 state["reward_sum"] += reward
-            elif status == "SKIPPED_LOCAL":
+            elif status in {"SKIPPED_LOCAL", "SKIPPED_STALE", "SKIPPED_UNKNOWN"}:
                 state["completed"] += 1
-                state["skipped_local"] += 1
+                if status == "SKIPPED_STALE":
+                    state["skipped_stale"] += 1
+                elif status == "SKIPPED_UNKNOWN":
+                    state["skipped_unknown"] += 1
+                else:
+                    state["skipped_local"] += 1
             elif status == "FAILED":
                 state["completed"] += 1
                 category = str(rows[-1].get("reason_code") or rows[-1].get("reason") or "").upper()

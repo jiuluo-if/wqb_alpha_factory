@@ -150,6 +150,11 @@ class ProposalExecutionWorkflow:
     def _unfinished_checkpoint_except(self, round_no):
         return self._ctx.checkpoints.unfinished_except(round_no)
 
+    def _unresolved_submission_identities(self, round_no):
+        return self._ctx.checkpoints.unresolved_submission_identities(
+            exclude_round=round_no
+        )
+
     def _on_update(self, experiment, round_no, hypothesis, experiments, delegation):
         self._ctx.hooks.on_simulation_update(
             experiment, round_no, hypothesis, experiments, delegation
@@ -336,15 +341,7 @@ class ProposalExecutionWorkflow:
         )
         local_seen = set(terminal_expressions)
         local_seen.update(terminal_fingerprints)
-        pending = [
-            exp for exp in ctx.trajectory.experiments
-            if exp.status in ("UNKNOWN", "PENDING")
-        ]
-        if pending:
-            print(
-                f"[NOTE] {len(pending)} 个历史实验未完成（UNKNOWN/PENDING），"
-                "其表达式已豁免去重，可在本轮重新提交。"
-            )
+        unresolved_identities = self._unresolved_submission_identities(round_no)
         fresh, skipped, rejected = [], [], []
         diversity_rejected, settings_rejected = [], []
         loop_guard = ResearchLoopGuard(ctx.trajectory.experiments)
@@ -521,6 +518,20 @@ class ProposalExecutionWorkflow:
             except ValueError as exc:
                 hooks.record_candidate_rejection(proposal, "settings", "INVALID_SETTINGS", str(exc))
                 settings_rejected.append((expression, [str(exc)]))
+                continue
+            execution_fingerprint = submission_fingerprint(
+                expression, effective_settings
+            )
+            if execution_fingerprint in unresolved_identities:
+                reason = (
+                    "同一 submission_fingerprint 仍存在未决远程执行；"
+                    "force-new-round 不能绕过 execution identity fence"
+                )
+                hooks.record_candidate_rejection(
+                    proposal, "execution_identity",
+                    "UNRESOLVED_SUBMISSION_IDENTITY", reason,
+                )
+                rejected.append((expression, [reason]))
                 continue
             proposal.setdefault("proposal_id", "p-" + submission_fingerprint(expression, effective_settings)[:16])
             fresh.append(proposal)
@@ -863,9 +874,86 @@ class ProposalExecutionWorkflow:
             return None
         return self._settle_complete_round(round_no, hypothesis, experiments)
 
+    def _record_terminal_skip(self, experiment, outcome, reason):
+        """Close an unresolved lifecycle without inventing research evidence."""
+        proposal = {
+            "proposal_id": experiment.allocation_key or experiment.proposal_id,
+            "expression": experiment.expression,
+            "dataset_family": experiment.datasets,
+            "template_family": experiment.template_family,
+        }
+        policy = self._ctx.search_policy
+        if getattr(policy, "enabled", False):
+            key = policy.allocator.proposal_key(proposal)
+            known = key in policy.allocator.proposals
+            known = known or key in getattr(policy, "validation_proposals", {})
+            if not known:
+                raise ValueError(
+                    "SKIP_SEARCH_ACCOUNTING_GAP: unresolved arm is not durable"
+                )
+        ledger = self._ctx.trial_ledger
+        delegation = self._ctx.simulation_delegation
+        ledger.record(
+            experiment, "completed", outcome=outcome, reason=reason,
+            reason_code=outcome, delegation=delegation,
+        )
+        ledger.record(
+            experiment, "simulation_settled", outcome=outcome, reason=reason,
+            reason_code=outcome, delegation=delegation,
+        )
+        policy.release(proposal, status="SKIPPED", reward=0.0)
+
+    @staticmethod
+    def _execution_identity_key(row):
+        """Compare checkpoint/trajectory identity using retained fields only."""
+        settings = row.get("settings") if isinstance(row.get("settings"), dict) else {}
+        fingerprint = submission_fingerprint(row.get("expression", ""), settings)
+        return (
+            str(row.get("id")),
+            row.get("round"),
+            row.get("hypothesis_id"),
+            canonical_expression(row.get("expression", "")),
+            json.dumps(settings, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+            tuple(row.get("fields_used") or ()),
+            str(fingerprint),
+        )
+
+    def _validate_finalize_checkpoint(self, checkpoint, experiments, round_no):
+        if checkpoint is None:
+            return None
+        checkpoint_rows = checkpoint.get("experiments") or []
+        durable_keys = {
+            self._execution_identity_key(exp.to_dict()) for exp in experiments
+        }
+        checkpoint_keys = {
+            self._execution_identity_key(row)
+            for row in checkpoint_rows if isinstance(row, dict)
+        }
+        if checkpoint_keys != durable_keys or len(checkpoint_rows) != len(experiments):
+            raise ValueError(
+                f"FINALIZE_EXECUTION_SET_MISMATCH: round {round_no}"
+            )
+        return checkpoint
+
     def skip_stale_reconciled(self, round_no, simulation_id, min_attempts=3):
         checkpoint = self._load_proposal_checkpoint(int(round_no))
-        if not checkpoint or checkpoint.get("complete"):
+        if not checkpoint:
+            raise ValueError(f"round {round_no} has no legal checkpoint")
+        experiments = [Experiment.from_dict(row) for row in checkpoint["experiments"]]
+        matches = [
+            exp for exp in experiments
+            if (exp.progress_url or "").rstrip("/").split("/")[-1] == simulation_id
+        ]
+        if len(matches) != 1:
+            raise ValueError(f"expected one checkpoint experiment for {simulation_id}, found {len(matches)}")
+        exp = matches[0]
+        if not exp.submission_fingerprint:
+            exp.submission_fingerprint = submission_fingerprint(
+                exp.expression, exp.settings
+            )
+        if exp.status == "SKIPPED_STALE":
+            return exp
+        if checkpoint.get("complete"):
             raise ValueError(f"round {round_no} has no unfinished checkpoint")
         history_path = os.path.join(self._ctx.state_dir, "reconcile_history.jsonl")
         attempts = [
@@ -877,14 +965,6 @@ class ProposalExecutionWorkflow:
             raise ValueError(
                 f"only {len(attempts)} read-only STALE/UNKNOWN reconciliations; need {min_attempts}"
             )
-        experiments = [Experiment.from_dict(row) for row in checkpoint["experiments"]]
-        matches = [
-            exp for exp in experiments
-            if (exp.progress_url or "").rstrip("/").split("/")[-1] == simulation_id
-        ]
-        if len(matches) != 1:
-            raise ValueError(f"expected one checkpoint experiment for {simulation_id}, found {len(matches)}")
-        exp = matches[0]
         if exp.status not in RECOVERABLE_STATUSES:
             raise ValueError(f"simulation {simulation_id} is already {exp.status}")
         exp.status = "SKIPPED_STALE"
@@ -898,6 +978,9 @@ class ProposalExecutionWorkflow:
             "research_decision": "N/A",
         }
         exp.error = "SKIPPED_AFTER_REPEATED_STALE_RECONCILIATION"
+        self._record_terminal_skip(
+            exp, "SKIPPED_STALE", exp.error
+        )
         unresolved = [item for item in experiments if item.status in UNRESOLVED_STATUSES]
         self._write_proposal_checkpoint(
             int(round_no), checkpoint.get("hypothesis") or {}, experiments, complete=not unresolved
@@ -917,13 +1000,21 @@ class ProposalExecutionWorkflow:
 
     def skip_submit_unknown_authorized(self, round_no, proposal_id):
         checkpoint = self._load_proposal_checkpoint(int(round_no))
-        if not checkpoint or checkpoint.get("complete"):
-            raise ValueError(f"round {round_no} has no unfinished checkpoint")
+        if not checkpoint:
+            raise ValueError(f"round {round_no} has no legal checkpoint")
         experiments = [Experiment.from_dict(row) for row in checkpoint["experiments"]]
         matches = [exp for exp in experiments if exp.proposal_id == proposal_id]
         if len(matches) != 1:
             raise ValueError(f"expected one checkpoint experiment for {proposal_id}, found {len(matches)}")
         exp = matches[0]
+        if not exp.submission_fingerprint:
+            exp.submission_fingerprint = submission_fingerprint(
+                exp.expression, exp.settings
+            )
+        if exp.status == "SKIPPED_UNKNOWN":
+            return exp
+        if checkpoint.get("complete"):
+            raise ValueError(f"round {round_no} has no unfinished checkpoint")
         # A progress-URL-less UNKNOWN is the same recovery-evidence gap as
         # SUBMIT_UNKNOWN: an ambiguous write result with no safe re-POST and no
         # remote identity to poll.  A URL-bearing UNKNOWN is NOT skippable here
@@ -957,6 +1048,9 @@ class ProposalExecutionWorkflow:
             if ambiguous_unknown
             else "SKIPPED_AFTER_USER_AUTHORIZED_SUBMIT_UNKNOWN"
         )
+        self._record_terminal_skip(
+            exp, "SKIPPED_UNKNOWN", exp.error
+        )
         unresolved = [item for item in experiments if item.status in UNRESOLVED_STATUSES]
         self._write_proposal_checkpoint(
             int(round_no), checkpoint.get("hypothesis") or {}, experiments, complete=not unresolved
@@ -976,22 +1070,41 @@ class ProposalExecutionWorkflow:
 
     def finalize_recorded_round(self, round_no):
         self._ctx.hooks.ensure_loaded()
-        rows = [exp for exp in self._ctx.trajectory.experiments if exp.round == int(round_no)]
+        read_stats = {}
+        rows = [
+            Experiment.from_dict(row)
+            for row in self._ctx.trajectory.iter_canonical_round(
+                int(round_no), stats=read_stats
+            )
+        ]
         if not rows:
             raise ValueError(f"no trajectory evidence for round {round_no}")
-        selected = {}
-        rank = {"UNKNOWN": 0, "PENDING": 0, "SUBMITTING": 0, "RUNNING": 0,
-                "SKIPPED_STALE": 1, "SKIPPED_UNKNOWN": 1, "FAILED": 1, "DONE": 2}
-        for exp in rows:
-            old = selected.get(exp.expression)
-            if old is None or rank.get(exp.status, 0) > rank.get(old.status, 0):
-                selected[exp.expression] = exp
-        experiments = list(selected.values())
+        if read_stats.get("identity_mismatch_rows"):
+            raise ValueError(
+                f"FINALIZE_EXECUTION_IDENTITY_MISMATCH: round {round_no}"
+            )
+        experiments = rows
         active = [exp for exp in experiments if exp.status in UNRESOLVED_STATUSES]
         if active:
-            raise ValueError(f"round {round_no} still has unresolved experiments")
-        checkpoint = self._load_proposal_checkpoint(int(round_no)) or {}
-        hypothesis = checkpoint.get("hypothesis") or {"id": f"h-llm-r{round_no}", "_round": int(round_no)}
+            raise ValueError(f"FINALIZE_UNRESOLVED_EXECUTION: round {round_no}")
+        checkpoint_path = self._proposal_checkpoint_path(int(round_no))
+        checkpoint = self._load_proposal_checkpoint(int(round_no))
+        if os.path.exists(checkpoint_path) and checkpoint is None:
+            raise ValueError(f"FINALIZE_EXECUTION_SET_MISMATCH: round {round_no}")
+        checkpoint = self._validate_finalize_checkpoint(
+            checkpoint, experiments, int(round_no)
+        )
+        if checkpoint is not None and not checkpoint.get("complete"):
+            hypothesis = checkpoint.get("hypothesis") or {
+                "id": f"h-llm-r{round_no}", "_round": int(round_no)
+            }
+            self._write_proposal_checkpoint(
+                int(round_no), hypothesis, experiments, complete=True
+            )
+        else:
+            hypothesis = (checkpoint or {}).get("hypothesis") or {
+                "id": f"h-llm-r{round_no}", "_round": int(round_no)
+            }
         self._ctx.hooks.refresh_self_correlation_evidence(experiments)
         self._ctx.hooks.mark_robustness_stability(experiments)
         summary = self._ctx.reflector.reflect(
@@ -1011,7 +1124,10 @@ class ProposalExecutionWorkflow:
             audit_path,
             {"round_no": int(round_no), "selected": len(experiments),
              "finalized_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-             "source": "trajectory_append_only"},
+             "source": "trajectory_append_only",
+             "checkpoint_status": "CLOSED" if checkpoint is not None else "NO_CHECKPOINT_TO_CLOSE",
+             "malformed_rows": read_stats.get("invalid_rows", 0)
+             + read_stats.get("malformed_round_rows", 0)},
             ("round_no", "source"),
         )
         print(f"[FINALIZE] r{round_no} diagnosed {len(experiments)} recorded terminal experiments")

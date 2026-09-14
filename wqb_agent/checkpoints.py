@@ -7,8 +7,10 @@ import os
 import re
 import threading
 import time
+from collections import defaultdict
 
 from .artifacts import atomic_write_json_if_changed
+from .expression import submission_fingerprint
 from .locking import StateMutationDelegation, single_instance_scope
 from .schema import CHECKPOINT_VERSION, CREATED_BY_VERSION, migrate_artifact
 
@@ -139,6 +141,52 @@ class CheckpointStore:
                 result = record["path"]
                 result_round = checkpoint_round
         return result
+
+    @staticmethod
+    def _submission_fingerprint(row):
+        expression = row.get("expression")
+        settings = row.get("settings")
+        if isinstance(expression, str) and isinstance(settings, dict):
+            # The payload is the canonical source for the existing execution
+            # fingerprint.  This also prevents a malformed legacy field from
+            # silently weakening the unresolved identity fence.
+            return submission_fingerprint(expression, settings)
+        value = row.get("submission_fingerprint")
+        if value not in (None, ""):
+            return str(value)
+        return None
+
+    def unresolved_submission_identities(self, *, exclude_round=None):
+        """Return unresolved execution keys from all incomplete checkpoints.
+
+        The returned values are bounded local identity metadata only.  The
+        helper is read-only and reconstructs the key for legacy rows that did
+        not persist ``submission_fingerprint``.
+        """
+        unresolved = defaultdict(list)
+        excluded = int(exclude_round) if exclude_round is not None else None
+        for record in self.scan():
+            if record["malformed"]:
+                continue
+            checkpoint = record["checkpoint"]
+            if checkpoint.get("complete") or (
+                excluded is not None and record["round_no"] == excluded
+            ):
+                continue
+            for row in checkpoint.get("experiments") or ():
+                if not isinstance(row, dict):
+                    continue
+                if str(row.get("status") or "").upper() not in {
+                    "PENDING", "RUNNING", "SUBMITTING", "UNKNOWN", "SUBMIT_UNKNOWN",
+                }:
+                    continue
+                fingerprint = self._submission_fingerprint(row)
+                if fingerprint:
+                    unresolved[fingerprint].append({
+                        "round_no": record["round_no"],
+                        "experiment_id": str(row.get("id")),
+                    })
+        return dict(unresolved)
 
     def scan(self, names=None):
         """Return the authoritative read-only view of checkpoint files.

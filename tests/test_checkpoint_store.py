@@ -120,6 +120,21 @@ class TestCheckpointStore(unittest.TestCase):
             self.assertEqual(store.unfinished_except(9), store.path(6))
             self.assertEqual(store.unfinished_except(6), store.path(8))
 
+    def test_unresolved_submission_identity_reconstructs_legacy_fingerprint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = CheckpointStore(tmp)
+            row = {
+                "id": "e1", "round": 4, "hypothesis_id": "h1",
+                "expression": "rank(close)", "settings": {"decay": 4},
+                "fields_used": ["close"], "status": "SUBMIT_UNKNOWN",
+            }
+            with open(store.path(4), "w", encoding="utf-8") as handle:
+                json.dump({"round_no": 4, "complete": False,
+                           "hypothesis": {}, "experiments": [row]}, handle)
+            identities = store.unresolved_submission_identities()
+            self.assertEqual(len(identities), 1)
+            self.assertEqual(identities[next(iter(identities))][0]["round_no"], 4)
+
     def test_scan_is_authoritative_for_valid_and_malformed_checkpoints(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = CheckpointStore(tmp)

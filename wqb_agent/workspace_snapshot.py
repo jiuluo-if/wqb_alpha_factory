@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from .artifacts import iter_jsonl_objects
 from .checkpoints import CheckpointStore
 from .schema import TRAJECTORY_VERSION, TRIAL_LEDGER_VERSION, VALIDATION_VERSION
-from .state import Trajectory
+from .state import Trajectory, same_execution_identity
 from .trial_ledger import LIFECYCLE_PHASE_INDEX, PHASES
 
 _CHECKPOINT_NAME = re.compile(r"round_\d+\.checkpoint\.json")
@@ -112,6 +112,7 @@ class TrajectorySummary:
     trajectory_proposal_ids: frozenset = frozenset()
     observed_simulation_submitted: frozenset = frozenset()
     unsupported_schema_rows: int = 0
+    identity_mismatch_rows: int = 0
 
 
 @dataclass(frozen=True)
@@ -129,6 +130,7 @@ class WorkspaceSnapshot:
     proposal_count: int = 0
     current_best: object = None
     evidence_cache_entries: int = 0
+    unresolved_submission_identity_collisions: int = 0
 
     @property
     def unfinished_checkpoint_paths(self):
@@ -212,6 +214,8 @@ def _trajectory_summary(state_dir):
     observed_simulation_submitted = set()
     observed_simulation_settled = set()
     observed_research_settled = set()
+    identity_references = {}
+    identity_mismatch_rows = 0
     summary = {
         "records": 0,
         "latest_round": None,
@@ -236,6 +240,13 @@ def _trajectory_summary(state_dir):
             trajectory_alpha_ids.add(str(row["alpha_id"]))
         if row.get("proposal_id"):
             trajectory_proposal_ids.add(str(row["proposal_id"]))
+        row_id = row.get("id")
+        if row_id not in (None, ""):
+            reference = identity_references.get(row_id)
+            if reference is not None and not same_execution_identity(reference, row):
+                identity_mismatch_rows += 1
+            else:
+                identity_references.setdefault(row_id, row)
         proposal_id = row.get("proposal_id")
         phase = row.get("phase")
         _observe_lifecycle(
@@ -282,6 +293,7 @@ def _trajectory_summary(state_dir):
         missing_alpha_id_rows=lifecycle_stats["missing_alpha_id_rows"],
         observed_simulation_submitted=frozenset(observed_simulation_submitted),
         unsupported_schema_rows=lifecycle_stats["unsupported_schema_rows"],
+        identity_mismatch_rows=identity_mismatch_rows,
     )
 
 
@@ -470,6 +482,7 @@ def read_workspace_snapshot(state_dir):
     proposals = payloads.get("proposals.json")
     experience = payloads.get("experience.json")
     evidence_cache = payloads.get("evidence_cache.json")
+    unresolved_identities = CheckpointStore(state_dir).unresolved_submission_identities()
     return WorkspaceSnapshot(
         state_dir=state_dir,
         checkpoint_records=checkpoint_records,
@@ -487,4 +500,7 @@ def read_workspace_snapshot(state_dir):
                       if isinstance(experience, dict) else None),
         evidence_cache_entries=(len(evidence_cache)
                                if isinstance(evidence_cache, dict) else 0),
+        unresolved_submission_identity_collisions=sum(
+            1 for entries in unresolved_identities.values() if len(entries) > 1
+        ),
     )

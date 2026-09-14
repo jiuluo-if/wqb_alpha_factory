@@ -64,7 +64,7 @@ def main(argv=None):
         from wqb_agent.audit import audit_state
         result = audit_state(
             typed_config.runtime.state_dir,
-            lifecycle_persistent=False,
+            lifecycle_persistent=True,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if not result.get("ok"):

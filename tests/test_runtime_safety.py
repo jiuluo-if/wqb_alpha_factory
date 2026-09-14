@@ -435,6 +435,46 @@ class TestRuntimeSafety(unittest.TestCase):
             self.assertFalse(result["ok"])
             self.assertIn("unknown_not_budget_held", result["errors"])
 
+    def test_audit_detects_duplicate_unresolved_submission_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            row = {
+                "id": "e1", "round": 1, "hypothesis_id": "h",
+                "expression": "rank(low)", "settings": {},
+                "fields_used": ["low"], "status": "SUBMIT_UNKNOWN",
+                "proposal_id": "p1",
+            }
+            for round_no in (1, 2):
+                with open(
+                    os.path.join(tmp, f"round_{round_no}.checkpoint.json"),
+                    "w", encoding="utf-8",
+                ) as handle:
+                    payload = {
+                        "schema_version": 1, "round_no": round_no,
+                        "hypothesis": {}, "complete": False,
+                        "experiments": [dict(row, round=round_no)],
+                    }
+                    json.dump(payload, handle)
+            result = audit_state(tmp)
+        self.assertFalse(result["ok"])
+        self.assertIn("duplicate_unresolved_submission_identity", result["errors"])
+
+    def test_audit_detects_trajectory_execution_identity_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = [
+                {"id": "e1", "round": 1, "hypothesis_id": "h",
+                 "expression": "rank(low)", "settings": {},
+                 "fields_used": ["low"], "status": "DONE"},
+                {"id": "e1", "round": 1, "hypothesis_id": "h",
+                 "expression": "rank(high)", "settings": {},
+                 "fields_used": ["high"], "status": "DONE"},
+            ]
+            with open(os.path.join(tmp, "trajectory.jsonl"), "w", encoding="utf-8") as handle:
+                for row in rows:
+                    handle.write(json.dumps(row) + "\n")
+            result = audit_state(tmp)
+        self.assertFalse(result["ok"])
+        self.assertIn("trajectory_execution_identity_mismatch", result["errors"])
+
     def test_audit_detects_terminal_reserved_arm(self):
         with tempfile.TemporaryDirectory() as tmp:
             with open(os.path.join(tmp, "round_1.checkpoint.json"), "w", encoding="utf-8") as handle:

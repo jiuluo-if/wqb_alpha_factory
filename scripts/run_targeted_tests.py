@@ -50,15 +50,25 @@ DIRECT_TESTS = {
         "tests/test_checkpoint_store.py",
         "tests/test_recovery.py",
     ),
+    "wqb_agent/audit.py": (
+        "tests/test_runtime_safety.py",
+        "tests/test_cli.py",
+    ),
+    "wqb_agent/workspace_snapshot.py": (
+        "tests/test_runtime_safety.py",
+    ),
     "wqb_agent/state.py": (
         "tests/test_state.py",
         "tests/test_recovery.py",
         "tests/test_settled_evidence_durability.py",
+        "tests/test_trajectory_batch_reads.py",
         "tests/test_factory_provenance_persistence.py",
     ),
     "wqb_agent/proposal_execution.py": (
         "tests/test_proposal_execution.py",
+        "tests/test_proposal_safety.py",
         "tests/test_recovery.py",
+        "tests/test_settled_evidence_durability.py",
         "tests/test_simulator.py",
     ),
     "wqb_agent/simulator.py": (
@@ -149,6 +159,7 @@ DIRECT_TESTS = {
         "tests/test_incremental_value.py",
         "tests/test_optimization_selection_accounting.py",
         "tests/test_protocol_truth.py",
+        "tests/test_proposal_safety.py",
         "tests/test_recovery.py",
     ),
 }

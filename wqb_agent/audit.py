@@ -10,11 +10,9 @@ from .workspace_snapshot import read_workspace_snapshot
 def audit_state(state_dir, *, snapshot=None, lifecycle_persistent=True):
     """Audit durable state and, when enabled, durable lifecycle projections.
 
-    Production Agent runs intentionally keep trajectory and TrialLedger in
-    memory.  In that mode the checkpoint is the only durable recovery
-    boundary, so absence of a local ledger is expected rather than evidence
-    of a broken checkpoint.  The default remains strict for callers auditing
-    a workspace that explicitly uses durable lifecycle artifacts.
+    Production Agent owns durable trajectory and TrialLedger artifacts.  The
+    persistent mode therefore checks their lifecycle parity with checkpoints;
+    the opt-out remains only for explicit legacy/ephemeral callers.
     """
     snapshot = snapshot or read_workspace_snapshot(state_dir)
     errors = []
@@ -57,6 +55,12 @@ def audit_state(state_dir, *, snapshot=None, lifecycle_persistent=True):
     if trajectory_summary.incomplete_rows:
         record("incomplete_trajectory_evidence", "trajectory",
                rows=trajectory_summary.incomplete_rows)
+    if trajectory_summary.identity_mismatch_rows:
+        record(
+            "trajectory_execution_identity_mismatch",
+            "trajectory",
+            rows=trajectory_summary.identity_mismatch_rows,
+        )
     if trajectory_summary.duplicate_lifecycle_phases:
         record("duplicate_trajectory_lifecycle_phase", "trajectory",
                rows=trajectory_summary.duplicate_lifecycle_phases)
@@ -107,6 +111,12 @@ def audit_state(state_dir, *, snapshot=None, lifecycle_persistent=True):
     if ledger_summary.missing_alpha_id_rows:
         record("missing_ledger_alpha_id", "trial_ledger",
                rows=ledger_summary.missing_alpha_id_rows)
+    if snapshot.unresolved_submission_identity_collisions:
+        record(
+            "duplicate_unresolved_submission_identity",
+            "checkpoint",
+            collisions=snapshot.unresolved_submission_identity_collisions,
+        )
     for checkpoint_record in snapshot.checkpoint_records:
         if checkpoint_record["malformed"]:
             record("checkpoint_unreadable", "checkpoint",

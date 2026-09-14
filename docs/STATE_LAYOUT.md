@@ -23,6 +23,19 @@
 
 自主 factory 的优化层/探索层只写入当前 `proposals.json` 的审计字段和 `factory_batch_stats`，不新增状态文件；云端优先级仍来自 `.alpha_feed_cache/weekly.json` 的轻量 ID/时间戳，优化证据仍必须来自当前进程的完成记录和后续 live API。
 
+## 四种不可混用的身份
+
+| 身份 | 权威 owner | 用途 |
+|---|---|---|
+| candidate identity | proposal / TrialLedger candidate event | 表示一次候选生成或拒绝，不代表已提交 Simulation |
+| proposal identity | `proposal_id` 与现有 TrialLedger lifecycle | 表示提案生命周期与 arm accounting |
+| Simulation execution identity | `submission_fingerprint(expression, settings)` | 表示一次远程 Simulation 写入；未完成 checkpoint 跨轮次、跨进程禁止再次 POST |
+| Experiment identity | `Experiment.id` 与 `trajectory.jsonl` | 表示同一次执行的 durable evidence 及其 `RESEARCH_SETTLED` revision |
+
+`force-new-round` 只解除旧轮次的编排阻塞，不能解除未决 Simulation execution identity；
+同一表达式但不同 settings 的 fingerprint 不同，不能把它们按表达式折叠。`state audit`
+以持久化 Trajectory、TrialLedger 和 checkpoint 做只读 parity 检查，不把任一身份推断成另一身份。
+
 `factory_session.json` 的 route probe 只保留每个比较维度的 bounded count 与
 带 `session_id + dimension` domain separation 的 SHA-256 set digest；相同 session
 内的集合比较仍保留 route decision 语义，session renewal 不产生稳定的跨 session

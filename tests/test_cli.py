@@ -369,6 +369,18 @@ class TestCliRuntimeSafety(unittest.TestCase):
                     main_entry.main(["state", "audit"])
             self.assertEqual(raised.exception.code, 2)
 
+    def test_state_audit_uses_persistent_lifecycle_contract(self):
+        with patch.object(
+            main_entry, "load_config", return_value={"simulation": {}, "agent": {}}
+        ), patch(
+            "wqb_agent.audit.audit_state",
+            return_value={"ok": True},
+        ) as audit:
+            main_entry.main(["state", "audit"])
+        audit.assert_called_once_with(
+            ".wqb_state", lifecycle_persistent=True
+        )
+
         with patch.object(
             main_entry, "load_config", return_value={"simulation": {}, "agent": {}}
         ), patch(

@@ -864,11 +864,11 @@ class Agent:
     def _terminal_identities(self, expressions=None):
         """视为"已模拟过"的表达式集合（去重依据）。
 
-        只把已定论的表达式计入：DONE 与研究级 FAILED（SYNTAX/DATA）不重复
-        提交；UNKNOWN / PENDING / 系统级失败（限流、超时、网络、认证）不
-        能证明方向结论——POST 可能未发生或结果未知，剔除去重以便重试
-        （2026-08-19 r256 实测：2 条提交 429 耗尽 + 15 条 PENDING 曾因去重
-        被永久锁死，无法重跑）。
+        只把已定论的表达式计入普通研究去重：DONE 与研究级 FAILED
+        （SYNTAX/DATA）不重复提交；UNKNOWN / PENDING / 系统级失败不代表
+        研究结论，因此不进入 terminal set。未完成 checkpoint 中的同一
+        ``submission_fingerprint`` 另由 ProposalExecutionWorkflow 的
+        execution-identity fence 阻止重复 POST，不因普通研究去重放行。
         """
         from .failures import classify_experiment, is_research_relevant
 
