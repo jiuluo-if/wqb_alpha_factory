@@ -47,13 +47,13 @@ Agent → SuggestionWorkflow / ProposalExecutionWorkflow / AlphaFeedWorkflow / O
 | 指标 | 第二阶段起点 | 当前 |
 |---|---:|---:|
 | production Python files | 86 | 91 |
-| production LOC | 30,253 | 30,645 |
+| production LOC | 30,253 | 30,340 |
 | test Python files | 92 | 96 |
-| test LOC | 24,303 | 24,509 |
+| test LOC | 24,303 | 24,543 |
 | `Agent` LOC / methods | 1,651 / 79 | 1,650 / 79 |
 | `AlphaFactory` LOC / methods | 1,801 / 31 | 1,141 / 31 |
-| `ProposalExecutionWorkflow` LOC / methods | 1,365 / 29 | 1,366 / 29 |
-| `AIFactoryRunner` LOC / methods | 1,948 / 56 | 1,851 / 55 |
+| `ProposalExecutionWorkflow` LOC / methods | 1,365 / 29 | 1,356 / 29 |
+| `AIFactoryRunner` LOC / methods | 1,948 / 56 | 1,754 / 55 |
 | import cycles | 0 | 0 |
 
 本阶段已完成 AlphaFactory feasibility、候选到 proposal、optimization screening 与 validation proposal projection 的 canonical 迁移，并删除 `wqb_agent/candidate.py`（20 行）及 11 个只导入不使用 `CandidateBuilder` 的测试 import。`AlphaFactory` 从 1,801 行收敛到 1,141 行；生成/选择仍由 factory 持有，完整审计 proposal record 与 partial-operator realizations 由 `alpha_assembly.assemble_factory_realizations()` 持有，DONE parent screening/CHILD 与 ROBUSTNESS 构造分别由 `optimization_screening.py`、`validation_proposals.py` 持有。ProposalExecution 已将 execution identity admission 委托给纯投影，并用 owner-generation signature 缓存可重建 binding；FactoryRunner 已将 session/quota/route 控制面拆出。
@@ -81,6 +81,16 @@ Agent → SuggestionWorkflow / ProposalExecutionWorkflow / AlphaFeedWorkflow / O
 - `alpha_factory.py` 仍包含 template compatibility、candidate generation 与 optimization/validation proposal construction；后续只在 owner contract 明确时继续拆分，不复制 registry 或 prepared-facts owner。
 - `proposal_execution.py` 仍包含 admission sequencing 和 manual recovery mutation；durable identity binding 已由 transient `ExecutionBindingIndex` 承担 projection，exactly-once fence 仍由既有 durable owners 与 workflow 共同维护。
 - `discovery.py`、`memory.py`、`state.py`、`client.py` 与 `trial_ledger.py` 仍是有真实 consumer 的大模块；本阶段未凭行数删除它们。脚本审计未发现可安全删除的 ACTIVE/兼容入口。
+
+## 第二阶段删除证据
+
+| 对象 | 分类 | 证据与替代 |
+|---|---|---|
+| `wqb_agent/candidate.py` / `CandidateBuilder` | DEAD | 仓内 production、CLI、文档和动态导入均无 consumer；运行时改为 `RuntimeComponents.alpha_factory` |
+| 11 个测试中的 `CandidateBuilder` import 与旧 `builder` shape assertion | DEAD | 仅旧架构形状测试使用，删除后 runtime composition contract 直接验证 AlphaFactory identity |
+| `HighSignalValidator` 包级动态导出 | DEAD | 仓内无 import/文档/CLI consumer；验证器仍由 `validation.py` 内部使用 |
+| `tests/test_security_hardening_batch.py` | ACTIVE | 原子写、Trajectory integrity、same-origin、PBO 与 packaging 各有独立安全覆盖，当前文件仍保留未重复的行为测试 |
+| `scripts/reconcile_pending.py`、`scripts/refresh_self_correlation.py`、`scripts/benchmark_local_io.py` | ACTIVE | 分别是只读恢复、只读 SELF_CORRELATION 回填和离线性能入口，均在 README/CLI/测试中有 consumer |
 
 `RuntimeComponents` 只创建一次 memory、trajectory、ledger、discovery、simulator、checkpoint 和 cache；workflow 不反向导入 Agent，不重新创建这些 owner。
 

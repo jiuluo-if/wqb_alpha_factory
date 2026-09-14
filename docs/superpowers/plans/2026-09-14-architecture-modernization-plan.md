@@ -58,7 +58,7 @@
 - [ ] 运行 `python scripts/run_targeted_tests.py --files wqb_agent/agent.py wqb_agent/research_planning.py wqb_agent/evidence_projection.py`、`py_compile` 和 Ruff。
 - [ ] 提交 `refactor：抽离Agent领域规划与证据投影` 并推送。
 
-### Task 3: 模块化 AlphaFactory — PARTIAL / semantic and relationship extractions DONE
+### Task 3: 模块化 AlphaFactory — DONE
 
 **Files:**
 - Create: `wqb_agent/alpha_semantics.py`
@@ -71,7 +71,7 @@
 **Interfaces:**
 - `alpha_semantics.derive_field_semantic_traits(profile)` 返回现有 traits 结构。
 - `alpha_relationships.relationship_gate(profiles, template)` 返回现有 admission result，不触发网络或 state mutation。
-- `alpha_assembly.assemble_candidate(...)` 只构造 proposal/domain data；`AlphaFactory` 组合这些能力并保持原 public API。
+- `alpha_assembly.assemble_factory_realizations(...)` 只构造 proposal/domain data；`optimization_screening.py` 与 `validation_proposals.py` 分别拥有 CHILD/ROBUSTNESS projection；`AlphaFactory` 仅保留组合与兼容 facade。
 
 - [ ] 为 traits、relationship gate 和 assembly 各补一个正常、缺失证据、拒绝路径测试。
 - [ ] 迁移实现并保持 template/private-catalog gate、operator/horizon/settings 和经济语义完全不变。
@@ -79,7 +79,7 @@
 - [ ] 运行四个 factory subsystem 测试文件和 architecture contract。
 - [ ] 运行 changed-file `py_compile`、Ruff；提交 `refactor：模块化AlphaFactory领域能力` 并推送。
 
-### Task 4: 分解 ProposalExecutionWorkflow 内部阶段 — PARTIAL / terminal and recovery projections DONE
+### Task 4: 分解 ProposalExecutionWorkflow 内部阶段 — DONE
 
 **Files:**
 - Create: `wqb_agent/proposal_admission.py`
@@ -90,7 +90,7 @@
 - Test: `tests/test_proposal_execution.py`, `tests/test_proposal_safety.py`, `tests/test_recovery.py`, `tests/test_simulator.py`, `tests/test_settled_evidence_durability.py`
 
 **Interfaces:**
-- `proposal_admission.admit_proposals(...)` 只做 schema/preflight/admission projection。
+- `proposal_admission.admit_proposal(...)` 与 `admit_execution_identity(...)` 只做早期 schema/settings/duplicate/identity admission projection；diversity 与 state mutation 仍由 workflow 编排。
 - `execution_recovery.reconcile_checkpoint(...)` 只按 exact Experiment identity/fingerprint 读取和合并，不 POST。
 - `terminal_evidence.require_durable_terminal_evidence(...)` 与 `terminal_evidence.finalize_round_projection(...)` 只使用现有 owners 的窄操作。
 - `ProposalExecutionWorkflow.run/resume_checkpoint` 继续是唯一编排入口。
@@ -101,7 +101,7 @@
 - [ ] 检查新模块没有 `Agent`、直接 client POST、第二 checkpoint/trajectory writer。
 - [ ] 运行 targeted runner、`py_compile`、Ruff 和受影响 frontier 检查；提交 `refactor：分解提案执行内部阶段` 并推送。
 
-### Task 5: 隔离 FactoryRunner legacy control plane — PARTIAL / route policy DONE
+### Task 5: 隔离 FactoryRunner legacy control plane — DONE
 
 **Files:**
 - Create: `wqb_agent/factory_session.py`
@@ -115,6 +115,7 @@
 - `factory_session.read_session/request_stop/status_view` 继续是 `factory_session.json` 的唯一 control-plane projection。
 - `factory_quota.prepare/reserve/release` 只处理 bounded quota counts。
 - `factory_route.route_decision` 只处理 route episode 与 bounded digest，不生成 research evidence。
+- `factory_blocker.py` 只处理 bounded blocker signature、privacy-safe probe 与 recheck projection。
 - `AIFactoryRunner` 只编排 legacy facade，不创建第二 state owner 或 Simulation path。
 
 - [ ] 先通过 git grep、CLI、tests、docs 和动态调用搜索确认每个候选分支的 consumer。
@@ -123,7 +124,7 @@
 - [ ] 仅删除有零 consumer 证据的历史分支，并在 commit body/文档记录 replacement。
 - [ ] 运行 factory subsystem targeted lane、语法检查和 Ruff；提交 `refactor：隔离legacy工厂控制面` 并推送。
 
-### Task 6: 清理 public surface、重复测试、脚本并升级文档 — PARTIAL / docs and metrics DONE; deletion candidates retained with evidence
+### Task 6: 清理 public surface、重复测试、脚本并升级文档 — DONE（保留有 consumer 的安全批次与运维脚本）
 
 **Files:**
 - Modify: `wqb_agent/__init__.py`
