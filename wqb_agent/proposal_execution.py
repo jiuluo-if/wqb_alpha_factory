@@ -21,7 +21,11 @@ from .execution_identity import ExecutionBindingIndex
 from .execution_recovery import merge_checkpoint_with_trajectory
 from .expression import canonical_expression, submission_fingerprint
 from .identity import candidate_identity
-from .proposal_admission import admit_execution_identity, rejection_reason_counts
+from .proposal_admission import (
+    admit_execution_identity,
+    admit_proposal,
+    rejection_reason_counts,
+)
 from .proposal_contract import (
     FACTORY_BATCH_SIZE,
     MAX_TARGETED_PROPOSALS,
@@ -560,41 +564,27 @@ class ProposalExecutionWorkflow:
                 )
             if source is not None:
                 proposal["field_source"] = source
-            expression = (proposal.get("expression") or "").strip()
-            if not expression:
-                hooks.record_candidate_rejection(
-                    proposal, "schema", "MISSING_EXPRESSION", "expression 不能为空"
-                )
-                continue
-            try:
-                effective_settings = hooks.proposal_settings(proposal.get("settings"))
-            except ValueError as exc:
-                hooks.record_candidate_rejection(
-                    proposal, "settings", "INVALID_SETTINGS", str(exc)
-                )
-                settings_rejected.append((expression, [str(exc)]))
-                continue
-            execution_fingerprint = submission_fingerprint(
-                expression, effective_settings
+            admission = admit_proposal(
+                proposal, settings_resolver=hooks.proposal_settings,
+                batch_execution_fingerprints=batch_execution_fingerprints,
+                research_seen=research_seen,
             )
-            if execution_fingerprint in batch_execution_fingerprints:
+            expression = admission.expression
+            if admission.status != "ACCEPTED":
                 hooks.record_candidate_rejection(
-                    proposal, "execution_identity", "DUPLICATE_EFFECTIVE_EXECUTION",
-                    "相同的完整 effective Simulation settings 已存在，禁止重复执行",
+                    proposal, "proposal_admission", admission.reason_code,
+                    admission.reason,
                 )
-                skipped.append(expression)
+                if admission.reason_code == "INVALID_SETTINGS":
+                    settings_rejected.append((expression, [admission.reason]))
+                elif admission.status == "SKIPPED":
+                    skipped.append(expression)
+                else:
+                    rejected.append((expression, [admission.reason]))
                 continue
-            settings_override = proposal.get("settings")
-            research_key = (
-                "settings::" + execution_fingerprint
-                if settings_override else canonical_expression(expression)
-            )
-            if research_key in research_seen:
-                hooks.record_candidate_rejection(
-                    proposal, "duplicate", "DUPLICATE_LOCAL", "同一研究表达式与设置已在本批出现"
-                )
-                skipped.append(expression)
-                continue
+            effective_settings = admission.effective_settings
+            execution_fingerprint = admission.execution_fingerprint
+            research_key = admission.research_key
             ok, problems = validate_proposal(
                 proposal,
                 discovered_fields=proposal_field_profiles,

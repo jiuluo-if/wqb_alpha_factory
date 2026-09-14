@@ -90,6 +90,14 @@ DIRECT_TESTS = {
         "tests/test_factory_boundaries.py",
         "tests/test_research_loop.py",
     ),
+    "wqb_agent/optimization_screening.py": (
+        "tests/test_agent_decision_to_proposal.py",
+        "tests/test_factory_provenance_persistence.py",
+    ),
+    "wqb_agent/validation_proposals.py": (
+        "tests/test_agent_decision_to_proposal.py",
+        "tests/test_optimization_decision_contract.py",
+    ),
     "wqb_agent/factory_session.py": (
         "tests/test_factory_session.py",
         "tests/test_factory_session_privacy.py",
@@ -195,6 +203,10 @@ DIRECT_TESTS = {
         "tests/test_factory_route.py",
         "tests/test_factory_boundaries.py",
         "tests/test_research_loop.py",
+    ),
+    "wqb_agent/factory_blocker.py": (
+        "tests/test_factory_blocker_control.py",
+        "tests/test_factory_session_privacy.py",
     ),
     "wqb_agent/weekly_quota.py": (
         "tests/test_factory_boundaries.py",

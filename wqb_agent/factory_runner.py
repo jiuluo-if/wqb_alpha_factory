@@ -25,6 +25,13 @@ from copy import deepcopy
 from .artifacts import atomic_write_json_if_changed
 from .diversity import field_concept_keys, semantic_mechanism_key
 from .expression import canonical_expression
+from .factory_blocker import (
+    blocker_projection,
+    blocker_signature,
+    control_probe,
+    safe_control_token,
+    safe_nonnegative_count,
+)
 from .factory_quota import (
     carry_forward_quota,
     prepare_quota,
@@ -179,46 +186,25 @@ class AIFactoryRunner:
 
     @staticmethod
     def _safe_control_token(value, default="UNKNOWN"):
-        """Keep blocker fingerprints to bounded public control-plane tokens."""
-        if isinstance(value, dict):
-            value = value.get("status") or value.get("state") or value.get("availability")
-        if not isinstance(value, (str, int, float, bool)):
-            return default
-        token = str(value).strip().upper()
-        if token in AIFactoryRunner._CONTROL_TOKENS:
-            return token
-        return default
+        return safe_control_token(value, AIFactoryRunner._CONTROL_TOKENS, default)
 
     @classmethod
     def _validate_internal_control_state(cls, session):
         """Reject new runtime state outside the declared durable vocabulary."""
         if not isinstance(session, dict):
             raise FactoryControlStateError("FACTORY_CONTROL_STATE_UNDECLARED: session")
-        for field, vocabulary in (
-            ("status", cls._SESSION_STATUSES),
-            ("last_action", cls._SESSION_ACTIONS),
-        ):
+        for field, vocabulary in (("status", cls._SESSION_STATUSES), ("last_action", cls._SESSION_ACTIONS)):
             value = session.get(field)
-            if value is None:
-                continue
-            if not isinstance(value, str) or value not in vocabulary:
-                raise FactoryControlStateError(
-                    f"FACTORY_CONTROL_STATE_UNDECLARED: {field}"
-                )
+            if value is not None and (not isinstance(value, str) or value not in vocabulary):
+                raise FactoryControlStateError(f"FACTORY_CONTROL_STATE_UNDECLARED: {field}")
 
     @classmethod
     def _project_runtime_return(cls, value):
-        """Bound a caller-visible result without mutating the runtime object."""
-        if not isinstance(value, dict):
-            return value
-        return cls._control_plane_session(value)
+        return value if not isinstance(value, dict) else cls._control_plane_session(value)
 
     @staticmethod
     def _safe_nonnegative_count(value):
-        try:
-            return max(0, int(value))
-        except (TypeError, ValueError, OverflowError):
-            return 0
+        return safe_nonnegative_count(value)
 
     @staticmethod
     def _safe_timestamp(value):
@@ -227,101 +213,18 @@ class AIFactoryRunner:
         except (TypeError, ValueError, OverflowError):
             return None
 
-    def _blocker_signature(kind, probe):
-        """Hash only bounded control-plane classes, never research payloads."""
-        probe = probe if isinstance(probe, dict) else {}
-        raw_counts = probe.get("rejection_reason_counts")
-        counts = raw_counts if isinstance(raw_counts, dict) else {}
-        safe = {
-            "kind": AIFactoryRunner._safe_control_token(kind),
-            "failure_taxonomy": AIFactoryRunner._safe_control_token(
-                probe.get("failure_taxonomy")
-            ),
-            "frequency_evidence": AIFactoryRunner._safe_control_token(
-                probe.get("frequency_evidence")
-            ),
-            "capability_status": AIFactoryRunner._safe_control_token(
-                probe.get("capability_status")
-            ),
-            "shortage_reason": AIFactoryRunner._safe_control_token(
-                probe.get("budget_shortage_reason"), default="NONE"
-            ),
-            "shortage_count": AIFactoryRunner._safe_nonnegative_count(
-                probe.get("budget_shortage_count")
-            ),
-            "rejection_reason_counts": dict(sorted(
-                (AIFactoryRunner._safe_control_token(key),
-                 AIFactoryRunner._safe_nonnegative_count(value))
-                for key, value in counts.items()
-                if AIFactoryRunner._safe_nonnegative_count(value) > 0
-            )),
-        }
-        return hashlib.sha256(
-            json.dumps(safe, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
+    @classmethod
+    def _blocker_signature(cls, kind, probe):
+        return blocker_signature(kind, probe, control_tokens=cls._CONTROL_TOKENS)
 
     @classmethod
     def _blocker_projection(cls, kind, probe, *, now, previous=None, recheck_sec=None):
-        previous = previous if isinstance(previous, dict) else {}
-        signature = cls._blocker_signature(kind, probe)
-        same = previous.get("signature") == signature and previous.get("kind") == kind
-        try:
-            consecutive = int(previous.get("consecutive_same_count", 0)) if same else 0
-        except (TypeError, ValueError):
-            consecutive = 0
         interval = cls.BLOCKER_RECHECK_SEC if recheck_sec is None else float(recheck_sec)
-        return {
-            "kind": str(kind),
-            "signature": signature,
-            "consecutive_same_count": consecutive + 1,
-            "first_seen_at": previous.get("first_seen_at", now) if same else now,
-            "last_seen_at": now,
-            "next_recheck_at": now + max(0.0, interval),
-            "resume_hint": "等待上游 control-plane evidence 更新后重试一次",
-        }
+        return blocker_projection(kind, probe, now=now, previous=previous, recheck_sec=interval, control_tokens=cls._CONTROL_TOKENS)
 
-    @staticmethod
-    def _control_probe(probe, stats=None):
-        result = dict(probe) if isinstance(probe, dict) else {}
-        if isinstance(stats, dict):
-            result["rejection_reason_counts"] = dict(stats.get("rejection_reason_counts") or {})
-            result["failure_taxonomy"] = stats.get("status") or result.get("failure_taxonomy")
-        bounded = {
-            "failure_taxonomy": AIFactoryRunner._safe_control_token(
-                result.get("failure_taxonomy")
-            ),
-            "frequency_evidence": AIFactoryRunner._safe_control_token(
-                result.get("frequency_evidence")
-            ),
-            "capability_status": AIFactoryRunner._safe_control_token(
-                result.get("capability_status")
-            ),
-            "budget_shortage_reason": AIFactoryRunner._safe_control_token(
-                result.get("budget_shortage_reason"), default="NONE"
-            ),
-            "budget_shortage_count": AIFactoryRunner._safe_nonnegative_count(
-                result.get("budget_shortage_count")
-            ),
-            "rejection_reason_counts": {
-                AIFactoryRunner._safe_control_token(key):
-                AIFactoryRunner._safe_nonnegative_count(value)
-                for key, value in (
-                    result.get("rejection_reason_counts")
-                    if isinstance(result.get("rejection_reason_counts"), dict)
-                    else {}
-                ).items()
-                if AIFactoryRunner._safe_nonnegative_count(value) > 0
-            },
-        }
-        return {
-            key: bounded[key]
-            for key in (
-                "failure_taxonomy", "frequency_evidence", "capability_status",
-                "budget_shortage_reason", "budget_shortage_count",
-                "rejection_reason_counts",
-            )
-            if key in result or key == "failure_taxonomy"
-        }
+    @classmethod
+    def _control_probe(cls, probe, stats=None):
+        return control_probe(probe, allowed=cls._CONTROL_TOKENS, stats=stats)
 
     def _remember_blocker(self, session, kind, probe, now):
         config = getattr(self.agent, "factory_config", {}) or {}

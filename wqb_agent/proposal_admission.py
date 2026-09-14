@@ -4,6 +4,55 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .expression import canonical_expression, submission_fingerprint
+
+
+@dataclass(frozen=True)
+class ProposalAdmission:
+    """Pure early admission result; workflow owns trial/rejection mutation."""
+
+    status: str
+    expression: str
+    reason_code: str | None = None
+    reason: str | None = None
+    effective_settings: object = None
+    execution_fingerprint: str | None = None
+    research_key: str | None = None
+
+
+def admit_proposal(
+    proposal, *, settings_resolver, batch_execution_fingerprints,
+    research_seen,
+):
+    """Classify schema/settings/local duplicate gates without touching owners."""
+    if not isinstance(proposal, dict):
+        return ProposalAdmission("REJECTED", str(proposal or ""), "NOT_OBJECT", "proposal 必须是对象")
+    expression = (proposal.get("expression") or "").strip()
+    if not expression:
+        return ProposalAdmission("REJECTED", expression, "MISSING_EXPRESSION", "expression 不能为空")
+    try:
+        settings = settings_resolver(proposal.get("settings"))
+    except ValueError as exc:
+        return ProposalAdmission("REJECTED", expression, "INVALID_SETTINGS", str(exc))
+    fingerprint = submission_fingerprint(expression, settings)
+    if fingerprint in batch_execution_fingerprints:
+        return ProposalAdmission(
+            "SKIPPED", expression, "DUPLICATE_EFFECTIVE_EXECUTION",
+            "相同的完整 effective Simulation settings 已存在，禁止重复执行",
+            settings, fingerprint,
+        )
+    research_key = (
+        "settings::" + fingerprint if proposal.get("settings")
+        else canonical_expression(expression)
+    )
+    if research_key in research_seen:
+        return ProposalAdmission(
+            "SKIPPED", expression, "DUPLICATE_LOCAL",
+            "同一研究表达式与设置已在本批出现", settings, fingerprint, research_key,
+        )
+    return ProposalAdmission("ACCEPTED", expression, effective_settings=settings,
+                             execution_fingerprint=fingerprint, research_key=research_key)
+
 
 @dataclass(frozen=True)
 class IdentityAdmission:

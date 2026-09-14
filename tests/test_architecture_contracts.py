@@ -86,6 +86,9 @@ class ArchitectureDependencyContracts(unittest.TestCase):
             "wqb_agent/research_guard.py",
             "wqb_agent/alpha_assembly.py",
             "wqb_agent/proposal_admission.py",
+            "wqb_agent/optimization_screening.py",
+            "wqb_agent/validation_proposals.py",
+            "wqb_agent/factory_blocker.py",
         )
         imports = _package_imports(domain_paths)
         forbidden = {"wqb_agent.agent", "wqb_agent.client", "wqb_agent.simulator"}
@@ -102,6 +105,9 @@ class ArchitectureDependencyContracts(unittest.TestCase):
             "wqb_agent/alpha_relationships.py",
             "wqb_agent/alpha_semantics.py",
             "wqb_agent/execution_identity.py",
+            "wqb_agent/optimization_screening.py",
+            "wqb_agent/validation_proposals.py",
+            "wqb_agent/factory_blocker.py",
         )
         imports = _package_imports(paths)
         for path, dependencies in imports.items():

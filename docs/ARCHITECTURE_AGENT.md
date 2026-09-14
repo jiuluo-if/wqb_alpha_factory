@@ -24,7 +24,7 @@ RuntimeComponents
 Agent → SuggestionWorkflow / ProposalExecutionWorkflow / AlphaFeedWorkflow / OptimizerWorkflow
 ```
 
-架构现代化后的纯领域投影位于 workflow 之前：`research_planning.py` 负责已解析输入的研究空间/假设组装，`evidence_projection.py` 负责严格质量与 correlation gate，`alpha_semantics.py` 负责字段语义 traits，`alpha_relationships.py` 负责字段关系与频率准入，`alpha_feasibility.py` 负责有界可行性诊断，`alpha_assembly.py` 负责候选到完整 proposal 的 canonical 投影，`execution_identity.py` 负责 transient durable binding projection，`terminal_evidence.py`/`execution_recovery.py` 负责终态证据和 checkpoint 合并，`proposal_admission.py` 负责执行身份准入与提案拒绝统计，`factory_session.py`/`factory_quota.py`/`factory_route.py` 负责工厂控制面投影。它们均不拥有状态、不调用远端写操作；旧 facade 只委托 canonical 函数。
+架构现代化后的纯领域投影位于 workflow 之前：`research_planning.py` 负责已解析输入的研究空间/假设组装，`evidence_projection.py` 负责严格质量与 correlation gate，`alpha_semantics.py` 负责字段语义 traits，`alpha_relationships.py` 负责字段关系与频率准入，`alpha_feasibility.py` 负责有界可行性诊断，`alpha_assembly.py` 负责候选到完整 proposal 的 canonical 投影，`optimization_screening.py` 负责 DONE evidence 的优化准入与 CHILD projection，`validation_proposals.py` 负责单变量 ROBUSTNESS projection，`execution_identity.py` 负责 transient durable binding projection，`terminal_evidence.py`/`execution_recovery.py` 负责终态证据和 checkpoint 合并，`proposal_admission.py` 负责执行身份准入与提案拒绝统计，`factory_session.py`/`factory_quota.py`/`factory_route.py` 负责工厂控制面投影。它们均不拥有状态、不调用远端写操作；旧 facade 只委托 canonical 函数。
 
 ## 第一阶段架构审计结果（2026-09-14）
 
@@ -46,17 +46,17 @@ Agent → SuggestionWorkflow / ProposalExecutionWorkflow / AlphaFeedWorkflow / O
 
 | 指标 | 第二阶段起点 | 当前 |
 |---|---:|---:|
-| production Python files | 86 | 89 |
-| production LOC | 30,253 | 30,405 |
+| production Python files | 86 | 91 |
+| production LOC | 30,253 | 30,645 |
 | test Python files | 92 | 96 |
 | test LOC | 24,303 | 24,509 |
 | `Agent` LOC / methods | 1,651 / 79 | 1,650 / 79 |
-| `AlphaFactory` LOC / methods | 1,801 / 31 | 1,471 / 31 |
+| `AlphaFactory` LOC / methods | 1,801 / 31 | 1,141 / 31 |
 | `ProposalExecutionWorkflow` LOC / methods | 1,365 / 29 | 1,366 / 29 |
 | `AIFactoryRunner` LOC / methods | 1,948 / 56 | 1,851 / 55 |
 | import cycles | 0 | 0 |
 
-本阶段已完成 AlphaFactory feasibility 与候选到 proposal 投影的 canonical 迁移，并删除 `wqb_agent/candidate.py`（20 行）及 11 个只导入不使用 `CandidateBuilder` 的测试 import。`AlphaFactory` 从 1,801 行收敛到 1,471 行；生成/选择仍由 factory 持有，完整审计 proposal record 与 partial-operator realizations 由 `alpha_assembly.assemble_factory_realizations()` 持有。ProposalExecution 已将 execution identity admission 委托给纯投影，并用 owner-generation signature 缓存可重建 binding；FactoryRunner 已将 session/quota/route 控制面拆出。
+本阶段已完成 AlphaFactory feasibility、候选到 proposal、optimization screening 与 validation proposal projection 的 canonical 迁移，并删除 `wqb_agent/candidate.py`（20 行）及 11 个只导入不使用 `CandidateBuilder` 的测试 import。`AlphaFactory` 从 1,801 行收敛到 1,141 行；生成/选择仍由 factory 持有，完整审计 proposal record 与 partial-operator realizations 由 `alpha_assembly.assemble_factory_realizations()` 持有，DONE parent screening/CHILD 与 ROBUSTNESS 构造分别由 `optimization_screening.py`、`validation_proposals.py` 持有。ProposalExecution 已将 execution identity admission 委托给纯投影，并用 owner-generation signature 缓存可重建 binding；FactoryRunner 已将 session/quota/route 控制面拆出。
 
 ## 已完成的提取
 
@@ -64,6 +64,7 @@ Agent → SuggestionWorkflow / ProposalExecutionWorkflow / AlphaFeedWorkflow / O
 - `alpha_factory.py` → `alpha_relationships.py`：关系标签、频率 bucket/compatibility、关系类型。
 - `alpha_factory.py` → `alpha_feasibility.py`：有界字段/模板可行性诊断与 fingerprint 投影。
 - `alpha_factory.py` → `alpha_assembly.py`：字段机制说明、候选到完整 proposal record 的 canonical 组装与 partial-operator realizations。
+- `alpha_factory.py` → `optimization_screening.py` / `validation_proposals.py`：DONE evidence screening、agent-authored CHILD 与单变量 ROBUSTNESS proposal projection。
 - `agent.py` → `research_planning.py`：研究空间、best iteration、探索 seed 的纯组装。
 - `agent.py` → `evidence_projection.py`：严格 correlation gate 与质量 rating。
 - `proposal_execution.py` → `terminal_evidence.py`、`execution_recovery.py`：终态证据判定、失败分类、canonical recovery merge。
@@ -71,6 +72,7 @@ Agent → SuggestionWorkflow / ProposalExecutionWorkflow / AlphaFeedWorkflow / O
 - `proposal_execution.py` → `execution_identity.py`：按 owner generation 缓存、可重建的精确 binding projection。
 - `factory_runner.py` → `factory_route.py`：route episode information-gain decision；runner 仍是兼容 facade。
 - `factory_runner.py` → `factory_session.py` / `factory_quota.py`：session lifecycle、stop/status 与 quota projection；runner 仍是兼容 facade。
+- `factory_runner.py` → `factory_blocker.py`：bounded blocker signature、privacy-safe probe 与 recheck projection；runner 保留 hook 调度。
 - `runtime_components.py` → `AlphaFactory`：运行时直接持有 canonical factory，不再经过 `CandidateBuilder`。
 
 ## Remaining architecture debt

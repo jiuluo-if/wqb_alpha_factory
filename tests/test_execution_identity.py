@@ -1,10 +1,33 @@
 import unittest
 
 from wqb_agent.execution_identity import ExecutionBindingIndex
-from wqb_agent.proposal_admission import admit_execution_identity
+from wqb_agent.proposal_admission import admit_execution_identity, admit_proposal
 
 
 class ExecutionBindingIndexTests(unittest.TestCase):
+    def test_proposal_admission_projects_settings_and_local_duplicates(self):
+        def resolve(value):
+            return {"universe": value or "TOP1000"}
+        first = admit_proposal(
+            {"expression": "rank(close)"}, settings_resolver=resolve,
+            batch_execution_fingerprints=set(), research_seen=set(),
+        )
+        self.assertEqual(first.status, "ACCEPTED")
+        duplicate = admit_proposal(
+            {"expression": "rank(close)"}, settings_resolver=resolve,
+            batch_execution_fingerprints={first.execution_fingerprint}, research_seen=set(),
+        )
+        self.assertEqual(duplicate.reason_code, "DUPLICATE_EFFECTIVE_EXECUTION")
+
+    def test_proposal_admission_rejects_invalid_settings_without_mutation(self):
+        def resolve(_value):
+            raise ValueError("bad settings")
+        result = admit_proposal(
+            {"expression": "rank(close)"}, settings_resolver=resolve,
+            batch_execution_fingerprints=set(), research_seen=set(),
+        )
+        self.assertEqual((result.status, result.reason_code), ("REJECTED", "INVALID_SETTINGS"))
+
     def test_identity_admission_rejects_durable_rebinding(self):
         decision = admit_execution_identity(
             {"proposal_id": "p1"},

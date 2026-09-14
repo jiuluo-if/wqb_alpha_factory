@@ -38,9 +38,7 @@ from .diversity import (
     select_budget_candidates,
 )
 from .expression import analyze_expression, canonical_expression
-from .pre_correlation import optimization_parent_admission
-from .proposal_contract import CHILD_CHANGE_TYPES, FACTORY_BATCH_SIZE
-from .research_guard import overfit_expression_reason, parameter_only_change_reason
+from .proposal_contract import FACTORY_BATCH_SIZE
 
 __all__ = [
     "AlphaFactory", "AlphaTemplate", "AlphaTemplateRegistry",
@@ -735,360 +733,32 @@ class AlphaFactory:
     def screen_optimization_parents(self, parents, *, excluded_expressions=None,
                                     min_sharpe=0.9, min_fitness=0.6,
                                     min_turnover=0.01, max_turnover=0.7):
-        """Apply deterministic code gates before Agent semantic selection.
-
-        This gate only examines observable evidence and anti-budget signals.
-        The lightweight cloud Alpha feed can prioritize or deduplicate a
-        parent, but it cannot become performance evidence by itself.
-        """
-        if not isinstance(parents, (list, tuple)):
-            return []
-        try:
-            min_sharpe, min_fitness = float(min_sharpe), float(min_fitness)
-            min_turnover, max_turnover = float(min_turnover), float(max_turnover)
-        except (TypeError, ValueError):
-            return []
-        excluded = {
-            canonical_expression(value)
-            for value in (excluded_expressions or [])
-            if isinstance(value, str) and value.strip()
-        }
-        screened = []
-        seen = set()
-        for parent in parents:
-            if not isinstance(parent, dict):
-                continue
-            if str(parent.get("status") or "").upper() != "DONE":
-                continue
-            expression = parent.get("expression")
-            if not isinstance(expression, str) or not expression.strip():
-                continue
-            identity = canonical_expression(expression)
-            if not identity or identity in seen or identity in excluded:
-                continue
-            admission = optimization_parent_admission(
-                parent, min_sharpe=min_sharpe, min_fitness=min_fitness,
-                min_turnover=min_turnover, max_turnover=max_turnover,
-            )
-            # 只有明确、有限的可修结构 health 失败可以进入优化修复路径；未知
-            # health 失败、缺失指标、极低 signal 与非法 turnover 仍 fail closed。
-            if not admission["admitted"]:
-                continue
-            seen.add(identity)
-            screened.append(parent)
-        return screened
+        from .optimization_screening import screen_optimization_parents
+        return screen_optimization_parents(
+            parents, excluded_expressions=excluded_expressions,
+            min_sharpe=min_sharpe, min_fitness=min_fitness,
+            min_turnover=min_turnover, max_turnover=max_turnover,
+        )
 
     def optimize_signal_proposals(self, parents, operator_reference,
-                                   max_candidates=4, excluded_expressions=None,
-                                   min_sharpe=0.9, min_fitness=0.6,
-                                   min_turnover=0.01, max_turnover=0.7):
-        """Create bounded CHILD proposals from already completed signals.
-
-        This is autonomous optimization, not blind mutation: a parent must be
-        DONE, have auditable discovery metadata, meet a configurable signal
-        threshold, and stay within turnover bounds.  Each child changes one
-        declared variable and still goes through the normal Agent preflight.
-        """
-        if not isinstance(parents, (list, tuple)) or not isinstance(operator_reference, dict):
-            return []
-        try:
-            limit = max(0, int(max_candidates))
-        except (TypeError, ValueError):
-            return []
-        excluded = {
-            canonical_expression(value)
-            for value in (excluded_expressions or [])
-            if isinstance(value, str) and value.strip()
-        }
-        allowed = {str(value) for value in (operator_reference.get("operators") or [])}
-        try:
-            min_sharpe, min_fitness = float(min_sharpe), float(min_fitness)
-            min_turnover, max_turnover = float(min_turnover), float(max_turnover)
-        except (TypeError, ValueError):
-            return []
-        parents = self.screen_optimization_parents(
-            parents,
+                                  max_candidates=4, excluded_expressions=None,
+                                  min_sharpe=0.9, min_fitness=0.6,
+                                  min_turnover=0.01, max_turnover=0.7):
+        from .optimization_screening import build_optimization_proposals
+        return build_optimization_proposals(
+            parents, operator_reference, max_candidates=max_candidates,
             excluded_expressions=excluded_expressions,
-            min_sharpe=min_sharpe,
-            min_fitness=min_fitness,
-            min_turnover=min_turnover,
-            max_turnover=max_turnover,
+            min_sharpe=min_sharpe, min_fitness=min_fitness,
+            min_turnover=min_turnover, max_turnover=max_turnover,
         )
-        out = []
-        seen_parents = set()
-        for parent in parents:
-            if len(out) >= limit or not isinstance(parent, dict):
-                break
-            # Automatic children previously performed generic smoothing and
-            # window variants.  They are exactly the low-information tuning
-            # loop this factory must stop producing.  A future child must be
-            # supplied by the agent with a distinct economic mechanism and a
-            # complete proposal contract instead of being invented here.
-            if not isinstance(parent.get("child_economic_hypothesis"), dict):
-                continue
-            base = parent.get("expression")
-            if not isinstance(base, str) or not base.strip():
-                continue
-            identity = canonical_expression(base)
-            if identity in seen_parents:
-                continue
-            seen_parents.add(identity)
-            fields = parent.get("fields_used") or []
-            datasets = parent.get("datasets") or []
-            common = {
-                "fields": list(fields),
-                "datasets": list(datasets),
-                "field_understanding": parent.get("field_understanding"),
-                "field_analysis": parent.get("field_analysis"),
-                "field_source": parent.get("field_source"),
-                "field_hypothesis_basis": parent.get("field_hypothesis_basis"),
-                "hypothesis_outcome": parent.get("hypothesis_outcome")
-                or parent.get("outcome"),
-                "confirmation_status": parent.get("confirmation_status"),
-                "mechanism_learning": parent.get("mechanism_learning"),
-                "unresolved_question": parent.get("unresolved_question"),
-                "next_discriminating_question": parent.get(
-                    "next_discriminating_question"
-                ),
-            }
-            if (not fields or not datasets or not common["field_understanding"]
-                    or not common["field_analysis"] or not common["field_source"]
-                    or not common["field_hypothesis_basis"]):
-                continue
-            child = parent.get("child_economic_hypothesis") or {}
-            if not isinstance(child, dict):
-                continue
-            child_expression = child.get("expression")
-            child_mechanism = child.get("economic_mechanism")
-            child_change = child.get("change_type")
-            if not all(isinstance(value, str) and value.strip() for value in (
-                child_expression, child_mechanism, child_change
-            )):
-                continue
-            if parameter_only_change_reason(base, child_expression):
-                continue
-            if overfit_expression_reason(child_expression):
-                continue
-            # 提案契约只接受既有 change_type 词表与 {applied, reason} 方向结构：
-            # 非法声明在组装处 fail-closed，不产出必然被 preflight 拒绝的 child。
-            if child_change not in CHILD_CHANGE_TYPES:
-                continue
-            child_transform = child.get("direction_transform")
-            if child_transform is not None and not isinstance(child_transform, dict):
-                continue
-            child_changed_variable = child.get("changed_variable")
-            if not isinstance(child_changed_variable, str) or not child_changed_variable.strip():
-                child_changed_variable = child_change
-            variants = ((child_change, child_expression, child_mechanism),)
-            for change_type, expression, rationale in variants:
-                if len(out) >= limit:
-                    break
-                normalized = canonical_expression(expression)
-                if normalized in excluded:
-                    continue
-                actual_ops = list(analyze_expression(expression).operators)
-                if not set(actual_ops).issubset(allowed):
-                    continue
-                proposal = dict(common)
-                proposal.update({
-                    "expression": expression,
-                    "operator_mapping": rationale,
-                    "economic_mechanism": child_mechanism,
-                    "operator_evidence": {
-                        "sha256": operator_reference.get("capability_fingerprint") or operator_reference.get("sha256"),
-                        "operators": actual_ops,
-                        "rationale": rationale,
-                    },
-                    "experiment_question": child.get(
-                        "experiment_question",
-                        f"新的经济机制 {change_type} 是否在独立证据上改善净收益与稳定性？",
-                    ),
-                    "expected_failure_modes": [
-                        "平滑过度导致信号衰减或延迟",
-                        "优化后换手、相关性或健康检查恶化",
-                    ],
-                    "tuning_risk": bool(child.get("tuning_risk", False)),
-                    "experiment_stage": "CHILD",
-                    "change_type": change_type,
-                    "parent_expression": base,
-                    "parent_id": parent.get("id") or parent.get("proposal_id"),
-                    "changed_variable": child_changed_variable,
-                    "research_role": "EXPLOIT",
-                    "lineage_id": parent.get("lineage_id") or parent.get("hypothesis_id"),
-                    "template_id": f"auto_opt_{change_type}",
-                    "template_family": "autonomous_optimization",
-                    "template_stage_path": "L0:completed signal -> L1:one-variable optimization",
-                    "template_ref": {"source": "newwqb_autonomous_optimizer",
-                                     "parent": identity},
-                    "template_slots": {"parent": base},
-                    "rationale": child.get("rationale") or rationale,
-                    "direction": parent.get("direction") or "long",
-                    "expected_horizon": parent.get("expected_horizon") or "short-term",
-                    "falsification": child.get(
-                        "falsification",
-                        "若独立样本、健康检查或自相关证据恶化，则关闭该优化分支。",
-                    ),
-                    "direction_transform": child_transform or {
-                        "applied": False,
-                        "reason": "沿用 parent 的方向，不把方向翻转当作新机制。",
-                    },
-                    "self_correlation_impact": child.get(
-                        "self_correlation_impact",
-                        {
-                            "expected_effect": "UNKNOWN",
-                            "basis": "pre_simulation_structural_forecast",
-                            "rationale": "优化前没有平台结算序列，不把结构差异冒充为低自相关。",
-                            "admission": "REVIEW",
-                        },
-                    ),
-                })
-                decision_payload = parent.get("optimization_decision")
-                if isinstance(decision_payload, dict) and decision_payload:
-                    proposal["optimization_decision"] = dict(decision_payload)
-                if parent.get("optimization_decision_id"):
-                    proposal["optimization_decision_id"] = parent["optimization_decision_id"]
-                proposal["proposal_origin"] = "agent_optimizer"
-                proposal["research_layer"] = "optimization"
-                proposal["optimization_source"] = parent.get(
-                    "optimization_source", "current_run"
-                )
-                out.append(proposal)
-                excluded.add(normalized)
-        return out
 
     def validation_proposals(self, requests, operator_reference, *,
                              max_candidates=4, excluded_expressions=None):
-        """Build bounded ROBUSTNESS proposals from Python-resolved VALIDATE requests.
-
-        The Agent chose *what* to validate; Python only resolves the legal
-        candidate value, the settings override and the provenance.  Parameter
-        variation is never a new economic mechanism, so every proposal is
-        ``ROBUSTNESS`` with a pre-registered ValidationPlan.
-        """
-        from .validation_report import default_validation_plan
-
-        if not isinstance(requests, (list, tuple)) or not isinstance(operator_reference, dict):
-            return []
-        try:
-            limit = max(0, int(max_candidates))
-        except (TypeError, ValueError):
-            return []
-        excluded = {
-            canonical_expression(value)
-            for value in (excluded_expressions or [])
-            if isinstance(value, str) and value.strip()
-        }
-        allowed_ops = {
-            str(value) for value in (operator_reference.get("operators") or [])
-        }
-        out = []
-        for request in requests or ():
-            if len(out) >= limit or not isinstance(request, dict):
-                break
-            parent = request.get("parent")
-            variable = str(request.get("variable") or "")
-            if not isinstance(parent, dict) or variable not in VALIDATION_CHANGE_TYPES:
-                continue
-            base = parent.get("expression")
-            if not isinstance(base, str) or not base.strip():
-                continue
-            expression = request.get("expression") or base
-            normalized = canonical_expression(expression)
-            if not normalized or normalized in excluded:
-                continue
-            actual_ops = list(analyze_expression(expression).operators)
-            if not set(actual_ops).issubset(allowed_ops):
-                continue
-            fields = parent.get("fields_used") or []
-            datasets = parent.get("datasets") or []
-            if not fields or not datasets:
-                continue
-            if any(not parent.get(key) for key in (
-                    "field_understanding", "field_analysis",
-                    "field_source", "field_hypothesis_basis")):
-                continue
-            settings_override = request.get("settings_override")
-            expected_override = set() if variable == "template_window" else {variable}
-            if (not isinstance(settings_override, dict)
-                    or set(settings_override) != expected_override):
-                continue
-            mechanism = parent.get("economic_mechanism")
-            if not isinstance(mechanism, str) or not mechanism.strip():
-                continue
-            expected_effect = str(request.get("expected_effect") or "").strip()
-            falsification = str(request.get("falsification") or "").strip()
-            reason = str(request.get("reason") or "").strip()
-            if not (expected_effect and falsification and reason):
-                continue
-            proposal = {
-                "expression": expression,
-                "fields": list(fields),
-                "datasets": list(datasets),
-                "field_understanding": parent.get("field_understanding"),
-                "field_analysis": parent.get("field_analysis"),
-                "field_source": parent.get("field_source"),
-                "field_hypothesis_basis": parent.get("field_hypothesis_basis"),
-                "operator_mapping": reason,
-                "economic_mechanism": mechanism,
-                "operator_evidence": {
-                    "sha256": operator_reference.get("capability_fingerprint") or operator_reference.get("sha256"),
-                    "operators": actual_ops,
-                    "rationale": reason,
-                },
-                "experiment_question": expected_effect,
-                "expected_failure_modes": [
-                    "参数邻域内的改善只是噪声或过拟合",
-                    "换手、健康或平台 checks 在新取值下恶化",
-                ],
-                "tuning_risk": False,
-                "experiment_stage": "ROBUSTNESS",
-                "change_type": VALIDATION_CHANGE_TYPES[variable],
-                "parent_expression": base,
-                "parent_id": parent.get("id") or parent.get("proposal_id"),
-                "changed_variable": variable,
-                "research_role": "VALIDATION",
-                "lineage_id": parent.get("lineage_id") or parent.get("hypothesis_id"),
-                "template_id": f"validate_{variable}",
-                "template_family": "bounded_validation",
-                "template_stage_path": "L0:completed signal -> L1:one-variable validation",
-                "template_ref": {
-                    "source": "bounded_validation",
-                    "parent": canonical_expression(base),
-                },
-                "template_slots": {"parent": base},
-                "rationale": reason,
-                "direction": parent.get("direction") or "long",
-                "expected_horizon": parent.get("expected_horizon") or "short-term",
-                "falsification": falsification,
-                "direction_transform": parent.get("direction_transform") or {
-                    "applied": False,
-                    "reason": "沿用 parent 的方向，不把方向翻转当作新机制。",
-                },
-                "self_correlation_impact": parent.get("self_correlation_impact") or {
-                    "expected_effect": "UNKNOWN",
-                    "basis": "pre_simulation_structural_forecast",
-                    "rationale": "参数验证不改变经济暴露来源，先不假设相关性。",
-                    "admission": "REVIEW",
-                },
-                "settings": dict(settings_override),
-                "validation_plan": default_validation_plan(parent),
-                "proposal_origin": "agent_optimizer",
-                "research_layer": "optimization",
-            }
-            numeric_variant = request.get("numeric_variant")
-            if isinstance(numeric_variant, dict) and numeric_variant:
-                proposal["numeric_variant"] = dict(numeric_variant)
-            settings_variant = request.get("settings_variant")
-            if isinstance(settings_variant, dict) and settings_variant:
-                proposal["settings_variant"] = dict(settings_variant)
-            decision_payload = request.get("optimization_decision") or parent.get("optimization_decision")
-            if isinstance(decision_payload, dict) and decision_payload:
-                proposal["optimization_decision"] = dict(decision_payload)
-            if request.get("optimization_decision_id"):
-                proposal["optimization_decision_id"] = request["optimization_decision_id"]
-            out.append(proposal)
-            excluded.add(normalized)
-        return out
+        from .validation_proposals import build_validation_proposals
+        return build_validation_proposals(
+            requests, operator_reference, max_candidates=max_candidates,
+            excluded_expressions=excluded_expressions,
+        )
 
     def assemble_proposals(self, hypothesis, fields, operator_reference,
                            max_candidates=8, excluded_expressions=None,
