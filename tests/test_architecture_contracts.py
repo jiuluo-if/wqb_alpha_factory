@@ -167,9 +167,11 @@ class ArchitectureDependencyContracts(unittest.TestCase):
             "wqb_agent/proposal_inbox.py",
             "wqb_agent/proposal_schema.py",
             "wqb_agent/proposal_batch.py",
+            "wqb_agent/proposal_validation.py",
         )
         imports = _package_imports(paths)
         self.assertNotIn("wqb_agent.proposal_contract", imports["wqb_agent/proposal_batch.py"])
+        self.assertNotIn("wqb_agent.proposal_contract", imports["wqb_agent/proposal_validation.py"])
         forbidden = {
             "wqb_agent.agent", "wqb_agent.client", "wqb_agent.memory",
             "wqb_agent.reflection", "wqb_agent.optimizer_workflow",
@@ -196,6 +198,13 @@ class ArchitectureDependencyContracts(unittest.TestCase):
         self.assertNotIn("record_trial_phase: Callable", source)
         self.assertNotIn("record_candidate_rejection: Callable", source)
         self.assertIn("self._ctx.trial_ledger.record(", source)
+
+    def test_proposal_contract_is_only_a_compatibility_facade(self):
+        source = (ROOT / "wqb_agent/proposal_contract.py").read_text(encoding="utf-8")
+        self.assertNotIn("def validate_proposal(", source)
+        self.assertNotIn("def validate_factory_batch(", source)
+        self.assertIn("from . import proposal_batch", source)
+        self.assertIn("from . import proposal_validation", source)
 
     def test_package_import_graph_has_no_cycles(self):
         modules = {
