@@ -125,11 +125,35 @@ class TestFactoryBlockerControl(unittest.TestCase):
                 handle.write("[[templates]]\nid = \"x\"\n")
             factory = AlphaFactory(registry=object(), catalog_path=catalog)
             now = time.time()
+            # Non-budget blocker kinds still clear only on an upstream
+            # control-plane evidence (catalog / field cache) freshness change.
+            self.assertTrue(factory.recheck_blocker(
+                {"kind": "CONTROL_PLANE_EVIDENCE",
+                 "last_seen_at": now - 100.0})["changed"])
+            self.assertFalse(factory.recheck_blocker(
+                {"kind": "CONTROL_PLANE_EVIDENCE",
+                 "last_seen_at": now + 100.0})["changed"])
+            self.assertFalse(factory.recheck_blocker(
+                {"kind": "CONTROL_PLANE_EVIDENCE"})["changed"])
+
+    def test_budget_shortage_recheck_allows_retry_after_cooldown(self):
+        with tempfile.TemporaryDirectory() as directory:
+            catalog = os.path.join(directory, "catalog.toml")
+            with open(catalog, "w", encoding="utf-8") as handle:
+                handle.write("[[templates]]\nid = \"x\"\n")
+            factory = AlphaFactory(registry=object(), catalog_path=catalog)
+            now = time.time()
+            # A route-level BUDGET_SHORTAGE is not resolved by waiting for the
+            # (stable) field cache or catalog to move, so once the runner's
+            # recheck cooldown has elapsed we permit a retry and let the
+            # factory advance to the next probe round.
             self.assertTrue(factory.recheck_blocker(
                 {"kind": "BUDGET_SHORTAGE", "last_seen_at": now - 100.0})["changed"])
-            self.assertFalse(factory.recheck_blocker(
+            self.assertTrue(factory.recheck_blocker(
                 {"kind": "BUDGET_SHORTAGE", "last_seen_at": now + 100.0})["changed"])
-            self.assertFalse(factory.recheck_blocker({"kind": "BUDGET_SHORTAGE"})["changed"])
+            # No valid last_seen means no recorded blocker -> no retry.
+            self.assertFalse(factory.recheck_blocker(
+                {"kind": "BUDGET_SHORTAGE"})["changed"])
 
 
 if __name__ == "__main__":
