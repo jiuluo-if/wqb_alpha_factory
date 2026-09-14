@@ -17,6 +17,7 @@ from typing import Any
 
 from .artifacts import append_jsonl_best_effort, iter_jsonl_objects
 from .diversity import extract_fields, is_redundant
+from .execution_identity import ExecutionBindingIndex
 from .execution_recovery import merge_checkpoint_with_trajectory
 from .expression import canonical_expression, submission_fingerprint
 from .identity import candidate_identity
@@ -111,6 +112,7 @@ class ProposalExecutionWorkflow:
 
     def __init__(self, context: ProposalExecutionContext):
         self.context = context
+        self._binding_index = ExecutionBindingIndex()
         self.last_run_stats = {
             "accepted": 0,
             "rejected": 0,
@@ -156,35 +158,51 @@ class ProposalExecutionWorkflow:
 
     def _durable_proposal_bindings(self, checkpoint_records):
         """Read exact proposal-id bindings from existing durable owners."""
-        bindings = {}
-
-        def add(proposal_id, fingerprint):
-            if proposal_id in (None, "") or fingerprint in (None, ""):
-                return
-            bindings.setdefault(str(proposal_id), set()).add(str(fingerprint))
-
         trajectory = self._ctx.trajectory
+        trajectory_path = getattr(trajectory, "path", None)
+        trajectory_signature = self._file_signature(trajectory_path)
+        ledger = self._ctx.trial_ledger
+        ledger_signature = self._file_signature(getattr(ledger, "path", None))
+        checkpoint_signature = tuple(
+            (
+                record.get("path"),
+                self._file_signature(record.get("path")),
+            )
+            for record in checkpoint_records
+            if isinstance(record, dict)
+        )
+        memory_signature = (
+            len(getattr(trajectory, "experiments", ())),
+            tuple(str(getattr(item, "id", ""))
+                  for item in getattr(trajectory, "experiments", ())[-16:]),
+        )
+        signature = (
+            trajectory_signature, memory_signature, ledger_signature,
+            checkpoint_signature,
+        )
+        if self._binding_index.is_current(signature):
+            return self._binding_index.snapshot()
         if getattr(trajectory, "persist", True) and getattr(trajectory, "path", None):
             rows = trajectory.iter_canonical_rows(strict=True) or ()
         else:
             rows = (experiment.to_dict() for experiment in getattr(trajectory, "experiments", ()))
-        for row in rows:
-            if isinstance(row, dict):
-                add(row.get("proposal_id"), row.get("submission_fingerprint"))
+        ledger_bindings = (
+            ledger.proposal_execution_bindings()
+            if hasattr(ledger, "proposal_execution_bindings") else {}
+        )
+        return self._binding_index.refresh(
+            signature, rows, checkpoint_records, ledger_bindings
+        )
 
-        for record in checkpoint_records:
-            if record.get("malformed"):
-                continue
-            for row in record.get("checkpoint", {}).get("experiments") or ():
-                if isinstance(row, dict):
-                    add(row.get("proposal_id"), row.get("submission_fingerprint"))
-
-        ledger = self._ctx.trial_ledger
-        if hasattr(ledger, "proposal_execution_bindings"):
-            for proposal_id, fingerprints in ledger.proposal_execution_bindings().items():
-                for fingerprint in fingerprints:
-                    add(proposal_id, fingerprint)
-        return bindings
+    @staticmethod
+    def _file_signature(path):
+        if not path:
+            return (None, None, None)
+        try:
+            stat = os.stat(path)
+        except OSError:
+            return (str(path), None, None)
+        return (str(path), stat.st_mtime_ns, stat.st_size)
 
     def _on_update(self, experiment, round_no, hypothesis, experiments, delegation):
         self._ctx.hooks.on_simulation_update(

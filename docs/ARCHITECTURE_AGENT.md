@@ -24,7 +24,7 @@ RuntimeComponents
 Agent → SuggestionWorkflow / ProposalExecutionWorkflow / AlphaFeedWorkflow / OptimizerWorkflow
 ```
 
-架构现代化后的纯领域投影位于 workflow 之前：`research_planning.py` 负责已解析输入的研究空间/假设组装，`evidence_projection.py` 负责严格质量与 correlation gate，`alpha_semantics.py` 负责字段语义 traits，`alpha_relationships.py` 负责字段关系与频率准入，`alpha_feasibility.py` 负责有界可行性诊断，`alpha_assembly.py` 负责字段机制文本组装，`terminal_evidence.py`/`execution_recovery.py` 负责终态证据和 checkpoint 合并，`proposal_admission.py` 负责提案拒绝统计，`factory_route.py` 负责 legacy route episode 决策。它们均不拥有状态、不调用远端写操作；旧 facade 只委托 canonical 函数。
+架构现代化后的纯领域投影位于 workflow 之前：`research_planning.py` 负责已解析输入的研究空间/假设组装，`evidence_projection.py` 负责严格质量与 correlation gate，`alpha_semantics.py` 负责字段语义 traits，`alpha_relationships.py` 负责字段关系与频率准入，`alpha_feasibility.py` 负责有界可行性诊断，`alpha_assembly.py` 负责字段机制文本组装，`execution_identity.py` 负责 transient durable binding projection，`terminal_evidence.py`/`execution_recovery.py` 负责终态证据和 checkpoint 合并，`proposal_admission.py` 负责提案拒绝统计，`factory_route.py` 负责 legacy route episode 决策。它们均不拥有状态、不调用远端写操作；旧 facade 只委托 canonical 函数。
 
 ## 第一阶段架构审计结果（2026-09-14）
 
@@ -68,6 +68,7 @@ Agent → SuggestionWorkflow / ProposalExecutionWorkflow / AlphaFeedWorkflow / O
 - `agent.py` → `evidence_projection.py`：严格 correlation gate 与质量 rating。
 - `proposal_execution.py` → `terminal_evidence.py`、`execution_recovery.py`：终态证据判定、失败分类、canonical recovery merge。
 - `proposal_execution.py` → `proposal_admission.py`：有界拒绝原因统计。
+- `proposal_execution.py` → `execution_identity.py`：按 owner generation 缓存、可重建的精确 binding projection。
 - `factory_runner.py` → `factory_route.py`：route episode information-gain decision；runner 仍是兼容 facade。
 - `runtime_components.py` → `AlphaFactory`：运行时直接持有 canonical factory，不再经过 `CandidateBuilder`。
 
@@ -75,7 +76,7 @@ Agent → SuggestionWorkflow / ProposalExecutionWorkflow / AlphaFeedWorkflow / O
 
 - `discovery.py`、`memory.py` 和 `factory_runner.py` 仍较大：它们同时承载现有持久化/兼容 consumer，下一刀需要先建立更细 owner contract，不能只按行数拆。
 - `alpha_factory.py` 仍包含 candidate assembly 和 optimization screening；candidate construction 仍共享 template registry、prepared-facts memo 与 proposal provenance，下一步应先以纯输入/输出 contract 测试隔离，再移动实现。
-- `proposal_execution.py` 仍包含 admission、durable identity binding 和 manual recovery mutation；这些路径共同维护 exactly-once fence，当前只提取了无状态阶段，避免产生第二 owner。
+- `proposal_execution.py` 仍包含 admission 和 manual recovery mutation；durable identity binding 已由 transient `ExecutionBindingIndex` 承担 projection，exactly-once fence 仍由既有 durable owners 与 workflow 共同维护。
 - 本阶段尚未删除脚本或 root public symbols；它们仍需满足零 imports/CLI/docs/tests/`__all__`/dynamic references 后才能删除。
 
 `RuntimeComponents` 只创建一次 memory、trajectory、ledger、discovery、simulator、checkpoint 和 cache；workflow 不反向导入 Agent，不重新创建这些 owner。

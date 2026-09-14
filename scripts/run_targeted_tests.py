@@ -79,6 +79,11 @@ DIRECT_TESTS = {
         "tests/test_proposal_execution.py",
         "tests/test_proposal_safety.py",
     ),
+    "wqb_agent/execution_identity.py": (
+        "tests/test_execution_identity.py",
+        "tests/test_proposal_execution.py",
+        "tests/test_proposal_safety.py",
+    ),
     "wqb_agent/discovery.py": (
         "tests/test_discovery.py",
         "tests/test_discovery_selection.py",

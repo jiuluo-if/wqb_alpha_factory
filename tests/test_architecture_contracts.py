@@ -78,12 +78,23 @@ class ArchitectureDependencyContracts(unittest.TestCase):
             "wqb_agent/alpha_feasibility.py",
             "wqb_agent/alpha_relationships.py",
             "wqb_agent/alpha_semantics.py",
+            "wqb_agent/execution_identity.py",
         )
         imports = _package_imports(paths)
         for path, dependencies in imports.items():
             self.assertNotIn("wqb_agent.candidate", dependencies, path)
             self.assertNotIn("wqb_agent.factory_runner", dependencies, path)
             self.assertNotIn("wqb_agent.runtime_components", dependencies, path)
+
+    def test_execution_helper_does_not_import_transport_or_workflow(self):
+        imports = _imports(ROOT / "wqb_agent/execution_identity.py")
+        forbidden = {
+            "wqb_agent.agent",
+            "wqb_agent.client",
+            "wqb_agent.proposal_execution",
+            "wqb_agent.simulator",
+        }
+        self.assertTrue(forbidden.isdisjoint(imports))
 
     def test_state_owners_do_not_import_orchestration(self):
         state_paths = (
