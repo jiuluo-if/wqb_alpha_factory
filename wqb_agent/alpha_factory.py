@@ -10,7 +10,7 @@ import itertools
 import os
 import random
 
-from .alpha_assembly import field_mechanism
+from .alpha_assembly import assemble_factory_realizations, field_mechanism
 from .alpha_feasibility import assess_feasibility as assess_feasibility_projection
 from .alpha_relationships import (
     frequency_bucket,
@@ -1267,200 +1267,16 @@ class AlphaFactory:
             field_source = profile.get("field_source") or source_default
             if not isinstance(field_source, dict):
                 field_source = {"kind": "unknown", "path": None, "snapshot_date": None}
-            profile_by_id = {
-                str(item.get("id")): item
-                for item in slot_profiles
-                if isinstance(item, dict) and item.get("id") is not None
-            }
-            profile_by_key = {
-                self._profile_key(item): item for item in slot_profiles
-                if isinstance(item, dict) and item.get("id") is not None
-            }
-            used_field_ids = [
-                str(item) for item in (candidate.get("fields_used") or [field_id])
-                if str(item) in profile_by_id
-            ]
-            if not used_field_ids:
-                continue
-            used_profiles = []
-            for field_ref in candidate.get("field_refs") or []:
-                if not isinstance(field_ref, dict) or not field_ref.get("id"):
-                    continue
-                key = (
-                    str(field_ref.get("dataset")) if field_ref.get("dataset") is not None else None,
-                    str(field_ref.get("id")),
-                )
-                profile = profile_by_key.get(key) or profile_by_id.get(str(field_ref["id"]))
-                if profile is not None and profile not in used_profiles:
-                    used_profiles.append(profile)
-            if not used_profiles:
-                used_profiles = [profile_by_id[item] for item in used_field_ids]
-            used_field_ids = [str(item.get("id")) for item in used_profiles]
-            field_understanding = {
-                item: f"基于本轮 discovery 原文：{profile_by_id[item].get('description')}"
-                for item in used_field_ids
-            }
-            field_analysis = {
-                item: {
-                    "semantic": profile_by_id[item].get("description"),
-                    "coverage": profile_by_id[item].get("coverage"),
-                    "frequency": profile_by_id[item].get("frequency"),
-                    "frequency_evidence": profile_frequency_evidence(
-                        profile_by_id[item]
-                    ),
-                    "data_type": profile_by_id[item].get("type"),
-                    "semantic_traits": _derive_field_semantic_traits(
-                        profile_by_id[item]
-                    ),
-                }
-                for item in used_field_ids
-            }
-            mechanisms = {
-                item: self._field_mechanism(
-                    profile_by_id[item],
-                    _derive_field_semantic_traits(profile_by_id[item]),
-                    template,
-                    relation,
-                )
-                for item in used_field_ids
-            }
-            field_hypothesis_basis = {
-                item: {
-                    "description": profile_by_id[item].get("description"),
-                    "mechanism": mechanisms[item],
-                    "semantic_traits": _derive_field_semantic_traits(
-                        profile_by_id[item]
-                    ),
-                    "independent_increment": "该 BASELINE 只检验这些字段组合的独立增量信息。",
-                    "direction": template.direction,
-                }
-                for item in used_field_ids
-            }
-            datasets = []
-            for item in used_profiles:
-                dataset = item.get("dataset")
-                if dataset and dataset not in datasets:
-                    datasets.append(dataset)
-            proposal = {
-                "expression": candidate["expression"],
-                "fields": used_field_ids,
-                "field_refs": list(candidate.get("field_refs") or []),
-                "datasets": datasets,
-                "field_understanding": field_understanding,
-                "field_analysis": field_analysis,
-                "field_source": field_source,
-                "field_hypothesis_basis": field_hypothesis_basis,
-                "economic_mechanism": mechanisms[used_field_ids[0]],
-                "semantic_admission": (
-                    relation["admission"] if relation else compatibility["admission"]
-                ),
-                "direction_transform": {
-                    **candidate["direction_transform"],
-                    "reason": mechanisms[used_field_ids[0]],
-                },
-                "operator_mapping": candidate["rationale"],
-                "operator_evidence": {
-                    "sha256": operator_reference.get("capability_fingerprint") or operator_reference.get("sha256"),
-                    "operators": actual_ops,
-                    "rationale": candidate["rationale"],
-                },
-                "experiment_question": (
-                    (
-                        "在机制、字段关系、horizon 和 settings 保持不变时，"
-                        f"{candidate.get('operator_role') or 'operator'} 使用 "
-                        f"{next(iter((candidate.get('operator_role_mapping') or {}).values()), 'REALIZATION')} "
-                        "是否改变可复现结果？"
-                    )
-                    if template.template_mode == "PARTIAL_OPERATOR" else
-                    f"字段 {field_id} 的 {template.template_id} 结构是否提供可复现的增量信号？"
-                ),
-                "operator_contrast_question_key": (
-                    f"{template.branch_of or template.template_id}::"
-                    f"{candidate.get('operator_role') or 'operator'}"
-                    if template.template_mode == "PARTIAL_OPERATOR" else None
-                ),
-                "expected_failure_modes": [
-                    "字段覆盖不足或缺失导致有效持仓减少",
-                    "信号集中或换手异常导致健康检查失败",
-                ],
-                "tuning_risk": False,
-                "experiment_stage": "BASELINE",
-                "change_type": "baseline",
-                "research_role": "EXPLORE",
-                "lineage_id": f"{hypothesis.get('id', 'factory')}:field:{field_id}",
-                "signal_family": f"{template.family}:{field_id}",
-                # Budget arms distinguish an economic template applied to
-                # different verified fields.  This permits breadth in the
-                # 100-slot factory batch without treating one field's
-                # numeric tuning as a new arm.
-                "mechanism_family": f"{template.family}:{field_id}",
-                "expected_quality": 1.0,
-                "information_gain": 1.0,
-                "novelty": 1.0,
-                "simulation_cost": 1.0,
-                "rationale": candidate["rationale"],
-                "direction": template.direction,
-                "expected_horizon": template.expected_horizon,
-                "falsification": template.falsification,
-                "self_correlation_impact": {
-                    "expected_effect": "UNKNOWN",
-                    "basis": "no_live_behavior_series",
-                    "rationale": "模拟前没有平台结算值，不把结构差异冒充为低自相关。",
-                    "admission": "REVIEW",
-                },
-            }
-            proposal.update({
-                key: candidate[key]
-                for key in ("mutation", "template_id", "template_mode", "template_family",
-                            "template_stage_path", "template_ref", "template_slots",
-                            "relationship_audit", "factory_version",
-                            "template_version", "template_fingerprint",
-                            "template_catalog_source", "template_bindings",
-                            "template_structural_fingerprint",
-                            "template_mechanism_fingerprint", "template_role",
-                            "template_operator_count", "template_field_roles",
-                            "template_field_relationship", "template_novelty_family",
-                            "template_allowed_settings_arms",
-                            "template_allowed_horizon_profiles")
-            })
-            if template.template_mode == "PARTIAL_OPERATOR":
-                slot = template.operator_slots[0]
-                proposal.update({
-                    "template_mode": "PARTIAL_OPERATOR",
-                    "template_branch_of": template.branch_of,
-                    "operator_role": slot.role,
-                    "operator_role_mapping": {
-                        slot.role: next(iter((selected_mapping or {}).values()))
-                    },
-                    "operator_realization_fingerprint": candidate.get(
-                        "operator_realization_fingerprint"
-                    ),
-                    "operator_capability_fingerprint": candidate.get(
-                        "operator_capability_fingerprint"
-                    ),
-                })
-            proposal["proposal_origin"] = "factory"
-            realization_proposals = [proposal]
-            if template.template_mode == "PARTIAL_OPERATOR":
-                for mapping in self._operator_mappings(template, operator_reference):
-                    if mapping == selected_mapping:
-                        continue
-                    alternative_expression = template.render(
-                        candidate["template_bindings"], mapping
-                    )
-                    alternative = dict(proposal)
-                    alternative["expression"] = alternative_expression
-                    alternative["operator_role_mapping"] = {
-                        slot.role: next(iter(mapping.values()))
-                    }
-                    alternative["operator_realization_fingerprint"] = (
-                        template.operator_realization_fingerprint(mapping)
-                    )
-                    alternative["operator_evidence"] = dict(proposal["operator_evidence"])
-                    alternative["operator_evidence"]["operators"] = list(
-                        analyze_expression(alternative_expression).operators
-                    )
-                    realization_proposals.append(alternative)
+            realization_proposals = assemble_factory_realizations(
+                hypothesis=hypothesis, field_id=field_id, profile=profile,
+                slot_profiles=slot_profiles, candidate=candidate, actual_ops=actual_ops,
+                template=template, compatibility=compatibility, relation=relation,
+                selected_mapping=selected_mapping, operator_reference=operator_reference,
+                field_source=field_source, field_mechanism_fn=self._field_mechanism,
+                derive_traits_fn=_derive_field_semantic_traits,
+                frequency_evidence_fn=profile_frequency_evidence,
+                operator_mappings_fn=self._operator_mappings,
+            )
             for realization in realization_proposals:
                 if len(assembled) >= limit:
                     break

@@ -109,6 +109,11 @@ class ArchitectureDependencyContracts(unittest.TestCase):
             self.assertNotIn("wqb_agent.factory_runner", dependencies, path)
             self.assertNotIn("wqb_agent.runtime_components", dependencies, path)
 
+    def test_alpha_assembly_owns_candidate_to_proposal_projection(self):
+        source = (ROOT / "wqb_agent/alpha_assembly.py").read_text(encoding="utf-8")
+        self.assertIn("def assemble_factory_realizations(", source)
+        self.assertNotIn("def assemble_factory_realizations(\n    self", source)
+
     def test_execution_helper_does_not_import_transport_or_workflow(self):
         imports = _imports(ROOT / "wqb_agent/execution_identity.py")
         forbidden = {
