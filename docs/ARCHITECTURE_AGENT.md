@@ -221,14 +221,14 @@ known progress URL GET-only contract 未改变。
 
 基线（Phase II 收口后 `f7735a9`）为 92 个 production Python 文件 / 30340 行、96 个
 测试文件 / 24543 行；当前收口为 101 个 production Python 文件 / 30413 行、96 个
-测试文件 / 24577 行。重点 owner 当前指标为：`discovery.py` 1174 行（31 函数，1 类），
+测试文件 / 24577 行。重点 owner 当前指标为：`discovery.py` 1157 行（31 函数，1 类），
 `memory.py` 1101 行（48 函数，2 类），`reflection.py` 844 行（26 函数，1 类），
-`optimizer_workflow.py` 1041 行（33 函数，3 类），`state.py` 977 行、`client.py` 945
+`optimizer_workflow.py` 1033 行（33 函数，3 类），`state.py` 977 行、`client.py` 945
 行。新增纯模块合计 547 行、34 函数、0 类；相对基线删除旧实现 809 行、增加显式
 边界与契约代码 747 行，净变化包含本轮 architecture tests 与文档/映射开销。
 
 本阶段未对 `state.py` 做风险性 wholesale 拆分，也未宣称未建立的性能收益；仅完成离线
-AST/LOC 结构计量。Phase III 影响范围的定向映射测试共 333 个通过；最终 Ruff、九个
+AST/LOC 结构计量。Phase III 影响范围的定向映射测试共 341 个通过；最终 Ruff、九个
 typed frontier 的 mypy、`state doctor`、`state audit` 和 repository privacy check
 均通过。doctor 对 fixture 的 `LEDGER_MISSING` 与 capability unavailable 只报告既有
 WARN，未触碰真实研究状态。所有阶段提交均使用 `2966684515@qq.com` 并推送到
