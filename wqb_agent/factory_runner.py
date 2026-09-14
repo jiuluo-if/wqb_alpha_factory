@@ -20,6 +20,7 @@ import re
 import time
 import uuid
 from contextlib import redirect_stdout
+from copy import deepcopy
 
 from .artifacts import atomic_write_json_if_changed
 from .diversity import field_concept_keys, semantic_mechanism_key
@@ -48,6 +49,10 @@ class _DiscardWriter:
 _DISCARD_STDOUT = _DiscardWriter()
 
 
+class FactoryControlStateError(ValueError):
+    """A runtime control token was not declared in the closed vocabulary."""
+
+
 class AIFactoryRunner:
     """Run suggestion -> proposal assembly -> production execution repeatedly."""
 
@@ -62,6 +67,56 @@ class AIFactoryRunner:
         "relationship": "relationship_fingerprints",
         "dataset_route": "dataset_route",
         "research_question": "research_question_fingerprints",
+    }
+    _SESSION_STATUSES = {
+        "RUNNING", "STOPPED", "RECONCILE_REQUIRED", "SIMULATION_BUDGET_CAP",
+        "ROUND_CAP", "DEADLINE", "OPERATOR_CAPABILITY_BLOCKED",
+    }
+    _SESSION_ACTIONS = {
+        "START", "ADVANCE_ROUTE_EPISODE", "STOP_REQUESTED", "BLOCKER_COOLDOWN",
+        "STOP_FEASIBILITY_BLOCKER", "STOP_PREFLIGHT_BLOCKER",
+        "STOP_OPERATOR_CAPABILITY", "STOP_BUDGET_SHORTAGE",
+        "INVALID_SIMULATION_QUOTA", "ZERO_DURATION", "WAIT_AGENT_DECISION",
+        "STORAGE_RECONCILE_REQUIRED", "ORPHANED_PROPOSALS_BUDGET_BLOCKED",
+        "RECOVER_PROPOSALS", "RECOVER_PROPOSALS_PENDING", "RECOVERED_PROPOSALS",
+        "EXECUTION_RECONCILE_REQUIRED", "RECOVERY_BUDGET_BLOCKED",
+        "RECOVER_CHECKPOINT", "CHECKPOINT_BLOCKED", "RECOVERED_CHECKPOINT",
+        "ROUND_CAP", "BUDGET_BLOCKED", "SUGGEST", "WAIT_NO_SUGGESTION",
+        "WAIT_INVALID_SUGGESTION", "FACTORY_BATCH_BUDGET_BLOCKED",
+        "STOP_MECHANISM_ROUTE", "REROUTE_FACTORY_FEASIBILITY",
+        "STOP_BUDGET_SHORTAGE", "REROUTE_BUDGET_SHORTAGE", "WAIT_FACTORY_BATCH",
+        "PROPOSALS_WRITE_ERROR", "WAIT_NO_VALID_PROPOSAL", "RUN_PROPOSALS",
+        "DAILY_OR_WEEKLY_BUDGET_BLOCKED", "RUN_PROPOSALS_PENDING",
+        "WAIT_RUN_PROPOSALS", "ROUND_COMPLETE", "ASSEMBLE_ERROR",
+        "RUN_PROPOSALS_ERROR", "RECOVER_PROPOSALS_ERROR",
+        "RECOVER_CHECKPOINT_ERROR", "SUGGEST_ERROR",
+        "ASSEMBLE_RECONCILE_REQUIRED", "RUN_PROPOSALS_RECONCILE_REQUIRED",
+        "RECOVER_PROPOSALS_RECONCILE_REQUIRED",
+        "RECOVER_CHECKPOINT_RECONCILE_REQUIRED",
+        "SUGGEST_RECONCILE_REQUIRED",
+    }
+    _RESULT_STATUSES = {
+        "LOCAL_OWNER_BUSY", "RECONCILE_REQUIRED", "INVALID_SIMULATION_QUOTA",
+        "INVALID_SESSION", "BLOCKED_RECHECK_NOT_DUE", "BLOCKER_UNCHANGED",
+        "ORPHANED_PROPOSALS_BUDGET_BLOCKED", "RECOVERY_BUDGET_BLOCKED",
+        "INVALID_RESEARCH_SPACE", "OPERATOR_CAPABILITY_UNKNOWN",
+        "FACTORY_BATCH_BUDGET_BLOCKED", "FACTORY_FEASIBILITY_CHECK_BLOCKED",
+        "FACTORY_BUDGET_SHORTAGE", "FACTORY_BATCH_NOT_READY",
+        "DAILY_OR_WEEKLY_BUDGET_BLOCKED", "RUN_PROPOSALS_NOT_EXECUTED",
+        "RETRYING", "ADVANCE_ROUTE_EPISODE",
+    }
+    _BLOCKER_STOP_ACTIONS = {
+        "FEASIBILITY": "STOP_FEASIBILITY_BLOCKER",
+        "PREFLIGHT": "STOP_PREFLIGHT_BLOCKER",
+        "OPERATOR_CAPABILITY": "STOP_OPERATOR_CAPABILITY",
+        "BUDGET_SHORTAGE": "STOP_BUDGET_SHORTAGE",
+    }
+    _TERMINAL_RECONCILE_ACTIONS = {
+        "ASSEMBLE": "ASSEMBLE_RECONCILE_REQUIRED",
+        "RUN_PROPOSALS": "RUN_PROPOSALS_RECONCILE_REQUIRED",
+        "RECOVER_PROPOSALS": "RECOVER_PROPOSALS_RECONCILE_REQUIRED",
+        "RECOVER_CHECKPOINT": "RECOVER_CHECKPOINT_RECONCILE_REQUIRED",
+        "SUGGEST": "SUGGEST_RECONCILE_REQUIRED",
     }
     _CONTROL_TOKENS = {
         "UNKNOWN", "NONE", "READY", "RUNNING", "STOPPED", "DEADLINE",
@@ -101,7 +156,9 @@ class AIFactoryRunner:
         "PREFLIGHT_REJECTED", "DUPLICATE_LOCAL", "DIVERSITY_REJECTED",
         "INVALID_SETTINGS", "BATCH_CAP", "ALREADY_SIMULATED", "SUCCESS",
         "FAIL", "FAILED", "SUSPICIOUS_HIGH_SIGNAL", "PASS", "BLOCK",
-    }
+    } | _SESSION_STATUSES | _SESSION_ACTIONS | _RESULT_STATUSES | set(
+        _BLOCKER_STOP_ACTIONS.values()
+    )
 
     @staticmethod
     def _safe_control_token(value, default="UNKNOWN"):
@@ -114,6 +171,30 @@ class AIFactoryRunner:
         if token in AIFactoryRunner._CONTROL_TOKENS:
             return token
         return default
+
+    @classmethod
+    def _validate_internal_control_state(cls, session):
+        """Reject new runtime state outside the declared durable vocabulary."""
+        if not isinstance(session, dict):
+            raise FactoryControlStateError("FACTORY_CONTROL_STATE_UNDECLARED: session")
+        for field, vocabulary in (
+            ("status", cls._SESSION_STATUSES),
+            ("last_action", cls._SESSION_ACTIONS),
+        ):
+            value = session.get(field)
+            if value is None:
+                continue
+            if not isinstance(value, str) or value not in vocabulary:
+                raise FactoryControlStateError(
+                    f"FACTORY_CONTROL_STATE_UNDECLARED: {field}"
+                )
+
+    @classmethod
+    def _project_runtime_return(cls, value):
+        """Bound a caller-visible result without mutating the runtime object."""
+        if not isinstance(value, dict):
+            return value
+        return cls._control_plane_session(value)
 
     @staticmethod
     def _safe_nonnegative_count(value):
@@ -481,9 +562,11 @@ class AIFactoryRunner:
             float(session["deadline"])
         except (KeyError, TypeError, ValueError):
             return None
-        session["stop_requested"] = True
-        session["last_action"] = "STOP_REQUESTED"
-        session = cls._control_plane_session(session)
+        source = deepcopy(session)
+        source["stop_requested"] = True
+        source["last_action"] = "STOP_REQUESTED"
+        cls._validate_internal_control_state(source)
+        session = cls._control_plane_session(source)
         atomic_write_json_if_changed(
             os.path.join(state_dir, cls.SESSION_FILE), session,
             ignored_keys=("updated_at",),
@@ -621,7 +704,7 @@ class AIFactoryRunner:
             weekly_simulation_cap=None):
         try:
             with single_instance_scope(self.state_dir, operation="factory-run"):
-                return self._run_locked(
+                result = self._run_locked(
                     duration_sec=duration_sec,
                     max_rounds=max_rounds,
                     idle_sleep_sec=idle_sleep_sec,
@@ -629,6 +712,7 @@ class AIFactoryRunner:
                     daily_simulation_cap=daily_simulation_cap,
                     weekly_simulation_cap=weekly_simulation_cap,
                 )
+                return self._project_runtime_return(result)
         except OwnerBusyError:
             return {
                 "schema_version": CHECKPOINT_VERSION,
@@ -715,6 +799,10 @@ class AIFactoryRunner:
                 "last_action": "INVALID_SESSION",
                 "last_result": {"status": "INVALID_SESSION"},
             }
+        if session is not None:
+            # Legacy inspection remains tolerant through read_session/status_view,
+            # but execution must not replace an undeclared recovery boundary.
+            self._validate_internal_control_state(session)
         if session and session.get("status") == "STOPPED" and isinstance(session.get("blocker"), dict):
             blocker = session["blocker"]
             try:
@@ -752,7 +840,13 @@ class AIFactoryRunner:
                 )
                 session["blocker"] = updated
                 session["status"] = "STOPPED"
-                session["last_action"] = f"STOP_{blocker.get('kind', 'BLOCKER')}"
+                session["last_action"] = self._BLOCKER_STOP_ACTIONS.get(
+                    blocker.get("kind")
+                )
+                if session["last_action"] is None:
+                    raise FactoryControlStateError(
+                        "FACTORY_CONTROL_STATE_UNDECLARED: blocker action"
+                    )
                 session["last_result"] = {
                     "status": "BLOCKER_UNCHANGED",
                     "blocker_kind": updated["kind"],
@@ -1648,16 +1742,16 @@ class AIFactoryRunner:
         # A concurrent --factory-stop may replace the envelope between two
         # runner writes.  Preserve that control-plane bit for the same
         # session, while allowing a genuinely new session to start cleanly.
+        self._validate_internal_control_state(session)
+        persistence_source = deepcopy(session)
         current = self.read_session(self.state_dir)
         if (
             current
             and current.get("session_id") == session.get("session_id")
             and current.get("stop_requested")
         ):
-            session["stop_requested"] = True
-        projected = self._control_plane_session(session)
-        session.clear()
-        session.update(projected)
+            persistence_source["stop_requested"] = True
+        projected = self._control_plane_session(persistence_source)
         atomic_write_json_if_changed(
             self.session_path, projected, ignored_keys=("updated_at",)
         )
@@ -1900,7 +1994,12 @@ class AIFactoryRunner:
         if not isinstance(exc, (ValueError, KeyError, TypeError)) and error_name not in terminal_names:
             return False
         session["status"] = "RECONCILE_REQUIRED"
-        session["last_action"] = f"{action}_RECONCILE_REQUIRED"
+        try:
+            session["last_action"] = AIFactoryRunner._TERMINAL_RECONCILE_ACTIONS[action]
+        except KeyError as exc:
+            raise FactoryControlStateError(
+                "FACTORY_CONTROL_STATE_UNDECLARED: terminal action"
+            ) from exc
         session["last_result"] = {
             "status": "RECONCILE_REQUIRED",
             "error_type": error_name,

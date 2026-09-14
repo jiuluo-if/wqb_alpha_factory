@@ -22,6 +22,15 @@ research questions, mechanisms, lineage/arm identity, metrics, checks, PnL or
 arbitrary exception messages. `factory status` and `factory run` use the same
 bounded projection.
 
+Projection is a persistence copy, not an in-place normalization of the running
+orchestrator. Runtime-generated session status/action values use a closed,
+declared vocabulary; an undeclared new transition fails closed before the next
+Simulation write instead of being silently rewritten to `UNKNOWN`. Legacy
+unknown values remain readable for inspection, while new durable writes require
+declared bounded tokens. Recovery markers such as `RUN_PROPOSALS`,
+`RECOVER_PROPOSALS`, `RECOVER_CHECKPOINT_ERROR`, `SUGGEST` and their error states
+round-trip through the same canonical JSON envelope.
+
 ## Documentation and commit hygiene
 
 Do not put research history, dated round reports, private paths, credentials or

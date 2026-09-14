@@ -29,6 +29,12 @@
 研究 fingerprint。rich feasibility、budget audit、proposal、checkpoint、Trajectory
 和 TrialLedger payload 继续归其既有 owner，不通过 session projection 搬迁或复制。
 
+durable projection 是 live orchestrator session 的 bounded copy：`_save_session()`
+只校验 internal control vocabulary、合并并发 stop bit、投影并原子写盘，不清空或
+改写 caller 持有的 runtime object；`factory run` 返回值在边界处单独投影。session
+status/action 使用 closed set，新增 runtime transition 未登记时 fail closed，旧会话
+的未知值仅允许在 read/status inspection 中降级为 `UNKNOWN`。
+
 ## 记忆阅读顺序
 
 1. 当前进程内 Agent 记忆和日缓存：只用于本轮决策，不作为事实源。
