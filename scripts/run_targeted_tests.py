@@ -265,6 +265,10 @@ DIRECT_TESTS = {
         "tests/test_targeted_batch_contract.py",
         "tests/test_security_hardening_batch.py",
     ),
+    "wqb_agent/proposal_schema.py": (
+        "tests/test_proposal_contract.py",
+        "tests/test_architecture_contracts.py",
+    ),
     "wqb_agent/optimizer_workflow.py": (
         "tests/test_optimizer_workflow.py",
         "tests/test_agent_decision_to_proposal.py",

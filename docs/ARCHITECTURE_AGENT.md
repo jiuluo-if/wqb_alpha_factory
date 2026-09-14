@@ -101,7 +101,7 @@ Agent → SuggestionWorkflow / ProposalExecutionWorkflow / AlphaFeedWorkflow / O
 | BRAIN transport | `client.py` | 认证、Retry-After、分类错误、只读 GET 与 Simulation submit |
 | Simulation execution | `ProposalExecutionWorkflow` → `Simulator` | checkpoint、预算、exactly-once、`SUBMIT_UNKNOWN` |
 | Research evidence | `Trajectory` / `TrialLedger` | append-only 事实与生命周期审计 |
-| TrialLedger append index | `TrialLedger` 内存 | owner-local event-id/completeness membership，可从 `trial_ledger.jsonl` 重建；不成为 durable owner |
+| TrialLedger append index | `TrialLedger` transient SQLite | owner-local exact event-id/completeness membership，可从 `trial_ledger.jsonl` 重建；SQLite 文件临时 disposable，JSONL 仍是唯一 durable truth |
 | Persistence durability | `artifacts.py` / existing append owners | POSIX atomic replace 后同步 parent directory；首次 append 创建文件时同步目录，普通 append 保持 file fsync |
 | Runtime operator reference | `wqb_agent.reference` package resource | installed package 是运行时 syntax reference owner；`docs/reference` 仅作同步的人类镜像 |
 | Checkpoint recovery boundary | `CheckpointStore` | canonical semantic validation、unfinished scan 与 atomic recovery envelope |
@@ -233,6 +233,31 @@ typed frontier 的 mypy、`state doctor`、`state audit` 和 repository privacy 
 均通过。doctor 对 fixture 的 `LEDGER_MISSING` 与 capability unavailable 只报告既有
 WARN，未触碰真实研究状态。所有阶段提交均使用 `2966684515@qq.com` 并推送到
 `origin/main`。
+
+## Architecture Modernization Phase IV（2026-09-15）
+
+本阶段从 baseline `2b3e0fb` 继续，完成不改变研究语义的局部收缩：`research_catalog.py` 成为
+fallback hypothesis 的纯目录 owner；`proposal_inbox.py` 与 `execution_plan.py` 分离提案解析和
+checkpoint disposition；`factory_control.py` 成为工厂控制词汇 owner；`proposal_schema.py` 成为
+schema vocabulary owner，而 `proposal_contract.py` 保留兼容 facade re-export。
+
+`ProposalExecutionWorkflow` 保持唯一 Simulation 编排路径，恢复、终态结算、`SUBMIT_UNKNOWN`
+和 known `progress_url` GET-only 语义不变。`TrialLedger` 删除 Python `self._event_ids` 长历史集合，
+改为 owner-local exact SQLite membership projection：JSONL 先 append+fsync，索引失败只使 projection
+invalid 并触发后续 rebuild，不重写第二条 durable event；启动、文件签名变化和外部 owner append 都会重建。
+
+当前静态计量为 `Agent` 1,600 行/78 defs、`ProposalExecutionWorkflow` 1,327 行/24 defs、
+`AIFactoryRunner` 1,679 行/54 defs、`proposal_contract.py` 670 行/14 defs。离线基准命令为
+`python scripts/benchmark_local_io.py --rows 10000,100000,500000 --workloads trial_ledger_startup,trial_ledger_append --repeat 1`：
+
+| rows | startup rebuild ms | append ms | startup/append Python peak KB |
+|---:|---:|---:|---:|
+| 10,000 | 111.803 | 7.783 | 57.8 / 20.3 |
+| 100,000 | 1,166.758 | 7.809 | 61.6 / 20.7 |
+| 500,000 | 5,588.456 | 9.959 | 60.3 / 19.7 |
+
+最新本地证据：proposal/execution/architecture 定向 lane 141 tests、schema/factory batch lane 78 tests，
+Ruff 与 py_compile 通过；基准为单次离线样本，不能替代多轮稳定性比较。
 
 ## 变更规则
 

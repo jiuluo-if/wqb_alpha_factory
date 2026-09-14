@@ -16,6 +16,7 @@ import os
 import re
 from importlib import resources
 
+from . import proposal_schema as _proposal_schema
 from .diversity import extract_fields
 from .expression import (
     analyze_expression,
@@ -30,35 +31,20 @@ from .research_guard import (
 )
 from .validation_report import validate_plan
 
-PROPOSAL_EXPERIMENT_QS = {
-    "field_understanding": "字段含义及其信息含义（必须基于本轮 discovery）",
-    "operator_mapping": "算子如何表达该经济机制",
-    "experiment_question": "本次 simulation 要回答的单一问题",
-}
+CHILD_CHANGE_TYPES = _proposal_schema.CHILD_CHANGE_TYPES
+EXPERIMENT_STAGES = _proposal_schema.EXPERIMENT_STAGES
+FACTORY_BATCH_SIZE = _proposal_schema.FACTORY_BATCH_SIZE
+MAX_CONFIGURED_PROPOSALS_PER_ROUND = _proposal_schema.MAX_CONFIGURED_PROPOSALS_PER_ROUND
+MAX_PROPOSALS_PER_ROUND = _proposal_schema.MAX_PROPOSALS_PER_ROUND
+MAX_TARGETED_CHILDREN = _proposal_schema.MAX_TARGETED_CHILDREN
+MAX_TARGETED_PROPOSALS = _proposal_schema.MAX_TARGETED_PROPOSALS
+MAX_TARGETED_VALIDATIONS = _proposal_schema.MAX_TARGETED_VALIDATIONS
+PROPOSAL_EXPERIMENT_QS = _proposal_schema.PROPOSAL_EXPERIMENT_QS
+RESEARCH_ROLES = _proposal_schema.RESEARCH_ROLES
+SETTING_OVERRIDES = _proposal_schema.SETTING_OVERRIDES
+TARGETED_BATCH_TTL_SEC = _proposal_schema.TARGETED_BATCH_TTL_SEC
+TARGETED_BATCH_TYPE = _proposal_schema.TARGETED_BATCH_TYPE
 
-RESEARCH_ROLES = {"EXPLORE", "EXPLOIT", "VALIDATION"}
-# 18 remains the safe default.  Larger batches are an explicit configuration
-# choice for factory runs; the upper bound prevents an accidental unbounded
-# inbox from becoming a production batch.
-MAX_PROPOSALS_PER_ROUND = 18
-MAX_CONFIGURED_PROPOSALS_PER_ROUND = 100
-FACTORY_BATCH_SIZE = 100
-# Agent authored 的 targeted optimization batch：复用同一个 proposals.json，
-# 但边界是 ≤4 CHILD + ≤4 ROBUSTNESS VALIDATE，绝不扩张成第二个 inbox。
-TARGETED_BATCH_TYPE = "targeted_optimization"
-MAX_TARGETED_CHILDREN = 4
-MAX_TARGETED_VALIDATIONS = 4
-MAX_TARGETED_PROPOSALS = MAX_TARGETED_CHILDREN + MAX_TARGETED_VALIDATIONS
-# 有效期只用于“工厂何时可以重新取得 inbox”的确定性仲裁：到期前 factory 不得
-# 用 exploration 100 覆盖一个合法且尚未执行的 Agent batch。
-TARGETED_BATCH_TTL_SEC = 6 * 3600
-EXPERIMENT_STAGES = {"BASELINE", "CHILD", "ROBUSTNESS"}
-CHILD_CHANGE_TYPES = {
-    "field_swap", "window_change", "operator_variant", "smoothing",
-    "neutralization", "decay", "window_locality", "semantic_field_swap",
-    "universe", "universe_robustness", "decay_truncation",
-}
-SETTING_OVERRIDES = {"universe", "truncation", "decay"}
 _VEC_INPUT_RE = re.compile(
     r"\b(vec_avg|vec_sum)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)",
     re.IGNORECASE,

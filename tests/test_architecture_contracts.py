@@ -164,6 +164,7 @@ class ArchitectureDependencyContracts(unittest.TestCase):
             "wqb_agent/factory_control.py",
             "wqb_agent/execution_plan.py",
             "wqb_agent/proposal_inbox.py",
+            "wqb_agent/proposal_schema.py",
         )
         imports = _package_imports(paths)
         forbidden = {
