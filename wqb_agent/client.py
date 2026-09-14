@@ -34,10 +34,10 @@ import math
 import random
 import threading
 import time
-from urllib.parse import urljoin, urlparse, urlunsplit
 
 import requests
 
+from .client_transport import backoff_delay, normalize_progress_url
 from .credentials import (
     DEFAULT_CREDENTIALS_FILE,
     CredentialError,
@@ -204,29 +204,9 @@ class WQBClient:
 
     def _normalize_progress_url(self, progress_url):
         """Resolve and validate a progress URL before any network request."""
-        if not isinstance(progress_url, str) or not progress_url.strip():
-            raise WQBSimulationError("Progress URL is missing or malformed.")
-        base = urlparse(self.base_url)
-        resolved = urlparse(urljoin(self.base_url.rstrip("/") + "/", progress_url.strip()))
-        try:
-            base_port = base.port
-            resolved_port = resolved.port
-        except ValueError as exc:
-            raise WQBSimulationError("Progress URL has an invalid port.") from exc
-        base_effective_port = base_port or (443 if base.scheme == "https" else 80)
-        resolved_effective_port = resolved_port or (443 if resolved.scheme == "https" else 80)
-        if (
-            not base.scheme or not base.hostname or base.username or base.password
-            or not resolved.scheme or not resolved.hostname
-            or resolved.username or resolved.password or resolved.fragment
-            or (resolved.scheme, resolved.hostname.lower(), resolved_effective_port)
-            != (base.scheme, base.hostname.lower(), base_effective_port)
-        ):
-            raise WQBSimulationError(
-                "Progress URL must be same-origin and contain no credentials or fragment."
-            )
-        return urlunsplit((resolved.scheme, resolved.netloc, resolved.path or "/",
-                           resolved.query, ""))
+        return normalize_progress_url(
+            self.base_url, progress_url, error_type=WQBSimulationError
+        )
 
     # ---- authentication ----
 
@@ -284,7 +264,7 @@ class WQBClient:
 
     @staticmethod
     def _backoff(attempt, base=1.0, cap=30.0):
-        return min(cap, base * (2 ** attempt) + random.uniform(0.0, base))
+        return backoff_delay(attempt, base=base, cap=cap)
 
     def _sleep_retry_after(self, resp):
         """Register and wait for a server-wide Retry-After gate.
