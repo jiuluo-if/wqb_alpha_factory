@@ -246,10 +246,11 @@ schema vocabulary owner，而 `proposal_contract.py` 保留兼容 facade re-expo
 改为 owner-local exact SQLite membership projection：JSONL 先 append+fsync，索引失败只使 projection
 invalid 并触发后续 rebuild，不重写第二条 durable event；启动、文件签名变化和外部 owner append 都会重建。
 
-当前静态计量为 `Agent` 1,577 行/77 defs、`ProposalExecutionWorkflow` 1,342 行/24 defs、
-`ProposalExecutionHooks` 19 callbacks、`AIFactoryRunner` 1,576 行/51 defs、
+当前静态计量为 `Agent` 1,577 行/78 defs、`ProposalExecutionWorkflow` 1,330 行/24 defs、
+`ProposalExecutionHooks` 19 callbacks、`AIFactoryRunner` 1,547 行/48 defs、
 `proposal_contract.py` 45 行/0 defs、`proposal_batch.py` 236 行/5 defs、
-`proposal_validation.py` 344 行/9 defs。相对本阶段早期 snapshot，已删除 3 个执行 hooks、
+`proposal_validation.py` 344 行/10 defs。当前 production 为 109 个 Python 文件/30,565 行，
+tests 为 99 个 Python 文件/24,810 行。相对本阶段早期 snapshot，已删除 3 个执行 hooks、
 3 个 checkpoint forwarding wrappers、3 个 FactoryRunner probe wrappers，并移除 Agent 的
 candidate-rejection forwarding method。离线基准命令为
 `python scripts/benchmark_local_io.py --rows 10000,100000,500000 --workloads trial_ledger_startup,trial_ledger_append --repeat 1`：
@@ -260,8 +261,19 @@ candidate-rejection forwarding method。离线基准命令为
 | 100,000 | 1,166.758 | 7.809 | 61.6 / 20.7 |
 | 500,000 | 5,588.456 | 9.959 | 60.3 / 19.7 |
 
-最新本地证据：proposal/execution/architecture 定向 lane 141 tests、schema/factory batch lane 78 tests，
-Ruff 与 py_compile 通过；基准为单次离线样本，不能替代多轮稳定性比较。
+兼容面按当前 consumer 保留并分类如下：
+
+| surface | classification | 处理 |
+|---|---|---|
+| `Agent.run_suggestion_round()` / `run_proposals()` | `PUBLIC_RETIRED_GUARD` | 保留 facade，真实编排下沉到 workflow |
+| `AIFactoryRunner` 公共入口 | `PUBLIC_REQUIRED` | 保留外部 factory 控制面入口，纯控制/route/probe 投影下沉 |
+| `proposal_contract` 导出名称 | `PUBLIC_REQUIRED` | 保留薄 facade，canonical 实现位于 schema/batch/validation |
+| 已删除的 private probe/checkpoint forwarding wrappers | `DEAD` | 无 runtime consumer，测试已迁移至 canonical owner |
+| Agent → workflow operation hooks | `INTERNAL_COMPAT` | 仅保留 Agent-owned state/evidence/output 边界，禁止任意 Agent 逃生通道 |
+
+当前验证证据：本次跨 owner targeted lane `Ran 304 tests ... OK`，Ruff 与 py_compile 均通过；此前
+proposal/factory/architecture lane 262 tests 也通过。TrialLedger 基准为单次离线样本，不能替代
+多轮稳定性比较。
 
 ## 变更规则
 

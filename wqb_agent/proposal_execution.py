@@ -49,9 +49,11 @@ from .state import (
     UNRESOLVED_STATUSES,
     Experiment,
     ResearchState,
-    same_execution_identity,
 )
-from .terminal_evidence import failure_category, has_full_terminal_evidence
+from .terminal_evidence import (
+    failure_category,
+    validate_terminal_snapshot,
+)
 
 
 @dataclass(frozen=True)
@@ -247,28 +249,14 @@ class ProposalExecutionWorkflow:
     def _require_durable_terminal_evidence(self, experiments, round_no):
         rows = self._canonical_rows_for(experiments)
         round_reader = getattr(self._ctx.trajectory, "iter_canonical_round", None)
+        canonical_round_ids = None
         if callable(round_reader):
             canonical_round_ids = {
                 str(row.get("id"))
                 for row in (round_reader(int(round_no)) or ())
                 if isinstance(row, dict) and row.get("id")
             }
-            expected_ids = {str(experiment.id) for experiment in experiments}
-            if canonical_round_ids != expected_ids:
-                raise ValueError(
-                    f"FINALIZE_EXECUTION_SET_MISMATCH: round {round_no}"
-                )
-        for experiment in experiments:
-            row = rows.get(experiment.id)
-            if row is None or not same_execution_identity(experiment.to_dict(), row):
-                raise ValueError(
-                    f"TERMINAL_EVIDENCE_UNRECOVERABLE: round {round_no} experiment {experiment.id}"
-                )
-            durable = Experiment.from_dict(row)
-            if not has_full_terminal_evidence(durable):
-                raise ValueError(
-                    f"TERMINAL_EVIDENCE_UNRECOVERABLE: round {round_no} experiment {experiment.id}"
-                )
+        validate_terminal_snapshot(experiments, rows, canonical_round_ids, round_no)
 
     def _merge_checkpoint_with_trajectory(self, experiments, round_no):
         """Monotonically merge checkpoint execution rows with canonical rows."""
