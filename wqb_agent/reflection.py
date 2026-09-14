@@ -31,6 +31,7 @@ from .research_guard import (
     overfit_expression_reason,
     parameter_only_change_reason,
 )
+from .state import research_settlement_identity
 
 HYPOTHESIS_OUTCOMES = frozenset({"SUPPORTED", "CONTRADICTED", "INCONCLUSIVE"})
 _LEARNING_METADATA_KEYS = (
@@ -76,7 +77,23 @@ class Reflector:
         # 平台证据缓存侧车（alpha_id -> 已结算 checks）；见 wqb_agent/evidence.py。
         self.evidence_cache = evidence_cache or {}
 
+    @staticmethod
+    def _settlement_key(exp, projection):
+        return f"{research_settlement_identity(exp)}:{projection}"
+
+    @staticmethod
+    def _round_source_key(round_no, hypothesis, results, projection):
+        identities = sorted(
+            research_settlement_identity(result["experiment"])
+            for result in results
+        )
+        return f"round:{round_no}:{hypothesis.get('id', '')}:{','.join(identities)}:{projection}"
+
     def reflect(self, round_no, hypothesis, experiments, validation_candidates=None):
+        experiments = sorted(
+            list(experiments or []),
+            key=research_settlement_identity,
+        )
         results = []
         for exp in experiments:
             verdict = self._classify(exp)
@@ -88,13 +105,21 @@ class Reflector:
         self._update_lineages(round_no, results)
         confirmation = self.research_confirmation_view(hypothesis, results)
         hypothesis_outcome = self._mark_hypothesis_outcome(
-            hypothesis, results, confirmation=confirmation
+            hypothesis, results, confirmation=confirmation,
+            source_key=self._round_source_key(round_no, hypothesis, results, "hypothesis"),
         )
         self._record_mechanism_learning(
-            round_no, hypothesis, results, hypothesis_outcome, confirmation=confirmation
+            round_no, hypothesis, results, hypothesis_outcome, confirmation=confirmation,
+            source_key=self._round_source_key(round_no, hypothesis, results, "mechanism"),
         )
-        self._generate_next(round_no, hypothesis, results)
-        self._recap(round_no, hypothesis, results, best, old_best_id)
+        self._generate_next(
+            round_no, hypothesis, results,
+            source_key=self._round_source_key(round_no, hypothesis, results, "next"),
+        )
+        self._recap(
+            round_no, hypothesis, results, best, old_best_id,
+            source_key=self._round_source_key(round_no, hypothesis, results, "recap"),
+        )
         self.memory.expire_short_term(now_round=round_no)
         self.memory.updated_round = round_no
         self.memory.compress()
@@ -324,6 +349,7 @@ class Reflector:
                 round_no,
                 evidence=1,
                 detail="run reconciliation, then confirm_pending(verdict)",
+                source_key=self._settlement_key(exp, "pending"),
             )
             return
         if verdict["label"] == "RECONCILE":
@@ -333,6 +359,7 @@ class Reflector:
                 round_no,
                 evidence=1,
                 detail="reconcile checks/metrics before any research decision",
+                source_key=self._settlement_key(exp, "incomplete"),
             )
             return
         if exp.status == "FAILED":
@@ -348,12 +375,14 @@ class Reflector:
                     round_no,
                     evidence=1,
                     detail="environment issue, no direction signal",
+                    source_key=self._settlement_key(exp, "system-failure"),
                 )
                 return
             self.memory.add_avoid(
                 self._direction_key(exp),
                 self._diagnose_error(exp),
                 round_no,
+                source_key=self._settlement_key(exp, "avoid-failure"),
             )
             return
 
@@ -376,6 +405,7 @@ class Reflector:
                     "alpha_id": exp.alpha_id,
                     "lineage": exp.hypothesis_id,
                 },
+                source_key=self._settlement_key(exp, "observation"),
             )
         else:
             self.memory.add_avoid(
@@ -384,6 +414,7 @@ class Reflector:
                 f"turnover={metrics.get('turnover')}, drawdown={metrics.get('drawdown')}, "
                 f"margin={metrics.get('margin')}; diagnosis={verdict.get('diagnosis')}",
                 round_no,
+                source_key=self._settlement_key(exp, "avoid-quality"),
             )
 
         turnover = metrics.get("turnover")
@@ -394,6 +425,7 @@ class Reflector:
                 round_no,
                 evidence=1,
                 detail={"experiment_id": exp.id, "lineage": exp.hypothesis_id},
+                source_key=self._settlement_key(exp, "turnover"),
             )
 
     @staticmethod
@@ -460,6 +492,8 @@ class Reflector:
             decision = self.memory.record_lineage_result(
                 lineage_id, self._exp_score(exp), label, round_no,
                 counts_toward_stop=(label == "SUCCESS"),
+                source_key=self._settlement_key(exp, "lineage"),
+                experiment_id=exp.id,
             )
             if decision in ("STOP", "KILL"):
                 self.memory.add_short_term(
@@ -469,9 +503,10 @@ class Reflector:
                     round_no,
                     evidence=1,
                     detail={"experiment_id": exp.id, "lineage": lineage_id},
+                    source_key=self._settlement_key(exp, "lineage-decision"),
                 )
 
-    def _generate_next(self, round_no, hypothesis, results):
+    def _generate_next(self, round_no, hypothesis, results, source_key=None):
         """Persist only an Agent-authored, discriminating next experiment."""
         candidate = hypothesis.get("next_experiment")
         if not isinstance(candidate, dict):
@@ -534,6 +569,7 @@ class Reflector:
             fields=fields,
             datasets=datasets,
             metadata=metadata,
+            source_key=source_key,
         )
 
     @staticmethod
@@ -658,7 +694,7 @@ class Reflector:
         if not interpretation:
             view["blocking_reasons"].append("invalid Agent interpretation")
             return view
-        refs = interpretation["evidence_refs"]
+        refs = sorted(interpretation["evidence_refs"])
         if len(set(refs)) != len(refs):
             view["blocking_reasons"].append("duplicate evidence reference")
             return view
@@ -729,7 +765,8 @@ class Reflector:
             )
         return view
 
-    def _mark_hypothesis_outcome(self, hypothesis, results, confirmation=None):
+    def _mark_hypothesis_outcome(self, hypothesis, results, confirmation=None,
+                                 source_key=None):
         hyp_id = hypothesis.get("id")
         if not hyp_id:
             return "INCONCLUSIVE"
@@ -796,11 +833,13 @@ class Reflector:
                 "agent_interpretation": interpretation,
                 "outcome_reason": reason,
             },
+            source_key=source_key,
         )
         return outcome
 
     def _record_mechanism_learning(
-        self, round_no, hypothesis, results, outcome, confirmation=None
+        self, round_no, hypothesis, results, outcome, confirmation=None,
+        source_key=None,
     ):
         interpretation = self._interpretation(hypothesis)
         if not interpretation:
@@ -841,11 +880,13 @@ class Reflector:
             self.memory.add_short_term(
                 "observation", interpretation["mechanism_learning"], round_no,
                 evidence=1, detail=detail,
+                source_key=f"{source_key}:{self._settlement_key(source, 'mechanism')}" if source_key else self._settlement_key(source, "mechanism"),
             )
 
     # ------------------------------------------------------------ recap
 
-    def _recap(self, round_no, hypothesis, results, best, old_best_id):
+    def _recap(self, round_no, hypothesis, results, best, old_best_id,
+               source_key=None):
         """Write a short-term round recap — the working memory the model
         reads next round before deciding what to explore. Never a
         long-term claim: conclusions live in lessons/avoid; this is the
@@ -872,9 +913,9 @@ class Reflector:
                 f"top sharpe={m.get('sharpe')} fitness={m.get('fitness')} "
                 f"expr={exp.expression[:60]}"
             )
-        if best and best.get("id") != old_best_id:
-            parts.append("NEW BEST")
-        self.memory.add_short_term("recap", " | ".join(parts), round_no)
+        self.memory.add_short_term(
+            "recap", " | ".join(parts), round_no, source_key=source_key
+        )
 
     # ------------------------------------------------------------ summary
 

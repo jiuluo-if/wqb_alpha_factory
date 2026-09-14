@@ -52,6 +52,12 @@ _EPHEMERAL_HYPOTHESIS_ID = re.compile(
 
 # Kinds allowed in the short-term tier.
 SHORT_KINDS = ("recap", "pending", "observation")
+
+
+class MemorySourceReplayConflict(ValueError):
+    """A durable memory source key was reused for different semantics."""
+
+    code = "MEMORY_SOURCE_REPLAY_CONFLICT"
 # Reasons recorded when an entry is soft-deleted into the garbage tier.
 GARBAGE_REASONS = ("stale", "superseded", "deduped", "expired", "low_value",
                    "not_promoted", "user_removed")
@@ -283,12 +289,60 @@ class ExperienceMemory:
 
     # ---------------------------------------------------------- short term
 
-    def add_short_term(self, kind, text, round_no, evidence=1, detail=None):
+    @staticmethod
+    def _stable_payload(value):
+        return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str,
+                          separators=(",", ":"))
+
+    def _source_entry(self, source_key):
+        if not source_key:
+            return None
+        key = str(source_key)
+        for kind, entries in (
+            ("short_term", self.short_term), ("lesson", self.lessons),
+            ("avoid", self.avoid), ("next", self.next),
+            ("hypothesis", self.active_hypotheses),
+        ):
+            for entry in entries:
+                if isinstance(entry, dict) and entry.get("source_key") == key:
+                    return kind, entry
+        for tomb in self.garbage:
+            entry = tomb.get("entry") if isinstance(tomb, dict) else None
+            if isinstance(entry, dict) and entry.get("source_key") == key:
+                return tomb.get("kind", "garbage"), entry
+        return None
+
+    def _source_replay(self, source_key, kind, semantic):
+        if not source_key:
+            return None
+        found = self._source_entry(source_key)
+        if found is None:
+            return None
+        old_kind, old = found
+        if old_kind != kind or old.get("_source_semantic") != self._stable_payload(semantic):
+            raise MemorySourceReplayConflict(
+                f"MEMORY_SOURCE_REPLAY_CONFLICT: source_key={source_key}"
+            )
+        return old
+
+    def _stamp_source(self, entry, source_key, semantic):
+        if source_key:
+            entry["source_key"] = str(source_key)
+            entry["_source_semantic"] = self._stable_payload(semantic)
+        return entry
+
+    def add_short_term(self, kind, text, round_no, evidence=1, detail=None,
+                       source_key=None):
         """Add a short-term entry. A similar existing entry is merged:
         hits + 1, text/round refreshed — repeated observations accumulate
         hits and become promotion candidates when they expire."""
         if kind not in SHORT_KINDS:
             raise ValueError(f"short-term kind must be one of {SHORT_KINDS}")
+        semantic = {"kind": kind, "text": text, "round": round_no,
+                    "evidence": evidence, "detail": detail}
+        replay = self._source_replay(source_key, "short_term", semantic)
+        if replay is not None:
+            return replay
         lineage = detail.get("lineage") if isinstance(detail, dict) else None
         for entry in self.short_term:
             if entry.get("kind") == kind and self._similar(
@@ -316,6 +370,7 @@ class ExperienceMemory:
             "created": time.time(),
             "updated": time.time(),
         }
+        self._stamp_source(entry, source_key, semantic)
         self._merge_learning_metadata(entry, detail)
         self.short_term.append(entry)
         return entry
@@ -396,6 +451,8 @@ class ExperienceMemory:
         confidence = min(0.6, 0.2 + 0.1 * entry.get("hits", 0))
         return self.add_lesson(
             entry["text"], now_round, evidence=evidence, confidence=confidence,
+            source_key=(f"promotion:{entry['source_key']}"
+                        if entry.get("source_key") else None),
             metadata={
                 key: entry[key]
                 for key in (
@@ -521,9 +578,16 @@ class ExperienceMemory:
     # ------------------------------------------------------------- lessons
 
     def add_lesson(self, claim, source_round, evidence, confidence=0.5,
-                   metadata=None):
+                   metadata=None, source_key=None):
+        semantic = {"claim": claim, "source_round": source_round,
+                    "evidence": evidence, "confidence": confidence,
+                    "metadata": metadata}
+        replay = self._source_replay(source_key, "lesson", semantic)
+        if replay is not None:
+            return replay
         for lesson in self.lessons:
             if self._similar(lesson["claim"], claim, threshold=0.8):
+                self._stamp_source(lesson, source_key, semantic)
                 lesson["source_round"] = source_round
                 lesson["evidence"] = lesson.get("evidence", 0) + evidence
                 lesson["confidence"] = min(1.0, lesson.get("confidence", 0.5) + 0.15)
@@ -542,6 +606,7 @@ class ExperienceMemory:
             "updated": time.time(),
             "last_used": time.time(),
         }
+        self._stamp_source(entry, source_key, semantic)
         if isinstance(metadata, dict) and metadata:
             entry["metadata"] = dict(metadata)
         self.lessons.append(entry)
@@ -549,9 +614,15 @@ class ExperienceMemory:
 
     # --------------------------------------------------------------- avoid
 
-    def add_avoid(self, direction, reason, source_round):
+    def add_avoid(self, direction, reason, source_round, source_key=None):
+        semantic = {"direction": direction, "reason": reason,
+                    "source_round": source_round}
+        replay = self._source_replay(source_key, "avoid", semantic)
+        if replay is not None:
+            return replay
         for item in self.avoid:
             if item.get("direction") == direction:
+                self._stamp_source(item, source_key, semantic)
                 item["reason"] = reason
                 item["source_round"] = source_round
                 item["updated"] = time.time()
@@ -564,6 +635,7 @@ class ExperienceMemory:
             "created": time.time(),
             "updated": time.time(),
         }
+        self._stamp_source(entry, source_key, semantic)
         self.avoid.append(entry)
         return entry
 
@@ -601,11 +673,18 @@ class ExperienceMemory:
     # ---------------------------------------------------------------- next
 
     def add_next(self, idea, priority, source, round_no, fields=None, datasets=None,
-                 metadata=None):
+                 metadata=None, source_key=None):
         """Register a next experiment idea. fields/datasets make the idea
         directly actionable: the next round fetches these fields first."""
+        semantic = {"idea": idea, "priority": priority, "source": source,
+                    "round_no": round_no, "fields": sorted(set(fields or [])),
+                    "datasets": sorted(set(datasets or [])), "metadata": metadata}
+        replay = self._source_replay(source_key, "next", semantic)
+        if replay is not None:
+            return replay
         for item in self.next:
             if item.get("idea") == idea:
+                self._stamp_source(item, source_key, semantic)
                 item["priority"] = max(item.get("priority", 0), priority)
                 item["source"] = source
                 if fields:
@@ -624,6 +703,7 @@ class ExperienceMemory:
             "round": round_no,
             "created": time.time(),
         }
+        self._stamp_source(entry, source_key, semantic)
         if fields:
             entry["fields"] = sorted(set(fields))
         if datasets:
@@ -675,7 +755,8 @@ class ExperienceMemory:
         return (self.lineages.get(lineage_id) or {}).get("decision", "CONTINUE")
 
     def record_lineage_result(self, lineage_id, score, label, round_no,
-                              counts_toward_stop=True):
+                              counts_toward_stop=True, source_key=None,
+                              experiment_id=None):
         """Update CONTINUE / STOP / KILL from resolved research evidence.
 
         A material score improvement earns another experiment.  Two resolved,
@@ -694,6 +775,53 @@ class ExperienceMemory:
         entry = self.lineages.setdefault(lineage_id, {
             "best_score": None, "no_gain_streak": 0, "decision": "CONTINUE",
         })
+        if source_key:
+            records = entry.setdefault("settlement_results", [])
+            source_key = str(source_key)
+            for record in records:
+                if record.get("source_key") == source_key:
+                    return entry.get("decision", "CONTINUE")
+            record = {
+                "source_key": source_key, "experiment_id": experiment_id,
+                "score": score, "label": label, "round": round_no,
+                "counts_toward_stop": bool(counts_toward_stop),
+            }
+            replaced = False
+            if experiment_id:
+                for index, previous in enumerate(records):
+                    if previous.get("experiment_id") == experiment_id:
+                        records[index] = record
+                        replaced = True
+                        break
+            if not replaced:
+                records.append(record)
+            # Bound only opaque replay metadata and rebuild the reducer so a
+            # revised final settlement replaces, rather than double-counts.
+            del records[:-self.max_lineages]
+            best_score = None
+            no_gain = 0
+            decision = "CONTINUE"
+            for item in records:
+                item_score = item.get("score")
+                if item_score is not None and (
+                    best_score is None or item_score > best_score + 0.05
+                ):
+                    best_score = item_score
+                    no_gain = 0
+                    decision = "CONTINUE"
+                elif item.get("counts_toward_stop"):
+                    no_gain += 1
+                    decision = (
+                        "KILL" if no_gain >= 3
+                        else "STOP" if no_gain >= 2
+                        else decision
+                    )
+            entry["best_score"] = best_score
+            entry["no_gain_streak"] = no_gain
+            entry["decision"] = decision
+            entry["last_label"] = label
+            entry["last_round"] = round_no
+            return decision
         best = entry.get("best_score")
         improved = score is not None and (best is None or score > best + 0.05)
         if improved:
@@ -737,10 +865,16 @@ class ExperienceMemory:
         return entry
 
     def mark_hypothesis(self, hyp_id, verdict, round_no, outcome=None,
-                        confirmation=None):
+                        confirmation=None, source_key=None):
         """Keep legacy execution status and a separate research outcome."""
         for entry in self.active_hypotheses:
             if entry["id"] == hyp_id:
+                semantic = {"hyp_id": hyp_id, "verdict": verdict,
+                            "round_no": round_no, "outcome": outcome,
+                            "confirmation": confirmation}
+                replay = self._source_replay(source_key, "hypothesis", semantic)
+                if replay is not None:
+                    return replay
                 entry["status"] = verdict
                 entry["last_verdict"] = verdict
                 if outcome in {"SUPPORTED", "CONTRADICTED", "INCONCLUSIVE"}:
@@ -761,6 +895,7 @@ class ExperienceMemory:
                         elif isinstance(value, str):
                             entry[key] = value
                 entry["last_round"] = round_no
+                self._stamp_source(entry, source_key, semantic)
                 return entry
         return None
 

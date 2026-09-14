@@ -5,6 +5,7 @@ READ WHEN: changing experiment serialization, trajectory, or checkpoints.
 DO NOT USE FOR: treating derived memory as immutable platform truth.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -69,6 +70,34 @@ def same_execution_identity(left, right):
     } == {
         key: identity_value(right, key) for key in IDENTITY_FIELDS
     }
+
+
+def research_settlement_identity(experiment):
+    """Return the stable identity shared by all derived settlement projections.
+
+    The TrialLedger settlement id wins when present.  Older/partial rows fall
+    back to the Experiment id plus a canonical final-outcome version; neither
+    timestamps nor expressions are identities.
+    """
+    final = getattr(experiment, "final_outcome", None)
+    if not isinstance(final, dict):
+        final = {}
+    settlement_id = final.get("settlement_id")
+    if not settlement_id and isinstance(final.get("settlement"), dict):
+        settlement_id = final["settlement"].get("settlement_id")
+    if settlement_id:
+        return f"settlement:{settlement_id}"
+    version = final.get("outcome_version") or final.get("version") or "v1"
+    semantic = {
+        key: value for key, value in final.items()
+        if key not in {"settled_at", "timestamp", "updated_at"}
+    }
+    digest = hashlib.sha256(
+        json.dumps(semantic, sort_keys=True, ensure_ascii=False, default=str,
+                   separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:16]
+    experiment_id = getattr(experiment, "id", None) or "unknown-experiment"
+    return f"experiment:{experiment_id}:outcome:{version}:{digest}"
 
 
 def json_literal_prefilter(value):

@@ -37,7 +37,7 @@ Agent → SuggestionWorkflow / ProposalExecutionWorkflow / AlphaFeedWorkflow / O
 | Remote reconciliation observation | `scripts/reconcile_pending.py` | 只读 GET/poll/get-alpha；不写 canonical research state |
 | Completed-state archive | `scripts/archive_completed_rounds.py` | 只移动 `CheckpointStore.scan()` 已验证的 complete checkpoint |
 | Historical projection audit | `workspace_snapshot.py` → `audit.py` | 只报告 duplicate remote execution projection，不自动修复 |
-| Compressed memory | `ExperienceMemory` | lessons、avoid、next、bounded short-term experience |
+| Compressed memory | `ExperienceMemory` | lessons、avoid、next、bounded short-term experience；派生 settlement 使用可选稳定 `source_key` 幂等投影 |
 | Optimization | `OptimizerWorkflow` | 只筛已有 DONE evidence，消费 Agent-authored decision |
 | Optimization read surface | `optimization_interfaces.py` | 只读 Alpha detail、aggregates、allow-listed PnL、correlation；不拥有状态 |
 | Alpha Feed | `AlphaFeedWorkflow` | 只读远端轻量 metadata，不恢复 metrics |

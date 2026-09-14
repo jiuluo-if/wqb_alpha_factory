@@ -30,6 +30,22 @@ def audit_state(state_dir, *, snapshot=None, lifecycle_persistent=True):
             findings.append(finding)
 
     trajectory_summary = snapshot.trajectory
+    replay = snapshot.replay
+    if replay.duplicate_memory_sources:
+        record("DUPLICATE_MEMORY_SETTLEMENT_SOURCE", "experience_memory",
+               source_hashes=list(replay.duplicate_memory_sources))
+    if replay.lineage_replay_double_counts:
+        record("LINEAGE_REPLAY_DOUBLE_COUNT", "experience_memory.lineages",
+               lineage_hashes=list(replay.lineage_replay_double_counts))
+    if replay.duplicate_round_recaps:
+        record("ROUND_RECAP_DUPLICATE_SOURCE", "experience_memory",
+               source_hashes=list(replay.duplicate_round_recaps))
+    if replay.memory_source_conflicts:
+        record("MEMORY_SETTLEMENT_CONFLICT", "experience_memory",
+               source_hashes=list(replay.memory_source_conflicts))
+    if replay.legacy_unverifiable_entries:
+        record("LEGACY_MEMORY_REPLAY_UNVERIFIABLE", "experience_memory",
+               severity="WARN", entries=replay.legacy_unverifiable_entries)
     trajectory_ids = set(trajectory_summary.trajectory_ids)
     observed_committed = set(trajectory_summary.observed_committed)
     observed_submitted = set(trajectory_summary.observed_submitted)

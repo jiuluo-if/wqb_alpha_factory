@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -91,6 +92,15 @@ class SubmissionPoolSummary:
 
 
 @dataclass(frozen=True)
+class ReplayAuditSummary:
+    duplicate_memory_sources: tuple = ()
+    memory_source_conflicts: tuple = ()
+    lineage_replay_double_counts: tuple = ()
+    duplicate_round_recaps: tuple = ()
+    legacy_unverifiable_entries: int = 0
+
+
+@dataclass(frozen=True)
 class TrajectorySummary:
     """Experiment/result/dedupe projection; TrialLedger owns lifecycle facts."""
 
@@ -141,6 +151,7 @@ class WorkspaceSnapshot:
     current_best: object = None
     evidence_cache_entries: int = 0
     unresolved_submission_identity_collisions: int = 0
+    replay: ReplayAuditSummary = ReplayAuditSummary()
 
     @property
     def unfinished_checkpoint_paths(self):
@@ -584,6 +595,56 @@ def _submission_pool_summary(payload):
     return SubmissionPoolSummary(tuple(identities), unverifiable, tuple(identity_sources))
 
 
+def _opaque_replay_id(value):
+    return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:16]
+
+
+def _replay_summary(experience):
+    if not isinstance(experience, dict):
+        return ReplayAuditSummary()
+    source_rows = []
+    legacy = 0
+    for kind in ("short_term", "lessons", "avoid", "next", "active_hypotheses"):
+        for row in experience.get(kind) or []:
+            if not isinstance(row, dict):
+                continue
+            source = row.get("source_key")
+            if source:
+                source_rows.append((str(source), kind, row.get("_source_semantic")))
+            else:
+                legacy += 1
+    by_source = {}
+    for source, kind, semantic in source_rows:
+        by_source.setdefault(source, []).append((kind, semantic))
+    duplicate = []
+    conflicts = []
+    for source, rows in by_source.items():
+        if len(rows) > 1:
+            opaque = _opaque_replay_id(source)
+            duplicate.append(opaque)
+            if len({(kind, semantic) for kind, semantic in rows}) > 1:
+                conflicts.append(opaque)
+    lineage_double = []
+    for lineage_id, lineage in (experience.get("lineages") or {}).items():
+        if not isinstance(lineage, dict):
+            continue
+        keys = [row.get("source_key") for row in lineage.get("settlement_results") or []
+                if isinstance(row, dict) and row.get("source_key")]
+        if len(keys) != len(set(keys)):
+            lineage_double.append(_opaque_replay_id(lineage_id))
+    recap_keys = [source for source, kind, _ in source_rows if kind == "short_term"
+                  and source.endswith(":recap")]
+    duplicate_recaps = [
+        _opaque_replay_id(source) for source in set(recap_keys)
+        if recap_keys.count(source) > 1
+    ]
+    return ReplayAuditSummary(
+        tuple(sorted(set(duplicate))), tuple(sorted(set(conflicts))),
+        tuple(sorted(set(lineage_double))), tuple(sorted(set(duplicate_recaps))),
+        legacy,
+    )
+
+
 def read_workspace_snapshot(state_dir):
     """Read checkpoint and trajectory facts once for one command lifecycle."""
     state_dir = os.fspath(state_dir)
@@ -597,6 +658,7 @@ def read_workspace_snapshot(state_dir):
     proposals = payloads.get("proposals.json")
     experience = payloads.get("experience.json")
     evidence_cache = payloads.get("evidence_cache.json")
+    replay = _replay_summary(experience)
     unresolved_identities = store.unresolved_submission_identities(
         records=checkpoint_records
     )
@@ -620,4 +682,5 @@ def read_workspace_snapshot(state_dir):
         unresolved_submission_identity_collisions=sum(
             1 for entries in unresolved_identities.values() if len(entries) > 1
         ),
+        replay=replay,
     )

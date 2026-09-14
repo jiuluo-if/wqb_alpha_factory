@@ -80,6 +80,16 @@ DIRECT_TESTS = {
         "tests/test_trajectory_batch_reads.py",
         "tests/test_factory_provenance_persistence.py",
     ),
+    "wqb_agent/memory.py": (
+        "tests/test_memory_tiers.py",
+        "tests/test_agent_evaluation.py",
+        "tests/test_replay_idempotency.py",
+    ),
+    "wqb_agent/reflection.py": (
+        "tests/test_memory_tiers.py",
+        "tests/test_agent_evaluation.py",
+        "tests/test_replay_idempotency.py",
+    ),
     "wqb_agent/proposal_execution.py": (
         "tests/test_proposal_execution.py",
         "tests/test_proposal_safety.py",
