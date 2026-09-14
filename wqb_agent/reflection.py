@@ -20,7 +20,6 @@ sign mismatch) do not block SUCCESS on their own.
 import re
 
 from .evidence import overlay_cached_checks
-from .expression import canonical_expression
 from .failures import (
     classify_experiment,
     is_research_relevant,
@@ -30,6 +29,12 @@ from .reflection_evaluation import (
     categorize_check,
     diagnosis_from,
     quality_gate,
+)
+from .reflection_learning import (
+    direction_key,
+    experiment_score,
+    independence_blocker,
+    interpretation,
 )
 from .research_guard import (
     is_direction_only_change,
@@ -368,14 +373,14 @@ class Reflector:
 
     @staticmethod
     def _direction_key(exp):
-        return exp.expression[:80]
+        return direction_key(exp)
 
     # --------------------------------------------------------------- best
 
     @staticmethod
     def _exp_score(exp):
         """实验统一评分（复用 metrics.score_of，只算有指标的实验）。"""
-        return score_of((exp.metrics or {}) or None)
+        return experiment_score(exp)
 
     def _update_best(self, results, validation_candidates=None):
         done = [
@@ -512,42 +517,7 @@ class Reflector:
 
     @staticmethod
     def _interpretation(hypothesis):
-        value = hypothesis.get("agent_interpretation")
-        if not isinstance(value, dict):
-            return None
-        outcome = str(value.get("outcome") or "").upper()
-        learning = value.get("mechanism_learning")
-        refs = value.get("evidence_refs")
-        if (
-            outcome not in HYPOTHESIS_OUTCOMES
-            or not isinstance(learning, str)
-            or not learning.strip()
-            or not isinstance(refs, list)
-            or not refs
-            or not all(isinstance(ref, (str, int)) and str(ref).strip() for ref in refs)
-        ):
-            return None
-        normalized = dict(value)
-        normalized["outcome"] = outcome
-        normalized["evidence_refs"] = [str(ref) for ref in refs]
-        if (
-            "direct_relevance" in normalized
-            and not isinstance(normalized["direct_relevance"], bool)
-        ):
-            return None
-        for key in _LEARNING_METADATA_KEYS:
-            if key not in normalized:
-                continue
-            expected = list if key in {"competing_explanations", "evidence_needed"} else str
-            if expected is list:
-                if (
-                    not isinstance(normalized[key], list)
-                    or not all(isinstance(item, str) and item.strip() for item in normalized[key])
-                ):
-                    return None
-            elif not isinstance(normalized[key], str) or not normalized[key].strip():
-                return None
-        return normalized
+        return interpretation(hypothesis, HYPOTHESIS_OUTCOMES)
 
     def _metrics_view(self, exp):
         metrics = exp.metrics or {}
@@ -600,14 +570,7 @@ class Reflector:
 
     @staticmethod
     def _independence_blocker(first, second):
-        first_expression = canonical_expression(first.expression)
-        second_expression = canonical_expression(second.expression)
-        if first_expression and first_expression == second_expression:
-            return "duplicate expression is not independent evidence"
-        if parameter_only_change_reason(first.expression, second.expression):
-            return "parameter-only expression variants are not independent evidence"
-        if is_direction_only_change(first.expression, second.expression):
-            return "direction-only expression variants are not independent evidence"
+        return independence_blocker(first, second)
         for exp in (first, second):
             parent = getattr(exp, "parent_expression", None)
             if not isinstance(parent, str) or not parent.strip():

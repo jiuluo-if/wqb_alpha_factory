@@ -149,6 +149,31 @@ class ArchitectureDependencyContracts(unittest.TestCase):
                 f"{path} imports forbidden modules: {sorted(forbidden & dependencies)}",
             )
 
+    def test_research_kernels_do_not_own_clients_or_durable_state(self):
+        paths = (
+            "wqb_agent/field_metadata.py",
+            "wqb_agent/field_catalog.py",
+            "wqb_agent/discovery_selection.py",
+            "wqb_agent/memory_codec.py",
+            "wqb_agent/memory_policy.py",
+            "wqb_agent/reflection_evaluation.py",
+            "wqb_agent/reflection_learning.py",
+            "wqb_agent/optimizer_selection.py",
+            "wqb_agent/client_transport.py",
+        )
+        imports = _package_imports(paths)
+        forbidden = {
+            "wqb_agent.agent", "wqb_agent.client", "wqb_agent.memory",
+            "wqb_agent.reflection", "wqb_agent.optimizer_workflow",
+            "requests",
+        }
+        for path, dependencies in imports.items():
+            self.assertTrue(
+                forbidden.isdisjoint(dependencies),
+                f"{path} imports forbidden owner/transport modules: "
+                f"{sorted(forbidden & dependencies)}",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

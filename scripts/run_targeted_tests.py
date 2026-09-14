@@ -79,6 +79,9 @@ DIRECT_TESTS = {
         "tests/test_runtime_composition.py",
         "tests/test_architecture_contracts.py",
     ),
+    "tests/test_architecture_contracts.py": (
+        "tests/test_architecture_contracts.py",
+    ),
     "wqb_agent/proposal_admission.py": (
         "tests/test_execution_identity.py",
         "tests/test_proposal_execution.py",
