@@ -25,6 +25,8 @@
 
 自主 factory 的优化层/探索层只写入当前 `proposals.json` 的审计字段和 `factory_batch_stats`，不新增状态文件；云端优先级仍来自 `.alpha_feed_cache/weekly.json` 的轻量 ID/时间戳，优化证据仍必须来自当前进程的完成记录和后续 live API。
 
+架构现代化新增的纯模块（语义、关系、机制文本、规划、证据、终态、恢复、拒绝统计和路由投影）不写入本布局中的任何 canonical 文件；它们只接收既有 owner 的输入并返回派生值，不能成为第二个 state、checkpoint、Trajectory、ledger 或 cache owner。
+
 ## 四种不可混用的身份
 
 | 身份 | 权威 owner | 用途 |

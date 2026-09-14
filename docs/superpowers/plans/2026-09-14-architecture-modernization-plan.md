@@ -21,7 +21,7 @@
 
 ---
 
-### Task 1: 建立 architecture contract 与 baseline tooling
+### Task 1: 建立 architecture contract 与 baseline tooling — DONE
 
 **Files:**
 - Create: `tests/test_architecture_contracts.py`
@@ -38,7 +38,7 @@
 - [ ] 运行 `python scripts/run_targeted_tests.py --files tests/test_architecture_contracts.py scripts/run_targeted_tests.py docs/TESTING.md`。
 - [ ] 提交 `test：建立架构依赖契约` 并推送。
 
-### Task 2: 提取 Agent 的纯规划与 projection 领域能力
+### Task 2: 提取 Agent 的纯规划与 projection 领域能力 — DONE
 
 **Files:**
 - Create: `wqb_agent/research_planning.py`
@@ -58,7 +58,7 @@
 - [ ] 运行 `python scripts/run_targeted_tests.py --files wqb_agent/agent.py wqb_agent/research_planning.py wqb_agent/evidence_projection.py`、`py_compile` 和 Ruff。
 - [ ] 提交 `refactor：抽离Agent领域规划与证据投影` 并推送。
 
-### Task 3: 模块化 AlphaFactory
+### Task 3: 模块化 AlphaFactory — PARTIAL / semantic and relationship extractions DONE
 
 **Files:**
 - Create: `wqb_agent/alpha_semantics.py`
@@ -79,7 +79,7 @@
 - [ ] 运行四个 factory subsystem 测试文件和 architecture contract。
 - [ ] 运行 changed-file `py_compile`、Ruff；提交 `refactor：模块化AlphaFactory领域能力` 并推送。
 
-### Task 4: 分解 ProposalExecutionWorkflow 内部阶段
+### Task 4: 分解 ProposalExecutionWorkflow 内部阶段 — PARTIAL / terminal and recovery projections DONE
 
 **Files:**
 - Create: `wqb_agent/proposal_admission.py`
@@ -101,7 +101,7 @@
 - [ ] 检查新模块没有 `Agent`、直接 client POST、第二 checkpoint/trajectory writer。
 - [ ] 运行 targeted runner、`py_compile`、Ruff 和受影响 frontier 检查；提交 `refactor：分解提案执行内部阶段` 并推送。
 
-### Task 5: 隔离 FactoryRunner legacy control plane
+### Task 5: 隔离 FactoryRunner legacy control plane — PARTIAL / route policy DONE
 
 **Files:**
 - Create: `wqb_agent/factory_session.py`
@@ -123,7 +123,7 @@
 - [ ] 仅删除有零 consumer 证据的历史分支，并在 commit body/文档记录 replacement。
 - [ ] 运行 factory subsystem targeted lane、语法检查和 Ruff；提交 `refactor：隔离legacy工厂控制面` 并推送。
 
-### Task 6: 清理 public surface、重复测试、脚本并升级文档
+### Task 6: 清理 public surface、重复测试、脚本并升级文档 — PARTIAL / docs and metrics DONE; deletion candidates retained with evidence
 
 **Files:**
 - Modify: `wqb_agent/__init__.py`

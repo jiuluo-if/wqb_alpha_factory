@@ -24,6 +24,42 @@ RuntimeComponents
 Agent → SuggestionWorkflow / ProposalExecutionWorkflow / AlphaFeedWorkflow / OptimizerWorkflow
 ```
 
+架构现代化后的纯领域投影位于 workflow 之前：`research_planning.py` 负责已解析输入的研究空间/假设组装，`evidence_projection.py` 负责严格质量与 correlation gate，`alpha_semantics.py` 负责字段语义 traits，`alpha_relationships.py` 负责字段关系与频率准入，`alpha_assembly.py` 负责字段机制文本组装，`terminal_evidence.py`/`execution_recovery.py` 负责终态证据和 checkpoint 合并，`proposal_admission.py` 负责提案拒绝统计，`factory_route.py` 负责 legacy route episode 决策。它们均不拥有状态、不调用远端写操作；旧 facade 只委托 canonical 函数。
+
+## 本轮架构审计结果（2026-09-14）
+
+| 指标 | before | after |
+|---|---:|---:|
+| production Python files | 76 | 84 |
+| production LOC | 29,951 | 30,217 |
+| test Python files | 84 | 91 |
+| test LOC | 24,022 | 24,275 |
+| `Agent` LOC / methods | 1,727 / 80 | 1,651 / 79 |
+| `AlphaFactory` LOC / methods | 2,181 / 35 | 1,822 / 31 |
+| `ProposalExecutionWorkflow` LOC / methods | 1,404 / 29 | 1,370 / 29 |
+| `AIFactoryRunner` LOC / methods | 2,024 / 57 | 1,948 / 56 |
+| import cycles | 0 | 0 |
+
+新增文件数增加是因为纯职责被拆成可独立测试的模块；本轮未删除 production/test/script 文件，也未删除任何安全 invariant。`CandidateBuilder`、`diagnostics.py`、`smoke.py` 和 legacy public surface 仍有当前 consumer，继续保留为 compatibility/operational code。
+
+## 已完成的提取
+
+- `alpha_factory.py` → `alpha_semantics.py`：字段语义 profile；`AlphaFactory` 通过 canonical alias 复用。
+- `alpha_factory.py` → `alpha_relationships.py`：关系标签、频率 bucket/compatibility、关系类型。
+- `alpha_factory.py` → `alpha_assembly.py`：字段机制说明与关系证据文本组装。
+- `agent.py` → `research_planning.py`：研究空间、best iteration、探索 seed 的纯组装。
+- `agent.py` → `evidence_projection.py`：严格 correlation gate 与质量 rating。
+- `proposal_execution.py` → `terminal_evidence.py`、`execution_recovery.py`：终态证据判定、失败分类、canonical recovery merge。
+- `proposal_execution.py` → `proposal_admission.py`：有界拒绝原因统计。
+- `factory_runner.py` → `factory_route.py`：route episode information-gain decision；runner 仍是兼容 facade。
+
+## Remaining architecture debt
+
+- `discovery.py`、`memory.py` 和 `factory_runner.py` 仍较大：它们同时承载现有持久化/兼容 consumer，下一刀需要先建立更细 owner contract，不能只按行数拆。
+- `alpha_factory.py` 仍包含 feasibility、candidate assembly 和 optimization screening；这些部分共享 template registry、prepared-facts memo 与 proposal provenance，下一阶段应先以纯输入/输出 contract 测试隔离，再移动实现。
+- `proposal_execution.py` 仍包含 admission、durable identity binding 和 manual recovery mutation；这些路径共同维护 exactly-once fence，当前只提取了无状态阶段，避免产生第二 owner。
+- 本轮没有足够证据安全删除脚本或 public compatibility symbols；后续删除必须继续满足零 imports/CLI/docs/tests/`__all__`/dynamic references。
+
 `RuntimeComponents` 只创建一次 memory、trajectory、ledger、discovery、simulator、checkpoint 和 cache；workflow 不反向导入 Agent，不重新创建这些 owner。
 
 ## Owner 与写路径

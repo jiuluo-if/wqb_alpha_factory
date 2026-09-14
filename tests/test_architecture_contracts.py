@@ -61,6 +61,8 @@ class ArchitectureDependencyContracts(unittest.TestCase):
             "wqb_agent/metrics.py",
             "wqb_agent/pre_correlation.py",
             "wqb_agent/research_guard.py",
+            "wqb_agent/alpha_assembly.py",
+            "wqb_agent/proposal_admission.py",
         )
         imports = _package_imports(domain_paths)
         forbidden = {"wqb_agent.agent", "wqb_agent.client", "wqb_agent.simulator"}

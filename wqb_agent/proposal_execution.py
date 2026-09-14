@@ -20,6 +20,7 @@ from .diversity import extract_fields, is_redundant
 from .execution_recovery import merge_checkpoint_with_trajectory
 from .expression import canonical_expression, submission_fingerprint
 from .identity import candidate_identity
+from .proposal_admission import rejection_reason_counts
 from .proposal_contract import (
     FACTORY_BATCH_SIZE,
     MAX_TARGETED_PROPOSALS,
@@ -125,15 +126,9 @@ class ProposalExecutionWorkflow:
     def _rejection_reason_counts(rejected, skipped, diversity_rejected,
                                  settings_rejected, budget_rejected):
         """Return a bounded transient histogram using existing public categories."""
-        return {
-            key: count for key, count in {
-                "PREFLIGHT_REJECTED": len(rejected),
-                "DUPLICATE_LOCAL": len(skipped),
-                "DIVERSITY_REJECTED": len(diversity_rejected),
-                "INVALID_SETTINGS": len(settings_rejected),
-                "BATCH_CAP": len(budget_rejected),
-            }.items() if count
-        }
+        return rejection_reason_counts(
+            rejected, skipped, diversity_rejected, settings_rejected, budget_rejected
+        )
 
     @property
     def _ctx(self):

@@ -63,6 +63,14 @@ DIRECT_TESTS = {
         "tests/test_factory_relationship_gate.py",
         "tests/test_factory_mechanism_selection.py",
     ),
+    "wqb_agent/alpha_assembly.py": (
+        "tests/test_alpha_assembly.py",
+        "tests/test_factory_mechanism_selection.py",
+    ),
+    "wqb_agent/proposal_admission.py": (
+        "tests/test_proposal_execution.py",
+        "tests/test_proposal_safety.py",
+    ),
     "wqb_agent/discovery.py": (
         "tests/test_discovery.py",
         "tests/test_discovery_selection.py",

@@ -17,6 +17,8 @@
 
 已删除的 report、ledger、schema enhance、memory maintenance 和一次性导入脚本不再是当前工程入口；完整历史由 Git 保留，研究事实仍从 `.wqb_state` 和 BRAIN 获取。
 
+架构审计的依赖契约由 `tests/test_architecture_contracts.py` 保护；新增生产模块必须先加入 `scripts/run_targeted_tests.py` 的显式测试映射。该审计只使用 stdlib AST，不读取真实研究 payload，也不触发远端写操作。
+
 ```powershell
 python scripts/reconcile_pending.py --state-dir .wqb_state
 python scripts/validate_integrity.py

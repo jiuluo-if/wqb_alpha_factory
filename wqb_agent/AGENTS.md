@@ -16,7 +16,7 @@
 
 ## 稳定架构边界
 
-当前 package 边界已冻结：`runtime_components.py` 只拥有基础对象，`runtime_composition.py` 只负责 wiring，四个 Agent workflow 不反向导入 Agent；`AlphaColorWorkflow` 是独立的显式远端颜色写 owner。生产 Simulation 只能沿 `Agent.run_proposals()` → `ProposalExecutionWorkflow` → `Simulator` → `WQBClient`，旧 `WQBClient.run_simulation()` 无生产调用。Optimizer 只消费 local `Trajectory` evidence，cloud cache 只能提供 metadata priority；审计 JSONL 无 owner lock 时明确为 best-effort。后续只因具体 feature/bug 或新的证据触碰边界，并同步测试、架构文档和完整质量门；不要新增 workflow/state/config abstraction 或继续拆 Agent 私有层。
+当前 package 边界按 `domain → state → mechanisms → workflows → runtime composition → facade/CLI` 收敛：`runtime_components.py` 只拥有基础对象，`runtime_composition.py` 只负责 wiring，四个 Agent workflow 不反向导入 Agent；`AlphaColorWorkflow` 是独立的显式远端颜色写 owner。生产 Simulation 只能沿 `Agent.run_proposals()` → `ProposalExecutionWorkflow` → `Simulator` → `WQBClient`，旧 `WQBClient.run_simulation()` 无生产调用。Optimizer 只消费 local `Trajectory` evidence，cloud cache 只能提供 metadata priority；审计 JSONL 无 owner lock 时明确为 best-effort。模块化允许新增单职责纯组件，但不得新增第二套 workflow/state/config abstraction 或继续制造 Agent 私有 forwarding。
 
 ## 职责
 
@@ -24,6 +24,7 @@
 - `metrics.py`、`expression.py`、`artifacts.py`、`locking.py` 和 failure helpers 是共享安全/序列化原语。
 - `search*`、`validation*`、`robustness.py`、`incremental_value.py`、`memory.py`、`submission.py` 是内部评估或 workspace 视图。
 - `factory_runner.py` 是兼容/legacy control plane，不是默认 Agent mental model。
+- `alpha_semantics.py`、`alpha_relationships.py`、`alpha_assembly.py`、`research_planning.py`、`evidence_projection.py`、`terminal_evidence.py`、`execution_recovery.py`、`proposal_admission.py` 和 `factory_route.py` 只提供无状态领域/控制投影；它们不得拥有 canonical state、网络写入或 workflow 编排。
 
 `SuggestionWorkflow` 是 suggestion round 的唯一编排 owner：它负责 discovery fallback、suggestion bundle 组装、`suggestions.json` emission 和既有控制台输出；`Agent` 只保留高层研究规划 hooks 与兼容 facade。Workflow 通过显式依赖和窄 operation-shaped hooks 工作，不反向导入 `Agent`，不直接依赖 `Client`/`Simulator`/checkpoint，也不复制 `_last_round_skipped` 或 `memory.best_exhausted`。
 

@@ -8,7 +8,7 @@
 - 当前唯一生产 Simulation 写链是 `Agent.run_proposals()` → `ProposalExecutionWorkflow` → `Simulator` → `WQBClient`；`WQBClient.run_simulation()` 仅保留旧库兼容且无生产调用。
 - `Trajectory`、`TrialLedger`、`CheckpointStore`、`ExperienceMemory`、`DailyResearchCache`、`WeeklyAlphaFeedCache` 各自只有一个 owner；`SUBMIT_UNKNOWN`、checkpoint exactly-once、UNKNOWN/UNAVAILABLE 不升 PASS、手工 Alpha submission 和 deterministic credentials 均为冻结 contract。
 - Optimizer 只从 local `Trajectory` 取得 DONE evidence；Alpha Feed cache 仅作 cloud metadata priority，不能恢复 metrics。`append_jsonl_best_effort` 无 lock 时只保证 best-effort，强唯一性由 owner lock 提供。
-- 后续仅接受具体 feature、bug fix 或有证据的局部维护。触碰冻结边界必须增加行为/回归测试、更新 [`docs/ARCHITECTURE_AGENT.md`](docs/ARCHITECTURE_AGENT.md)、通过完整质量门并说明 owner 变化；不得新增 workflow/state model/config abstraction 或让编排重新堆回 Agent。
+- 当前进入架构现代化阶段：允许有证据的模块化、legacy 隔离和测试治理；触碰冻结边界必须增加行为/回归测试、更新 [`docs/ARCHITECTURE_AGENT.md`](docs/ARCHITECTURE_AGENT.md)、通过完整质量门并说明 owner 变化。仍不得新增第二套 workflow/state model/config abstraction 或让编排重新堆回 Agent。
 
 ## 30 秒安全接管
 
