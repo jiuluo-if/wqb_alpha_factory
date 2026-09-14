@@ -9,9 +9,10 @@ from dataclasses import dataclass
 
 from .artifacts import iter_jsonl_objects
 from .checkpoints import CheckpointStore
+from .expression import canonical_expression
 from .schema import TRAJECTORY_VERSION, TRIAL_LEDGER_VERSION, VALIDATION_VERSION
 from .state import Trajectory, same_execution_identity
-from .trial_ledger import LIFECYCLE_PHASE_INDEX, PHASES
+from .trial_ledger import LIFECYCLE_PHASE_INDEX, PHASES, TrialLedger
 
 _CHECKPOINT_NAME = re.compile(r"round_\d+\.checkpoint\.json")
 _FIXED_ARTIFACT_NAMES = (
@@ -70,6 +71,7 @@ class LedgerSummary:
     missing_alpha_id_rows: int = 0
     simulation_submitted: frozenset = frozenset()
     unsupported_schema_rows: int = 0
+    lifecycle_identity_drift: dict = None
 
 
 @dataclass(frozen=True)
@@ -113,6 +115,7 @@ class TrajectorySummary:
     observed_simulation_submitted: frozenset = frozenset()
     unsupported_schema_rows: int = 0
     identity_mismatch_rows: int = 0
+    parent_identity_issues: dict = None
 
 
 @dataclass(frozen=True)
@@ -215,6 +218,7 @@ def _trajectory_summary(state_dir):
     observed_simulation_settled = set()
     observed_research_settled = set()
     identity_references = {}
+    canonical_rows = {}
     identity_mismatch_rows = 0
     summary = {
         "records": 0,
@@ -247,6 +251,7 @@ def _trajectory_summary(state_dir):
                 identity_mismatch_rows += 1
             else:
                 identity_references.setdefault(row_id, row)
+                canonical_rows[row_id] = row
         proposal_id = row.get("proposal_id")
         phase = row.get("phase")
         _observe_lifecycle(
@@ -271,6 +276,33 @@ def _trajectory_summary(state_dir):
                 summary["duplicate_observed_settlements"] += 1
             elif settlement_id:
                 observed_settlement_ids.add(str(settlement_id))
+    parent_issues = {}
+    done_by_expression = {}
+    for row in canonical_rows.values():
+        if row.get("status") == "DONE" and isinstance(row.get("metrics"), dict) and row.get("metrics"):
+            done_by_expression.setdefault(
+                canonical_expression(row.get("expression", "")), []
+            ).append(row)
+    for row in canonical_rows.values():
+        stage = str(row.get("experiment_stage") or "").upper()
+        if stage not in {"CHILD", "ROBUSTNESS"} and not row.get("parent_id"):
+            continue
+        parent_id = row.get("parent_id")
+        parent = canonical_rows.get(str(parent_id)) if parent_id not in (None, "") else None
+        if parent_id not in (None, ""):
+            if parent is None:
+                parent_issues["PARENT_NOT_FOUND"] = parent_issues.get("PARENT_NOT_FOUND", 0) + 1
+                continue
+            if parent.get("status") != "DONE" or not isinstance(parent.get("metrics"), dict) or not parent.get("metrics"):
+                parent_issues["PARENT_NOT_DONE"] = parent_issues.get("PARENT_NOT_DONE", 0) + 1
+            if canonical_expression(row.get("parent_expression", "")) != canonical_expression(parent.get("expression", "")):
+                parent_issues["PARENT_EXPRESSION_MISMATCH"] = parent_issues.get("PARENT_EXPRESSION_MISMATCH", 0) + 1
+        elif stage in {"CHILD", "ROBUSTNESS"}:
+            candidates = done_by_expression.get(canonical_expression(row.get("parent_expression", "")), [])
+            if len(candidates) > 1:
+                parent_issues["PARENT_REFERENCE_AMBIGUOUS"] = parent_issues.get("PARENT_REFERENCE_AMBIGUOUS", 0) + 1
+            elif not candidates:
+                parent_issues["PARENT_NOT_FOUND"] = parent_issues.get("PARENT_NOT_FOUND", 0) + 1
     return TrajectorySummary(
         records=summary["records"],
         latest_round=summary["latest_round"],
@@ -294,6 +326,7 @@ def _trajectory_summary(state_dir):
         observed_simulation_submitted=frozenset(observed_simulation_submitted),
         unsupported_schema_rows=lifecycle_stats["unsupported_schema_rows"],
         identity_mismatch_rows=identity_mismatch_rows,
+        parent_identity_issues=parent_issues,
     )
 
 
@@ -381,6 +414,7 @@ def _ledger_summary(path):
     settlement_ids = set()
     duplicate_settlements = 0
     lifecycle_stats = _new_lifecycle_stats()
+    lifecycle_rows = {}
     read_stats = {}
     for row in iter_jsonl_objects(path, stats=read_stats):
         _observe_lifecycle(
@@ -400,6 +434,9 @@ def _ledger_summary(path):
             simulation_settled.add(str(proposal_id))
         if proposal_id and phase == "research_outcome_settled":
             research_settled.add(str(proposal_id))
+        if proposal_id and phase in {"simulation_committed", "simulation_submitted",
+                                     "simulation_settled", "submitted", "completed"}:
+            lifecycle_rows.setdefault(str(proposal_id), []).append(row)
         if phase != "research_outcome_settled":
             continue
         settlement_id = (row.get("settlement") or {}).get("settlement_id")
@@ -410,6 +447,10 @@ def _ledger_summary(path):
             duplicate_settlements += 1
         else:
             settlement_ids.add(settlement_id)
+    drift = {}
+    for rows in lifecycle_rows.values():
+        for code in TrialLedger._lifecycle_identity(rows).get("drift") or ():
+            drift[code] = drift.get(code, 0) + 1
     return LedgerSummary(
         committed=frozenset(committed),
         submitted=frozenset(submitted),
@@ -425,6 +466,7 @@ def _ledger_summary(path):
         missing_alpha_id_rows=lifecycle_stats["missing_alpha_id_rows"],
         simulation_submitted=frozenset(simulation_submitted),
         unsupported_schema_rows=lifecycle_stats["unsupported_schema_rows"],
+        lifecycle_identity_drift=drift,
     )
 
 

@@ -61,6 +61,8 @@ def audit_state(state_dir, *, snapshot=None, lifecycle_persistent=True):
             "trajectory",
             rows=trajectory_summary.identity_mismatch_rows,
         )
+    for code, count in (trajectory_summary.parent_identity_issues or {}).items():
+        record(code, "trajectory", rows=count)
     if trajectory_summary.duplicate_lifecycle_phases:
         record("duplicate_trajectory_lifecycle_phase", "trajectory",
                rows=trajectory_summary.duplicate_lifecycle_phases)
@@ -85,6 +87,8 @@ def audit_state(state_dir, *, snapshot=None, lifecycle_persistent=True):
     if ledger_summary.phase_order_violations:
         record("ledger_lifecycle_order", "trial_ledger",
                violations=[list(item) for item in ledger_summary.phase_order_violations])
+    for code, count in (ledger_summary.lifecycle_identity_drift or {}).items():
+        record(code, "trial_ledger", rows=count)
     if snapshot.validation.invalid_rows:
         record("malformed_validation_evidence", "validation_reports",
                severity="WARN", invalid_rows=snapshot.validation.invalid_rows)
@@ -119,9 +123,27 @@ def audit_state(state_dir, *, snapshot=None, lifecycle_persistent=True):
         )
     for checkpoint_record in snapshot.checkpoint_records:
         if checkpoint_record["malformed"]:
+            validation_code = checkpoint_record.get("validation_code")
+            if validation_code == "CHECKPOINT_SUBMISSION_IDENTITY_MISMATCH":
+                record("checkpoint_submission_fingerprint_mismatch", "checkpoint",
+                       round=checkpoint_record["round_no"])
+            if not checkpoint_record["checkpoint"].get("complete", False):
+                record("unverifiable_unfinished_execution_identity", "checkpoint",
+                       round=checkpoint_record["round_no"])
             record("checkpoint_unreadable", "checkpoint",
-                   path=checkpoint_record["path"])
+                   round=checkpoint_record["round_no"])
         for row in checkpoint_record["checkpoint"].get("experiments") or []:
+            if isinstance(row, dict):
+                missing_legacy = [
+                    key for key in ("candidate_id", "datasets", "created_at")
+                    if row.get(key) in (None, "", [], {})
+                ]
+                if str(row.get("experiment_stage") or "").upper() in {"CHILD", "ROBUSTNESS"}:
+                    if row.get("parent_id") in (None, ""):
+                        missing_legacy.append("parent_id")
+                if missing_legacy:
+                    record("legacy_identity_incomplete", "checkpoint",
+                           severity="WARN", round=checkpoint_record["round_no"])
             if isinstance(row, dict) and row.get("status") == "PENDING" and not row.get("proposal_id"):
                 record("phantom_reservation", "checkpoint",
                        path=checkpoint_record["path"])

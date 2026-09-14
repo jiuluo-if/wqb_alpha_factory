@@ -65,6 +65,169 @@ class TestProposalExecutionSafety(TmpStateMixin, unittest.TestCase):
             proposal["settings"] = settings
         return proposal
 
+    @staticmethod
+    def _done_parent(agent, parent_id, *, settings=None, status="DONE", metrics=None):
+        parent = Experiment(
+            1, "h-parent", "rank(close)", settings or {}, ["close"], ["pv1"],
+            id=parent_id,
+        )
+        parent.status = status
+        parent.metrics = metrics if metrics is not None else {"fitness": 1.0}
+        agent.trajectory.add(parent)
+        return parent
+
+    def _child_proposal(self, agent, *, expression, parent_id=None,
+                        parent_expression="rank(close)"):
+        proposal = self._force_round_proposal(agent)
+        proposal.update({
+            "expression": expression,
+            "research_role": "EXPLOIT",
+            "experiment_stage": "CHILD",
+            "parent_expression": parent_expression,
+            "change_type": "decay",
+            "changed_variable": "decay",
+        })
+        if parent_id is not None:
+            proposal["parent_id"] = parent_id
+        return proposal
+
+    def test_exact_parent_id_selects_same_expression_parent_and_persists(self):
+        agent, client = make_agent(self._tmp, rounds=2)
+        self._done_parent(agent, "parent-a", settings={"decay": 1})
+        self._done_parent(agent, "parent-b", settings={"decay": 2})
+        proposals = {
+            "round_no": 2,
+            "hypothesis": {"id": "h-child", "statement": "exact parent"},
+            "fields": [{"id": "returns", "dataset": "pv1", "type": "MATRIX",
+                        "description": "daily simple returns", "semantic_status": "KNOWN"}],
+            "proposals": [
+                self._child_proposal(
+                    agent, expression="rank(returns)", parent_id="parent-a"
+                ),
+                self._child_proposal(
+                    agent, expression="rank(ts_mean(returns, 5))", parent_id="parent-b"
+                ),
+            ],
+        }
+        path = os.path.join(self._tmp, "proposals.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(proposals, handle)
+
+        summary = agent.run_proposals(path)
+
+        self.assertEqual(len(client.sim_calls), 2)
+        self.assertEqual(summary["experiment_count"], 2)
+        children = {
+            experiment.expression: experiment
+            for experiment in agent.trajectory.experiments
+            if experiment.round == 2
+        }
+        self.assertEqual(children["rank(returns)"].parent_id, "parent-a")
+        self.assertEqual(
+            children["rank(ts_mean(returns, 5))"].parent_id, "parent-b"
+        )
+        restarted = Trajectory(path=agent.trajectory.path)
+        for expression, expected_parent_id in {
+            "rank(returns)": "parent-a",
+            "rank(ts_mean(returns, 5))": "parent-b",
+        }.items():
+            experiment_id = children[expression].id
+            revisions = [
+                row for row in restarted.iter_rows()
+                if row.get("id") == experiment_id
+            ]
+            self.assertGreaterEqual(len(revisions), 1)
+            self.assertTrue(all(row.get("parent_id") == expected_parent_id for row in revisions))
+            self.assertEqual(len({row.get("created_at") for row in revisions}), 1)
+
+    def test_parent_identity_failures_never_post(self):
+        agent, client = make_agent(self._tmp, rounds=2)
+        self._done_parent(agent, "parent-not-done", status="PENDING", metrics={})
+        self._done_parent(agent, "parent-good")
+        proposals = {
+            "round_no": 2,
+            "hypothesis": {"id": "h-child", "statement": "parent failures"},
+            "fields": [{"id": "returns", "dataset": "pv1", "type": "MATRIX",
+                        "description": "daily simple returns", "semantic_status": "KNOWN"}],
+            "proposals": [
+                self._child_proposal(
+                    agent, expression="rank(returns)", parent_id="missing"
+                ),
+                self._child_proposal(
+                    agent, expression="rank(ts_mean(returns, 5))", parent_id="parent-not-done"
+                ),
+                self._child_proposal(
+                    agent, expression="rank(ts_rank(returns, 5))", parent_id="parent-good",
+                    parent_expression="rank(open)",
+                ),
+            ],
+        }
+        path = os.path.join(self._tmp, "proposals.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(proposals, handle)
+
+        summary = agent.run_proposals(path)
+
+        self.assertEqual(client.sim_calls, [])
+        self.assertIsNone(summary)
+        self.assertEqual(agent.last_run_stats["accepted"], 0)
+        reasons = {
+            row.get("reason_code")
+            for row in iter_jsonl_objects(agent.trial_ledger.path)
+            if row.get("phase") == "candidate_rejected"
+        }
+        self.assertIn("PARENT_NOT_FOUND", reasons)
+        self.assertIn("PARENT_NOT_DONE", reasons)
+        self.assertIn("PARENT_EXPRESSION_MISMATCH", reasons)
+
+    def test_legacy_parent_resolution_is_unique_but_ambiguity_is_rejected(self):
+        agent, client = make_agent(self._tmp, rounds=2)
+        self._done_parent(agent, "parent-only")
+        unique = self._child_proposal(
+            agent, expression="rank(returns)", parent_expression="rank(close)"
+        )
+        unique.pop("parent_id", None)
+        proposals = {
+            "round_no": 2,
+            "hypothesis": {"id": "h-child", "statement": "legacy parent"},
+            "fields": [{"id": "returns", "dataset": "pv1", "type": "MATRIX",
+                        "description": "daily simple returns", "semantic_status": "KNOWN"}],
+            "proposals": [unique],
+        }
+        path = os.path.join(self._tmp, "proposals.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(proposals, handle)
+        summary = agent.run_proposals(path)
+        self.assertEqual(len(client.sim_calls), 1)
+        child = next(experiment for experiment in agent.trajectory.experiments if experiment.round == 2)
+        self.assertEqual(child.parent_id, "parent-only")
+
+        agent2, client2 = make_agent(self._tmp + "-ambiguous", rounds=2)
+        os.makedirs(agent2.state_dir, exist_ok=True)
+        self._done_parent(agent2, "parent-a")
+        self._done_parent(agent2, "parent-b", settings={"decay": 2})
+        ambiguous = self._child_proposal(
+            agent2, expression="rank(returns)", parent_expression="rank(close)"
+        )
+        ambiguous.pop("parent_id", None)
+        path2 = os.path.join(agent2.state_dir, "proposals.json")
+        with open(path2, "w", encoding="utf-8") as handle:
+            json.dump({
+                "round_no": 2,
+                "fields": [{"id": "returns", "dataset": "pv1", "type": "MATRIX",
+                            "description": "daily simple returns", "semantic_status": "KNOWN"}],
+                "proposals": [ambiguous],
+            }, handle)
+        result = agent2.run_proposals(path2)
+        self.assertEqual(client2.sim_calls, [])
+        self.assertIsNone(result)
+        self.assertEqual(agent2.last_run_stats["accepted"], 0)
+        self.assertIn("PARENT_REFERENCE_AMBIGUOUS", {
+            row.get("reason_code")
+            for row in iter_jsonl_objects(agent2.trial_ledger.path)
+            if row.get("phase") == "candidate_rejected"
+        })
+
     def test_run_proposals_executes_llm_candidates(self):
         agent, client = make_agent(self._tmp, rounds=1)
         proposals = {
@@ -422,6 +585,32 @@ class TestProposalExecutionSafety(TmpStateMixin, unittest.TestCase):
 
         agent.run_proposals(path, allow_unresolved_checkpoint=True)
         self.assertEqual(client.sim_calls, ["rank(returns)"])
+
+    def test_omitted_and_explicit_default_settings_share_execution_identity(self):
+        agent, client = make_agent(self._tmp, rounds=1)
+        first = self._force_round_proposal(agent)
+        second = self._force_round_proposal(
+            agent, settings={"decay": agent.simulation_settings["decay"]}
+        )
+        path = os.path.join(self._tmp, "proposals.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({
+                "round_no": 1,
+                "fields": [{"id": "returns", "dataset": "pv1", "type": "MATRIX",
+                            "description": "daily return", "semantic_status": "KNOWN"}],
+                "proposals": [first, second],
+            }, handle)
+
+        agent.run_proposals(path)
+
+        self.assertEqual(client.sim_calls, ["rank(returns)"])
+        rows = list(agent.trial_ledger._events) if not agent.trial_ledger.path else list(
+            iter_jsonl_objects(agent.trial_ledger.path)
+        )
+        self.assertTrue(any(
+            row.get("reason_code") == "DUPLICATE_EFFECTIVE_EXECUTION"
+            for row in rows
+        ))
 
     def test_proposal_priority_cap_never_spends_over_budget(self):
         agent, client = make_agent(self._tmp, rounds=1)

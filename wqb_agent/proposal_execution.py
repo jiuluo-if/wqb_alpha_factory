@@ -252,21 +252,36 @@ class ProposalExecutionWorkflow:
             if round_no <= 0:
                 print("[PROPOSALS ERROR] round_no 必须是正整数；未执行任何提案。")
                 return None
-        foreign_checkpoint = self._unfinished_checkpoint_except(round_no)
-        if foreign_checkpoint and not allow_unresolved_checkpoint:
+        checkpoint_records = self._ctx.checkpoints.scan()
+        foreign_record = self._ctx.checkpoints.unfinished_record_except(
+            round_no, records=checkpoint_records
+        )
+        current_record = next(
+            (record for record in checkpoint_records
+             if record["round_no"] == round_no),
+            None,
+        )
+        if foreign_record and foreign_record.get("validation_code") not in (None,):
             print(
-                f"[CHECKPOINT BLOCKED] 存在未完成 {os.path.basename(foreign_checkpoint)}；"
+                f"[CHECKPOINT BLOCKED] {os.path.basename(foreign_record['path'])} "
+                f"身份不可验证：{foreign_record.get('validation_code') or 'UNVERIFIABLE_CHECKPOINT_IDENTITY'}；"
+                "force-new-round 不能绕过。"
+            )
+            return None
+        if foreign_record and not allow_unresolved_checkpoint:
+            print(
+                f"[CHECKPOINT BLOCKED] 存在未完成 {os.path.basename(foreign_record['path'])}；"
                 "必须先以原 proposals.json 恢复，禁止开启新轮。"
             )
             return None
-        if foreign_checkpoint and allow_unresolved_checkpoint:
+        if foreign_record and allow_unresolved_checkpoint:
             print(
-                f"[FORCE NEW ROUND] 保留未完成 {os.path.basename(foreign_checkpoint)} "
+                f"[FORCE NEW ROUND] 保留未完成 {os.path.basename(foreign_record['path'])} "
                 "及其原 progress_url；按用户明确授权开启新轮。"
             )
         checkpoint_path = self._proposal_checkpoint_path(round_no)
-        checkpoint = self._load_proposal_checkpoint(round_no)
-        if os.path.exists(checkpoint_path) and checkpoint is None:
+        checkpoint = current_record.get("checkpoint") if current_record else None
+        if current_record and current_record.get("malformed"):
             print(
                 f"[CHECKPOINT ERROR] {checkpoint_path} 无法解析或轮次不匹配；"
                 "保留原文件，需先人工对账。"
@@ -339,9 +354,11 @@ class ProposalExecutionWorkflow:
         terminal_expressions, terminal_fingerprints = hooks.terminal_identities(
             [item.get("expression") for item in proposal_list if isinstance(item, dict)]
         )
-        local_seen = set(terminal_expressions)
-        local_seen.update(terminal_fingerprints)
-        unresolved_identities = self._unresolved_submission_identities(round_no)
+        research_seen = set(terminal_expressions)
+        batch_execution_fingerprints = set(terminal_fingerprints)
+        unresolved_identities = ctx.checkpoints.unresolved_submission_identities(
+            exclude_round=round_no, records=checkpoint_records
+        )
         fresh, skipped, rejected = [], [], []
         diversity_rejected, settings_rejected = [], []
         loop_guard = ResearchLoopGuard(ctx.trajectory.experiments)
@@ -378,9 +395,16 @@ class ProposalExecutionWorkflow:
                 profile["platform_dedupe"] = usage
                 discovered_profiles[profile_key] = profile
         proposal_field_profiles = list(discovered_profiles.values())
-        completed_parent_index = ctx.trajectory.find_completed_expressions(
+        parent_ids = {
+            str(item.get("parent_id"))
+            for item in proposal_list
+            if isinstance(item, dict) and item.get("parent_id") not in (None, "")
+        }
+        parent_rows = ctx.trajectory.find_rows(parent_ids) if parent_ids else {}
+        legacy_parent_candidates = ctx.trajectory.find_completed_parent_candidates(
             [item.get("parent_expression") for item in proposal_list if isinstance(item, dict)]
         )
+        effective_settings_by_candidate = {}
 
         for raw_proposal in proposal_list:
             if not isinstance(raw_proposal, dict):
@@ -411,34 +435,35 @@ class ProposalExecutionWorkflow:
                     proposal, "schema", "MISSING_EXPRESSION", "expression 不能为空"
                 )
                 continue
-            settings_override = proposal.get("settings")
-            if settings_override:
-                try:
-                    effective_settings = hooks.proposal_settings(settings_override)
-                except ValueError:
-                    effective_settings = settings_override
-                if isinstance(effective_settings, dict):
-                    dedup_key = "settings::" + submission_fingerprint(expression, effective_settings)
-                else:
-                    dedup_key = (
-                        "settings::" + json.dumps(settings_override, sort_keys=True)
-                        + "::" + canonical_expression(expression)
-                    )
-                if dedup_key in local_seen:
-                    hooks.record_candidate_rejection(
-                        proposal, "duplicate", "DUPLICATE_LOCAL", "同一表达式与设置已在本批出现"
-                    )
-                    skipped.append(expression)
-                    continue
-                local_seen.add(dedup_key)
-            elif canonical_expression(expression) in local_seen:
+            try:
+                effective_settings = hooks.proposal_settings(proposal.get("settings"))
+            except ValueError as exc:
                 hooks.record_candidate_rejection(
-                    proposal, "duplicate", "DUPLICATE_LOCAL", "同一规范化表达式已在本批出现"
+                    proposal, "settings", "INVALID_SETTINGS", str(exc)
+                )
+                settings_rejected.append((expression, [str(exc)]))
+                continue
+            execution_fingerprint = submission_fingerprint(
+                expression, effective_settings
+            )
+            if execution_fingerprint in batch_execution_fingerprints:
+                hooks.record_candidate_rejection(
+                    proposal, "execution_identity", "DUPLICATE_EFFECTIVE_EXECUTION",
+                    "相同的完整 effective Simulation settings 已存在，禁止重复执行",
                 )
                 skipped.append(expression)
                 continue
-            else:
-                local_seen.add(canonical_expression(expression))
+            settings_override = proposal.get("settings")
+            research_key = (
+                "settings::" + execution_fingerprint
+                if settings_override else canonical_expression(expression)
+            )
+            if research_key in research_seen:
+                hooks.record_candidate_rejection(
+                    proposal, "duplicate", "DUPLICATE_LOCAL", "同一研究表达式与设置已在本批出现"
+                )
+                skipped.append(expression)
+                continue
             ok, problems = validate_proposal(
                 proposal,
                 discovered_fields=proposal_field_profiles,
@@ -459,6 +484,68 @@ class ProposalExecutionWorkflow:
                 )
                 rejected.append((expression, problems))
                 continue
+            role = proposal.get("research_role")
+            parent = None
+            if role in {"EXPLOIT", "VALIDATION"}:
+                supplied_parent_id = proposal.get("parent_id")
+                if supplied_parent_id not in (None, ""):
+                    parent = parent_rows.get(str(supplied_parent_id))
+                    if parent is None:
+                        reason = "PARENT_NOT_FOUND"
+                        hooks.record_candidate_rejection(
+                            proposal, "parent_identity", reason,
+                            "parent_id 未在 durable canonical trajectory 中找到",
+                        )
+                        rejected.append((expression, [reason]))
+                        continue
+                else:
+                    candidates = legacy_parent_candidates.get(
+                        canonical_expression(proposal.get("parent_expression", "")), []
+                    )
+                    if len(candidates) > 1:
+                        reason = "PARENT_REFERENCE_AMBIGUOUS"
+                        hooks.record_candidate_rejection(
+                            proposal, "parent_identity", reason,
+                            "legacy expression-only parent 引用对应多个 Experiment",
+                        )
+                        rejected.append((expression, [reason]))
+                        continue
+                    if not candidates:
+                        reason = "PARENT_NOT_FOUND"
+                        hooks.record_candidate_rejection(
+                            proposal, "parent_identity", reason,
+                            "legacy parent_expression 没有唯一 DONE Experiment",
+                        )
+                        rejected.append((expression, [reason]))
+                        continue
+                    parent = candidates[0].to_dict()
+                    proposal["parent_id"] = parent.get("id")
+                if str(parent.get("status") or "").upper() != "DONE":
+                    reason = "PARENT_NOT_DONE"
+                    hooks.record_candidate_rejection(
+                        proposal, "parent_identity", reason,
+                        "parent_id 对应 Experiment 尚未完成",
+                    )
+                    rejected.append((expression, [reason]))
+                    continue
+                if not isinstance(parent.get("metrics"), dict) or not parent.get("metrics"):
+                    reason = "PARENT_NOT_DONE"
+                    hooks.record_candidate_rejection(
+                        proposal, "parent_identity", reason,
+                        "parent_id 对应 Experiment 缺少 required evidence",
+                    )
+                    rejected.append((expression, [reason]))
+                    continue
+                if canonical_expression(proposal.get("parent_expression", "")) != canonical_expression(
+                    parent.get("expression", "")
+                ):
+                    reason = "PARENT_EXPRESSION_MISMATCH"
+                    hooks.record_candidate_rejection(
+                        proposal, "parent_identity", reason,
+                        "parent_expression 与 parent_id 的 canonical expression 不一致",
+                    )
+                    rejected.append((expression, [reason]))
+                    continue
             if ctx.research_allocation:
                 if not (
                     isinstance(source, dict)
@@ -475,21 +562,15 @@ class ProposalExecutionWorkflow:
                     hooks.record_candidate_rejection(proposal, "research_guard", "INVALID_RESEARCH_ROLE", reason)
                     rejected.append((expression, [reason]))
                     continue
-                parent = hooks.completed_parent(
-                    proposal.get("parent_expression"), completed_parent_index
-                )
                 if role == "EXPLORE" and proposal.get("experiment_stage") != "BASELINE":
                     reason = "EXPLORE 必须是新的 BASELINE"
                     hooks.record_candidate_rejection(proposal, "research_guard", "EXPLORE_STAGE_MISMATCH", reason)
                     rejected.append((expression, [reason]))
                     continue
-                if role in {"EXPLOIT", "VALIDATION"} and parent is None:
-                    reason = f"{role} 只能引用已完成的 parent_expression，不能在同一批提案中预支结果"
-                    hooks.record_candidate_rejection(proposal, "research_guard", "PARENT_NOT_DONE", reason)
-                    rejected.append((expression, [reason]))
-                    continue
                 if role == "VALIDATION":
-                    parent_verdict = ctx.reflector._classify(parent).get("label")
+                    parent_verdict = ctx.reflector._classify(
+                        Experiment.from_dict(parent)
+                    ).get("label")
                     if parent_verdict not in {"SUCCESS", "SUSPICIOUS_HIGH_SIGNAL"}:
                         reason = "VALIDATION 的 parent 必须已通过质量门或为需审计的高信号"
                         hooks.record_candidate_rejection(proposal, "research_guard", "PARENT_QUALITY_FAIL", reason)
@@ -513,15 +594,6 @@ class ProposalExecutionWorkflow:
                 hooks.record_candidate_rejection(proposal, "research_guard", "LOOP_GUARD", guard_reason)
                 diversity_rejected.append((expression, [guard_reason]))
                 continue
-            try:
-                effective_settings = hooks.proposal_settings(proposal.get("settings"))
-            except ValueError as exc:
-                hooks.record_candidate_rejection(proposal, "settings", "INVALID_SETTINGS", str(exc))
-                settings_rejected.append((expression, [str(exc)]))
-                continue
-            execution_fingerprint = submission_fingerprint(
-                expression, effective_settings
-            )
             if execution_fingerprint in unresolved_identities:
                 reason = (
                     "同一 submission_fingerprint 仍存在未决远程执行；"
@@ -533,6 +605,9 @@ class ProposalExecutionWorkflow:
                 )
                 rejected.append((expression, [reason]))
                 continue
+            batch_execution_fingerprints.add(execution_fingerprint)
+            research_seen.add(research_key)
+            effective_settings_by_candidate[proposal["candidate_id"]] = effective_settings
             proposal.setdefault("proposal_id", "p-" + submission_fingerprint(expression, effective_settings)[:16])
             fresh.append(proposal)
 
@@ -764,11 +839,14 @@ class ProposalExecutionWorkflow:
             fields = proposal.get("fields") or known_ids
             if fields:
                 fields = extract_fields(proposal["expression"], fields)
+            effective_settings = effective_settings_by_candidate.get(proposal.get("candidate_id"))
+            if effective_settings is None:
+                effective_settings = hooks.proposal_settings(proposal.get("settings"))
             exp = Experiment(
                 round_no,
                 hypothesis["id"],
                 proposal["expression"],
-                hooks.proposal_settings(proposal.get("settings")),
+                effective_settings,
                 fields,
                 datasets=proposal.get("datasets") or [],
             )
@@ -776,6 +854,7 @@ class ProposalExecutionWorkflow:
             exp.submission_fingerprint = submission_fingerprint(exp.expression, exp.settings)
             exp.proposal_id = proposal.get("proposal_id") or "p-" + exp.submission_fingerprint[:16]
             exp.optimization_decision_id = proposal.get("optimization_decision_id")
+            exp.parent_id = proposal.get("parent_id")
             for name in (
                 "field_source", "field_understanding", "field_analysis", "field_hypothesis_basis",
                 "operator_evidence", "template_id", "template_family", "template_stage_path",

@@ -138,7 +138,14 @@ class TrialLedger:
                delegation=None):
         if phase not in PHASES:
             raise ValueError(f"未知 trial phase: {phase}")
-        candidate_id = self._value(trial, "candidate_id") or candidate_identity(trial, round_no=self._value(trial, "round"))
+        candidate_id = self._value(trial, "candidate_id")
+        if candidate_id in (None, ""):
+            recovery_terminal = phase in {"completed", "simulation_settled"} and str(
+                outcome or self._value(trial, "status") or ""
+            ).upper() in {"SKIPPED_STALE", "SKIPPED_UNKNOWN"}
+            candidate_id = None if recovery_terminal else candidate_identity(
+                trial, round_no=self._value(trial, "round")
+            )
         trial_id = self._trial_id(trial) or candidate_id
         expression = _text(self._value(trial, "expression", ""), "")
         fingerprint = _text(
@@ -161,6 +168,7 @@ class TrialLedger:
             "created_by_version": CREATED_BY_VERSION,
             "event_id": event_id,
             "trial_id": trial_id,
+            "experiment_id": self._value(trial, "id"),
             "candidate_id": candidate_id,
             "proposal_id": self._value(trial, "proposal_id"),
             "phase": phase,
@@ -389,6 +397,11 @@ class TrialLedger:
                 groups["field"][field][row.get("phase", "unknown")] += 1
         lifecycle_proposals = self._lifecycle_proposals(lifecycle_rows)
         lifecycle_arm_counts = self._lifecycle_arm_counts(lifecycle_rows)
+        lifecycle_identity_drift = Counter(
+            code
+            for proposal in lifecycle_proposals.values()
+            for code in proposal.get("identity_drift") or ()
+        )
         for proposal_id, settlement in settlement_rows.items():
             proposal = lifecycle_proposals.get(proposal_id)
             if not isinstance(proposal, dict):
@@ -432,6 +445,7 @@ class TrialLedger:
             "arm_counts": self._arm_counts(latest_by_trial),
             "lifecycle_arm_counts": lifecycle_arm_counts,
             "lifecycle_proposals": lifecycle_proposals,
+            "lifecycle_identity_drift": dict(lifecycle_identity_drift),
             "settled_observation_count": len(settlement_rows),
             "settled_rewards": {
                 proposal_id: row.get("reward")
@@ -552,6 +566,65 @@ class TrialLedger:
             datasets = "+".join(sorted(str(item) for item in datasets))
         return f"{datasets}::{row.get('template_family') or 'unknown-mechanism'}"
 
+    @classmethod
+    def _lifecycle_identity(cls, rows):
+        """Reduce immutable lifecycle facts without trusting sparse terminal rows."""
+        reference = None
+        for row in rows:
+            if row.get("phase") in {"simulation_committed", "simulation_submitted"}:
+                if any(row.get(key) not in (None, "", [], {}) for key in (
+                    "candidate_id", "expression_fingerprint", "dataset_family",
+                    "template_family", "research_role",
+                )):
+                    reference = row
+                    break
+        reference = reference or next((row for row in rows if row), {})
+        candidate_id = next(
+            (row.get("candidate_id") for row in rows
+             if row.get("candidate_id") not in (None, "")),
+            None,
+        )
+        arm = cls._arm_for_row(reference)
+        if arm == "unknown-dataset::unknown-mechanism":
+            arm = next(
+                (cls._arm_for_row(row) for row in rows
+                 if row.get("dataset_family") not in (None, "", [], {})
+                 or row.get("template_family") not in (None, "", "unknown")),
+                arm,
+            )
+        drift = set()
+        for row in rows:
+            row_candidate = row.get("candidate_id")
+            if candidate_id is not None and row_candidate not in (None, "", candidate_id):
+                drift.add("LIFECYCLE_CANDIDATE_ID_DRIFT")
+            row_has_arm = (
+                row.get("dataset_family") not in (None, "", [], {})
+                or row.get("template_family") not in (None, "", "unknown")
+            )
+            if row_has_arm and cls._arm_for_row(row) != arm:
+                drift.add("LIFECYCLE_ARM_DRIFT")
+        return {
+            "candidate_id": candidate_id,
+            "proposal_id": reference.get("proposal_id"),
+            "experiment_id": next(
+                (row.get("experiment_id") for row in rows
+                 if row.get("experiment_id") not in (None, "")),
+                None,
+            ),
+            "expression_fingerprint": next(
+                (row.get("expression_fingerprint") for row in rows
+                 if row.get("expression_fingerprint") not in (None, "")),
+                None,
+            ),
+            "research_role": next(
+                (row.get("research_role") for row in rows
+                 if row.get("research_role") not in (None, "", "unknown")),
+                "EXPLORE",
+            ),
+            "arm": arm,
+            "drift": tuple(sorted(drift)),
+        }
+
     @staticmethod
     def _lifecycle_status(rows):
         latest = rows[-1]
@@ -576,11 +649,16 @@ class TrialLedger:
     def _lifecycle_proposals(cls, lifecycle_rows):
         result = {}
         for proposal_id, rows in lifecycle_rows.items():
+            identity = cls._lifecycle_identity(rows)
             result[proposal_id] = {
-                "arm": cls._arm_for_row(rows[-1]),
+                "arm": identity["arm"],
                 "status": cls._lifecycle_status(rows),
                 "committed": any(row.get("phase") == "simulation_committed" for row in rows),
-                "research_role": rows[-1].get("research_role") or "EXPLORE",
+                "research_role": identity["research_role"],
+                "candidate_id": identity["candidate_id"],
+                "experiment_id": identity["experiment_id"],
+                "expression_fingerprint": identity["expression_fingerprint"],
+                "identity_drift": identity["drift"],
                 "reward": rows[-1].get("reward"),
             }
         return result
@@ -597,7 +675,8 @@ class TrialLedger:
         for rows in lifecycle_rows.values():
             if not rows:
                 continue
-            state = result[cls._arm_for_row(rows[-1])]
+            identity = cls._lifecycle_identity(rows)
+            state = result[identity["arm"]]
             state["admitted"] += 1
             state["submitted"] += int(any(
                 row.get("phase") in {"simulation_submitted", "simulation_settled", "completed"}

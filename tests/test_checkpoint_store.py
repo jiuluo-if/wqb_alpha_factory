@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from wqb_agent.checkpoints import CheckpointStore
+from wqb_agent.expression import submission_fingerprint
 from wqb_agent.locking import OwnerBusyError, single_instance_scope
 
 
@@ -95,6 +96,60 @@ class TestCheckpointStore(unittest.TestCase):
             self.assertEqual(row["progress_url"], "/simulations/s1")
             for forbidden in ("alpha_id", "metrics", "checks", "yearly_evidence"):
                 self.assertNotIn(forbidden, row)
+
+    def test_checkpoint_preserves_recovery_identity_envelope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = CheckpointStore(tmp)
+            experiment = SimpleNamespace(to_dict=lambda: {
+                "id": "e1", "round": 4, "hypothesis_id": "h1",
+                "expression": "rank(close)", "settings": {"decay": 4},
+                "fields_used": ["close"], "datasets": ["pv1"],
+                "candidate_id": "candidate-1", "proposal_id": "proposal-1",
+                "submission_fingerprint": submission_fingerprint(
+                    "rank(close)", {"decay": 4}
+                ), "submission_started_at": 12.5,
+                "parent_expression": "rank(open)", "parent_id": "parent-1",
+                "lineage_id": "lineage-1", "created_at": 10.0,
+                "optimization_decision_id": "decision-1",
+                "template_mode": "PARTIAL_OPERATOR",
+                "operator_role_mapping": {"x": "documented"},
+                "status": "RUNNING", "progress_url": "/simulations/s1",
+            })
+            store.write(4, {"id": "h1"}, [experiment], complete=False)
+            row = store.load(4)["experiments"][0]
+            for key in (
+                "datasets", "candidate_id", "proposal_id", "submission_started_at",
+                "parent_expression", "parent_id", "lineage_id", "created_at",
+                "optimization_decision_id", "template_mode", "operator_role_mapping",
+            ):
+                self.assertIn(key, row)
+            for forbidden in ("metrics", "checks", "pnl_evidence", "validation_report"):
+                self.assertNotIn(forbidden, row)
+
+    def test_persisted_fingerprint_mismatch_is_invalid_not_repaired(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = CheckpointStore(tmp)
+            row = {
+                "id": "e1", "round": 4, "hypothesis_id": "h1",
+                "expression": "rank(close)", "settings": {"decay": 4},
+                "fields_used": ["close"], "status": "SUBMIT_UNKNOWN",
+                "submission_fingerprint": "corrupt",
+            }
+            with open(store.path(4), "w", encoding="utf-8") as handle:
+                json.dump({"round_no": 4, "complete": False,
+                           "hypothesis": {}, "experiments": [row]}, handle)
+            self.assertIsNone(store.load(4))
+            record = store.scan()[0]
+            self.assertEqual(record["validation_code"], "CHECKPOINT_SUBMISSION_IDENTITY_MISMATCH")
+
+    def test_future_checkpoint_schema_is_unverifiable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = CheckpointStore(tmp)
+            with open(store.path(4), "w", encoding="utf-8") as handle:
+                json.dump({"schema_version": 999, "round_no": 4,
+                           "complete": False, "hypothesis": {}, "experiments": []}, handle)
+            record = store.scan()[0]
+            self.assertEqual(record["validation_code"], "UNSUPPORTED_FUTURE_CHECKPOINT_SCHEMA")
 
     def test_malformed_or_mismatched_checkpoint_is_not_treated_as_absent(self):
         with tempfile.TemporaryDirectory() as tmp:

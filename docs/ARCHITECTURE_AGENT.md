@@ -54,6 +54,24 @@ Optimizer 不生成经济机制、不扫描参数、不写 trajectory、不刷�
 
 探索批次使用既有 exact-100 contract；Agent-authored targeted batch 使用同一个 `proposals.json`，上限由既有 batch contract 控制。未知写结果只保留 `SUBMIT_UNKNOWN` 并进行只读 reconciliation；已知 progress URL 只能轮询。
 
+Execution identity 只使用 `Agent._proposal_settings()` 合并后的完整有效
+Simulation settings；raw proposal settings 和 expression-only shortcut 都不是远端
+execution identity。`submission_fingerprint` 已存储时必须与 expression/settings
+重新计算的值一致，缺失 fingerprint 仅对 legacy checkpoint 做确定性恢复；不一致、
+不可读或 future-schema checkpoint 对 force-new-round 仍是
+`UNVERIFIABLE_CHECKPOINT_IDENTITY`，不得产生新的 POST。
+
+checkpoint 是 recovery envelope，不是结果库：它保存可重建同一 Experiment 的
+id、datasets、candidate/proposal、created_at、parent provenance、fingerprint、
+progress URL 与 template/operator provenance，但不保存 metrics、checks、PnL、
+Alpha result 或 validation payload。Optimizer 的 CHILD/ROBUSTNESS 以精确
+`parent_id == Experiment.id` 为权威；`parent_expression` 只作 cross-check，legacy
+expression-only 只有在 durable canonical history 中唯一时兼容。
+
+TrialLedger 对 proposal lifecycle 的 candidate、execution fingerprint、research role
+和 arm 采用最早合法 committed/submitted identity；稀疏 terminal row 只能补充状态，
+不能把历史试验迁移到另一个 arm。identity 或 arm drift 由 `state audit` fail closed。
+
 ## 变更规则
 
 触碰 owner、proposal/schema、state merge 或安全边界时，必须增加行为/回归测试并更新本文件。公共文档只保留当前 contract；历史由 Git 承担，隐私规则见 [`PRIVACY.md`](PRIVACY.md)，研究方法见 [`RESEARCH_POLICY.md`](RESEARCH_POLICY.md)。

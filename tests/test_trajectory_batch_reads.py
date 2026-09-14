@@ -160,6 +160,18 @@ class TestFindRowsBatch(unittest.TestCase):
         self.assertEqual([row["expression"] for row in rows], ["rank(field_a)"])
         self.assertEqual(stats["identity_mismatch_rows"], 1)
 
+    def test_completed_parent_candidates_preserve_expression_ambiguity(self):
+        first = _experiment("parent-a", expression="rank(field_a)")
+        second = _experiment("parent-b", expression="rank(field_a)")
+        _write(self.path, [first, second])
+        candidates = self._trajectory().find_completed_parent_candidates(
+            ["rank(field_a)"]
+        )
+        self.assertEqual(
+            {item.id for item in candidates["rank(field_a)"]},
+            {"parent-a", "parent-b"},
+        )
+
     def test_iter_rows_decodes_escaped_lines_instead_of_skipping(self):
         row = _experiment("e0").to_dict()
         row["proposal_id"] = None

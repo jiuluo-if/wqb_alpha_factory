@@ -178,6 +178,19 @@ class TestCorruptInputs(unittest.TestCase):
         with open(checkpoint_path, encoding="utf-8") as f:
             self.assertEqual(f.read(), "{broken")
 
+    def test_force_new_round_cannot_bypass_malformed_foreign_checkpoint(self):
+        config = {
+            "simulation": {"universe": "TOP3000", "decay": 0, "truncation": 0.08},
+            "agent": {"state_dir": self.tmp},
+        }
+        agent = Agent(object(), config)
+        proposals_path = os.path.join(self.tmp, "proposals.json")
+        with open(proposals_path, "w", encoding="utf-8") as f:
+            json.dump({"round_no": 2, "proposals": [{"expression": "rank(a)"}]}, f)
+        with open(os.path.join(self.tmp, "round_1.checkpoint.json"), "w", encoding="utf-8") as f:
+            f.write("{broken")
+        self.assertIsNone(agent.run_proposals(proposals_path, allow_unresolved_checkpoint=True))
+
     def test_run_proposals_non_dict_payload_returns_none(self):
         config = {
             "simulation": {"universe": "TOP3000", "decay": 0, "truncation": 0.08},

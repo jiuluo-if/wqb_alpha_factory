@@ -36,7 +36,7 @@ IDENTITY_FIELDS = (
     "id", "round", "hypothesis_id", "expression", "settings", "fields_used",
     "datasets", "candidate_id", "proposal_id", "submission_fingerprint",
     "submission_started_at", "parent_expression", "lineage_id", "created_at",
-    "optimization_decision_id",
+    "optimization_decision_id", "parent_id",
 )
 
 OPERATOR_PROVENANCE_FIELDS = (
@@ -194,6 +194,7 @@ class Experiment:
     research_role: object = None
     change_type: object = None
     parent_expression: object = None
+    parent_id: object = None
     child_economic_hypothesis: object = None
     changed_variable: object = None
     expected_failure_modes: list = field(default_factory=list)
@@ -707,6 +708,34 @@ class Trajectory:
             target: self._completed_expression_cache.get(target)
             for target in targets
         }
+
+    def find_completed_parent_candidates(self, expressions):
+        """Resolve all eligible DONE parents per expression in one owner pass.
+
+        This compatibility helper is intentionally plural: expression-only
+        legacy references may be ambiguous and must never select an arbitrary
+        historical Experiment.
+        """
+        targets = {
+            canonical_expression(expression)
+            for expression in (expressions or ())
+            if isinstance(expression, str) and expression.strip()
+        }
+        result = {target: [] for target in targets}
+        if not targets:
+            return result
+        if self.persist and self.path and os.path.exists(self.path):
+            rows = self.iter_canonical_rows() or ()
+        else:
+            rows = (experiment.to_dict() for experiment in self.experiments)
+        for row in rows:
+            target = canonical_expression(row.get("expression", ""))
+            if target not in targets or row.get("status") != "DONE":
+                continue
+            if not isinstance(row.get("metrics"), dict) or not row.get("metrics"):
+                continue
+            result[target].append(Experiment.from_dict(row))
+        return result
 
     def load(self):
         """Load the durable trajectory and merge its append-only revisions.

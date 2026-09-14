@@ -100,6 +100,11 @@ DIRECT_TESTS = {
         "tests/test_factory_provenance_persistence.py",
         "tests/test_targeted_batch_contract.py",
     ),
+    "wqb_agent/optimizer_workflow.py": (
+        "tests/test_optimizer_workflow.py",
+        "tests/test_agent_decision_to_proposal.py",
+        "tests/test_proposal_safety.py",
+    ),
     "wqb_agent/alpha_factory.py": (
         "tests/test_factory_batch_contract.py",
         "tests/test_factory_mechanism_selection.py",
@@ -161,6 +166,8 @@ DIRECT_TESTS = {
         "tests/test_protocol_truth.py",
         "tests/test_proposal_safety.py",
         "tests/test_recovery.py",
+        "tests/test_runtime_safety.py",
+        "tests/test_search_calibration.py",
     ),
 }
 

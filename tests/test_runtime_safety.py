@@ -19,6 +19,7 @@ from wqb_agent.doctor import run_doctor
 from wqb_agent.incremental_policy import IncrementalValuePolicy
 from wqb_agent.protocol import retry_after_seconds
 from wqb_agent.schema import ARTIFACT_SCHEMAS, CURRENT_SCHEMA_VERSION, migrate_artifact
+from wqb_agent.search_snapshot import SearchSnapshot
 from wqb_agent.state import Experiment
 from wqb_agent.trial_ledger import TrialLedger
 from wqb_agent.workspace_snapshot import read_workspace_snapshot
@@ -308,6 +309,90 @@ class TestRuntimeSafety(unittest.TestCase):
             snapshot = read_workspace_snapshot(tmp)
         self.assertEqual(snapshot.ledger.simulation_submitted, frozenset({"p"}))
         self.assertEqual(snapshot.ledger.submitted, frozenset({"p"}))
+
+    def test_lifecycle_reducer_keeps_early_arm_and_reports_drift(self):
+        rows = {
+            "p": [
+                {"proposal_id": "p", "candidate_id": "c1",
+                 "phase": "simulation_committed", "dataset_family": ["pv1"],
+                 "template_family": "mechanism-a", "research_role": "EXPLOIT"},
+                {"proposal_id": "p", "candidate_id": "c1",
+                 "phase": "simulation_settled", "outcome": "SKIPPED_UNKNOWN",
+                 "dataset_family": [], "template_family": "unknown"},
+            ]
+        }
+        proposals = TrialLedger._lifecycle_proposals(rows)
+        self.assertEqual(proposals["p"]["arm"], "pv1::mechanism-a")
+        self.assertEqual(proposals["p"]["research_role"], "EXPLOIT")
+        self.assertEqual(proposals["p"]["identity_drift"], ())
+
+        rows["p"][1]["candidate_id"] = "c2"
+        rows["p"][1]["dataset_family"] = ["pv2"]
+        proposals = TrialLedger._lifecycle_proposals(rows)
+        self.assertEqual(set(proposals["p"]["identity_drift"]), {
+            "LIFECYCLE_ARM_DRIFT", "LIFECYCLE_CANDIDATE_ID_DRIFT",
+        })
+
+    def test_search_snapshot_uses_canonical_arm_after_sparse_terminal_recovery(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = TrialLedger(os.path.join(tmp, "trial_ledger.jsonl"))
+            early = {
+                "proposal_id": "p", "candidate_id": "c1",
+                "dataset_family": ["pv1"], "template_family": "trend",
+                "research_role": "EXPLOIT", "status": "RUNNING",
+            }
+            ledger.record(early, "simulation_committed", outcome="COMMITTED")
+            ledger.record(
+                {"proposal_id": "p", "status": "SKIPPED_UNKNOWN"},
+                "simulation_settled", outcome="SKIPPED_UNKNOWN",
+            )
+
+            snapshot = SearchSnapshot.from_sources([], ledger.summarize())
+
+        self.assertIn("pv1::trend", snapshot["arms"])
+        self.assertNotIn("unknown-dataset::unknown-mechanism", snapshot["arms"])
+        self.assertEqual(snapshot["proposals"]["p"]["arm"], "pv1::trend")
+
+    def test_audit_reports_exact_parent_identity_violations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = {
+                "id": "parent-a", "round": 1, "hypothesis_id": "h",
+                "expression": "rank(close)", "settings": {},
+                "fields_used": ["close"], "datasets": ["pv1"],
+                "status": "DONE", "metrics": {"fitness": 1.0},
+            }
+            child = {
+                "id": "child-a", "round": 2, "hypothesis_id": "h2",
+                "expression": "rank(volume)", "settings": {},
+                "fields_used": ["volume"], "datasets": ["pv1"],
+                "status": "DONE", "metrics": {"fitness": 0.5},
+                "experiment_stage": "CHILD", "parent_id": "parent-a",
+                "parent_expression": "rank(open)",
+            }
+            with open(os.path.join(tmp, "trajectory.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(parent) + "\n")
+                handle.write(json.dumps(child) + "\n")
+            result = audit_state(tmp)
+        self.assertFalse(result["ok"])
+        self.assertIn("PARENT_EXPRESSION_MISMATCH", result["errors"])
+
+    def test_audit_reports_lifecycle_candidate_and_arm_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = [
+                {"proposal_id": "p", "candidate_id": "c1",
+                 "phase": "simulation_committed", "dataset_family": ["pv1"],
+                 "template_family": "a"},
+                {"proposal_id": "p", "candidate_id": "c2",
+                 "phase": "simulation_settled", "outcome": "SKIPPED_STALE",
+                 "dataset_family": ["pv2"], "template_family": "b"},
+            ]
+            with open(os.path.join(tmp, "trial_ledger.jsonl"), "w", encoding="utf-8") as handle:
+                for row in rows:
+                    handle.write(json.dumps(row) + "\n")
+            result = audit_state(tmp)
+        self.assertFalse(result["ok"])
+        self.assertIn("LIFECYCLE_CANDIDATE_ID_DRIFT", result["errors"])
+        self.assertIn("LIFECYCLE_ARM_DRIFT", result["errors"])
 
     def test_valid_non_simulation_ledger_phases_are_not_lifecycle_degraded(self):
         with tempfile.TemporaryDirectory() as tmp:

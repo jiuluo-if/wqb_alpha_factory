@@ -13,12 +13,19 @@ from .artifacts import atomic_write_json_if_changed
 from .expression import submission_fingerprint
 from .locking import StateMutationDelegation, single_instance_scope
 from .schema import CHECKPOINT_VERSION, CREATED_BY_VERSION, migrate_artifact
+from .state import IDENTITY_FIELDS, OPERATOR_PROVENANCE_FIELDS
 
 _CHECKPOINT_NAME = re.compile(r"round_(\d+)\.checkpoint\.json")
 _REQUIRED_EXPERIMENT_FIELDS = {
     "id", "round", "hypothesis_id", "expression", "settings",
     "fields_used", "status",
 }
+_CHECKPOINT_IDENTITY_FIELDS = tuple(dict.fromkeys(
+    (*IDENTITY_FIELDS, *OPERATOR_PROVENANCE_FIELDS,
+     "template_id", "template_family", "template_stage_path", "template_ref",
+     "template_slots", "experiment_stage", "research_role", "change_type",
+     "proposal_origin", "research_layer", "progress_url")
+))
 
 
 class CheckpointStore:
@@ -54,20 +61,8 @@ class CheckpointStore:
             # only enough identity and known progress URL to continue a
             # transport recovery, while metrics, checks, Alpha IDs, and
             # result-side evidence remain in the process-local daily cache.
-            keep = {
-                "schema_version", "created_by_version", "id", "round",
-                "hypothesis_id", "expression", "settings", "fields_used",
-                "status", "proposal_id", "submission_fingerprint",
-                "optimization_decision_id",
-                "submission_started_at", "progress_url", "experiment_stage",
-                "research_role", "change_type", "lineage_id", "template_id",
-                "template_family", "proposal_origin", "research_layer",
-                "template_version", "template_mode", "template_branch_of",
-                "template_fingerprint", "template_structural_fingerprint",
-                "template_mechanism_fingerprint", "operator_role",
-                "operator_role_mapping", "operator_realization_fingerprint",
-                "operator_capability_fingerprint",
-            }
+            keep = {"schema_version", "created_by_version", "status",
+                    *_CHECKPOINT_IDENTITY_FIELDS}
             row = {key: value for key, value in row.items() if key in keep}
             checkpoint_experiments.append(row)
         data = {
@@ -93,18 +88,26 @@ class CheckpointStore:
             return False, None
 
     @staticmethod
-    def _validate(round_no, data):
+    def _validate_with_code(round_no, data):
+        if not isinstance(data, dict):
+            return None, "CHECKPOINT_MALFORMED"
+        stored_version = data.get("schema_version")
+        try:
+            future_version = int(stored_version)
+        except (TypeError, ValueError):
+            future_version = None
+        if future_version is not None and future_version > CHECKPOINT_VERSION:
+            return None, "UNSUPPORTED_FUTURE_CHECKPOINT_SCHEMA"
         data = migrate_artifact("checkpoint", data)
         if (
-            not isinstance(data, dict)
-            or data.get("round_no") != int(round_no)
+            data.get("round_no") != int(round_no)
             or not isinstance(data.get("experiments"), list)
             or not isinstance(data.get("hypothesis"), dict)
         ):
-            return None
+            return None, "CHECKPOINT_MALFORMED"
         for row in data["experiments"]:
             if not isinstance(row, dict) or not _REQUIRED_EXPERIMENT_FIELDS.issubset(row):
-                return None
+                return None, "CHECKPOINT_REQUIRED_IDENTITY_MISSING"
             if (
                 not isinstance(row["id"], (str, int))
                 or not str(row["id"]).strip()
@@ -114,8 +117,18 @@ class CheckpointStore:
                 or not isinstance(row["fields_used"], (list, tuple))
                 or not isinstance(row["status"], str)
             ):
-                return None
-        return data
+                return None, "CHECKPOINT_REQUIRED_IDENTITY_INVALID"
+            stored = row.get("submission_fingerprint")
+            if stored not in (None, ""):
+                expected = submission_fingerprint(row["expression"], row["settings"])
+                if str(stored) != expected:
+                    return None, "CHECKPOINT_SUBMISSION_IDENTITY_MISMATCH"
+        return data, None
+
+    @staticmethod
+    def _validate(round_no, data):
+        checkpoint, _ = CheckpointStore._validate_with_code(round_no, data)
+        return checkpoint
 
     def load(self, round_no):
         """Load a validated checkpoint; malformed input returns ``None``."""
@@ -129,16 +142,21 @@ class CheckpointStore:
 
     def unfinished_except(self, round_no):
         """Return the lowest-round unfinished or malformed checkpoint path."""
+        record = self.unfinished_record_except(round_no)
+        return record["path"] if record else None
+
+    def unfinished_record_except(self, round_no, *, records=None):
+        """Return the lowest-round unfinished or malformed checkpoint record."""
         result = None
         result_round = None
-        for record in self.scan():
+        for record in self.scan() if records is None else records:
             checkpoint_round = record["round_no"]
             if checkpoint_round == int(round_no):
                 continue
             if result_round is not None and checkpoint_round >= result_round:
                 continue
             if record["malformed"] or not record["checkpoint"].get("complete", False):
-                result = record["path"]
+                result = record
                 result_round = checkpoint_round
         return result
 
@@ -208,15 +226,21 @@ class CheckpointStore:
             round_no = int(match.group(1))
             path = os.path.join(self.state_dir, name)
             readable, decoded = self._read_decoded(path)
+            validation_code = None
             try:
-                checkpoint = self._validate(round_no, decoded) if readable else None
+                checkpoint, validation_code = (
+                    self._validate_with_code(round_no, decoded)
+                    if readable else (None, "CHECKPOINT_UNREADABLE")
+                )
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 checkpoint = None
+                validation_code = "CHECKPOINT_MALFORMED"
             raw = decoded if readable and isinstance(decoded, dict) else {}
             records.append({
                 "path": path,
                 "round_no": round_no,
                 "checkpoint": checkpoint if checkpoint is not None else raw,
                 "malformed": checkpoint is None,
+                "validation_code": validation_code,
             })
         return records

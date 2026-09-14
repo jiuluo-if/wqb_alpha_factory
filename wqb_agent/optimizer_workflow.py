@@ -919,17 +919,16 @@ class OptimizerWorkflow:
         target = str(parent_id or "")
         if not target:
             return None
-        for experiment in reversed(self.trajectory.recent(256)):
-            record = (
-                experiment.to_dict() if hasattr(experiment, "to_dict") else experiment
-            )
-            if isinstance(record, Mapping) and str(record.get("id")) == target:
-                return record
-        finder = getattr(self.trajectory, "find_row", None)
+        finder = getattr(self.trajectory, "find_rows", None)
         if callable(finder):
-            row = finder(target)
+            rows = finder([target])
+            row = rows.get(target) if isinstance(rows, Mapping) else None
             if isinstance(row, Mapping):
                 return row
+        for experiment in reversed(self.trajectory.recent(256)):
+            record = experiment.to_dict() if hasattr(experiment, "to_dict") else experiment
+            if isinstance(record, Mapping) and str(record.get("id")) == target:
+                return record
         return None
 
     def generate_from_decisions(self, decisions, *, max_candidates=4):

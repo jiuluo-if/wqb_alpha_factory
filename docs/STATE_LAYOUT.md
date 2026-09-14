@@ -36,6 +36,23 @@
 同一表达式但不同 settings 的 fingerprint 不同，不能把它们按表达式折叠。`state audit`
 以持久化 Trajectory、TrialLedger 和 checkpoint 做只读 parity 检查，不把任一身份推断成另一身份。
 
+checkpoint 的 recovery envelope 与 `state.IDENTITY_FIELDS` 机械共用字段声明，另保留
+必要的 template/operator provenance 与 `progress_url`。legacy row 缺少新增 provenance
+时只允许 tolerant read 和已知 URL 的只读 reconcile；不能由 expression 猜 candidate、
+dataset 或 parent。存在的 `submission_fingerprint` 若与完整 payload 不一致属于
+`CHECKPOINT_SUBMISSION_IDENTITY_MISMATCH`，不能静默重算；malformed、unreadable 或
+future-schema 的 foreign checkpoint 即使 `force-new-round` 也不允许新写入。
+
+远端 execution dedupe 使用当前 batch 内的 `batch_execution_fingerprints`，输入是
+`Agent._proposal_settings()` 产出的完整 effective settings。research expression 去重、
+SearchPolicy arm 和 execution dedupe 是三种不同判断；`DUPLICATE_EFFECTIVE_EXECUTION`
+在 SearchPolicy 关闭时仍然生效。
+
+Optimizer child 的 `parent_id` 是 Experiment identity，`parent_expression` 只用于
+一致性核验；同表达式多个 DONE parent 时，legacy expression-only 引用保持
+`PARENT_REFERENCE_AMBIGUOUS`。TrialLedger 的 lifecycle arm 取最早合法 committed/submitted
+identity，terminal sparse metadata 不会把试验移到 unknown arm。
+
 `factory_session.json` 的 route probe 只保留每个比较维度的 bounded count 与
 带 `session_id + dimension` domain separation 的 SHA-256 set digest；相同 session
 内的集合比较仍保留 route decision 语义，session renewal 不产生稳定的跨 session
