@@ -78,11 +78,15 @@ class AIFactoryRunner:
         "BUDGET_BLOCKED", "STORAGE_RECONCILE_REQUIRED", "CHECKPOINT_BLOCKED",
         "EXECUTION_RECONCILE_REQUIRED", "STOP_REQUESTED", "WAIT_AGENT_DECISION",
         "WAIT_NO_SUGGESTION", "WAIT_INVALID_SUGGESTION", "WAIT_FACTORY_BATCH",
-        "WAIT_NO_VALID_PROPOSAL", "RUN_PROPOSALS_PENDING", "RECOVER_PROPOSALS_PENDING",
+        "WAIT_NO_VALID_PROPOSAL", "WAIT_RUN_PROPOSALS", "RUN_PROPOSALS_PENDING",
+        "RECOVER_PROPOSALS_PENDING",
         "RECOVER_CHECKPOINT", "RECOVERED_PROPOSALS", "RECOVERED_CHECKPOINT",
         "BLOCKER_COOLDOWN", "STOP_OPERATOR_CAPABILITY", "PROPOSALS_WRITE_ERROR",
         "ASSEMBLE_ERROR", "RUN_PROPOSALS_ERROR", "RECOVER_PROPOSALS_ERROR",
         "EXECUTION_RECONCILE_REQUIRED", "FACTORY_BATCH_BUDGET_BLOCKED",
+        "TARGETED_OPTIMIZATION_PENDING", "TARGETED_BATCH_INVALID", "TARGETED_BATCH_WRITTEN",
+        "TARGETED_BATCH_REJECTED", "NO_TARGETED_PROPOSAL", "TARGETED_BATCH_UNCHANGED",
+        "TARGETED_BATCH_CONFLICT", "TARGETED_BATCH_RECOVERY_BLOCKED",
         "ROUND_COMPLETE", "STOP_MECHANISM_ROUTE", "REROUTE_FACTORY_FEASIBILITY",
         "STOP_BUDGET_SHORTAGE", "REROUTE_BUDGET_SHORTAGE", "ADVANCE_ROUTE_EPISODE",
         "REROUTE", "STOP", "CANDIDATE_CHANGE_ONLY", "RESEARCH_INFORMATION_CHANGE",
@@ -1709,6 +1713,14 @@ class AIFactoryRunner:
                     if cls._safe_control_token(name) != "UNKNOWN"
                     and cls._safe_nonnegative_count(value) > 0
                 }
+        if "errors" in result:
+            errors = result.get("errors")
+            if isinstance(errors, (list, tuple, set, dict)):
+                projected["errors"] = ["PRESENT"] if errors else []
+                projected["error_count"] = len(errors)
+            elif errors:
+                projected["errors"] = ["PRESENT"]
+                projected["error_count"] = 1
         audit = result.get("budget_audit")
         if isinstance(audit, dict):
             for source_key, target_key in (
