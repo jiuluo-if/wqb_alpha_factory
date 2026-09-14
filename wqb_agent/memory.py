@@ -25,19 +25,22 @@ the compressed long-term view; garbage.json keeps the tombstone log in a
 separate file so the main memory file never bloats.
 """
 
-import base64
-import binascii
 import json
 import math
 import os
 import re
 import time
 import uuid
-import zlib
 from functools import lru_cache
 
 from .artifacts import atomic_write_json_if_changed
 from .expression import canonical_expression
+from .memory_codec import (
+    dict_list,
+    pack_expressions,
+    stable_payload,
+    unpack_expressions,
+)
 from .schema import MEMORY_VERSION
 
 _CJK_RUN = re.compile(r"[\u4e00-\u9fff]+")
@@ -187,13 +190,13 @@ class ExperienceMemory:
             data.get("current_best")
             if isinstance(data.get("current_best"), dict) else None
         )
-        self.lessons = self._dict_list(data.get("lessons"))
-        self.avoid = self._dict_list(data.get("avoid"))
-        self.next = self._dict_list(data.get("next"))
-        self.active_hypotheses = self._dict_list(data.get("active_hypotheses"))
+        self.lessons = dict_list(data.get("lessons"))
+        self.avoid = dict_list(data.get("avoid"))
+        self.next = dict_list(data.get("next"))
+        self.active_hypotheses = dict_list(data.get("active_hypotheses"))
         packed = data.get("seen_expressions_blob")
         if isinstance(packed, str):
-            self.seen_expressions = self._unpack_expressions(packed)
+            self.seen_expressions = unpack_expressions(packed)
         else:
             # Backward compatibility with the pre-factory JSON list format.
             legacy_expressions = data.get("seen_expressions", [])
@@ -220,7 +223,7 @@ class ExperienceMemory:
         except (TypeError, ValueError):
             self.updated_round = 0
         # short_term may be absent in files written by older versions.
-        self.short_term = self._dict_list(data.get("short_term"))
+        self.short_term = dict_list(data.get("short_term"))
         raw_lineages = data.get("lineages", {})
         self.lineages = (
             {str(key): value for key, value in raw_lineages.items()
@@ -244,17 +247,10 @@ class ExperienceMemory:
         try:
             with open(path, encoding="utf-8") as f:
                 value = json.load(f)
-            self.garbage = self._dict_list(value)
+            self.garbage = dict_list(value)
         except (json.JSONDecodeError, OSError):
             # A corrupt tombstone log must never break the main memory.
             self.garbage = []
-
-    @staticmethod
-    def _dict_list(value):
-        """Normalize optional persisted collections at the trust boundary."""
-        if not isinstance(value, list):
-            return []
-        return [item for item in value if isinstance(item, dict)]
 
     def save(self):
         if not self.state_dir or not self.persist:
@@ -271,7 +267,7 @@ class ExperienceMemory:
             # exact dedupe, but the durable decision view stores them in one
             # compressed field.  This removes megabytes of JSON punctuation
             # without creating a second redundant memory file.
-            "seen_expressions_blob": self._pack_expressions(self.seen_expressions),
+            "seen_expressions_blob": pack_expressions(self.seen_expressions),
             "seen_expressions_count": len(self.seen_expressions),
             "used_hypotheses": sorted(self.used_hypotheses),
             "best_exhausted": self.best_exhausted,
@@ -288,11 +284,6 @@ class ExperienceMemory:
         atomic_write_json_if_changed(path, self.garbage)
 
     # ---------------------------------------------------------- short term
-
-    @staticmethod
-    def _stable_payload(value):
-        return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str,
-                          separators=(",", ":"))
 
     def _source_entry(self, source_key):
         if not source_key:
@@ -319,7 +310,7 @@ class ExperienceMemory:
         if found is None:
             return None
         old_kind, old = found
-        if old_kind != kind or old.get("_source_semantic") != self._stable_payload(semantic):
+        if old_kind != kind or old.get("_source_semantic") != stable_payload(semantic):
             raise MemorySourceReplayConflict(
                 f"MEMORY_SOURCE_REPLAY_CONFLICT: source_key={source_key}"
             )
@@ -328,7 +319,7 @@ class ExperienceMemory:
     def _stamp_source(self, entry, source_key, semantic):
         if source_key:
             entry["source_key"] = str(source_key)
-            entry["_source_semantic"] = self._stable_payload(semantic)
+            entry["_source_semantic"] = stable_payload(semantic)
         return entry
 
     def add_short_term(self, kind, text, round_no, evidence=1, detail=None,
@@ -933,25 +924,6 @@ class ExperienceMemory:
                 sorted(self.used_hypotheses)[-self.max_used_hypotheses:]
             )
 
-    @staticmethod
-    def _pack_expressions(expressions):
-        raw = json.dumps(
-            sorted(expressions), ensure_ascii=False, separators=(",", ":")
-        ).encode("utf-8")
-        return base64.b64encode(zlib.compress(raw, level=9)).decode("ascii")
-
-    @staticmethod
-    def _unpack_expressions(packed):
-        try:
-            raw = zlib.decompress(base64.b64decode(packed.encode("ascii")))
-            values = json.loads(raw.decode("utf-8"))
-            return (
-                {canonical_expression(value) for value in values}
-                if isinstance(values, list) else set()
-            )
-        except (ValueError, TypeError, KeyError, UnicodeError, binascii.Error,
-                zlib.error, json.JSONDecodeError):
-            return set()
 
     def set_current_best(self, experiment):
         self.current_best = experiment.to_dict()
@@ -1065,23 +1037,23 @@ class ExperienceMemory:
         # dictionary cannot abort an unattended factory save or create a
         # duplicate garbage stream on every retry.
         self.lessons = [
-            item for item in self._dict_list(self.lessons)
+            item for item in dict_list(self.lessons)
             if isinstance(item.get("claim"), str) and item["claim"].strip()
         ]
         self.avoid = [
-            item for item in self._dict_list(self.avoid)
+            item for item in dict_list(self.avoid)
             if isinstance(item.get("direction"), str) and item["direction"].strip()
         ]
         self.next = [
-            item for item in self._dict_list(self.next)
+            item for item in dict_list(self.next)
             if isinstance(item.get("idea"), str) and item["idea"].strip()
         ]
         self.active_hypotheses = [
-            item for item in self._dict_list(self.active_hypotheses)
+            item for item in dict_list(self.active_hypotheses)
             if isinstance(item.get("id"), (str, int)) and str(item["id"]).strip()
         ]
         self.short_term = [
-            item for item in self._dict_list(self.short_term)
+            item for item in dict_list(self.short_term)
             if isinstance(item.get("text"), str) and item["text"].strip()
         ]
         merged = []
@@ -1120,7 +1092,7 @@ class ExperienceMemory:
             self.lineages = dict(ordered[: self.max_lineages])
         if len(self.garbage) > self.max_garbage:
             self.garbage = sorted(
-                self._dict_list(self.garbage),
+                dict_list(self.garbage),
                 key=lambda x: self._number(x.get("moved_at")),
                 reverse=True,
             )[: self.max_garbage]
