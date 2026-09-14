@@ -136,7 +136,7 @@ class TestFactoryBlockerControl(unittest.TestCase):
             self.assertFalse(factory.recheck_blocker(
                 {"kind": "CONTROL_PLANE_EVIDENCE"})["changed"])
 
-    def test_budget_shortage_recheck_allows_retry_after_cooldown(self):
+    def test_budget_shortage_recheck_does_not_fake_evidence_change(self):
         with tempfile.TemporaryDirectory() as directory:
             catalog = os.path.join(directory, "catalog.toml")
             with open(catalog, "w", encoding="utf-8") as handle:
@@ -144,16 +144,60 @@ class TestFactoryBlockerControl(unittest.TestCase):
             factory = AlphaFactory(registry=object(), catalog_path=catalog)
             now = time.time()
             # A route-level BUDGET_SHORTAGE is not resolved by waiting for the
-            # (stable) field cache or catalog to move, so once the runner's
-            # recheck cooldown has elapsed we permit a retry and let the
-            # factory advance to the next probe round.
-            self.assertTrue(factory.recheck_blocker(
+            # stable field cache or catalog; episode advance is runner-owned.
+            self.assertFalse(factory.recheck_blocker(
                 {"kind": "BUDGET_SHORTAGE", "last_seen_at": now - 100.0})["changed"])
-            self.assertTrue(factory.recheck_blocker(
+            self.assertFalse(factory.recheck_blocker(
                 {"kind": "BUDGET_SHORTAGE", "last_seen_at": now + 100.0})["changed"])
             # No valid last_seen means no recorded blocker -> no retry.
             self.assertFalse(factory.recheck_blocker(
                 {"kind": "BUDGET_SHORTAGE"})["changed"])
+
+    def test_budget_shortage_episode_advance_does_not_post_or_release_quota(self):
+        with tempfile.TemporaryDirectory() as directory:
+            blocker = AIFactoryRunner._blocker_projection(
+                "BUDGET_SHORTAGE", {"budget_shortage_count": 2},
+                now=10.0, recheck_sec=0,
+            )
+            with open(os.path.join(directory, "factory_session.json"), "w", encoding="utf-8") as handle:
+                json.dump({
+                    "session_id": "session-budget",
+                    "status": "STOPPED",
+                    "deadline": 1000,
+                    "rounds_completed": 1,
+                    "simulations_reserved": 9,
+                    "simulation_cap": 100,
+                    "quota": {
+                        "schema_version": 1,
+                        "timezone": "America/New_York",
+                        "local_date": "1970-01-01",
+                        "week_start": "1969-12-29",
+                        "daily_cap": 100,
+                        "weekly_cap": 100,
+                        "daily_reserved": 9,
+                        "weekly_reserved": 9,
+                    },
+                    "last_round": 4,
+                    "probe_offset": 2,
+                    "blocker": blocker,
+                }, handle)
+            agent = SimpleNamespace(
+                state_dir=directory,
+                factory_config={},
+                alpha_factory=Mock(),
+                run_suggestion_round=Mock(side_effect=AssertionError("no suggestion")),
+                run_proposals=Mock(side_effect=AssertionError("no proposals")),
+                checkpoints=Mock(),
+            )
+            result = AIFactoryRunner(
+                agent, clock=lambda: 20.0, sleeper=Mock()
+            ).run(duration_sec=0, max_simulations=100)
+
+        self.assertEqual(result["last_action"], "ADVANCE_ROUTE_EPISODE")
+        self.assertEqual(result["simulations_reserved"], 9)
+        self.assertEqual(result["probe_offset"], 2)
+        agent.run_suggestion_round.assert_not_called()
+        agent.run_proposals.assert_not_called()
 
 
 if __name__ == "__main__":

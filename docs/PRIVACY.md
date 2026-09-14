@@ -14,6 +14,14 @@ trajectory, ExperienceMemory, PnL, reports, plans, findings and generated
 exports are local-only. Keep them under ignored `.wqb_state/`, `research_data/`,
 `reports/` or `.planning/` paths owned by the existing runtime.
 
+The durable `.wqb_state/factory_session.json` is stricter than a general local
+research file: it is a bounded control-plane envelope. It may retain session,
+quota, retry, route counters, blocker taxonomy/counts and session-bound opaque
+route set digests, but never raw expressions, field/Alpha/template/dataset IDs,
+research questions, mechanisms, lineage/arm identity, metrics, checks, PnL or
+arbitrary exception messages. `factory status` and `factory run` use the same
+bounded projection.
+
 ## Documentation and commit hygiene
 
 Do not put research history, dated round reports, private paths, credentials or

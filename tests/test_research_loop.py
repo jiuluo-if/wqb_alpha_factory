@@ -346,8 +346,8 @@ class TestResearchLoopIntegration(unittest.TestCase):
 
         self.assertEqual(result["status"], "STOPPED")
         self.assertEqual(result["last_action"], "STOP_BUDGET_SHORTAGE")
-        self.assertIn("budget_audit", result["last_result"])
-        self.assertGreater(result["last_result"]["budget_audit"]["shortage_count"], 0)
+        self.assertGreater(result["last_result"]["shortage_count"], 0)
+        self.assertNotIn("budget_audit", result["last_result"])
         agent.run_proposals.assert_not_called()
 
     def test_restart_preserves_budget_route_and_no_gain_state(self):

@@ -54,6 +54,50 @@ class AIFactoryRunner:
     SESSION_FILE = "factory_session.json"
     CHECKPOINT_CACHE_MAX = 512
     BLOCKER_RECHECK_SEC = 3600.0
+    _ROUTE_DIMENSIONS = {
+        "candidate_expression": "candidate_expression_fingerprints",
+        "semantic_mechanism": "semantic_mechanism_fingerprints",
+        "structural_family": "structural_family_fingerprints",
+        "field_concept": "field_concept_fingerprints",
+        "relationship": "relationship_fingerprints",
+        "dataset_route": "dataset_route",
+        "research_question": "research_question_fingerprints",
+    }
+    _CONTROL_TOKENS = {
+        "UNKNOWN", "NONE", "READY", "RUNNING", "STOPPED", "DEADLINE",
+        "ROUND_CAP", "START", "ZERO_DURATION", "RECONCILE_REQUIRED",
+        "INVALID_SESSION", "INVALID_SIMULATION_QUOTA", "RETRYING",
+        "PREFLIGHT", "FEASIBILITY", "BUDGET_SHORTAGE", "OPERATOR_CAPABILITY",
+        "PREFLIGHT_BLOCKED", "FACTORY_BATCH_BLOCKED", "FACTORY_BATCH_NOT_READY",
+        "FACTORY_FEASIBILITY_CHECK_BLOCKED", "FACTORY_BUDGET_SHORTAGE",
+        "RUN_PROPOSALS_NOT_EXECUTED", "BLOCKER_UNCHANGED", "BLOCKED_RECHECK_NOT_DUE",
+        "SIMULATION_BUDGET_CAP", "OPERATOR_CAPABILITY_BLOCKED",
+        "OPERATOR_CAPABILITY_UNKNOWN", "STOP_PREFLIGHT_BLOCKER",
+        "FACTORY_BATCH_BUDGET_BLOCKED", "DAILY_OR_WEEKLY_BUDGET_BLOCKED",
+        "ORPHANED_PROPOSALS_BUDGET_BLOCKED", "RECOVERY_BUDGET_BLOCKED",
+        "BUDGET_BLOCKED", "STORAGE_RECONCILE_REQUIRED", "CHECKPOINT_BLOCKED",
+        "EXECUTION_RECONCILE_REQUIRED", "STOP_REQUESTED", "WAIT_AGENT_DECISION",
+        "WAIT_NO_SUGGESTION", "WAIT_INVALID_SUGGESTION", "WAIT_FACTORY_BATCH",
+        "WAIT_NO_VALID_PROPOSAL", "RUN_PROPOSALS_PENDING", "RECOVER_PROPOSALS_PENDING",
+        "RECOVER_CHECKPOINT", "RECOVERED_PROPOSALS", "RECOVERED_CHECKPOINT",
+        "BLOCKER_COOLDOWN", "STOP_OPERATOR_CAPABILITY", "PROPOSALS_WRITE_ERROR",
+        "ASSEMBLE_ERROR", "RUN_PROPOSALS_ERROR", "RECOVER_PROPOSALS_ERROR",
+        "EXECUTION_RECONCILE_REQUIRED", "FACTORY_BATCH_BUDGET_BLOCKED",
+        "ROUND_COMPLETE", "STOP_MECHANISM_ROUTE", "REROUTE_FACTORY_FEASIBILITY",
+        "STOP_BUDGET_SHORTAGE", "REROUTE_BUDGET_SHORTAGE", "ADVANCE_ROUTE_EPISODE",
+        "REROUTE", "STOP", "CANDIDATE_CHANGE_ONLY", "RESEARCH_INFORMATION_CHANGE",
+        "NONE", "CANDIDATE_CHANGE", "SEMANTIC_CHANGE", "RELATIONSHIP_CHANGE",
+        "DATASET_CHANGE", "QUESTION_CHANGE", "FAILURE_TAXONOMY", "FREQUENCY_EVIDENCE",
+        "CAPABILITY_STATUS", "BUDGET_SHORTAGE_REASON", "BUDGET_SHORTAGE_COUNT",
+        "CURRENT_BUNDLE", "SAME_DATASET_RELATIONSHIP", "SAME_DATASET_NEW_MECHANISM",
+        "NEW_DATASET_COMPOSITION", "REDISCOVERY",
+        "FIELD_SEMANTICS_INSUFFICIENT", "FREQUENCY_EVIDENCE_INSUFFICIENT",
+        "FREQUENCY_INCOMPATIBLE", "RELATIONSHIP_REVIEW", "MECHANISM_FAMILY_EXHAUSTED",
+        "TEMPLATE_INCOMPATIBLE", "CROSS_DATASET_FEASIBILITY_ZERO",
+        "PREFLIGHT_REJECTED", "DUPLICATE_LOCAL", "DIVERSITY_REJECTED",
+        "INVALID_SETTINGS", "BATCH_CAP", "ALREADY_SIMULATED", "SUCCESS",
+        "FAIL", "FAILED", "SUSPICIOUS_HIGH_SIGNAL", "PASS", "BLOCK",
+    }
 
     @staticmethod
     def _safe_control_token(value, default="UNKNOWN"):
@@ -63,7 +107,9 @@ class AIFactoryRunner:
         if not isinstance(value, (str, int, float, bool)):
             return default
         token = str(value).strip().upper()
-        return token[:80] if token else default
+        if token in AIFactoryRunner._CONTROL_TOKENS:
+            return token
+        return default
 
     @staticmethod
     def _safe_nonnegative_count(value):
@@ -71,6 +117,13 @@ class AIFactoryRunner:
             return max(0, int(value))
         except (TypeError, ValueError, OverflowError):
             return 0
+
+    @staticmethod
+    def _safe_timestamp(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
 
     def _blocker_signature(kind, probe):
         """Hash only bounded control-plane classes, never research payloads."""
@@ -176,6 +229,38 @@ class AIFactoryRunner:
         )
 
     @staticmethod
+    def _begin_route_episode(session, round_no):
+        if session.get("route_episode_round") == round_no:
+            return
+        session["route_episode_round"] = round_no
+        session["route_attempt"] = 0
+        session["no_gain_attempts"] = 0
+        session["last_feasibility_check"] = None
+        session["last_budget_probe"] = None
+        session["last_preflight_probe"] = None
+
+    @staticmethod
+    def _finish_route_episode(session, round_no):
+        session["route_episode_round"] = round_no
+        session["route_attempt"] = 0
+        session["no_gain_attempts"] = 0
+        session["last_feasibility_check"] = None
+        session["last_budget_probe"] = None
+        session["last_preflight_probe"] = None
+
+    @classmethod
+    def _advance_route_episode(cls, session):
+        round_no = session.get("last_round")
+        cls._begin_route_episode(session, round_no)
+        cls._finish_route_episode(session, round_no)
+        session["last_action"] = "ADVANCE_ROUTE_EPISODE"
+        session["last_result"] = {
+            "round_no": round_no,
+            "status": "ADVANCE_ROUTE_EPISODE",
+            "probe_offset": cls._safe_nonnegative_count(session.get("probe_offset")),
+        }
+
+    @staticmethod
     def route_decision(previous_probe, current_probe, *, route_attempt,
                        no_gain_attempts, max_route_attempts=3,
                        max_no_gain_attempts=2):
@@ -183,14 +268,29 @@ class AIFactoryRunner:
         previous_probe = previous_probe if isinstance(previous_probe, dict) else {}
         current_probe = current_probe if isinstance(current_probe, dict) else {}
         current_taxonomy = str(current_probe.get("failure_taxonomy") or "UNKNOWN")
-        candidate_changed = (
-            set(current_probe.get("candidate_expression_fingerprints") or ())
-            != set(previous_probe.get("candidate_expression_fingerprints") or ())
-        )
+        def dimension_changed(dimension):
+            digest_key = f"{dimension}_set_digest"
+            count_key = f"{dimension}_count"
+            if digest_key in previous_probe or digest_key in current_probe:
+                if digest_key not in previous_probe and not current_probe.get(count_key):
+                    return False
+                if digest_key not in current_probe and not previous_probe.get(count_key):
+                    return False
+                return (
+                    previous_probe.get(digest_key), previous_probe.get(count_key)
+                ) != (
+                    current_probe.get(digest_key), current_probe.get(count_key)
+                )
+            key = AIFactoryRunner._ROUTE_DIMENSIONS[dimension]
+            return set(previous_probe.get(key) or ()) != set(current_probe.get(key) or ())
+
+        candidate_changed = dimension_changed("candidate_expression")
         new_metadata = any(
-            key in previous_probe or key in current_probe
-            for key in ("semantic_mechanism_fingerprints", "structural_family_fingerprints",
-                        "field_concept_fingerprints", "research_question_fingerprints")
+            f"{dimension}_set_digest" in previous_probe
+            or f"{dimension}_set_digest" in current_probe
+            or AIFactoryRunner._ROUTE_DIMENSIONS[dimension] in previous_probe
+            or AIFactoryRunner._ROUTE_DIMENSIONS[dimension] in current_probe
+            for dimension in AIFactoryRunner._ROUTE_DIMENSIONS
         )
         changes = []
         for name, key in (
@@ -199,7 +299,13 @@ class AIFactoryRunner:
             ("dataset_change", "dataset_route"),
             ("question_change", "research_question_fingerprints"),
         ):
-            if set(current_probe.get(key) or ()) != set(previous_probe.get(key) or ()):
+            dimension = {
+                "semantic_mechanism_fingerprints": "semantic_mechanism",
+                "relationship_fingerprints": "relationship",
+                "dataset_route": "dataset_route",
+                "research_question_fingerprints": "research_question",
+            }[key]
+            if dimension_changed(dimension):
                 changes.append(name)
         for key in ("failure_taxonomy", "frequency_evidence", "capability_status",
                     "rejection_reason_counts", "budget_shortage_reason", "budget_shortage_count"):
@@ -291,6 +397,52 @@ class AIFactoryRunner:
         )
         return probe
 
+    @staticmethod
+    def _route_set_digest(values, *, session_id, dimension):
+        normalized = sorted({str(value) for value in (values or ()) if str(value).strip()})
+        canonical = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
+        return hashlib.sha256(
+            f"{session_id}:{dimension}:{canonical}".encode()
+        ).hexdigest()
+
+    @classmethod
+    def _route_probe_projection(cls, probe, *, session_id):
+        """Persist only bounded counts and session-bound route set digests."""
+        source = probe if isinstance(probe, dict) else {}
+        projection = cls._control_probe(source)
+        for dimension, source_key in cls._ROUTE_DIMENSIONS.items():
+            digest_key = f"{dimension}_set_digest"
+            count_key = f"{dimension}_count"
+            if source_key not in source and digest_key in source:
+                projection[count_key] = cls._safe_nonnegative_count(source.get(count_key))
+                digest = str(source.get(digest_key, "")).lower()
+                projection[digest_key] = (
+                    digest
+                    if re.fullmatch(r"[0-9a-f]{64}", digest)
+                    else cls._route_set_digest(
+                        (), session_id=session_id, dimension=dimension
+                    )
+                )
+                continue
+            values = source.get(source_key)
+            normalized = sorted({str(value) for value in (values or ()) if str(value).strip()})
+            projection[count_key] = len(normalized)
+            projection[digest_key] = cls._route_set_digest(
+                normalized, session_id=session_id, dimension=dimension
+            )
+        for key in ("eligible_count", "selected_count", "shortage_count"):
+            if key in source:
+                projection[key] = cls._safe_nonnegative_count(source.get(key))
+        if "budget_shortage_count" in source:
+            projection["shortage_count"] = cls._safe_nonnegative_count(
+                source.get("budget_shortage_count")
+            )
+        if "budget_shortage_reason" in source:
+            projection["shortage_reason"] = cls._safe_control_token(
+                source.get("budget_shortage_reason"), default="UNKNOWN"
+            )
+        return projection
+
     @classmethod
     def read_session(cls, state_dir):
         """Read the single factory envelope without constructing an Agent."""
@@ -327,6 +479,7 @@ class AIFactoryRunner:
             return None
         session["stop_requested"] = True
         session["last_action"] = "STOP_REQUESTED"
+        session = cls._control_plane_session(session)
         atomic_write_json_if_changed(
             os.path.join(state_dir, cls.SESSION_FILE), session,
             ignored_keys=("updated_at",),
@@ -336,14 +489,15 @@ class AIFactoryRunner:
     @classmethod
     def status_view(cls, state_dir):
         """Return only the stable, decision-useful session fields."""
-        session = cls.read_session(state_dir)
-        if not session:
+        raw_session = cls.read_session(state_dir)
+        if not raw_session:
             if os.path.exists(os.path.join(state_dir, cls.SESSION_FILE)):
                 return {
                     "status": "RECONCILE_REQUIRED",
                     "last_action": "INVALID_SESSION",
                 }
             return None
+        session = cls._control_plane_session(raw_session)
         keys = (
             "schema_version", "session_id", "started_at", "deadline", "status",
             "stop_requested", "rounds_completed", "simulations_reserved",
@@ -363,8 +517,8 @@ class AIFactoryRunner:
         if isinstance(view.get("last_result"), dict):
             view["last_result"] = {
                 key: view["last_result"][key]
-                for key in ("round_no", "proposals", "summary_round", "verdicts", "best",
-                            "status", "error_type", "message")
+                for key in ("round_no", "proposals", "summary_round", "verdict_count",
+                            "verdict_class_counts", "best_present", "status", "error_type")
                 if key in view["last_result"]
             }
         if isinstance(view.get("blocker"), dict):
@@ -573,7 +727,14 @@ class AIFactoryRunner:
                 }
                 self._save_session(session)
                 return session
-            recheck = self._recheck_blocker(blocker)
+            if blocker.get("kind") == "BUDGET_SHORTAGE":
+                self._advance_route_episode(session)
+                session.pop("blocker", None)
+                session["status"] = "RUNNING"
+                self._save_session(session)
+                recheck = {"changed": True, "probe": {}}
+            else:
+                recheck = self._recheck_blocker(blocker)
             if not recheck.get("changed"):
                 updated = dict(blocker)
                 updated["consecutive_same_count"] = int(
@@ -613,11 +774,13 @@ class AIFactoryRunner:
                 session.get("last_action") == "CHECKPOINT_BLOCKED"
                 and self._unfinished_checkpoint() is None
             ):
+                self._save_session(session)
                 return session
         # A zero-duration probe must never overwrite or stop a live session.
         # The explicit --factory-stop command is the only control-plane action
         # allowed to request a running factory to stop.
         if duration <= 0 and session and session.get("status") == "RUNNING":
+            self._save_session(session)
             return session
         previous_session = session
         if duration <= 0 or not session or session.get("status") != "RUNNING" or session.get("deadline", 0) <= now:
@@ -658,6 +821,7 @@ class AIFactoryRunner:
             session.setdefault("stop_requested", False)
         session.setdefault("route_attempt", 0)
         session.setdefault("no_gain_attempts", 0)
+        session.setdefault("route_episode_round", None)
         if "last_feasibility_check" not in session:
             session["last_feasibility_check"] = session.get("last_feasibility_probe")
         session.setdefault("last_feasibility_check", None)
@@ -773,6 +937,7 @@ class AIFactoryRunner:
                 session["last_result"] = self._compact_result(
                     session.get("last_round"), result, proposal_count
                 )
+                self._finish_route_episode(session, session.get("last_round"))
                 self._save_session(session)
                 continue
             foreign = self._unfinished_checkpoint()
@@ -848,6 +1013,7 @@ class AIFactoryRunner:
                 session["last_result"] = self._compact_result(
                     checkpoint_round, recovery_result, self._checkpoint_experiment_count(foreign)
                 )
+                self._finish_route_episode(session, checkpoint_round)
                 self._save_session(session)
 
             if round_cap and session["rounds_completed"] >= round_cap:
@@ -862,6 +1028,7 @@ class AIFactoryRunner:
                 break
 
             round_no = self.agent.next_round_no()
+            self._begin_route_episode(session, round_no)
             try:
                 probe_offset = max(0, int(session.get("probe_offset", 0)))
             except (TypeError, ValueError):
@@ -972,14 +1139,17 @@ class AIFactoryRunner:
                         getattr(self.agent, "min_cross_dataset_pairs", 0) > 0 and
                         not feasibility.get("batch_gate", {}).get("feasible", False)):
                         config = getattr(self.agent, "factory_config", {}) or {}
+                        feasibility_probe = self._route_probe_projection(
+                            feasibility, session_id=session["session_id"]
+                        )
                         decision = self.route_decision(
-                            session.get("last_feasibility_check"), feasibility,
+                            session.get("last_feasibility_check"), feasibility_probe,
                             route_attempt=session.get("route_attempt", 0),
                             no_gain_attempts=session.get("no_gain_attempts", 0),
                             max_route_attempts=config.get("max_route_attempts", 3),
                             max_no_gain_attempts=config.get("max_no_gain_attempts", 2),
                         )
-                        session["last_feasibility_check"] = feasibility
+                        session["last_feasibility_check"] = feasibility_probe
                         session["route_attempt"] = decision["route_attempt"] + 1
                         session["no_gain_attempts"] = decision["no_gain_attempts"]
                         session["probe_offset"] = probe_offset + 1
@@ -1059,6 +1229,9 @@ class AIFactoryRunner:
                 if shortage_count > 0:
                     budget_probe = self._selection_probe(
                         proposals, feasibility, budget_audit
+                    )
+                    budget_probe = self._route_probe_projection(
+                        budget_probe, session_id=session["session_id"]
                     )
                     config = getattr(self.agent, "factory_config", {}) or {}
                     decision = self.route_decision(
@@ -1199,6 +1372,9 @@ class AIFactoryRunner:
                 agent_status = stats.get("status") if isinstance(stats, dict) else None
                 if agent_status in {"PREFLIGHT_BLOCKED", "FACTORY_BATCH_BLOCKED"}:
                     preflight_probe = self._control_probe({}, stats)
+                    preflight_probe = self._route_probe_projection(
+                        preflight_probe, session_id=session["session_id"]
+                    )
                     config = getattr(self.agent, "factory_config", {}) or {}
                     decision = self.route_decision(
                         session.get("last_preflight_probe"), preflight_probe,
@@ -1250,6 +1426,7 @@ class AIFactoryRunner:
             session["rounds_completed"] += 1
             session["last_action"] = "ROUND_COMPLETE"
             session["last_result"] = self._compact_result(round_no, result, len(proposals))
+            self._finish_route_episode(session, round_no)
             self._save_session(session)
 
         if session["status"] == "RUNNING":
@@ -1474,9 +1651,182 @@ class AIFactoryRunner:
             and current.get("stop_requested")
         ):
             session["stop_requested"] = True
+        projected = self._control_plane_session(session)
+        session.clear()
+        session.update(projected)
         atomic_write_json_if_changed(
-            self.session_path, session, ignored_keys=("updated_at",)
+            self.session_path, projected, ignored_keys=("updated_at",)
         )
+
+    @classmethod
+    def _project_route_decision(cls, decision):
+        if not isinstance(decision, dict):
+            return None
+        projected = {}
+        for key in ("action", "change_type", "route_name"):
+            if key in decision:
+                projected[key] = cls._safe_control_token(decision[key])
+        for key in ("reason",):
+            if key in decision:
+                projected[key] = cls._safe_control_token(decision[key])
+        if "information_gain" in decision:
+            projected["information_gain"] = bool(decision["information_gain"])
+        if isinstance(decision.get("information_changes"), list):
+            projected["information_changes"] = [
+                cls._safe_control_token(value)
+                for value in decision["information_changes"]
+                if cls._safe_control_token(value) != "UNKNOWN"
+            ][:8]
+        for key in ("no_gain_attempts", "route_attempt", "route_index"):
+            if key in decision:
+                projected[key] = cls._safe_nonnegative_count(decision[key])
+        return projected
+
+    @classmethod
+    def _project_last_result(cls, result):
+        if not isinstance(result, dict):
+            return None
+        projected = {}
+        for key in ("round_no", "proposals", "required", "summary_round"):
+            if key in result:
+                projected[key] = cls._safe_nonnegative_count(result[key])
+        for key in ("eligible_count", "selected_count", "shortage_count"):
+            if key in result:
+                projected[key] = cls._safe_nonnegative_count(result[key])
+        if "shortage_reason" in result:
+            projected["shortage_reason"] = cls._safe_control_token(
+                result["shortage_reason"], default="UNKNOWN"
+            )
+        for key in ("status", "agent_status", "error_type"):
+            if key in result:
+                projected[key] = cls._safe_control_token(result[key])
+        for key in ("rejection_counts", "rejection_reason_counts"):
+            counts = result.get(key)
+            if isinstance(counts, dict):
+                projected[key] = {
+                    cls._safe_control_token(name): cls._safe_nonnegative_count(value)
+                    for name, value in counts.items()
+                    if cls._safe_control_token(name) != "UNKNOWN"
+                    and cls._safe_nonnegative_count(value) > 0
+                }
+        audit = result.get("budget_audit")
+        if isinstance(audit, dict):
+            for source_key, target_key in (
+                ("eligible_count", "eligible_count"),
+                ("selected_count", "selected_count"),
+                ("shortage_count", "shortage_count"),
+            ):
+                if source_key in audit:
+                    projected[target_key] = cls._safe_nonnegative_count(audit[source_key])
+            if "shortage_reason" in audit:
+                projected["shortage_reason"] = cls._safe_control_token(
+                    audit["shortage_reason"], default="UNKNOWN"
+                )
+        if "best" in result:
+            projected["best_present"] = bool(result.get("best"))
+        if "verdicts" in result:
+            verdicts = result.get("verdicts")
+            if isinstance(verdicts, dict):
+                projected["verdict_class_counts"] = {
+                    cls._safe_control_token(name): cls._safe_nonnegative_count(value)
+                    for name, value in verdicts.items()
+                    if cls._safe_control_token(name) != "UNKNOWN"
+                    and cls._safe_nonnegative_count(value) > 0
+                }
+                projected["verdict_count"] = sum(projected["verdict_class_counts"].values())
+            elif isinstance(verdicts, (list, tuple)):
+                projected["verdict_count"] = len(verdicts)
+        route_decision = cls._project_route_decision(result.get("route_decision"))
+        if route_decision:
+            projected["route_decision"] = route_decision
+        return projected
+
+    @classmethod
+    def _control_plane_session(cls, session):
+        source = session if isinstance(session, dict) else {}
+        projected = {}
+        scalar_keys = (
+            "schema_version", "created_by_version", "session_id", "started_at",
+            "deadline", "status", "stop_requested", "rounds_completed",
+            "simulations_reserved", "simulation_cap", "last_round", "last_action",
+            "route_attempt", "no_gain_attempts", "probe_offset", "retry_count",
+            "route_episode_round", "finished_at",
+        )
+        for key in scalar_keys:
+            if key not in source:
+                continue
+            value = source[key]
+            if key in {"status", "last_action"}:
+                value = cls._safe_control_token(value)
+            elif key == "created_by_version":
+                value = CREATED_BY_VERSION
+            elif key in {"started_at", "deadline", "finished_at"}:
+                try:
+                    value = float(value)
+                except (TypeError, ValueError, OverflowError):
+                    continue
+            elif key in {
+                "rounds_completed", "simulations_reserved", "simulation_cap",
+                "last_round", "route_attempt", "no_gain_attempts", "probe_offset",
+                "retry_count", "route_episode_round",
+            }:
+                value = cls._safe_nonnegative_count(value)
+            elif key == "stop_requested":
+                value = bool(value)
+            projected[key] = value
+        if isinstance(source.get("quota"), dict):
+            quota = source["quota"]
+            projected["quota"] = {
+                key: quota[key]
+                for key in (
+                    "schema_version", "timezone", "local_date", "week_start",
+                    "daily_cap", "weekly_cap", "daily_reserved", "weekly_reserved",
+                )
+                if key in quota
+            }
+            for key in ("schema_version", "daily_cap", "weekly_cap", "daily_reserved", "weekly_reserved"):
+                if key in projected["quota"]:
+                    projected["quota"][key] = cls._safe_nonnegative_count(projected["quota"][key])
+            for key in ("local_date", "week_start"):
+                if key in projected["quota"] and not re.fullmatch(
+                    r"\d{4}-\d{2}-\d{2}", str(projected["quota"][key])
+                ):
+                    projected["quota"][key] = "UNKNOWN"
+            if projected["quota"].get("timezone") != WeeklySimulationQuota.TIMEZONE:
+                projected["quota"]["timezone"] = WeeklySimulationQuota.TIMEZONE
+        for key in ("last_feasibility_check", "last_budget_probe", "last_preflight_probe"):
+            raw = source.get(key)
+            if raw is None and key == "last_feasibility_check":
+                raw = source.get("last_feasibility_probe")
+            projected[key] = (
+                cls._route_probe_projection(raw, session_id=str(source.get("session_id", "UNKNOWN")))
+                if isinstance(raw, dict) else None
+            )
+        if isinstance(source.get("blocker"), dict):
+            blocker = source["blocker"]
+            signature = str(blocker.get("signature", "")).lower()
+            if not re.fullmatch(r"[0-9a-f]{64}", signature):
+                signature = ""
+            projected["blocker"] = {
+                "kind": cls._safe_control_token(blocker.get("kind")),
+                "signature": signature,
+                "consecutive_same_count": cls._safe_nonnegative_count(
+                    blocker.get("consecutive_same_count")
+                ),
+                "first_seen_at": cls._safe_timestamp(blocker.get("first_seen_at")),
+                "last_seen_at": cls._safe_timestamp(blocker.get("last_seen_at")),
+                "next_recheck_at": cls._safe_timestamp(blocker.get("next_recheck_at")),
+                "resume_hint": "等待上游 control-plane evidence 更新后重试一次",
+            }
+        if isinstance(source.get("last_result"), dict):
+            projected["last_result"] = cls._project_last_result(source["last_result"])
+        if isinstance(source.get("feed_refresh"), dict):
+            projected["feed_refresh"] = {
+                key: cls._safe_control_token(source["feed_refresh"].get(key))
+                for key in ("status", "last_attempt_status")
+                if source["feed_refresh"].get(key) is not None
+            }
+        return projected
 
     def _load_session(self):
         session = self.read_session(self.state_dir)
@@ -1527,7 +1877,6 @@ class AIFactoryRunner:
         session["last_result"] = {
             "status": "RETRYING",
             "error_type": type(exc).__name__,
-            "message": str(exc)[:200],
         }
 
     def _stop_on_terminal_error(self, session, action, exc):
@@ -1543,7 +1892,6 @@ class AIFactoryRunner:
         session["last_result"] = {
             "status": "RECONCILE_REQUIRED",
             "error_type": error_name,
-            "message": str(exc)[:200],
         }
         self._save_session(session)
         return True
@@ -1561,6 +1909,5 @@ class AIFactoryRunner:
             "proposals": proposal_count,
             "summary_round": result.get("round"),
             "verdicts": result.get("verdicts"),
-            "best": (result.get("best") or {}).get("expression")
-                    if isinstance(result.get("best"), dict) else None,
+            "best_present": bool(result.get("best")),
         }

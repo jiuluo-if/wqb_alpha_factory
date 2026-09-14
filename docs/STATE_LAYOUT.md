@@ -10,7 +10,7 @@
 | 原始证据 | `trajectory.jsonl`（Trajectory owner 的 append-only canonical 证据）；`trial_ledger.jsonl` 是 durable lifecycle/accounting owner | 已确认 Experiment 的研究证据：metrics、checks、field audit、hypothesis、economic mechanism；同一 `id` 可有 canonical 首行 + `RESEARCH_SETTLED` 结算 revision | `trajectory.jsonl` 由既有 owner 追加 revision 并在新进程只读 rehydrate（latest valid revision wins）；ledger selection/settlement 由同一 state owner scope 保护；远程未完成状态只由 checkpoint 恢复 |
 | 执行恢复 | `round_*.checkpoint.json`、`run.lock`、POSIX `run.lock.guard` | 提交状态、progress URL、锁和崩溃恢复依据 | `run.lock`/OS mutex 是整个 `state_dir` 的唯一 root owner；POSIX `.guard` 是 `flock` 同步原语，不是 research/result sidecar。Simulation worker 只能使用当前 root owner 显式创建的、绑定 `state_dir` 与 owner 生命周期的内存 delegation；owner 释放后 delegation 立即失效。OS owner 存活或存在未完成 checkpoint 时禁止新轮和移动 |
 | 当前工作项 | `suggestions.json`、`proposals.json` | 当前 discovery 证据包与待执行提案；长时工厂复用同一 inbox | 只由规定流程生成/审阅；逻辑内容不变不重写；targeted inbox 的 read/check/write 在同一 owner transaction 内完成 |
-| 工厂控制面 | `factory_session.json` | Factory session 的 deadline、最近动作、`stop_requested`、本地配额和 bounded blocker retry guard | 固定单文件且是 Factory quota 的唯一 owner；quota lifecycle 按纽约本地日/ISO week 连续，session renewal 不等于 quota renewal；blocker 仅为去私有化 control-plane projection，不保存研究 payload，也不创建第二 state store；阶段配额为每周 11200、每日 1600（纽约本地日刷新）；`factory status` 只读，`factory stop` 原子请求安全停止；不按轮次复制 session/log |
+| 工厂控制面 | `factory_session.json` | Factory session 的 deadline、最近动作、`stop_requested`、本地配额、bounded retry/route counters、blocker 和 opaque route aggregate | 固定单文件且是 Factory quota 的唯一 owner；quota lifecycle 按纽约本地日/ISO week 连续，session renewal 不等于 quota renewal；只保存 bounded control-plane projection、counts 和 session-bound set digest，不保存 Alpha/field/expression/template/dataset/research/metrics payload；blocker 仅为去私有化 control-plane projection，不创建第二 state store；阶段配额为每周 11200、每日 1600（纽约本地日刷新）；`factory status` 只读，`factory stop` 原子请求安全停止；不按轮次复制 session/log |
 | TrialLedger | `.wqb_state/trial_ledger.jsonl` | 唯一 durable append-only lifecycle、optimization selection 与 settlement accounting owner | 本地 private research state；所有 durable append 由 root owner thread 或显式 delegated Simulation worker 执行；首次真实 accounting mutation 时才记录 `COMPLETE_FROM_START` 或 `INCOMPLETE_LEGACY` 边界；构造和只读 inspection 不写盘，不从 Trajectory 伪造遗漏 selection |
 | Trajectory / ExperienceMemory | `trajectory.jsonl` / existing memory owner | Trajectory 只拥有 executed Experiment evidence；ExperienceMemory 只保留派生 decision/learning view | settlement revision 通过同一 Experiment identity；selection fact 不再写入 ExperienceMemory |
 | 当日结果视图 | 进程内 `DailyResearchCache` | 当前进程内的模拟结果、Alpha 和颜色视图 | 跨纽约本地日自动清空；不写研究状态 |
@@ -22,6 +22,12 @@
 | 当前 checkpoint | `round_*.checkpoint.json` | 未完成远程任务的 progress URL、身份和最小恢复元数据 | 这是唯一结果恢复边界；不得手工覆盖 |
 
 自主 factory 的优化层/探索层只写入当前 `proposals.json` 的审计字段和 `factory_batch_stats`，不新增状态文件；云端优先级仍来自 `.alpha_feed_cache/weekly.json` 的轻量 ID/时间戳，优化证据仍必须来自当前进程的完成记录和后续 live API。
+
+`factory_session.json` 的 route probe 只保留每个比较维度的 bounded count 与
+带 `session_id + dimension` domain separation 的 SHA-256 set digest；相同 session
+内的集合比较仍保留 route decision 语义，session renewal 不产生稳定的跨 session
+研究 fingerprint。rich feasibility、budget audit、proposal、checkpoint、Trajectory
+和 TrialLedger payload 继续归其既有 owner，不通过 session projection 搬迁或复制。
 
 ## 记忆阅读顺序
 

@@ -344,22 +344,17 @@ class AlphaFactory:
         reassembles candidates, and never writes state: ``changed=True``
         simply permits the runner to retry the probe once.
 
-        A route-level ``BUDGET_SHORTAGE`` (this hypothesis pool yields too
-        few eligible candidates) is *not* resolved by waiting for the field
-        cache or catalog to move: in the autonomous loop that evidence is
-        stable, so waiting would stall the research loop indefinitely.  The
-        runner only invokes this hook once the recheck cooldown has elapsed,
-        so for ``BUDGET_SHORTAGE`` we permit a retry unconditionally, letting
-        the factory advance to the next probe round instead of parking.  The
-        cooldown gate above still bounds how often this can happen.
+        A route-level ``BUDGET_SHORTAGE`` is not evidence freshness.  The
+        runner owns an explicit route-episode advance for that case; this
+        hook must not relabel a cooldown expiry as changed evidence.
         """
         context = context if isinstance(context, dict) else {}
         try:
             last_seen = float(context.get("last_seen_at"))
         except (TypeError, ValueError):
             last_seen = 0.0
-        if context.get("kind") == "BUDGET_SHORTAGE" and last_seen > 0:
-            return {"changed": True, "probe": {}}
+        if context.get("kind") == "BUDGET_SHORTAGE":
+            return {"changed": False, "probe": {}}
         if last_seen <= 0:
             return {"changed": False, "probe": {}}
         paths = []
