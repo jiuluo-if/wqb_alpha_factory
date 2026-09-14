@@ -250,6 +250,10 @@ DIRECT_TESTS = {
         "tests/test_agent_decision_to_proposal.py",
         "tests/test_proposal_safety.py",
     ),
+    "wqb_agent/optimizer_selection.py": (
+        "tests/test_optimizer_workflow.py",
+        "tests/test_multi_generation_optimization.py",
+    ),
     "wqb_agent/alpha_factory.py": (
         "tests/test_factory_batch_contract.py",
         "tests/test_factory_mechanism_selection.py",

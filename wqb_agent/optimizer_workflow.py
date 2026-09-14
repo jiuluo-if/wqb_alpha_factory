@@ -24,6 +24,7 @@ from .optimization_decision import (
     validation_candidate_values,
     validation_rejections,
 )
+from .optimizer_selection import parent_rejections
 from .pre_correlation import READINESS_BANDS, failing_check_names
 from .research_guard import overfit_expression_reason, parameter_only_change_reason
 from .research_yield import ResearchYieldFunnel, child_generation_bound
@@ -254,31 +255,7 @@ class OptimizerWorkflow:
 
     @staticmethod
     def _parent_rejections(parent):
-        if not isinstance(parent, dict):
-            return ["INVALID_PARENT"]
-        if str(parent.get("status") or "").upper() != "DONE":
-            return ["PARENT_NOT_DONE"]
-        reasons = []
-        metrics = parent.get("metrics")
-        if not isinstance(metrics, dict) or not metrics:
-            reasons.append("PARENT_METRICS_MISSING")
-        if not isinstance(metrics, dict) or "checks" not in metrics:
-            reasons.append("PARENT_CHECKS_INCOMPLETE")
-        if not parent.get("expression"):
-            reasons.append("PARENT_METRICS_MISSING")
-        field_missing = False
-        for key in ("fields_used", "datasets", "field_understanding",
-                    "field_analysis", "field_source", "field_hypothesis_basis"):
-            value = parent.get(key)
-            if not value:
-                field_missing = True
-        if field_missing:
-            reasons.append("PARENT_FIELD_EVIDENCE_MISSING")
-        if (not parent.get("hypothesis_id") or
-            not isinstance(parent.get("economic_mechanism"), str) or
-            not parent["economic_mechanism"].strip()):
-            reasons.append("PARENT_HYPOTHESIS_MISSING")
-        return reasons
+        return parent_rejections(parent)
 
     def optimizable_signal_records(self, limit=128):
         """返回 trajectory 中已有 DONE 证据，并按 cloud metadata 排序。"""
