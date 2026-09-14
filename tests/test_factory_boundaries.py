@@ -329,6 +329,173 @@ class TestAgentColorAndOptimizerTriggers(unittest.TestCase):
 
 
 class TestFactoryRunnerAccounting(unittest.TestCase):
+    def test_new_session_carries_forward_same_day_quota(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            now = utc_timestamp(dt.datetime(2026, 9, 9, 12, 0))
+            quota = WeeklySimulationQuota(
+                weekly_cap=11200, daily_cap=1600, clock=lambda: now
+            )
+            prior_quota = quota.reserve(quota.initial_state(), 300)
+            previous = {
+                "schema_version": 1,
+                "created_by_version": "test",
+                "session_id": "old-session",
+                "started_at": now - 100,
+                "deadline": now - 1,
+                "status": "STOPPED",
+                "rounds_completed": 1,
+                "simulations_reserved": 300,
+                "simulation_cap": 11200,
+                "quota": prior_quota,
+            }
+            with open(
+                os.path.join(tmp, "factory_session.json"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                json.dump(previous, handle)
+
+            agent = SimpleNamespace(state_dir=tmp, alpha_factory=Mock())
+            result = AIFactoryRunner(
+                agent,
+                factory=agent.alpha_factory,
+                clock=lambda: now,
+                sleeper=lambda _seconds: None,
+            ).run(
+                duration_sec=0,
+                max_simulations=11200,
+                daily_simulation_cap=1600,
+                weekly_simulation_cap=11200,
+            )
+
+        self.assertNotEqual(result["session_id"], "old-session")
+        self.assertEqual(result["quota"]["daily_reserved"], 300)
+        self.assertEqual(result["quota"]["weekly_reserved"], 300)
+
+    def test_legacy_aggregate_is_migrated_before_new_session(self):
+        now = utc_timestamp(dt.datetime(2026, 9, 9, 12, 0))
+        quota = WeeklySimulationQuota(weekly_cap=11200, daily_cap=1600, clock=lambda: now)
+        carried = AIFactoryRunner._carry_forward_quota(
+            {"simulations_reserved": 700}, quota
+        )
+        self.assertEqual(carried["daily_reserved"], 700)
+        self.assertEqual(carried["weekly_reserved"], 700)
+
+    def test_carry_forward_delegates_day_and_week_rollover(self):
+        old_clock = utc_timestamp(dt.datetime(2026, 9, 8, 12, 0))
+        old_quota = WeeklySimulationQuota(
+            weekly_cap=11200, daily_cap=1600, clock=lambda: old_clock
+        )
+        old_state = old_quota.reserve(old_quota.initial_state(), 700)
+        new_day = utc_timestamp(dt.datetime(2026, 9, 9, 12, 0))
+        new_quota = WeeklySimulationQuota(
+            weekly_cap=11200, daily_cap=1600, clock=lambda: new_day
+        )
+        carried = AIFactoryRunner._carry_forward_quota({"quota": old_state}, new_quota)
+        self.assertEqual(carried["daily_reserved"], 0)
+        self.assertEqual(carried["weekly_reserved"], 700)
+
+        new_week = utc_timestamp(dt.datetime(2026, 9, 14, 12, 0))
+        rollover_quota = WeeklySimulationQuota(
+            weekly_cap=11200, daily_cap=1600, clock=lambda: new_week
+        )
+        carried = AIFactoryRunner._carry_forward_quota({"quota": old_state}, rollover_quota)
+        self.assertEqual(carried["daily_reserved"], 0)
+        self.assertEqual(carried["weekly_reserved"], 0)
+
+    def test_carry_forward_fails_closed_for_malformed_or_over_cap_state(self):
+        now = utc_timestamp(dt.datetime(2026, 9, 9, 12, 0))
+        quota = WeeklySimulationQuota(weekly_cap=1000, daily_cap=100, clock=lambda: now)
+        with self.assertRaises(ValueError):
+            AIFactoryRunner._carry_forward_quota(
+                {"quota": {"daily_reserved": "bad"}}, quota
+            )
+        with self.assertRaises(ValueError):
+            AIFactoryRunner._carry_forward_quota(
+                {"simulations_reserved": 1001}, quota
+            )
+
+    def test_carry_forward_preserves_usage_when_cap_increases_and_rejects_decrease(self):
+        now = utc_timestamp(dt.datetime(2026, 9, 9, 12, 0))
+        old_quota = WeeklySimulationQuota(weekly_cap=1000, daily_cap=100, clock=lambda: now)
+        old_state = old_quota.reserve(old_quota.initial_state(), 100)
+        increased = WeeklySimulationQuota(weekly_cap=2000, daily_cap=200, clock=lambda: now)
+        self.assertEqual(
+            AIFactoryRunner._carry_forward_quota({"quota": old_state}, increased)["weekly_reserved"],
+            100,
+        )
+        decreased = WeeklySimulationQuota(weekly_cap=50, daily_cap=50, clock=lambda: now)
+        with self.assertRaises(ValueError):
+            AIFactoryRunner._carry_forward_quota({"quota": old_state}, decreased)
+
+    def test_budget_cap_restart_remains_blocked_without_new_agent_work(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            now = utc_timestamp(dt.datetime(2026, 9, 9, 12, 0))
+            quota = WeeklySimulationQuota(weekly_cap=100, daily_cap=100, clock=lambda: now)
+            previous = {
+                "session_id": "old-session",
+                "started_at": now - 100,
+                "deadline": now - 1,
+                "status": "SIMULATION_BUDGET_CAP",
+                "rounds_completed": 1,
+                "simulations_reserved": 100,
+                "simulation_cap": 100,
+                "quota": quota.reserve(quota.initial_state(), 100),
+            }
+            with open(os.path.join(tmp, "factory_session.json"), "w", encoding="utf-8") as handle:
+                json.dump(previous, handle)
+            agent = SimpleNamespace(
+                state_dir=tmp,
+                alpha_factory=Mock(),
+                next_round_no=Mock(side_effect=AssertionError("suggestion must not run")),
+                run_suggestion_round=Mock(side_effect=AssertionError("suggestion must not run")),
+                run_proposals=Mock(side_effect=AssertionError("proposals must not run")),
+                checkpoints=SimpleNamespace(unfinished_except=lambda _round: None),
+            )
+            result = AIFactoryRunner(
+                agent, factory=agent.alpha_factory, clock=lambda: now
+            ).run(
+                duration_sec=10,
+                max_simulations=100,
+                daily_simulation_cap=100,
+                weekly_simulation_cap=100,
+            )
+
+        self.assertEqual(result["status"], "SIMULATION_BUDGET_CAP")
+        self.assertEqual(result["quota"]["daily_reserved"], 100)
+        self.assertEqual(result["quota"]["weekly_reserved"], 100)
+        agent.next_round_no.assert_not_called()
+        agent.run_suggestion_round.assert_not_called()
+        agent.run_proposals.assert_not_called()
+
+    def test_malformed_previous_quota_returns_reconcile_required(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            now = utc_timestamp(dt.datetime(2026, 9, 9, 12, 0))
+            previous = {
+                "session_id": "old-session",
+                "started_at": now - 100,
+                "deadline": now - 1,
+                "status": "STOPPED",
+                "rounds_completed": 1,
+                "simulations_reserved": 10,
+                "simulation_cap": 100,
+                "quota": {"daily_reserved": "invalid"},
+            }
+            with open(os.path.join(tmp, "factory_session.json"), "w", encoding="utf-8") as handle:
+                json.dump(previous, handle)
+            agent = SimpleNamespace(state_dir=tmp, alpha_factory=Mock())
+            result = AIFactoryRunner(
+                agent, factory=agent.alpha_factory, clock=lambda: now
+            ).run(
+                duration_sec=0,
+                max_simulations=100,
+                daily_simulation_cap=100,
+                weekly_simulation_cap=100,
+            )
+
+        self.assertEqual(result["status"], "RECONCILE_REQUIRED")
+        self.assertEqual(result["last_action"], "INVALID_SIMULATION_QUOTA")
+
     def test_known_expressions_include_completed_checkpoint_identities(self):
         with tempfile.TemporaryDirectory() as tmp:
             experiment = Experiment(1, "h", "rank(old_field)", {}, ["old_field"])

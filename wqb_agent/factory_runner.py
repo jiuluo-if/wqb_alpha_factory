@@ -416,6 +416,30 @@ class AIFactoryRunner:
         return quota
 
     @staticmethod
+    def _carry_forward_quota(previous_session, quota):
+        """Carry the canonical quota across a renewed session envelope."""
+        if not previous_session:
+            return quota.initial_state()
+        raw_state = previous_session.get("quota")
+        if raw_state is None:
+            # Legacy envelopes have no local-day metadata.  Project their
+            # aggregate conservatively into today's bucket, then let the
+            # quota owner validate caps and calendar rollover.
+            legacy_reserved = previous_session.get("simulations_reserved", 0)
+            if isinstance(legacy_reserved, bool):
+                raise ValueError("legacy reservation must be an integer")
+            try:
+                legacy_reserved = int(legacy_reserved)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("legacy reservation must be an integer") from exc
+            if legacy_reserved < 0:
+                raise ValueError("legacy reservation must be non-negative")
+            raw_state = quota.initial_state()
+            raw_state["daily_reserved"] = min(legacy_reserved, quota.daily_cap)
+            raw_state["weekly_reserved"] = legacy_reserved
+        return quota.normalize_state(raw_state)
+
+    @staticmethod
     def _quota_remaining(session, quota):
         state = quota.normalize_state(session.get("quota"))
         session["quota"] = state
@@ -595,7 +619,20 @@ class AIFactoryRunner:
         # allowed to request a running factory to stop.
         if duration <= 0 and session and session.get("status") == "RUNNING":
             return session
+        previous_session = session
         if duration <= 0 or not session or session.get("status") != "RUNNING" or session.get("deadline", 0) <= now:
+            try:
+                carried_quota = self._carry_forward_quota(previous_session, quota)
+            except ValueError:
+                if previous_session is not None:
+                    previous_session["status"] = "RECONCILE_REQUIRED"
+                    previous_session["last_action"] = "INVALID_SIMULATION_QUOTA"
+                    previous_session["last_result"] = {
+                        "status": "INVALID_SIMULATION_QUOTA"
+                    }
+                    self._save_session(previous_session)
+                    return previous_session
+                raise
             session = {
                 "schema_version": CHECKPOINT_VERSION,
                 "created_by_version": CREATED_BY_VERSION,
@@ -604,9 +641,9 @@ class AIFactoryRunner:
                 "deadline": now + duration,
                 "status": "RUNNING",
                 "rounds_completed": 0,
-                "simulations_reserved": 0,
+                "simulations_reserved": carried_quota["weekly_reserved"],
                 "simulation_cap": weekly_cap,
-                "quota": quota.initial_state(),
+                "quota": carried_quota,
                 "last_round": None,
                 "last_action": "START",
                 "last_result": None,
