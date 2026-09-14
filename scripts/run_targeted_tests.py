@@ -53,6 +53,11 @@ DIRECT_TESTS = {
         "tests/test_agent_evaluation.py",
         "tests/test_runtime_settlement.py",
     ),
+    "wqb_agent/alpha_semantics.py": (
+        "tests/test_alpha_semantics.py",
+        "tests/test_factory_semantic_traits.py",
+        "tests/test_factory_relationship_gate.py",
+    ),
     "wqb_agent/discovery.py": (
         "tests/test_discovery.py",
         "tests/test_discovery_selection.py",
