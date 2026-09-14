@@ -45,6 +45,7 @@ from .credentials import (
 )
 from .failures import FailureKind, classify_error
 from .protocol import probe_capability_response, retry_after_seconds
+from .query_errors import QueryTooBroadError
 
 BASE_URL = "https://api.worldquantbrain.com"
 
@@ -99,7 +100,7 @@ class WQBSimulationError(WQBError):
     kind = FailureKind.INFRA
 
 
-class WQBQueryTooBroadError(WQBSimulationError):
+class WQBQueryTooBroadError(WQBSimulationError, QueryTooBroadError):
     """The platform requires a narrower date/filter window."""
 
 

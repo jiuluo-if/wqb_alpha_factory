@@ -7,8 +7,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 
-from .client import WQBQueryTooBroadError
 from .daily_cache import NEW_YORK
+from .query_errors import QueryTooBroadError
 
 
 def remote_local_date(value):
@@ -110,7 +110,7 @@ class AlphaFeedWorkflow:
                             rows_fetched=rows_fetched[status],
                         )
                     return rows
-                except WQBQueryTooBroadError:
+                except QueryTooBroadError:
                     if depth >= 12 or end_at - start_at <= timedelta(minutes=1):
                         raise
                     midpoint = start_at + (end_at - start_at) / 2

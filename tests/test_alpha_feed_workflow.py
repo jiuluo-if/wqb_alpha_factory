@@ -385,7 +385,7 @@ class TestAlphaFeedWorkflowArchitecture(unittest.TestCase):
             ".factory_runner", "wqb_agent.factory_runner", "main", "cli",
         ):
             self.assertNotIn(forbidden, imports)
-        self.assertIn(".client", imports)
+        self.assertNotIn(".client", imports)
         for forbidden in (
             "submit_simulation(", "patch_alpha(", "submit_alpha(",
             "update_alpha(", "requests.post", "requests.patch",

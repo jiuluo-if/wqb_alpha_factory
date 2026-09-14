@@ -20,6 +20,11 @@ durable metrics by itself.
 
 ## CI Targeted Gate
 
+架构变更还必须运行 `tests/test_architecture_contracts.py`。该测试使用
+stdlib `ast` fail-closed 检查 workflow 不反向依赖 `Agent`/transport、领域模块
+不依赖 transport/orchestration，以及 persistence owner 不依赖 orchestration。
+每个新增 production module 必须先加入 `scripts/run_targeted_tests.py` 的显式映射。
+
 GitHub CI 使用 Python 3.11，执行必要的静态/离线检查，并根据 base SHA 选择与变更文件直接相关的测试：
 
 ```powershell

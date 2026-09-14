@@ -38,6 +38,12 @@ DIRECT_TESTS = {
         "tests/test_security_hardening_batch.py",
     ),
     "wqb_agent/protocol.py": ("tests/test_protocol_truth.py",),
+    "wqb_agent/query_errors.py": ("tests/test_alpha_feed_workflow.py", "tests/test_client_refactor.py"),
+    "wqb_agent/alpha_feed_workflow.py": (
+        "tests/test_alpha_feed_workflow.py",
+        "tests/test_runtime_composition.py",
+        "tests/test_runtime_safety.py",
+    ),
     "wqb_agent/discovery.py": (
         "tests/test_discovery.py",
         "tests/test_discovery_selection.py",
