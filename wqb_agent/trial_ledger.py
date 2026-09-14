@@ -558,10 +558,10 @@ class TrialLedger:
             if status == "DONE":
                 result[arm]["completed"] += 1
                 result[arm]["done"] += 1
-                result[arm]["evaluated"] += 1
-                result[arm]["reward_count"] += 1
                 try:
-                    reward = float(row.get("fitness", 0.0) or 0.0)
+                    reward = float(row.get("fitness"))
+                    result[arm]["evaluated"] += 1
+                    result[arm]["reward_count"] += 1
                     result[arm]["reward"] += reward
                     result[arm]["reward_sum"] += reward
                 except (TypeError, ValueError):
@@ -582,9 +582,9 @@ class TrialLedger:
                     result[arm]["skipped_local"] += 1
             elif status == "FAILED":
                 result[arm]["completed"] += 1
-                if str(row.get("reason_code") or row.get("reason") or "").upper() in {"INFRA", "RATE_LIMIT", "AUTH", "TIMEOUT"}:
+                if str(row.get("reason_code") or row.get("reason") or "").upper() in {"INFRA", "RATE_LIMIT", "AUTH", "TIMEOUT", "NETWORK", "HTTP"}:
                     result[arm]["failed_infra"] += 1
-                else:
+                elif str(row.get("reason_code") or row.get("reason") or "").upper() in {"RESEARCH", "FAIL"}:
                     result[arm]["failed_research"] += 1
         return dict(result)
 
@@ -719,12 +719,14 @@ class TrialLedger:
             elif status == "DONE":
                 state["completed"] += 1
                 state["done"] += 1
-                state["evaluated"] += 1
-                state["reward_count"] += 1
                 try:
                     reward = float(rows[-1].get("reward"))
+                    state["evaluated"] += 1
+                    state["reward_count"] += 1
                 except (TypeError, ValueError):
-                    reward = 0.0
+                    reward = None
+                if reward is None:
+                    continue
                 state["reward"] += reward
                 state["reward_sum"] += reward
             elif status in {"SKIPPED_LOCAL", "SKIPPED_STALE", "SKIPPED_UNKNOWN"}:
@@ -738,8 +740,8 @@ class TrialLedger:
             elif status == "FAILED":
                 state["completed"] += 1
                 category = str(rows[-1].get("reason_code") or rows[-1].get("reason") or "").upper()
-                if category in {"INFRA", "RATE_LIMIT", "AUTH", "TIMEOUT", "SUBMIT_UNKNOWN"}:
+                if category in {"INFRA", "RATE_LIMIT", "AUTH", "TIMEOUT", "SUBMIT_UNKNOWN", "NETWORK", "HTTP"}:
                     state["failed_infra"] += 1
-                else:
+                elif category in {"RESEARCH", "FAIL"}:
                     state["failed_research"] += 1
         return dict(result)

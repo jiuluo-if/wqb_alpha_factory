@@ -104,6 +104,21 @@ Experiment-backed TrialLedger 证明的重绑定使用 `PROPOSAL_ID_REBIND`。Se
 只负责 allocation，不拥有 execution identity；BudgetAllocator 对 terminal proposal
 key 的跨 arm reserve 也 fail closed。
 
+Simulation 的远端终态与本地研究终态是两个有序边界：`Simulator` 先收到
+`DONE/FAILED`，再等待 `on_complete` 将 terminal evidence 追加到 canonical
+Trajectory，成功确认后才发送终态 checkpoint update。`on_complete` 失败会向上抛出，
+保留已知远端身份但不写 terminal checkpoint；`UNKNOWN/SUBMIT_UNKNOWN` 仍按原有只读
+对账规则处理。恢复时只按 `Experiment.id + same_execution_identity` 批量合并，不能
+按 expression 猜测；Trajectory 的完整终态优先于稀疏 checkpoint，无法恢复且没有
+`progress_url` 时返回 `TERMINAL_EVIDENCE_UNRECOVERABLE`，不得反思、奖励或提交。
+
+自动 recovery 与手工 `finalize_recorded_round()` 共用同一 terminal projection：只有
+execution set 与 canonical Trajectory 一致、每个终态 evidence durable、无 unresolved
+且无 identity drift 时才能写 `complete=true`。`state audit` 对 cross-store 漂移只输出
+round/count/opaque IDs，具体包括 `TERMINAL_CHECKPOINT_MISSING_CANONICAL_EVIDENCE`、
+`CHECKPOINT_TRAJECTORY_IDENTITY_MISMATCH`、`DONE_CANONICAL_RESULT_EVIDENCE_INCOMPLETE`
+和 `CHECKPOINT_STATUS_BEHIND_CANONICAL_TERMINAL`。
+
 TrialLedger 对 proposal lifecycle 的 candidate、execution fingerprint、research role
 和 arm 采用最早合法 committed/submitted identity；稀疏 terminal row 只能补充状态，
 不能把历史试验迁移到另一个 arm。identity 或 arm drift 由 `state audit` fail closed。

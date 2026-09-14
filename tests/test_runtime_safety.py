@@ -27,6 +27,44 @@ from wqb_agent.workspace_snapshot import read_workspace_snapshot
 
 class TestRuntimeSafety(unittest.TestCase):
 
+    def test_audit_cross_store_terminal_evidence_is_bounded_and_fail_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            experiment = Experiment(
+                901, "h-901", "rank(private_signal)", {"decay": 4},
+                ["private_signal"], ["pv1"], id="opaque-exp-901",
+            )
+            experiment.status = "DONE"
+            experiment.metrics = {"fitness": 1.0}
+            agent = Agent(object(), {"simulation": {}, "agent": {"state_dir": tmp}})
+            agent._write_proposal_checkpoint(901, {"id": "h-901"}, [experiment], complete=False)
+            result = audit_state(tmp)
+
+        self.assertIn("TERMINAL_CHECKPOINT_MISSING_CANONICAL_EVIDENCE", result["errors"])
+        rendered = json.dumps(result, ensure_ascii=False)
+        self.assertNotIn("private_signal", rendered)
+        self.assertIn("opaque-exp-901", rendered)
+
+    def test_audit_treats_running_checkpoint_behind_canonical_done_as_recoverable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            experiment = Experiment(
+                902, "h-902", "rank(private_signal)", {"decay": 4},
+                ["private_signal"], ["pv1"], id="opaque-exp-902",
+            )
+            experiment.status = "DONE"
+            experiment.metrics = {"fitness": 1.0}
+            with open(os.path.join(tmp, "trajectory.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(experiment.to_dict()) + "\n")
+            checkpoint = experiment.to_dict()
+            checkpoint["status"] = "RUNNING"
+            with open(os.path.join(tmp, "round_902.checkpoint.json"), "w", encoding="utf-8") as handle:
+                json.dump({"schema_version": 1, "round_no": 902,
+                           "hypothesis": {"id": "h-902"}, "complete": False,
+                           "experiments": [checkpoint]}, handle)
+            result = audit_state(tmp, lifecycle_persistent=False)
+
+        self.assertTrue(result["ok"])
+        self.assertIn("CHECKPOINT_STATUS_BEHIND_CANONICAL_TERMINAL", result["warnings"])
+
     def test_snapshot_exposes_ledger_lifecycle_evidence_separately(self):
         with tempfile.TemporaryDirectory() as tmp:
             with open(os.path.join(tmp, "trial_ledger.jsonl"), "w", encoding="utf-8") as handle:
@@ -509,7 +547,8 @@ class TestRuntimeSafety(unittest.TestCase):
                     "fields_used": ["low"], "status": "DONE", "proposal_id": "p"
                 }]}, handle)
             result = audit_state(tmp, lifecycle_persistent=False)
-            self.assertTrue(result["ok"])
+            self.assertFalse(result["ok"])
+            self.assertIn("TERMINAL_CHECKPOINT_MISSING_CANONICAL_EVIDENCE", result["errors"])
             self.assertNotIn("ledger_missing", result["errors"])
             self.assertNotIn("checkpoint_ledger_mismatch", result["errors"])
 

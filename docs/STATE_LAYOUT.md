@@ -165,3 +165,19 @@ latest-valid-revision-wins; identity mismatches and corrupt rows are skipped.
   fail-closed and audited as `SETTLEMENT_REVISION_REJECTED`.
 - Settlement revisions never touch the Alpha Feed cache, color metadata, quotas
   or remote state; they add no scheduler and no second research-state owner.
+
+# Terminal evidence ordering and recovery
+
+Remote `DONE/FAILED` is transport evidence, not yet a locally settled result.
+The ordering is `remote terminal -> on_complete/canonical Trajectory append ->
+acknowledgement -> terminal checkpoint update -> round finalization`. A failed
+canonical append leaves the remote job known and the checkpoint unresolved; it
+never rewrites the remote result as `UNKNOWN` and never closes the checkpoint.
+
+Recovery joins checkpoint rows to canonical rows by exact `Experiment.id` and
+`same_execution_identity` in one batch lookup. A full canonical terminal row
+replaces a sparse checkpoint row without GET/POST. A terminal row with no
+canonical evidence may only poll its existing `progress_url`; without that URL
+recovery is `TERMINAL_EVIDENCE_UNRECOVERABLE`. Sparse terminal rows cannot enter
+reflection, SearchPolicy reward accounting, SubmissionPool, robustness or
+promotion. Workspace audit emits only bounded opaque IDs for cross-store drift.

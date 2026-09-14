@@ -63,7 +63,10 @@ class Simulator:
         after a worker has produced a terminal result.  This makes the real
         platform result visible immediately (rather than after the whole
         batch), while keeping state mutation and reflection in the caller.
-        Callback failures are isolated from simulation dispatch.
+        Terminal callbacks are the acknowledgement boundary for durable local
+        evidence.  A terminal checkpoint notification is therefore emitted
+        only after ``on_complete`` returns successfully; callback failures are
+        propagated instead of being downgraded to a transport result.
         """
         self.stop_dispatch = False
         self.paused_reason = None
@@ -98,15 +101,13 @@ class Simulator:
                         self.stop_dispatch = True
                         self.paused_reason = f"{exp.status}:{exp.id}"
                     if on_complete is not None:
-                        try:
-                            on_complete(exp)
-                        except Exception as callback_error:
-                            # Reporting must never turn a valid platform result
-                            # into an UNKNOWN simulation or stop repolling.
-                            print(
-                                f"[CALLBACK_ERROR] {exp.id}: "
-                                f"{type(callback_error).__name__}: {callback_error}"
+                        acknowledged = on_complete(exp)
+                        if acknowledged is False:
+                            raise RuntimeError(
+                                f"terminal evidence acknowledgement rejected: {exp.id}"
                             )
+                    if exp.status in {"DONE", "FAILED"} and on_update is not None:
+                        on_update(exp)
                     completed.append(exp)
                 fill_window()
 
@@ -142,7 +143,10 @@ class Simulator:
         recoverable = (WQBRateLimitError, WQBTimeoutError, WQBSimulationError)
 
         def persist():
-            if on_update is not None:
+            # DONE/FAILED updates are checkpoint notifications.  They must be
+            # deferred until the dispatcher has received the successful
+            # canonical evidence acknowledgement from ``on_complete``.
+            if on_update is not None and experiment.status not in {"DONE", "FAILED"}:
                 on_update(experiment)
 
         try:

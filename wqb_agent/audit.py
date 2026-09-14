@@ -37,6 +37,9 @@ def audit_state(state_dir, *, snapshot=None, lifecycle_persistent=True):
     observed_simulation_settled = set(trajectory_summary.observed_simulation_settled)
     observed_research_settled = set(trajectory_summary.observed_research_settled)
     checkpoint_terminal = {}
+    recoverable_status_behind = set(
+        trajectory_summary.checkpoint_status_behind_canonical_terminal
+    )
     ledger_summary = snapshot.ledger
     ledger_committed = set(ledger_summary.committed)
     ledger_submitted = set(ledger_summary.submitted)
@@ -95,6 +98,31 @@ def audit_state(state_dir, *, snapshot=None, lifecycle_persistent=True):
             "trajectory",
             collision_count=trajectory_summary.duplicate_remote_execution_projection,
             round_count=len(trajectory_summary.duplicate_remote_execution_projection_rounds),
+        )
+    if trajectory_summary.terminal_checkpoint_missing_canonical_evidence:
+        record(
+            "TERMINAL_CHECKPOINT_MISSING_CANONICAL_EVIDENCE",
+            "checkpoint+trajectory",
+            experiment_ids=list(trajectory_summary.terminal_checkpoint_missing_canonical_evidence),
+        )
+    if trajectory_summary.checkpoint_trajectory_identity_mismatch:
+        record(
+            "CHECKPOINT_TRAJECTORY_IDENTITY_MISMATCH",
+            "checkpoint+trajectory",
+            experiment_ids=list(trajectory_summary.checkpoint_trajectory_identity_mismatch),
+        )
+    if trajectory_summary.done_canonical_result_evidence_incomplete:
+        record(
+            "DONE_CANONICAL_RESULT_EVIDENCE_INCOMPLETE",
+            "trajectory+checkpoint",
+            experiment_ids=list(trajectory_summary.done_canonical_result_evidence_incomplete),
+        )
+    if trajectory_summary.checkpoint_status_behind_canonical_terminal:
+        record(
+            "CHECKPOINT_STATUS_BEHIND_CANONICAL_TERMINAL",
+            "checkpoint+trajectory",
+            severity="WARN",
+            experiment_ids=list(trajectory_summary.checkpoint_status_behind_canonical_terminal),
         )
     if ledger_summary.proposal_id_execution_rebind:
         record(
@@ -167,7 +195,19 @@ def audit_state(state_dir, *, snapshot=None, lifecycle_persistent=True):
             if validation_code in checkpoint_codes:
                 record(checkpoint_codes[validation_code], "checkpoint",
                        round=checkpoint_record["round_no"])
-            if checkpoint_record["checkpoint"].get("complete") is not True:
+            checkpoint_ids = {
+                str(row.get("id"))
+                for row in checkpoint_record["checkpoint"].get("experiments") or []
+                if isinstance(row, dict) and row.get("id")
+            }
+            if (
+                checkpoint_record["checkpoint"].get("complete") is not True
+                and not checkpoint_ids
+                or (
+                    checkpoint_record["checkpoint"].get("complete") is not True
+                    and not checkpoint_ids.issubset(recoverable_status_behind)
+                )
+            ):
                 record("unverifiable_unfinished_execution_identity", "checkpoint",
                        round=checkpoint_record["round_no"])
             record("checkpoint_unreadable", "checkpoint",

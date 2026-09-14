@@ -389,7 +389,7 @@ class BudgetAllocator:
             elif status == "FAILED":
                 if infrastructure:
                     state["failed_infra"] += 1
-                else:
+                elif category in {"RESEARCH", "FAIL"}:
                     state["failed_research"] += 1
                     # A completed Simulation whose evidence falsifies the
                     # mechanism is a valid zero-reward observation when the

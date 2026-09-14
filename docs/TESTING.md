@@ -8,6 +8,12 @@
 
 审查 diff 后，识别直接受影响的 behavior，运行 1–5 个相关 test method/class 和一个最近邻 regression；对 changed Python files 运行 `py_compile` 和 Ruff。只有 typed frontier 被改动时才运行对应 mypy。普通本地修改默认不跑 whole suite。
 
+Terminal-evidence changes must include behavior tests for callback ordering and
+callback failure, exact identity recovery from canonical Trajectory, sparse
+terminal fail-closed behavior, replay-neutral reward accounting, and bounded
+checkpoint/Trajectory audit findings. A terminal checkpoint is not evidence of
+durable metrics by itself.
+
 ## Progressive Expansion
 
 失败或涉及多个 owner、shared helper、proposal/schema、state merge semantics 或 safety contract 时，依次扩大到 nearby subsystem，再到相关 module/contract suite。改动 safety contract 必须有对应行为测试；这仍不是默认 whole-repository regression。

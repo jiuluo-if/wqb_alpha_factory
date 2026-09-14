@@ -35,6 +35,49 @@ from wqb_agent.submission import SubmissionPool, self_correlation_evidence
 
 class TestProposalExecutionSafety(TmpStateMixin, unittest.TestCase):
 
+    def test_resume_reuses_full_canonical_terminal_without_remote_poll(self):
+        """恢复时 canonical Trajectory 是同一执行的终态证据来源。"""
+        agent, client = make_agent(self._tmp, rounds=1)
+        durable = Experiment(
+            71, "h-71", "rank(returns)", {"decay": 4}, ["returns"],
+            ["pv1"], id="exp-71",
+        )
+        durable.status = "DONE"
+        durable.metrics = {"fitness": 1.25, "sharpe": 0.8}
+        durable.alpha_id = "alpha-71"
+        durable.progress_url = "progress-71"
+        checkpoint = Experiment.from_dict(durable.to_dict())
+        checkpoint.status = "UNKNOWN"
+        checkpoint.metrics = None
+        checkpoint.alpha_id = None
+        agent.trajectory.add(durable)
+        agent._write_proposal_checkpoint(71, {"id": "h-71"}, [checkpoint], complete=False)
+
+        agent._resume_proposal_checkpoint(agent._load_proposal_checkpoint(71))
+
+        self.assertEqual(client.sim_calls, [])
+        self.assertTrue(agent._load_proposal_checkpoint(71)["complete"])
+        restored = agent.trajectory.find_row("exp-71")
+        self.assertEqual(restored["metrics"], durable.metrics)
+
+    def test_terminal_checkpoint_without_canonical_evidence_fails_closed(self):
+        """稀疏终态不能直接进入反思、奖励或 submission。"""
+        agent, client = make_agent(self._tmp, rounds=1)
+        sparse = Experiment(
+            72, "h-72", "rank(returns)", {"decay": 4}, ["returns"],
+            ["pv1"], id="exp-72",
+        )
+        sparse.status = "DONE"
+        sparse.progress_url = None
+        sparse.metrics = None
+        agent._write_proposal_checkpoint(72, {"id": "h-72"}, [sparse], complete=False)
+
+        with self.assertRaisesRegex(ValueError, "TERMINAL_EVIDENCE_UNRECOVERABLE"):
+            agent._resume_proposal_checkpoint(agent._load_proposal_checkpoint(72))
+
+        self.assertEqual(client.sim_calls, [])
+        self.assertFalse(agent._load_proposal_checkpoint(72)["complete"])
+
     @staticmethod
     def _force_round_proposal(agent, *, settings=None):
         proposal = {

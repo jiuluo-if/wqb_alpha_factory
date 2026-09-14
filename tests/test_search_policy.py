@@ -65,6 +65,18 @@ class TestStructuralAndEmpiricalDiversity(unittest.TestCase):
 
 
 class TestBudgetAllocator(unittest.TestCase):
+    def test_sparse_done_and_legacy_failed_do_not_create_research_reward(self):
+        allocator = BudgetAllocator(total_budget=10)
+        sparse = {"expression": "rank(close)", "datasets": ["pv1"], "template_family": "trend"}
+        legacy = {"expression": "rank(volume)", "datasets": ["pv1"], "template_family": "value"}
+        self.assertTrue(allocator.reserve(sparse))
+        self.assertTrue(allocator.reserve(legacy))
+        allocator.transition(sparse, "DONE", reward=None)
+        allocator.transition(legacy, "FAILED", reward=None, outcome=None)
+        arm = allocator.arms[allocator.arm_key(sparse)]
+        self.assertEqual(arm["reward_count"], 0)
+        self.assertEqual(arm["failed_research"], 0)
+
     def test_pending_arm_is_not_bombarded(self):
         allocator = BudgetAllocator(total_budget=10, max_pending_per_arm=1)
         proposal = {"datasets": ["pv1"], "template_family": "momentum"}

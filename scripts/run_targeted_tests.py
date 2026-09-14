@@ -62,11 +62,13 @@ DIRECT_TESTS = {
     ),
     "wqb_agent/audit.py": (
         "tests/test_runtime_safety.py",
+        "tests/test_workspace_snapshot.py",
         "tests/test_cli.py",
         "tests/test_canonical_ops.py",
     ),
     "wqb_agent/workspace_snapshot.py": (
         "tests/test_runtime_safety.py",
+        "tests/test_workspace_snapshot.py",
         "tests/test_canonical_ops.py",
     ),
     "wqb_agent/state.py": (
@@ -82,11 +84,14 @@ DIRECT_TESTS = {
         "tests/test_recovery.py",
         "tests/test_settled_evidence_durability.py",
         "tests/test_simulator.py",
+        "tests/test_runtime_safety.py",
+        "tests/test_search_policy.py",
     ),
     "wqb_agent/simulator.py": (
         "tests/test_simulator.py",
         "tests/test_proposal_execution.py",
         "tests/test_recovery.py",
+        "tests/test_runtime_safety.py",
     ),
     "wqb_agent/factory_runner.py": (
         "tests/test_factory_boundaries.py",

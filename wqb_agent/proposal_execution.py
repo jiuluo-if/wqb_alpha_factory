@@ -35,10 +35,12 @@ from .research_guard import ResearchLoopGuard, structural_family_key
 from .state import (
     OPERATOR_PROVENANCE_FIELDS,
     RECOVERABLE_STATUSES,
+    TERMINAL_STATUSES,
     UNKNOWN_STATUSES,
     UNRESOLVED_STATUSES,
     Experiment,
     ResearchState,
+    same_execution_identity,
 )
 
 
@@ -206,22 +208,103 @@ class ProposalExecutionWorkflow:
         finally:
             self._ctx.trajectory.end_append_batch()
 
-    def _settle_complete_round(self, round_no, hypothesis, experiments,
-                               total_elapsed_sec=None):
-        """Perform the existing terminal projection in its original order."""
-        self._ctx.trajectory.add_many(experiments)
-        for exp in experiments:
-            self._ctx.search_policy.release(
-                {
-                    "proposal_id": exp.allocation_key,
-                    "expression": exp.expression,
-                    "dataset_family": exp.datasets,
-                    "template_family": exp.template_family,
-                },
-                status="DONE" if exp.status == "DONE" else exp.status,
-                reward=(exp.metrics or {}).get("fitness", 0.0)
-                if isinstance(exp.metrics, dict) else 0.0,
+    @staticmethod
+    def _has_full_terminal_evidence(experiment):
+        """Return whether a terminal row is safe for research consumers."""
+        status = str(getattr(experiment, "status", "") or "").upper()
+        if status == "DONE":
+            return isinstance(getattr(experiment, "metrics", None), dict) and bool(
+                experiment.metrics
             )
+        if status == "FAILED":
+            return bool(getattr(experiment, "error", None))
+        if status in {"SKIPPED", "SKIPPED_STALE", "SKIPPED_UNKNOWN"}:
+            return bool(getattr(experiment, "skip_record", None) or getattr(experiment, "error", None))
+        return False
+
+    @staticmethod
+    def _failure_category(experiment):
+        if str(getattr(experiment, "status", "") or "").upper() != "FAILED":
+            return None
+        error = str(getattr(experiment, "error", "") or "").upper()
+        if any(token in error for token in (
+            "TIMEOUT", "RATE_LIMIT", "AUTH", "INFRA", "NETWORK", "HTTP",
+        )):
+            return "INFRA"
+        if any(token in error for token in (
+            "SIMULATION REJECTED", "SYNTAX", "INVALID SETTINGS", "INVALID FIELD",
+        )):
+            return "RESEARCH"
+        return None
+
+    def _canonical_rows_for(self, experiments):
+        ids = [experiment.id for experiment in experiments]
+        finder = getattr(self._ctx.trajectory, "find_rows", None)
+        if callable(finder):
+            return finder(ids)
+        return {
+            experiment.id: experiment.to_dict()
+            for experiment in getattr(self._ctx.trajectory, "experiments", ())
+            if experiment.id in ids
+        }
+
+    def _require_durable_terminal_evidence(self, experiments, round_no):
+        rows = self._canonical_rows_for(experiments)
+        round_reader = getattr(self._ctx.trajectory, "iter_canonical_round", None)
+        if callable(round_reader):
+            canonical_round_ids = {
+                str(row.get("id"))
+                for row in (round_reader(int(round_no)) or ())
+                if isinstance(row, dict) and row.get("id")
+            }
+            expected_ids = {str(experiment.id) for experiment in experiments}
+            if canonical_round_ids != expected_ids:
+                raise ValueError(
+                    f"FINALIZE_EXECUTION_SET_MISMATCH: round {round_no}"
+                )
+        for experiment in experiments:
+            row = rows.get(experiment.id)
+            if row is None or not same_execution_identity(experiment.to_dict(), row):
+                raise ValueError(
+                    f"TERMINAL_EVIDENCE_UNRECOVERABLE: round {round_no} experiment {experiment.id}"
+                )
+            durable = Experiment.from_dict(row)
+            if not self._has_full_terminal_evidence(durable):
+                raise ValueError(
+                    f"TERMINAL_EVIDENCE_UNRECOVERABLE: round {round_no} experiment {experiment.id}"
+                )
+
+    def _merge_checkpoint_with_trajectory(self, experiments, round_no):
+        """Monotonically merge checkpoint execution rows with canonical rows."""
+        rows = self._canonical_rows_for(experiments)
+        merged = []
+        for experiment in experiments:
+            row = rows.get(experiment.id)
+            if row is not None and not same_execution_identity(experiment.to_dict(), row):
+                raise ValueError(
+                    f"CHECKPOINT_TRAJECTORY_IDENTITY_MISMATCH: round {round_no} experiment {experiment.id}"
+                )
+            if row is not None:
+                canonical = Experiment.from_dict(row)
+                if canonical.status in TERMINAL_STATUSES and self._has_full_terminal_evidence(canonical):
+                    merged.append(canonical)
+                    continue
+            if experiment.status in TERMINAL_STATUSES:
+                if not experiment.progress_url:
+                    raise ValueError(
+                        f"TERMINAL_EVIDENCE_UNRECOVERABLE: round {round_no} experiment {experiment.id}"
+                    )
+                # A sparse terminal checkpoint with a durable remote identity
+                # is repolled, never POSTed again.
+                experiment.status = "RUNNING"
+            merged.append(experiment)
+        return merged
+
+    def _finalize_round_projection(self, round_no, hypothesis, experiments,
+                                   *, total_elapsed_sec=None,
+                                   close_checkpoint=False):
+        """Apply the one canonical terminal projection for any round source."""
+        self._require_durable_terminal_evidence(experiments, round_no)
         self._ctx.hooks.refresh_self_correlation_evidence(experiments)
         self._ctx.hooks.mark_robustness_stability(experiments)
         summary = self._ctx.reflector.reflect(
@@ -238,15 +321,43 @@ class ProposalExecutionWorkflow:
             fields_used=[f for exp in experiments for f in exp.fields_used],
         )
         self._ctx.hooks.save_state(state)
-        self._write_proposal_checkpoint(round_no, hypothesis, experiments, complete=True)
+        if close_checkpoint:
+            self._write_proposal_checkpoint(round_no, hypothesis, experiments, complete=True)
         self._ctx.hooks.write_context()
-        self._ctx.hooks.print_summary(summary)
-        if total_elapsed_sec is None:
-            self._ctx.hooks.write_sims_results(round_no, experiments)
-        else:
+        if total_elapsed_sec is not None:
             self._ctx.hooks.write_sims_results(
                 round_no, experiments, total_elapsed_sec=total_elapsed_sec
             )
+        return summary
+
+    def _settle_complete_round(self, round_no, hypothesis, experiments,
+                               total_elapsed_sec=None):
+        """Perform the existing terminal projection in its original order."""
+        self._ctx.trajectory.add_many(experiments)
+        self._require_durable_terminal_evidence(experiments, round_no)
+        for exp in experiments:
+            reward = None
+            if exp.status == "DONE" and isinstance(exp.metrics, dict):
+                reward = exp.metrics.get("fitness")
+            self._ctx.search_policy.release(
+                {
+                    "proposal_id": exp.allocation_key,
+                    "expression": exp.expression,
+                    "dataset_family": exp.datasets,
+                    "template_family": exp.template_family,
+                },
+                status="DONE" if exp.status == "DONE" else exp.status,
+                reward=reward,
+                outcome=self._failure_category(exp),
+            )
+        summary = self._finalize_round_projection(
+            round_no, hypothesis, experiments,
+            total_elapsed_sec=total_elapsed_sec,
+            close_checkpoint=True,
+        )
+        self._ctx.hooks.print_summary(summary)
+        if total_elapsed_sec is None:
+            self._ctx.hooks.write_sims_results(round_no, experiments)
         return summary
 
     def run(self, path=None, allow_unresolved_checkpoint=False):
@@ -1028,6 +1139,7 @@ class ProposalExecutionWorkflow:
         round_no = checkpoint["round_no"]
         hypothesis = checkpoint.get("hypothesis") or {"id": f"h-llm-r{round_no}"}
         experiments = [Experiment.from_dict(row) for row in checkpoint["experiments"]]
+        experiments = self._merge_checkpoint_with_trajectory(experiments, round_no)
         runnable = [exp for exp in experiments if exp.status in RECOVERABLE_STATUSES]
         unresolved_unknown = [exp for exp in experiments if exp.status == "SUBMIT_UNKNOWN"]
         print(f"\n=== Round {round_no} checkpoint resume ===")
@@ -1266,31 +1378,13 @@ class ProposalExecutionWorkflow:
         checkpoint = self._validate_finalize_checkpoint(
             checkpoint, experiments, int(round_no)
         )
-        if checkpoint is not None and checkpoint.get("complete") is not True:
-            hypothesis = checkpoint.get("hypothesis") or {
-                "id": f"h-llm-r{round_no}", "_round": int(round_no)
-            }
-            self._write_proposal_checkpoint(
-                int(round_no), hypothesis, experiments, complete=True
-            )
-        else:
-            hypothesis = (checkpoint or {}).get("hypothesis") or {
-                "id": f"h-llm-r{round_no}", "_round": int(round_no)
-            }
-        self._ctx.hooks.refresh_self_correlation_evidence(experiments)
-        self._ctx.hooks.mark_robustness_stability(experiments)
-        summary = self._ctx.reflector.reflect(
+        hypothesis = (checkpoint or {}).get("hypothesis") or {
+            "id": f"h-llm-r{round_no}", "_round": int(round_no)
+        }
+        summary = self._finalize_round_projection(
             int(round_no), hypothesis, experiments,
-            validation_candidates=self._ctx.hooks.validation_candidates(),
+            close_checkpoint=checkpoint is not None and checkpoint.get("complete") is not True,
         )
-        self._ctx.hooks.sync_submission_pool(experiments)
-        state = ResearchState(
-            round_no=int(round_no), hypothesis=hypothesis,
-            dataset=sorted({d for exp in experiments for d in exp.datasets}),
-            fields_used=[f for exp in experiments for f in exp.fields_used],
-        )
-        self._ctx.hooks.save_state(state)
-        self._ctx.hooks.write_context()
         audit_path = os.path.join(self._ctx.state_dir, "round_finalization_log.jsonl")
         append_jsonl_best_effort(
             audit_path,

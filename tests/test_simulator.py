@@ -169,6 +169,46 @@ class FakeClient:
 
 
 class TestSimulator(unittest.TestCase):
+    def test_terminal_complete_callback_is_acknowledged_before_terminal_update(self):
+        """终态 checkpoint 通知必须晚于 canonical evidence 回调。"""
+        events = []
+        client = FakeClient(latency=0)
+        exp = Experiment(1, "h", "rank(field)", {}, [])
+
+        def on_complete(item):
+            events.append(("complete", item.status))
+            return True
+
+        def on_update(item):
+            events.append(("update", item.status))
+
+        Simulator(client, max_concurrent=1, poll_timeout_sec=30).run(
+            [exp], on_complete=on_complete, on_update=on_update
+        )
+
+        self.assertEqual(
+            events[-2:], [("complete", "DONE"), ("update", "DONE")]
+        )
+
+    def test_terminal_complete_callback_failure_is_not_swallowed(self):
+        """canonical evidence 失败时不得发出终态 checkpoint 更新。"""
+        events = []
+        client = FakeClient(latency=0)
+        exp = Experiment(1, "h", "rank(field)", {}, [])
+
+        def on_complete(_item):
+            raise RuntimeError("trajectory unavailable")
+
+        def on_update(item):
+            events.append(item.status)
+
+        with self.assertRaisesRegex(RuntimeError, "trajectory unavailable"):
+            Simulator(client, max_concurrent=1, poll_timeout_sec=30).run(
+                [exp], on_complete=on_complete, on_update=on_update
+            )
+
+        self.assertNotIn("DONE", events)
+
     def test_concurrency_limited(self):
         client = FakeClient(latency=0.05)
         sim = Simulator(client, max_concurrent=3, poll_timeout_sec=30)

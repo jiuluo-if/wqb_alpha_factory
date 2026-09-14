@@ -119,6 +119,10 @@ class TrajectorySummary:
     parent_identity_issues: dict = None
     duplicate_remote_execution_projection: int = 0
     duplicate_remote_execution_projection_rounds: tuple = ()
+    terminal_checkpoint_missing_canonical_evidence: tuple = ()
+    checkpoint_trajectory_identity_mismatch: tuple = ()
+    done_canonical_result_evidence_incomplete: tuple = ()
+    checkpoint_status_behind_canonical_terminal: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -207,7 +211,7 @@ def _observe_lifecycle(row, stats, *, require_phase, expected_schema_version):
         stats["missing_alpha_id_rows"] += 1
 
 
-def _trajectory_summary(state_dir):
+def _trajectory_summary(state_dir, checkpoint_records=()):
     trajectory = Trajectory(path=os.path.join(state_dir, "trajectory.jsonl"))
     lifecycle_stats = _new_lifecycle_stats()
     read_stats = {}
@@ -323,6 +327,45 @@ def _trajectory_summary(state_dir):
         for row in canonical_rows.values():
             if str(row.get("id")) in ids and row.get("round") not in (None, ""):
                 remote_rounds.add(str(row["round"]))
+    canonical_by_id = {str(row.get("id")): row for row in canonical_rows.values()}
+    missing_canonical = []
+    identity_mismatch = []
+    incomplete_done = []
+    status_behind = []
+    terminal_statuses = {"DONE", "FAILED", "SKIPPED", "SKIPPED_STALE", "SKIPPED_UNKNOWN"}
+
+    def full_result(row):
+        status = str(row.get("status") or "").upper()
+        if status == "DONE":
+            return isinstance(row.get("metrics"), dict) and bool(row.get("metrics"))
+        if status == "FAILED":
+            return bool(row.get("error"))
+        if status in {"SKIPPED", "SKIPPED_STALE", "SKIPPED_UNKNOWN"}:
+            return bool(row.get("skip_record") or row.get("error"))
+        return False
+
+    for record in checkpoint_records or ():
+        checkpoint = record.get("checkpoint") or {}
+        for row in checkpoint.get("experiments") or ():
+            if not isinstance(row, dict) or not row.get("id"):
+                continue
+            key = str(row["id"])
+            canonical = canonical_by_id.get(key)
+            status = str(row.get("status") or "").upper()
+            if canonical is None:
+                if status in terminal_statuses:
+                    missing_canonical.append(key)
+                continue
+            if not same_execution_identity(row, canonical):
+                identity_mismatch.append(key)
+                continue
+            canonical_status = str(canonical.get("status") or "").upper()
+            if status in terminal_statuses and not full_result(canonical):
+                missing_canonical.append(key)
+            if canonical_status == "DONE" and not full_result(canonical):
+                incomplete_done.append(key)
+            if status not in terminal_statuses and canonical_status in terminal_statuses:
+                status_behind.append(key)
     return TrajectorySummary(
         records=summary["records"],
         latest_round=summary["latest_round"],
@@ -349,6 +392,10 @@ def _trajectory_summary(state_dir):
         parent_identity_issues=parent_issues,
         duplicate_remote_execution_projection=len(remote_groups),
         duplicate_remote_execution_projection_rounds=tuple(sorted(remote_rounds)),
+        terminal_checkpoint_missing_canonical_evidence=tuple(sorted(set(missing_canonical))),
+        checkpoint_trajectory_identity_mismatch=tuple(sorted(set(identity_mismatch))),
+        done_canonical_result_evidence_incomplete=tuple(sorted(set(incomplete_done))),
+        checkpoint_status_behind_canonical_terminal=tuple(sorted(set(status_behind))),
     )
 
 
@@ -556,7 +603,7 @@ def read_workspace_snapshot(state_dir):
     return WorkspaceSnapshot(
         state_dir=state_dir,
         checkpoint_records=checkpoint_records,
-        trajectory=_trajectory_summary(state_dir),
+        trajectory=_trajectory_summary(state_dir, checkpoint_records),
         inventory=inventory,
         ledger=_ledger_summary(os.path.join(state_dir, "trial_ledger.jsonl")),
         validation=_validation_summary(os.path.join(state_dir, "validation_reports.jsonl")),
