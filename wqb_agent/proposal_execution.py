@@ -21,7 +21,7 @@ from .execution_identity import ExecutionBindingIndex
 from .execution_recovery import merge_checkpoint_with_trajectory
 from .expression import canonical_expression, submission_fingerprint
 from .identity import candidate_identity
-from .proposal_admission import rejection_reason_counts
+from .proposal_admission import admit_execution_identity, rejection_reason_counts
 from .proposal_contract import (
     FACTORY_BATCH_SIZE,
     MAX_TARGETED_PROPOSALS,
@@ -725,39 +725,23 @@ class ProposalExecutionWorkflow:
                 hooks.record_candidate_rejection(proposal, "research_guard", "LOOP_GUARD", guard_reason)
                 diversity_rejected.append((expression, [guard_reason]))
                 continue
-            if execution_fingerprint in unresolved_identities:
-                reason = (
-                    "同一 submission_fingerprint 仍存在未决远程执行；"
-                    "force-new-round 不能绕过 execution identity fence"
-                )
-                hooks.record_candidate_rejection(
-                    proposal, "execution_identity",
-                    "UNRESOLVED_SUBMISSION_IDENTITY", reason,
-                )
-                rejected.append((expression, [reason]))
-                continue
-            proposal_id = str(
-                proposal.get("proposal_id")
-                or "p-" + execution_fingerprint[:16]
+            identity = admit_execution_identity(
+                proposal,
+                execution_fingerprint,
+                unresolved_identities=unresolved_identities,
+                durable_bindings=durable_proposal_bindings,
+                batch_bindings=batch_proposal_bindings,
+                conflicting_proposal_ids=conflicting_proposal_ids,
             )
-            durable_fingerprints = durable_proposal_bindings.get(proposal_id, set())
-            if durable_fingerprints and execution_fingerprint not in durable_fingerprints:
-                reason_code = "PROPOSAL_ID_REBIND"
-                hooks.record_candidate_rejection(
-                    proposal, "execution_identity", reason_code,
-                    "proposal_id 已经绑定其他 durable execution identity",
-                )
-                rejected.append((expression, [reason_code]))
-                continue
-            previous_fingerprint = batch_proposal_bindings.get(proposal_id)
-            if (
-                proposal_id in conflicting_proposal_ids
-                or (
-                    previous_fingerprint is not None
-                    and previous_fingerprint != execution_fingerprint
-                )
-            ):
-                reason_code = "PROPOSAL_ID_EXECUTION_COLLISION"
+            proposal_id = identity.proposal_id
+            if identity.status != "ACCEPTED":
+                reason_code = identity.reason_code
+                if not identity.collision:
+                    hooks.record_candidate_rejection(
+                        proposal, "execution_identity", reason_code, identity.reason,
+                    )
+                    rejected.append((expression, [reason_code]))
+                    continue
                 if proposal_id not in conflicting_proposal_ids and fresh:
                     previous = next(
                         (item for item in fresh
@@ -777,8 +761,7 @@ class ProposalExecutionWorkflow:
                         rejected.append((previous["expression"], [reason_code]))
                 conflicting_proposal_ids.add(proposal_id)
                 hooks.record_candidate_rejection(
-                    proposal, "execution_identity", reason_code,
-                    "同一 batch 的 proposal_id 绑定多个 execution identity",
+                    proposal, "execution_identity", reason_code, identity.reason,
                 )
                 rejected.append((expression, [reason_code]))
                 continue

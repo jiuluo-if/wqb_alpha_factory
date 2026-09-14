@@ -42,11 +42,6 @@ def __getattr__(name):
 
         globals()[name] = WQBClient
         return WQBClient
-    if name == "HighSignalValidator":
-        from .validation import HighSignalValidator
-
-        globals()[name] = HighSignalValidator
-        return HighSignalValidator
     if name in {
         "ExperimentSpec", "inspect_state", "discover_fields",
         "get_operator_reference", "get_operator_syntax_reference",

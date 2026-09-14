@@ -76,6 +76,7 @@ DIRECT_TESTS = {
         "tests/test_architecture_contracts.py",
     ),
     "wqb_agent/proposal_admission.py": (
+        "tests/test_execution_identity.py",
         "tests/test_proposal_execution.py",
         "tests/test_proposal_safety.py",
     ),
@@ -370,9 +371,9 @@ def select_tests(changed_files: list[str]) -> tuple[str, ...]:
 
 def changed_files(base_sha: str | None) -> list[str]:
     if base_sha:
-        command = ["git", "diff", "--name-only", f"{base_sha}...HEAD"]
+        command = ["git", "diff", "--name-status", f"{base_sha}...HEAD"]
     else:
-        command = ["git", "diff", "--name-only", "HEAD^", "HEAD"]
+        command = ["git", "diff", "--name-status", "HEAD^", "HEAD"]
     result = subprocess.run(
         command,
         cwd=ROOT,
@@ -380,7 +381,15 @@ def changed_files(base_sha: str | None) -> list[str]:
         capture_output=True,
         text=True,
     )
-    return [line for line in result.stdout.splitlines() if line.strip()]
+    changed = []
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        status, _, path = line.partition("\t")
+        if status.startswith("D"):
+            continue
+        changed.append(path)
+    return changed
 
 
 def _test_modules(test_files: tuple[str, ...]) -> list[str]:
