@@ -206,6 +206,33 @@ TrialLedger 对 proposal lifecycle 的 candidate、execution fingerprint、resea
 和 arm 采用最早合法 committed/submitted identity；稀疏 terminal row 只能补充状态，
 不能把历史试验迁移到另一个 arm。identity 或 arm drift 由 `state audit` fail closed。
 
+## Phase III Research Kernel Decomposition（2026-09-15）
+
+本阶段把纯策略与 owner 分开，但不新增 state、proposal 或 workflow 抽象。
+`FieldDiscovery` 仍独占 client 读取、catalog/cache 生命周期和持久化；纯字段证据与
+评分分别位于 `field_metadata.py`、`discovery_selection.py`。`ExperienceMemory` 仍
+独占 experience/garbage 文件、tier mutation、compress 和 save；纯 durable-view
+编解码位于 `memory_codec.py`。`Reflector` 仍独占 round effects 与单次 save；质量门和
+诊断位于 `reflection_evaluation.py`。`OptimizerWorkflow` 仍独占 trajectory/cloud
+metadata acquisition 与编排；parent evidence gate 位于 `optimizer_selection.py`。
+`WQBClient` 仍独占 Session、认证、限流和 endpoint；同源 progress URL 与退避计算位于
+`client_transport.py`。`Trajectory`、checkpoint exactly-once、SUBMIT_UNKNOWN 和
+known progress URL GET-only contract 未改变。
+
+基线（Phase II 收口后 `f7735a9`）为 92 个 production Python 文件 / 30340 行、96 个
+测试文件 / 24543 行；本阶段收口为 98 / 30383 与 96 / 24552。重点 owner 当前指标为：
+`discovery.py` 1217 行（35 函数，1 类），`memory.py` 1139 行（50 函数，2 类），
+`reflection.py` 881 行（26 函数，1 类），`optimizer_workflow.py` 1064 行（34 函数，
+3 类），`state.py` 977 行、`client.py` 945 行。新增纯模块合计 376 行、19 函数、0 类；
+删除旧实现 377 行，净 production 增长来自显式边界和契约测试。
+
+本阶段未对 `state.py` 做风险性 wholesale 拆分，也未宣称未建立的性能收益；仅完成离线
+AST/LOC 结构计量。Phase III 影响范围的定向映射测试共 333 个通过；最终 Ruff、九个
+typed frontier 的 mypy、`state doctor`、`state audit` 和 repository privacy check
+均通过。doctor 对 fixture 的 `LEDGER_MISSING` 与 capability unavailable 只报告既有
+WARN，未触碰真实研究状态。所有阶段提交均使用 `2966684515@qq.com` 并推送到
+`origin/main`。
+
 ## 变更规则
 
 触碰 owner、proposal/schema、state merge 或安全边界时，必须增加行为/回归测试并更新本文件。公共文档只保留当前 contract；历史由 Git 承担，隐私规则见 [`PRIVACY.md`](PRIVACY.md)，研究方法见 [`RESEARCH_POLICY.md`](RESEARCH_POLICY.md)。
