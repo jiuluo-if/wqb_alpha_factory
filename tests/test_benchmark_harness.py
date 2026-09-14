@@ -23,7 +23,7 @@ class TestBenchmarkHarnessSmoke(unittest.TestCase):
                 "--repeat",
                 "2",
                 "--workloads",
-                "trajectory_load,artifacts_iter_jsonl",
+                "trajectory_load,artifacts_iter_jsonl,trial_ledger_append",
             ],
             capture_output=True,
             text=True,
@@ -36,3 +36,4 @@ class TestBenchmarkHarnessSmoke(unittest.TestCase):
         self.assertIn("p95_ms", result.stdout)
         self.assertIn("trajectory_load", result.stdout)
         self.assertIn("artifacts_iter_jsonl", result.stdout)
+        self.assertIn("trial_ledger_append", result.stdout)

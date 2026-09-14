@@ -1,0 +1,76 @@
+import json
+import os
+import tempfile
+import unittest
+
+from wqb_agent.trial_ledger import TrialLedger
+
+
+def _trial(candidate_id):
+    return {"candidate_id": candidate_id, "proposal_id": candidate_id,
+            "expression": f"rank({candidate_id})", "round": 1}
+
+
+def _event_ids(path):
+    with open(path, encoding="utf-8") as handle:
+        return [json.loads(line)["event_id"] for line in handle if line.strip()]
+
+
+class TrialLedgerIOTests(unittest.TestCase):
+    def test_one_owner_reconciles_once_for_many_appends(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "trial_ledger.jsonl")
+            with open(path, "w", encoding="utf-8") as handle:
+                for index in range(1000):
+                    handle.write(json.dumps({"event_id": f"old-{index}", "phase": "generated"}) + "\n")
+            ledger = TrialLedger(path)
+            self.assertTrue(ledger.record(_trial("new-a"), "candidate_generated"))
+            self.assertEqual(ledger._reconciliation_count, 1)
+            self.assertTrue(ledger.record(_trial("new-b"), "candidate_generated"))
+            self.assertTrue(ledger.record(_trial("new-c"), "candidate_generated"))
+            self.assertEqual(ledger._reconciliation_count, 1)
+            self.assertEqual(len(_event_ids(path)), 1003)
+
+    def test_restart_duplicate_is_exact_noop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "trial_ledger.jsonl")
+            trial = _trial("same")
+            self.assertTrue(TrialLedger(path).record(trial, "candidate_generated"))
+            before = _event_ids(path)
+            self.assertFalse(TrialLedger(path).record(trial, "candidate_generated"))
+            self.assertEqual(_event_ids(path), before)
+
+    def test_duplicate_and_new_events_mix_without_reordering_existing_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "trial_ledger.jsonl")
+            first = TrialLedger(path)
+            self.assertTrue(first.record(_trial("a"), "candidate_generated"))
+            self.assertTrue(first.record(_trial("b"), "candidate_generated"))
+            second = TrialLedger(path)
+            self.assertFalse(second.record(_trial("a"), "candidate_generated"))
+            self.assertTrue(second.record(_trial("c"), "candidate_generated"))
+            self.assertFalse(second.record(_trial("b"), "candidate_generated"))
+            self.assertTrue(second.record(_trial("d"), "candidate_generated"))
+            self.assertEqual(len(_event_ids(path)), 4)
+
+    def test_history_completeness_boundary_is_written_once_across_restart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger_path = os.path.join(tmp, "trial_ledger.jsonl")
+            trajectory_path = os.path.join(tmp, "trajectory.jsonl")
+            with open(trajectory_path, "w", encoding="utf-8") as handle:
+                handle.write('{"id":"legacy"}\n')
+            trial = _trial("settled")
+            ledger = TrialLedger(ledger_path, trajectory_path=trajectory_path)
+            self.assertTrue(ledger.record(trial, "candidate_generated"))
+            self.assertEqual(ledger.summarize()["history_completeness"], "INCOMPLETE_LEGACY")
+            rows_after_first = _event_ids(ledger_path)
+            self.assertFalse(ledger.record(trial, "candidate_generated"))
+            self.assertEqual(len(_event_ids(ledger_path)), len(rows_after_first))
+            restarted = TrialLedger(ledger_path, trajectory_path=trajectory_path)
+            self.assertFalse(restarted.record(trial, "candidate_generated"))
+            self.assertEqual(len(_event_ids(ledger_path)), len(rows_after_first))
+            self.assertEqual(restarted.summarize()["history_completeness"], "INCOMPLETE_LEGACY")
+
+
+if __name__ == "__main__":
+    unittest.main()

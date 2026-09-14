@@ -201,7 +201,9 @@ DIRECT_TESTS = {
         "tests/test_recovery.py",
         "tests/test_runtime_safety.py",
         "tests/test_search_calibration.py",
+        "tests/test_trial_ledger_io.py",
     ),
+    "scripts/benchmark_local_io.py": ("tests/test_benchmark_harness.py",),
 }
 
 FRONTEND_CONFIG_FILES = {

@@ -17,7 +17,6 @@ from collections import Counter, defaultdict
 from contextlib import nullcontext
 
 from .artifacts import (
-    append_jsonl_if_unique,
     atomic_write_json_if_changed,
     iter_jsonl_objects,
 )
@@ -69,6 +68,14 @@ class TrialLedger:
         self.trajectory_path = trajectory_path
         self._events = []
         self._append_lock = threading.Lock()
+        # Owner-local, rebuildable projections.  The JSONL remains the only
+        # durable source of lifecycle/accounting truth.
+        self._event_ids = set()
+        self._membership_initialized = False
+        self._membership_signature = None
+        self._history_completeness = None
+        self._history_completeness_exists = False
+        self._reconciliation_count = 0
 
     def _durable_scope(self, operation, delegation=None):
         if not self.persist or not self.path:
@@ -80,11 +87,26 @@ class TrialLedger:
             return delegation.authorization(state_dir)
         return single_instance_scope(state_dir, operation)
 
-    def _history_completeness_unlocked(self, trajectory_path):
-        existing = list(iter_jsonl_objects(self.path)) if os.path.exists(self.path) else []
-        for row in existing:
-            if row.get("phase") == "history_completeness":
-                return str(row.get("outcome") or "UNKNOWN"), True
+    @staticmethod
+    def _file_signature(path):
+        try:
+            stat = os.stat(path)
+        except OSError:
+            return None
+        return stat.st_size, stat.st_mtime_ns
+
+    def _reconcile_membership_unlocked(self, trajectory_path):
+        event_ids = set()
+        completeness = None
+        completeness_exists = False
+        if self.path and os.path.exists(self.path):
+            for row in iter_jsonl_objects(self.path):
+                event_id = row.get("event_id")
+                if event_id is not None:
+                    event_ids.add(event_id)
+                if row.get("phase") == "history_completeness":
+                    completeness = str(row.get("outcome") or "UNKNOWN")
+                    completeness_exists = True
         trajectory_has_rows = False
         if trajectory_path and os.path.exists(trajectory_path):
             try:
@@ -92,8 +114,45 @@ class TrialLedger:
                     trajectory_has_rows = any(line.strip() for line in handle)
             except OSError:
                 trajectory_has_rows = True
-        outcome = "INCOMPLETE_LEGACY" if trajectory_has_rows or existing else "COMPLETE_FROM_START"
-        return outcome, False
+        if completeness is None:
+            completeness = (
+                "INCOMPLETE_LEGACY"
+                if trajectory_has_rows or event_ids
+                else "COMPLETE_FROM_START"
+            )
+        self._event_ids = event_ids
+        self._history_completeness = completeness
+        self._history_completeness_exists = completeness_exists
+        self._membership_initialized = True
+        self._membership_signature = self._file_signature(self.path)
+        self._reconciliation_count += 1
+        return completeness, completeness_exists
+
+    def _ensure_membership_unlocked(self, trajectory_path):
+        signature = self._file_signature(self.path)
+        if (
+            not self._membership_initialized
+            or signature != self._membership_signature
+        ):
+            return self._reconcile_membership_unlocked(trajectory_path)
+        return self._history_completeness, self._history_completeness_exists
+
+    def _append_jsonl_unique_unlocked(self, row):
+        event_id = row.get("event_id")
+        if event_id in self._event_ids:
+            return False
+        parent = os.path.dirname(os.path.abspath(self.path))
+        os.makedirs(parent, exist_ok=True)
+        line = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
+        with open(self.path, "ab") as handle:
+            handle.write(line)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if event_id is not None:
+            self._event_ids.add(event_id)
+        self._membership_initialized = True
+        self._membership_signature = self._file_signature(self.path)
+        return True
 
     def _write_history_completeness_unlocked(self, outcome):
         row = {
@@ -108,7 +167,9 @@ class TrialLedger:
             "status": outcome,
             "recorded_at": time.time(),
         }
-        append_jsonl_if_unique(self.path, row, ("event_id",), lock=self._append_lock)
+        self._append_jsonl_unique_unlocked(row)
+        self._history_completeness = outcome
+        self._history_completeness_exists = True
         return outcome
 
     def initialize_history_completeness(self, trajectory_path):
@@ -116,10 +177,11 @@ class TrialLedger:
         if not self.path or not self.persist:
             return "COMPLETE_FROM_START"
         with self._durable_scope("trial-ledger-history"):
-            outcome, exists = self._history_completeness_unlocked(trajectory_path)
-            if not exists:
-                self._write_history_completeness_unlocked(outcome)
-            return outcome
+            with self._append_lock:
+                outcome, exists = self._ensure_membership_unlocked(trajectory_path)
+                if not exists:
+                    self._write_history_completeness_unlocked(outcome)
+                return outcome
 
     @staticmethod
     def _trial_id(trial):
@@ -222,16 +284,18 @@ class TrialLedger:
             self._events.append(row)
             return True
         with self._durable_scope("trial-ledger-record", delegation=delegation):
-            if self.trajectory_path:
-                outcome, exists = self._history_completeness_unlocked(self.trajectory_path)
-            else:
-                outcome, exists = None, True
-            written = append_jsonl_if_unique(
-                self.path, row, ("event_id",), lock=self._append_lock
-            )
-            if self.trajectory_path and not exists:
-                self._write_history_completeness_unlocked(outcome)
-            return written
+            with self._append_lock:
+                if self.trajectory_path:
+                    outcome, exists = self._ensure_membership_unlocked(
+                        self.trajectory_path
+                    )
+                else:
+                    outcome, exists = self._ensure_membership_unlocked(None)
+                    exists = True
+                written = self._append_jsonl_unique_unlocked(row)
+                if self.trajectory_path and not exists:
+                    self._write_history_completeness_unlocked(outcome)
+                return written
 
     @classmethod
     def _operator_realization(cls, trial):

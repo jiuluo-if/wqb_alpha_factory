@@ -33,6 +33,7 @@ Agent → SuggestionWorkflow / ProposalExecutionWorkflow / AlphaFeedWorkflow / O
 | BRAIN transport | `client.py` | 认证、Retry-After、分类错误、只读 GET 与 Simulation submit |
 | Simulation execution | `ProposalExecutionWorkflow` → `Simulator` | checkpoint、预算、exactly-once、`SUBMIT_UNKNOWN` |
 | Research evidence | `Trajectory` / `TrialLedger` | append-only 事实与生命周期审计 |
+| TrialLedger append index | `TrialLedger` 内存 | owner-local event-id/completeness membership，可从 `trial_ledger.jsonl` 重建；不成为 durable owner |
 | Checkpoint recovery boundary | `CheckpointStore` | canonical semantic validation、unfinished scan 与 atomic recovery envelope |
 | Remote reconciliation observation | `scripts/reconcile_pending.py` | 只读 GET/poll/get-alpha；不写 canonical research state |
 | Completed-state archive | `scripts/archive_completed_rounds.py` | 只移动 `CheckpointStore.scan()` 已验证的 complete checkpoint |

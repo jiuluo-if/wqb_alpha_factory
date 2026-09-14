@@ -37,6 +37,7 @@ from wqb_agent.research_api import (  # noqa: E402
     search_history,
 )
 from wqb_agent.state import Experiment, Trajectory  # noqa: E402
+from wqb_agent.trial_ledger import TrialLedger  # noqa: E402
 
 DEFAULT_ROWS = (1000, 10000, 50000)
 DEFAULT_REPEAT = 5
@@ -306,6 +307,35 @@ def workload_artifacts_write_jsonl_unchanged(rows, root, codec):
     return run
 
 
+def workload_trial_ledger_append(rows, root, codec):
+    """Append a small batch after one synthetic historical ledger scan."""
+    directory = os.path.join(root, f"trial_ledger_{rows}")
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, "trial_ledger.jsonl")
+    with open(path, "w", encoding="utf-8") as handle:
+        for index in range(rows):
+            handle.write(json.dumps({
+                "event_id": f"synthetic-{index:08d}",
+                "phase": "candidate_generated",
+                "candidate_id": f"candidate-{index:08d}",
+            }) + "\n")
+    ledger = TrialLedger(path)
+    counter = {"value": 0}
+
+    def run():
+        index = counter["value"]
+        counter["value"] += 1
+        candidate = f"benchmark-new-{index:06d}"
+        ledger.record({
+            "candidate_id": candidate,
+            "proposal_id": candidate,
+            "expression": "rank(synthetic_field)",
+            "round": 1,
+        }, "candidate_generated", outcome="CONSIDERED")
+
+    return run
+
+
 def workload_discovery_local_catalog(rows, root, codec):
     base = _load_catalog(root, rows)
     cache_path = os.path.join(base, "fields_cache.json")
@@ -351,6 +381,7 @@ WORKLOADS = {
     "artifacts_iter_jsonl": workload_artifacts_iter_jsonl,
     "artifacts_write_json_unchanged": workload_artifacts_write_json_unchanged,
     "artifacts_write_jsonl_unchanged": workload_artifacts_write_jsonl_unchanged,
+    "trial_ledger_append": workload_trial_ledger_append,
     "discovery_local_catalog": workload_discovery_local_catalog,
     "discovery_disk_cache": workload_discovery_disk_cache,
     "jsonl_decode": workload_jsonl_decode,
