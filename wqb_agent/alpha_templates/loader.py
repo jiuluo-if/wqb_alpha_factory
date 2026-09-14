@@ -93,6 +93,8 @@ def _parse(document, *, strict_schema=False):
     for raw in document["templates"]:
         if not isinstance(raw, dict):
             raise ValueError("template entry must be a table")
+        if strict_schema and str(raw.get("semantic_contract", "UNDECLARED")).upper() == "SYNTHETIC_FIXTURE":
+            raise ValueError(f"{raw.get('id', '<unknown>')}: SYNTHETIC_SEMANTIC_CONTRACT_PRIVATE")
         required = _REQUIRED
         if strict_schema:
             required = (*required, "role", "field_roles", "allowed_field_families",
@@ -176,6 +178,7 @@ def _parse(document, *, strict_schema=False):
             allowed_field_families=tuple(raw.get("allowed_field_families", [])),
             field_relationship=_text(raw.get("field_relationship", "synthetic example"), "field_relationship"),
             relationship_contract=raw.get("relationship_contract", "UNDECLARED"),
+            semantic_contract=raw.get("semantic_contract", "UNDECLARED"),
             direction_reason=_text(raw.get("direction_reason", raw["economic_mechanism"]), "direction_reason"),
             allowed_horizon_profiles=horizon_profiles,
             allowed_settings_arms=tuple(raw.get("allowed_settings_arms", ["BASE"])),

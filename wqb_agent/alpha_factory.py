@@ -18,7 +18,11 @@ from .alpha_templates import (
     TemplateNumericSlot,
     template_numeric_audit,
 )
-from .alpha_templates.validation import effective_relationship_contract
+from .alpha_templates.validation import (
+    effective_relationship_contract,
+    effective_semantic_contract,
+    evaluate_semantic_contract,
+)
 from .discovery import normalize_coverage, profile_frequency_evidence
 from .diversity import (
     extract_fields,
@@ -767,117 +771,13 @@ class AlphaFactory:
     def _template_semantic_compatibility(template, profile, traits=None):
         """Score unary template fit; unknown semantics remain explicitly weak."""
         traits = traits or _derive_field_semantic_traits(profile)
-        family = template.family
-        concept = traits["concept"]
-        measurement = traits["measurement"]
-        behavior = traits["behavior"]
-        frequency = traits["frequency"]
-        sign_semantics = traits["sign_semantics"]
-        known = traits.get("semantic_admission") == "ALLOW"
         field_type = str(profile.get("type") or "").upper()
-        reasons = []
-        score = 0
-
-        # Public catalog entries are deliberately synthetic fixtures.  They
-        # must remain useful for offline schema/factory tests without being
-        # mistaken for private economic evidence; production runtime requires
-        # the private catalog before any real execution path is available.
-        if template.template_id.startswith("toy_"):
-            uses_vector = "vec_avg" in template.expression or "vec_sum" in template.expression
-            if uses_vector != (field_type == "VECTOR"):
-                return {"admission": "REJECT", "score": -100, "reasons": ["VECTOR 类型不匹配"]}
-            return {
-                "admission": "ALLOW",
-                "score": 1,
-                "reasons": ["synthetic template fixture; no economic evidence"],
-            }
-
-        vector_family = family.startswith("vector_") or family == "vector_aggregation"
         uses_vector = "vec_avg" in template.expression or "vec_sum" in template.expression
-        if uses_vector != (field_type == "VECTOR"):
-            return {"admission": "REJECT", "score": -100, "reasons": ["VECTOR 类型不匹配"]}
-        if field_type == "VECTOR" and not uses_vector:
-            return {"admission": "REJECT", "score": -100, "reasons": ["VECTOR 只能进入向量聚合模板"]}
-
-        if family in {"quality_change", "data_resilient_change", "group_data_repair", "data_quality_penalty", "stale_information"}:
-            if concept != "data_quality":
-                return {"admission": "REJECT", "score": -30, "reasons": ["模板要求 data_quality 语义"]}
-            score += 60
-            reasons.append("字段语义明确指向数据质量")
-        elif family == "event_trigger":
-            if (not known or behavior != "event_driven"
-                    or frequency in {"weekly", "monthly", "quarterly", "annual"}):
-                return {"admission": "REJECT", "score": -30, "reasons": ["缺少事件驱动语义证据"]}
-            score += 65
-            reasons.append("字段以事件驱动方式更新")
-        elif family in {"risk_adjusted_reversal", "downside_risk"}:
-            if concept not in {"volatility", "market_price", "liquidity", "analyst_revision"}:
-                if known:
-                    return {"admission": "REJECT", "score": -20, "reasons": ["风险模板与字段概念不匹配"]}
-            score += 55 if concept == "volatility" else 30
-            reasons.append("模板把字段变化解释为风险或异常暴露")
-        elif family in {"persistent_level", "momentum", "change", "innovation_surprise", "delayed_confirmation",
-                        "accumulated_change", "distribution_regime", "adaptive_scale_change", "trend_residual",
-                        "compounding_pressure", "turnover_control", "distributional_change", "group_relative_change",
-                        "group_relative_extreme", "group_centered_level", "extreme_location", "extreme_low"}:
-            if known and concept == "data_quality":
-                return {"admission": "REJECT", "score": -20, "reasons": ["数据质量不是该模板的经济输入"]}
-            if concept == "analyst_revision":
-                score += 65 if family in {"change", "innovation_surprise", "delayed_confirmation", "persistent_level"} else 45
-                reasons.append("分析师修正体现信息更新或扩散过程")
-            elif measurement in {"change", "dispersion"}:
-                score += 48
-                reasons.append("字段提供可观察的变化或离散程度")
-            elif measurement == "level" and family in {"persistent_level", "distribution_regime", "group_centered_level"}:
-                score += 42
-                reasons.append("字段水平适合检验相对状态与持续性")
-            else:
-                score += 22
-                reasons.append("字段可作为有限的时间序列基线")
-        elif family in {"robust_cross_section", "rank_level", "zscore_level", "group_neutralized", "cross_sectional_rank",
-                        "cross_sectional_standardize"}:
-            score += 32
-            reasons.append("横截面基线不依赖绝对尺度")
-
-        if concept == "volatility":
-            if family in {"risk_adjusted_reversal", "downside_risk"}:
-                score += 30
-                reasons.append("波动率直接支持风险暴露或风险调整机制")
-            elif family == "distribution_regime":
-                score += 24
-                reasons.append("波动率适合风险状态或 regime 表达")
-            elif family in {"relative_spread_change", "relative_ratio",
-                            "relative_covariance", "relative_correlation",
-                            "generic_multi_field_spread", "generic_multi_field_ratio"}:
-                score += 18
-                reasons.append("波动率可与价格或另一风险量构成相对关系")
-        if concept == "analyst_revision":
-            if family in {"change", "persistent_level", "innovation_surprise",
-                          "delayed_confirmation"}:
-                score += 35
-                reasons.append("修正字段直接观测预期更新、持续性或滞后确认")
-            elif family == "event_trigger":
-                score -= 25
-                reasons.append("修正虽是更新事件，但优先测试变化本身而非极端触发")
-        if behavior == "slow_moving":
-            if family == "event_trigger":
-                return {"admission": "REJECT", "score": -30, "reasons": ["慢变字段不默认进入事件触发"]}
-            if family in {"persistent_level", "distribution_regime", "group_centered_level"}:
-                score += 24
-                reasons.append("低频字段更适合检验持久状态或历史 regime")
-        if sign_semantics == "nonnegative_level" and family in {
-                "reversal", "risk_adjusted_reversal", "downside_risk"}:
-            score -= 8
-            reasons.append("非负水平字段不把符号方向直接解释为反转")
-        if concept == "analyst_revision" and family == "data_quality_penalty":
-            return {"admission": "REJECT", "score": -30, "reasons": ["修正字段不能冒充数据质量"]}
-        if not known:
-            if vector_family or template.field_slots != ("p",):
-                return {"admission": "REVIEW", "score": score - 15, "reasons": ["语义 UNKNOWN，仅可审阅"]}
-            return {"admission": "REVIEW", "score": score - 10, "reasons": ["语义 UNKNOWN，仅可作语法基线"]}
-        if not reasons:
-            return {"admission": "REVIEW", "score": 0, "reasons": ["没有足够的经济兼容证据"]}
-        return {"admission": "ALLOW", "score": score, "reasons": reasons}
+        return evaluate_semantic_contract(
+            effective_semantic_contract(template), traits,
+            field_type=field_type, uses_vector_operator=uses_vector,
+            field_slots=template.field_slots,
+        )
 
     @classmethod
     def _relationship_labels(cls, left, right):

@@ -102,6 +102,7 @@ class AlphaTemplate:
     allowed_field_families: tuple
     field_relationship: str
     relationship_contract: str
+    semantic_contract: str
     direction_reason: str
     allowed_horizon_profiles: tuple
     allowed_settings_arms: tuple
@@ -123,6 +124,7 @@ class AlphaTemplate:
                  field_roles=(), fixed_field_bindings=(),
                  allowed_field_families=(), field_relationship="",
                  relationship_contract="UNDECLARED",
+                 semantic_contract="UNDECLARED",
                  direction_reason="", allowed_horizon_profiles=(),
                  allowed_settings_arms=("BASE",), mechanism_tags=(),
                  novelty_family="", template_mode="CONCRETE", branch_of=None,
@@ -152,6 +154,8 @@ class AlphaTemplate:
         object.__setattr__(self, "field_relationship", field_relationship)
         object.__setattr__(self, "relationship_contract",
                            str(relationship_contract or "UNDECLARED").upper())
+        object.__setattr__(self, "semantic_contract",
+                           str(semantic_contract or "UNDECLARED").upper())
         object.__setattr__(self, "direction_reason", direction_reason or self.economic_mechanism)
         object.__setattr__(self, "allowed_horizon_profiles", tuple(allowed_horizon_profiles))
         object.__setattr__(self, "allowed_settings_arms", tuple(allowed_settings_arms))
@@ -310,6 +314,11 @@ class AlphaTemplate:
             "relationship_contract": self.effective_relationship_contract,
             "relationship_contract_status": (
                 "DECLARED" if self.effective_relationship_contract != "UNDECLARED"
+                else "LEGACY_UNDECLARED"
+            ),
+            "semantic_contract": self.semantic_contract,
+            "semantic_contract_status": (
+                "DECLARED" if self.semantic_contract != "UNDECLARED"
                 else "LEGACY_UNDECLARED"
             ),
             "direction_reason": self.direction_reason,

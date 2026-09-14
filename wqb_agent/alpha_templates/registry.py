@@ -88,6 +88,7 @@ class AlphaTemplateRegistry:
             "role", "family", "required_slots", "field_roles", "allowed_field_families",
             "field_relationship", "direction", "direction_transform", "economic_mechanism",
             "relationship_contract",
+            "semantic_contract",
             "mechanism_fingerprint", "novelty_family", "numeric_slots",
             "allowed_horizon_profiles", "allowed_settings_arms", "expected_horizon",
             "falsification", "self_correlation_impact", "direction_reason",

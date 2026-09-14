@@ -9,10 +9,12 @@ tracked catalog 只能包含 TOY/SYNTHETIC/NON-RESEARCH 示例；真实模板、
 This directory owns the template schema, fail-closed loaders, registry, and numeric/operator audits. The tracked catalog is public synthetic material only; it must never contain production expressions, private field IDs, fixed private pairings, research evidence, or learned priors.
 
 `family` and `template_id` are provenance/grouping metadata only and never
-dispatch relationship admission. `field_relationship` is human-readable text;
-the sole machine selector is the bounded `relationship_contract` enum owned by
-this package. Legacy multi-field templates may load with `UNDECLARED`, but remain
-review-only until the user explicitly declares a supported contract.
+dispatch semantic or relationship admission. `semantic_contract` is the bounded
+machine selector for unary/primary-field suitability; `relationship_contract` is
+the separate bounded selector for multi-field relations. `field_relationship`
+and mechanism text are human-readable only. Legacy templates may load with
+`UNDECLARED`, but remain review-only until the user explicitly declares a
+supported contract.
 
 Private templates are loaded only from an explicit absolute constructor path, `WQB_ALPHA_TEMPLATE_CATALOG`, or `~/.wqb_alpha_factory/private/alpha_templates.toml`. Missing private input is `PRIVATE_TEMPLATE_CATALOG_MISSING`; never search cwd/parents or fall back to the public package catalog.
 

@@ -58,6 +58,29 @@ contract 是 `SINGLE_FIELD`，不进入关系 gate。旧 private catalog 缺少�
 可读取和审计，但保持 `UNDECLARED`，自动 Factory 只返回 review/block；用户需在
 私有 catalog 中显式补充 contract 才能恢复自动准入。不会自动迁移私有文件。
 
+## Unary semantic admission contract
+
+`semantic_contract` 是 `wqb_agent.alpha_templates` 唯一拥有的有限 machine-readable
+主字段语义准入枚举。它只消费 `_derive_field_semantic_traits()` 产生的 traits 与
+结构事实；`family`、`template_id` 只保留作 provenance/grouping/研究 identity，
+不会路由 semantic admission 或 score。`economic_mechanism` 与
+`field_relationship` 也是人类可读 metadata，不会被解析为规则。
+
+允许的 generic contract 包括 `SYNTHETIC_FIXTURE`、`DATA_QUALITY`、
+`EVENT_DRIVEN`、`RISK_STATE`、`TIME_SERIES_STATE`、`PERSISTENT_STATE`、
+`CROSS_SECTIONAL_STATE`、`RELATIONAL_PRIMARY`、`VECTOR_AGGREGATION` 和
+`UNDECLARED`；不存在 catalog 自定义权重或规则 DSL。
+
+公开 builtin catalog 中的 synthetic fixture 必须显式声明
+`SYNTHETIC_FIXTURE`；private catalog 不得使用该 fixture contract 绕过生产语义
+准入。旧模板缺字段时 tolerant-read 为 `UNDECLARED`，catalog status 为
+`LEGACY_UNDECLARED`，自动 Factory 保持 review/block，并不会从 family、ID、表达式、
+算子或文本推断 contract。向量准入由字段 type 与实际向量算子结构决定。
+
+多字段模板必须同时通过 semantic contract 和独立的 `relationship_contract`；
+后者仍由现有 relationship gate 负责。PARTIAL_OPERATOR sibling 必须与 concrete
+parent 共享 semantic contract，contract 变化不会进入 candidate identity。
+
 ## Concrete and partial-operator branches
 
 模板默认 `template_mode = "CONCRETE"`；旧 v2 catalog 不需要迁移。只有显式声明
