@@ -26,6 +26,7 @@ from wqb_agent.diversity import (
     select_budget_candidates,
     semantic_mechanism_key,
 )
+from wqb_agent.factory_probe import selection_probe
 from wqb_agent.factory_runner import AIFactoryRunner
 from wqb_agent.proposal_contract import factory_batch_stats, validate_factory_batch
 from wqb_agent.research_guard import parameter_only_change_reason
@@ -146,7 +147,7 @@ class TestFactoryMechanismSelection(unittest.TestCase):
         self.assertEqual(decision["change_type"], "candidate_change_only")
 
     def test_selection_probe_uses_abstract_partial_question_key(self):
-        probe = AIFactoryRunner._selection_probe([
+        probe = selection_probe([
             {"template_mode": "PARTIAL_OPERATOR",
              "operator_contrast_question_key": "branch::ROLE",
              "experiment_question": "uses op_a?"},

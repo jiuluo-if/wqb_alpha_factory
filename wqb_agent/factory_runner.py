@@ -13,7 +13,6 @@ day-long process reuses the same canonical artifacts instead of creating one
 control file per pass.
 """
 
-import hashlib
 import json
 import os
 import re
@@ -23,7 +22,6 @@ from contextlib import redirect_stdout
 from copy import deepcopy
 
 from .artifacts import atomic_write_json_if_changed
-from .diversity import field_concept_keys, semantic_mechanism_key
 from .expression import canonical_expression
 from .factory_blocker import (
     blocker_projection,
@@ -40,6 +38,7 @@ from .factory_control import (
     SESSION_STATUSES,
     TERMINAL_RECONCILE_ACTIONS,
 )
+from .factory_probe import route_probe_projection, selection_probe
 from .factory_quota import (
     carry_forward_quota,
     prepare_quota,
@@ -91,15 +90,6 @@ class AIFactoryRunner:
     SESSION_FILE = "factory_session.json"
     CHECKPOINT_CACHE_MAX = 512
     BLOCKER_RECHECK_SEC = 3600.0
-    _ROUTE_DIMENSIONS = {
-        "candidate_expression": "candidate_expression_fingerprints",
-        "semantic_mechanism": "semantic_mechanism_fingerprints",
-        "structural_family": "structural_family_fingerprints",
-        "field_concept": "field_concept_fingerprints",
-        "relationship": "relationship_fingerprints",
-        "dataset_route": "dataset_route",
-        "research_question": "research_question_fingerprints",
-    }
     # Compatibility attribute names remain stable, while vocabulary ownership
     # lives in the pure factory_control module.
     _SESSION_STATUSES = SESSION_STATUSES
@@ -203,99 +193,6 @@ class AIFactoryRunner:
             max_route_attempts=max_route_attempts,
             max_no_gain_attempts=max_no_gain_attempts,
         )
-    @staticmethod
-    def _selection_probe(proposals, feasibility, budget_audit):
-        """Project the actually selected batch into the route control plane."""
-        probe = dict(feasibility) if isinstance(feasibility, dict) else {}
-        items = [item for item in (proposals or []) if isinstance(item, dict)]
-        probe["candidate_expression_fingerprints"] = sorted({
-            canonical_expression(item.get("expression"))
-            for item in items
-            if canonical_expression(item.get("expression"))
-        })
-        probe["semantic_mechanism_fingerprints"] = sorted({
-            key for key in (semantic_mechanism_key(item) for item in items)
-            if key != "UNKNOWN"
-        })
-        probe["structural_family_fingerprints"] = sorted({
-            str(item.get("template_family") or item.get("template_id"))
-            for item in items
-            if item.get("template_family") or item.get("template_id")
-        })
-        probe["field_concept_fingerprints"] = sorted({
-            concept for item in items for concept in field_concept_keys(item)
-            if concept != "unknown"
-        })
-        probe["dataset_route"] = sorted({
-            str(dataset)
-            for item in items
-            for dataset in (item.get("datasets") or [])
-            if dataset is not None and str(dataset).strip()
-        })
-        def question_key(item):
-            if item.get("template_mode") == "PARTIAL_OPERATOR":
-                return item.get("operator_contrast_question_key")
-            return item.get("experiment_question") or item.get("research_question")
-        probe["research_question_fingerprints"] = sorted({
-            str(question_key(item)).strip().lower()
-            for item in items
-            if question_key(item)
-        })
-        probe["budget_shortage_count"] = int(
-            budget_audit.get("shortage_count", 0)
-        ) if isinstance(budget_audit, dict) else 0
-        probe["budget_shortage_reason"] = (
-            budget_audit.get("shortage_reason")
-            if isinstance(budget_audit, dict) else None
-        )
-        return probe
-
-    @staticmethod
-    def _route_set_digest(values, *, session_id, dimension):
-        normalized = sorted({str(value) for value in (values or ()) if str(value).strip()})
-        canonical = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
-        return hashlib.sha256(
-            f"{session_id}:{dimension}:{canonical}".encode()
-        ).hexdigest()
-
-    @classmethod
-    def _route_probe_projection(cls, probe, *, session_id):
-        """Persist only bounded counts and session-bound route set digests."""
-        source = probe if isinstance(probe, dict) else {}
-        projection = cls._control_probe(source)
-        for dimension, source_key in cls._ROUTE_DIMENSIONS.items():
-            digest_key = f"{dimension}_set_digest"
-            count_key = f"{dimension}_count"
-            if source_key not in source and digest_key in source:
-                projection[count_key] = cls._safe_nonnegative_count(source.get(count_key))
-                digest = str(source.get(digest_key, "")).lower()
-                projection[digest_key] = (
-                    digest
-                    if re.fullmatch(r"[0-9a-f]{64}", digest)
-                    else cls._route_set_digest(
-                        (), session_id=session_id, dimension=dimension
-                    )
-                )
-                continue
-            values = source.get(source_key)
-            normalized = sorted({str(value) for value in (values or ()) if str(value).strip()})
-            projection[count_key] = len(normalized)
-            projection[digest_key] = cls._route_set_digest(
-                normalized, session_id=session_id, dimension=dimension
-            )
-        for key in ("eligible_count", "selected_count", "shortage_count"):
-            if key in source:
-                projection[key] = cls._safe_nonnegative_count(source.get(key))
-        if "budget_shortage_count" in source:
-            projection["shortage_count"] = cls._safe_nonnegative_count(
-                source.get("budget_shortage_count")
-            )
-        if "budget_shortage_reason" in source:
-            projection["shortage_reason"] = cls._safe_control_token(
-                source.get("budget_shortage_reason"), default="UNKNOWN"
-            )
-        return projection
-
     @classmethod
     def read_session(cls, state_dir):
         """Read the single factory envelope without constructing an Agent."""
@@ -892,7 +789,7 @@ class AIFactoryRunner:
                         getattr(self.agent, "min_cross_dataset_pairs", 0) > 0 and
                         not feasibility.get("batch_gate", {}).get("feasible", False)):
                         config = getattr(self.agent, "factory_config", {}) or {}
-                        feasibility_probe = self._route_probe_projection(
+                        feasibility_probe = route_probe_projection(
                             feasibility, session_id=session["session_id"]
                         )
                         decision = self.route_decision(
@@ -980,10 +877,10 @@ class AIFactoryRunner:
                     if isinstance(budget_audit, dict) else 0
                 )
                 if shortage_count > 0:
-                    budget_probe = self._selection_probe(
+                    budget_probe = selection_probe(
                         proposals, feasibility, budget_audit
                     )
-                    budget_probe = self._route_probe_projection(
+                    budget_probe = route_probe_projection(
                         budget_probe, session_id=session["session_id"]
                     )
                     config = getattr(self.agent, "factory_config", {}) or {}
@@ -1125,7 +1022,7 @@ class AIFactoryRunner:
                 agent_status = stats.get("status") if isinstance(stats, dict) else None
                 if agent_status in {"PREFLIGHT_BLOCKED", "FACTORY_BATCH_BLOCKED"}:
                     preflight_probe = self._control_probe({}, stats)
-                    preflight_probe = self._route_probe_projection(
+                    preflight_probe = route_probe_projection(
                         preflight_probe, session_id=session["session_id"]
                     )
                     config = getattr(self.agent, "factory_config", {}) or {}
@@ -1560,7 +1457,7 @@ class AIFactoryRunner:
             if raw is None and key == "last_feasibility_check":
                 raw = source.get("last_feasibility_probe")
             projected[key] = (
-                cls._route_probe_projection(raw, session_id=str(source.get("session_id", "UNKNOWN")))
+                route_probe_projection(raw, session_id=str(source.get("session_id", "UNKNOWN")))
                 if isinstance(raw, dict) else None
             )
         if isinstance(source.get("blocker"), dict):

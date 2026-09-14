@@ -28,7 +28,6 @@ from .evidence import (
 from .evidence_projection import alpha_rating
 from .expression import canonical_expression, submission_fingerprint
 from .heartbeat import HeartbeatSink
-from .identity import candidate_identity
 from .incremental_value import build_incremental_value
 from .locking import OwnerBusyError, single_instance_scope
 from .metrics import (
@@ -200,8 +199,6 @@ class Agent:
                 known_field_types=self._known_field_types,
                 proposal_settings=self._proposal_settings,
                 completed_parent=self._completed_parent,
-                record_trial_phase=self._record_trial_phase,
-                record_candidate_rejection=self._record_candidate_rejection,
                 on_simulation_update=self._on_simulation_update,
                 record_live_result=self._record_live_result,
                 refresh_self_correlation_evidence=self._refresh_self_correlation_evidence,
@@ -889,23 +886,6 @@ class Agent:
                 experiment, phase, outcome=outcome, reason=reason,
                 reason_code=reason_code,
                 delegation=delegation,
-            )
-        except Exception as exc:
-            print(f"[TRIAL_LEDGER_WARN] {type(exc).__name__}: {exc}")
-
-    def _record_candidate_rejection(self, candidate, stage, reason_code, reason):
-        """Record every local rejection against its stable candidate identity."""
-        try:
-            if isinstance(candidate, dict):
-                candidate = dict(candidate)
-                candidate.setdefault("candidate_id", candidate_identity(candidate, round_no=candidate.get("round")))
-            self.trial_ledger.record(
-                candidate,
-                "candidate_rejected",
-                outcome="REJECTED",
-                reason=reason,
-                reason_code=reason_code,
-                stage=stage,
             )
         except Exception as exc:
             print(f"[TRIAL_LEDGER_WARN] {type(exc).__name__}: {exc}")

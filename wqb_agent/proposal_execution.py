@@ -71,8 +71,6 @@ class ProposalExecutionHooks:
     known_field_types: Callable[[dict, dict | None], dict]
     proposal_settings: Callable[[dict | None], dict]
     completed_parent: Callable[[str | None, dict | None], Any]
-    record_trial_phase: Callable[..., None]
-    record_candidate_rejection: Callable[..., None]
     on_simulation_update: Callable[..., None]
     record_live_result: Callable[[Experiment], None]
     refresh_self_correlation_evidence: Callable[[list[Experiment]], None]
@@ -142,6 +140,33 @@ class ProposalExecutionWorkflow:
     def _ctx(self):
         return self.context
 
+    def _record_trial_phase(self, experiment, phase, outcome=None, reason=None,
+                            reason_code=None, delegation=None):
+        """Write lifecycle audit through the canonical ledger owner."""
+        try:
+            self._ctx.trial_ledger.record(
+                experiment, phase, outcome=outcome, reason=reason,
+                reason_code=reason_code, delegation=delegation,
+            )
+        except Exception as exc:
+            print(f"[TRIAL_LEDGER_WARN] {type(exc).__name__}: {exc}")
+
+    def _record_candidate_rejection(self, candidate, stage, reason_code, reason):
+        """Record local rejection without an Agent forwarding callback."""
+        try:
+            if isinstance(candidate, dict):
+                candidate = dict(candidate)
+                candidate.setdefault(
+                    "candidate_id",
+                    candidate_identity(candidate, round_no=candidate.get("round")),
+                )
+            self._ctx.trial_ledger.record(
+                candidate, "candidate_rejected", outcome="REJECTED",
+                reason=reason, reason_code=reason_code, stage=stage,
+            )
+        except Exception as exc:
+            print(f"[TRIAL_LEDGER_WARN] {type(exc).__name__}: {exc}")
+
     def _durable_proposal_bindings(self, checkpoint_records):
         """Read exact proposal-id bindings from existing durable owners."""
         trajectory = self._ctx.trajectory
@@ -209,15 +234,6 @@ class ProposalExecutionWorkflow:
         finally:
             self._ctx.trajectory.end_append_batch()
 
-    @staticmethod
-    def _has_full_terminal_evidence(experiment):
-        """Return whether a terminal row is safe for research consumers."""
-        return has_full_terminal_evidence(experiment)
-
-    @staticmethod
-    def _failure_category(experiment):
-        return failure_category(experiment)
-
     def _canonical_rows_for(self, experiments):
         ids = [experiment.id for experiment in experiments]
         finder = getattr(self._ctx.trajectory, "find_rows", None)
@@ -250,7 +266,7 @@ class ProposalExecutionWorkflow:
                     f"TERMINAL_EVIDENCE_UNRECOVERABLE: round {round_no} experiment {experiment.id}"
                 )
             durable = Experiment.from_dict(row)
-            if not self._has_full_terminal_evidence(durable):
+            if not has_full_terminal_evidence(durable):
                 raise ValueError(
                     f"TERMINAL_EVIDENCE_UNRECOVERABLE: round {round_no} experiment {experiment.id}"
                 )
@@ -313,7 +329,7 @@ class ProposalExecutionWorkflow:
                 },
                 status="DONE" if exp.status == "DONE" else exp.status,
                 reward=reward,
-                outcome=self._failure_category(exp),
+                outcome=failure_category(exp),
             )
         summary = self._finalize_round_projection(
             round_no, hypothesis, experiments,
@@ -516,8 +532,8 @@ class ProposalExecutionWorkflow:
             if not isinstance(raw_proposal, dict):
                 malformed = {"round": round_no, "expression": str(raw_proposal or "")}
                 malformed["candidate_id"] = candidate_identity(malformed, round_no=round_no)
-                hooks.record_trial_phase(malformed, "candidate_generated", outcome="CONSIDERED")
-                hooks.record_candidate_rejection(
+                self._record_trial_phase(malformed, "candidate_generated", outcome="CONSIDERED")
+                self._record_candidate_rejection(
                     malformed, "schema", "NOT_OBJECT", "proposal 必须是对象"
                 )
                 rejected.append((str(raw_proposal), ["proposal 必须是对象"]))
@@ -525,7 +541,7 @@ class ProposalExecutionWorkflow:
             proposal = dict(raw_proposal)
             proposal["round"] = round_no
             proposal["candidate_id"] = candidate_identity(proposal, round_no=round_no)
-            hooks.record_trial_phase(proposal, "candidate_generated", outcome="CONSIDERED")
+            self._record_trial_phase(proposal, "candidate_generated", outcome="CONSIDERED")
             source = proposal.get("field_source") or payload.get("field_source")
             if source is None:
                 source = next(
@@ -542,7 +558,7 @@ class ProposalExecutionWorkflow:
             )
             expression = admission.expression
             if admission.status != "ACCEPTED":
-                hooks.record_candidate_rejection(
+                self._record_candidate_rejection(
                     proposal, "proposal_admission", admission.reason_code,
                     admission.reason,
                 )
@@ -571,7 +587,7 @@ class ProposalExecutionWorkflow:
                 problems.extend(type_problems)
                 ok = False
             if not ok:
-                hooks.record_candidate_rejection(
+                self._record_candidate_rejection(
                     proposal, "schema", "PREFLIGHT_REJECTED", "; ".join(problems)
                 )
                 rejected.append((expression, problems))
@@ -584,7 +600,7 @@ class ProposalExecutionWorkflow:
                     parent = parent_rows.get(str(supplied_parent_id))
                     if parent is None:
                         reason = "PARENT_NOT_FOUND"
-                        hooks.record_candidate_rejection(
+                        self._record_candidate_rejection(
                             proposal, "parent_identity", reason,
                             "parent_id 未在 durable canonical trajectory 中找到",
                         )
@@ -596,7 +612,7 @@ class ProposalExecutionWorkflow:
                     )
                     if len(candidates) > 1:
                         reason = "PARENT_REFERENCE_AMBIGUOUS"
-                        hooks.record_candidate_rejection(
+                        self._record_candidate_rejection(
                             proposal, "parent_identity", reason,
                             "legacy expression-only parent 引用对应多个 Experiment",
                         )
@@ -604,7 +620,7 @@ class ProposalExecutionWorkflow:
                         continue
                     if not candidates:
                         reason = "PARENT_NOT_FOUND"
-                        hooks.record_candidate_rejection(
+                        self._record_candidate_rejection(
                             proposal, "parent_identity", reason,
                             "legacy parent_expression 没有唯一 DONE Experiment",
                         )
@@ -614,7 +630,7 @@ class ProposalExecutionWorkflow:
                     proposal["parent_id"] = parent.get("id")
                 if str(parent.get("status") or "").upper() != "DONE":
                     reason = "PARENT_NOT_DONE"
-                    hooks.record_candidate_rejection(
+                    self._record_candidate_rejection(
                         proposal, "parent_identity", reason,
                         "parent_id 对应 Experiment 尚未完成",
                     )
@@ -622,7 +638,7 @@ class ProposalExecutionWorkflow:
                     continue
                 if not isinstance(parent.get("metrics"), dict) or not parent.get("metrics"):
                     reason = "PARENT_NOT_DONE"
-                    hooks.record_candidate_rejection(
+                    self._record_candidate_rejection(
                         proposal, "parent_identity", reason,
                         "parent_id 对应 Experiment 缺少 required evidence",
                     )
@@ -632,7 +648,7 @@ class ProposalExecutionWorkflow:
                     parent.get("expression", "")
                 ):
                     reason = "PARENT_EXPRESSION_MISMATCH"
-                    hooks.record_candidate_rejection(
+                    self._record_candidate_rejection(
                         proposal, "parent_identity", reason,
                         "parent_expression 与 parent_id 的 canonical expression 不一致",
                     )
@@ -645,18 +661,18 @@ class ProposalExecutionWorkflow:
                     and "snapshot_date" in source
                 ):
                     reason = "field_source 必须声明 local_catalog/brain_api 及 snapshot_date"
-                    hooks.record_candidate_rejection(proposal, "field_source", "INVALID_FIELD_SOURCE", reason)
+                    self._record_candidate_rejection(proposal, "field_source", "INVALID_FIELD_SOURCE", reason)
                     rejected.append((expression, [reason]))
                     continue
                 role = proposal.get("research_role")
                 if role not in RESEARCH_ROLES:
                     reason = "research_role 必须是 EXPLORE/EXPLOIT/VALIDATION"
-                    hooks.record_candidate_rejection(proposal, "research_guard", "INVALID_RESEARCH_ROLE", reason)
+                    self._record_candidate_rejection(proposal, "research_guard", "INVALID_RESEARCH_ROLE", reason)
                     rejected.append((expression, [reason]))
                     continue
                 if role == "EXPLORE" and proposal.get("experiment_stage") != "BASELINE":
                     reason = "EXPLORE 必须是新的 BASELINE"
-                    hooks.record_candidate_rejection(proposal, "research_guard", "EXPLORE_STAGE_MISMATCH", reason)
+                    self._record_candidate_rejection(proposal, "research_guard", "EXPLORE_STAGE_MISMATCH", reason)
                     rejected.append((expression, [reason]))
                     continue
                 if role == "VALIDATION":
@@ -665,7 +681,7 @@ class ProposalExecutionWorkflow:
                     ).get("label")
                     if parent_verdict not in {"SUCCESS", "SUSPICIOUS_HIGH_SIGNAL"}:
                         reason = "VALIDATION 的 parent 必须已通过质量门或为需审计的高信号"
-                        hooks.record_candidate_rejection(proposal, "research_guard", "PARENT_QUALITY_FAIL", reason)
+                        self._record_candidate_rejection(proposal, "research_guard", "PARENT_QUALITY_FAIL", reason)
                         rejected.append((expression, [reason]))
                         continue
             lineage_id = proposal.get("lineage_id") or proposal.get("parent_expression") or hypothesis.get("id")
@@ -676,14 +692,14 @@ class ProposalExecutionWorkflow:
             )
             if blocked:
                 reason = f"lineage {lineage_id!r} 已标记 {lineage_decision}，不再消耗探索预算"
-                hooks.record_candidate_rejection(proposal, "lineage", f"LINEAGE_{lineage_decision}", reason)
+                self._record_candidate_rejection(proposal, "lineage", f"LINEAGE_{lineage_decision}", reason)
                 diversity_rejected.append((expression, [reason]))
                 continue
             guard_ok, guard_reason = loop_guard.check(
                 proposal, default_lineage=proposal.get("lineage_id") or hypothesis.get("id")
             )
             if not guard_ok:
-                hooks.record_candidate_rejection(proposal, "research_guard", "LOOP_GUARD", guard_reason)
+                self._record_candidate_rejection(proposal, "research_guard", "LOOP_GUARD", guard_reason)
                 diversity_rejected.append((expression, [guard_reason]))
                 continue
             identity = admit_execution_identity(
@@ -698,7 +714,7 @@ class ProposalExecutionWorkflow:
             if identity.status != "ACCEPTED":
                 reason_code = identity.reason_code
                 if not identity.collision:
-                    hooks.record_candidate_rejection(
+                    self._record_candidate_rejection(
                         proposal, "execution_identity", reason_code, identity.reason,
                     )
                     rejected.append((expression, [reason_code]))
@@ -715,13 +731,13 @@ class ProposalExecutionWorkflow:
                     )
                     if previous is not None:
                         fresh.remove(previous)
-                        hooks.record_candidate_rejection(
+                        self._record_candidate_rejection(
                             previous, "execution_identity", reason_code,
                             "同一 batch 的 proposal_id 绑定多个 execution identity",
                         )
                         rejected.append((previous["expression"], [reason_code]))
                 conflicting_proposal_ids.add(proposal_id)
-                hooks.record_candidate_rejection(
+                self._record_candidate_rejection(
                     proposal, "execution_identity", reason_code, identity.reason,
                 )
                 rejected.append((expression, [reason_code]))
@@ -748,7 +764,7 @@ class ProposalExecutionWorkflow:
             role = proposal.get("research_role")
             if role in role_max and allocation_counts.get(role, 0) >= int(role_max[role]):
                 reason = f"{role} 已达到本轮动态上限 {role_max[role]}"
-                hooks.record_candidate_rejection(proposal, "diversity", "ARM_ROLE_CAP", reason)
+                self._record_candidate_rejection(proposal, "diversity", "ARM_ROLE_CAP", reason)
                 diversity_rejected.append((proposal["expression"], [reason]))
                 continue
             fields = extract_fields(proposal["expression"], proposal.get("fields") or [])
@@ -762,7 +778,7 @@ class ProposalExecutionWorkflow:
             family_cap = 4 if factory_batch else 2
             if family_counts.get(family, 0) >= family_cap:
                 reason = f"signal family {family!r} 已达本批上限 {family_cap}"
-                hooks.record_candidate_rejection(proposal, "diversity", "DIVERSITY_FAMILY_CAP", reason)
+                self._record_candidate_rejection(proposal, "diversity", "DIVERSITY_FAMILY_CAP", reason)
                 diversity_rejected.append((proposal["expression"], [reason]))
                 continue
             record = {
@@ -781,7 +797,7 @@ class ProposalExecutionWorkflow:
             )
             if redundant and not (distinct_factory_templates or distinct_factory_field_scope):
                 reason = "与本轮更高优先级候选近重复"
-                hooks.record_candidate_rejection(proposal, "diversity", "DIVERSITY_REDUNDANT", reason)
+                self._record_candidate_rejection(proposal, "diversity", "DIVERSITY_REDUNDANT", reason)
                 diversity_rejected.append((proposal["expression"], [reason]))
                 continue
             if not ctx.search_policy.accept(proposal):
@@ -796,7 +812,7 @@ class ProposalExecutionWorkflow:
                     if reason_code == "TERMINAL_PROPOSAL_KEY_ARM_REBIND"
                     else "同一 dataset/mechanism research arm 已有待定或预留预算"
                 )
-                hooks.record_candidate_rejection(
+                self._record_candidate_rejection(
                     proposal,
                     "simulation_budget" if reason_code == "SIMULATION_BUDGET" else "arm",
                     reason_code,
@@ -804,7 +820,7 @@ class ProposalExecutionWorkflow:
                 )
                 diversity_rejected.append((proposal["expression"], [reason]))
                 continue
-            hooks.record_trial_phase(proposal, "candidate_admitted", outcome="ADMITTED")
+            self._record_trial_phase(proposal, "candidate_admitted", outcome="ADMITTED")
             family_counts[family] = family_counts.get(family, 0) + 1
             if role in allocation_counts:
                 allocation_counts[role] += 1
@@ -839,7 +855,7 @@ class ProposalExecutionWorkflow:
         budget_rejected = diverse[budget_cap:]
         fresh = diverse[:budget_cap]
         for proposal in budget_rejected:
-            hooks.record_candidate_rejection(proposal, "batch_budget", "BATCH_CAP", "本地 batch cap 淘汰，未承诺 Simulation")
+            self._record_candidate_rejection(proposal, "batch_budget", "BATCH_CAP", "本地 batch cap 淘汰，未承诺 Simulation")
             ctx.search_policy.release(proposal, status="SKIPPED_LOCAL")
 
         if ctx.research_allocation:
@@ -890,9 +906,9 @@ class ProposalExecutionWorkflow:
         for proposal in fresh:
             if ctx.search_policy.commit(proposal):
                 committed.append(proposal)
-                hooks.record_trial_phase(proposal, "simulation_committed", outcome="COMMITTED")
+                self._record_trial_phase(proposal, "simulation_committed", outcome="COMMITTED")
             else:
-                hooks.record_candidate_rejection(
+                self._record_candidate_rejection(
                     proposal, "simulation_budget", "BUDGET_COMMIT_FAILED",
                     "最终执行集合无法承诺 Simulation budget",
                 )
@@ -1013,9 +1029,9 @@ class ProposalExecutionWorkflow:
             if exp.experiment_stage == "ROBUSTNESS" and exp.validation_plan is None:
                 raise ValueError("ROBUSTNESS 缺少预注册 validation_plan")
             experiments.append(exp)
-            hooks.record_trial_phase(exp, "generated", outcome="PENDING")
-            hooks.record_trial_phase(exp, "preflight", outcome="ACCEPTED")
-            hooks.record_trial_phase(exp, "preflight_accepted", outcome="ACCEPTED")
+            self._record_trial_phase(exp, "generated", outcome="PENDING")
+            self._record_trial_phase(exp, "preflight", outcome="ACCEPTED")
+            self._record_trial_phase(exp, "preflight_accepted", outcome="ACCEPTED")
             ctx.memory.remember_expression(exp.expression)
 
         ctx.memory.register_hypothesis(hypothesis)

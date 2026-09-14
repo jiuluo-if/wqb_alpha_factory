@@ -162,6 +162,7 @@ class ArchitectureDependencyContracts(unittest.TestCase):
             "wqb_agent/client_transport.py",
             "wqb_agent/research_catalog.py",
             "wqb_agent/factory_control.py",
+            "wqb_agent/factory_probe.py",
             "wqb_agent/execution_plan.py",
             "wqb_agent/proposal_inbox.py",
             "wqb_agent/proposal_schema.py",
@@ -178,6 +179,21 @@ class ArchitectureDependencyContracts(unittest.TestCase):
                 f"{path} imports forbidden owner/transport modules: "
                 f"{sorted(forbidden & dependencies)}",
             )
+
+    def test_factory_probe_is_canonical_and_runner_has_no_probe_wrappers(self):
+        runner = (ROOT / "wqb_agent/factory_runner.py").read_text(encoding="utf-8")
+        self.assertNotIn("def _selection_probe(", runner)
+        self.assertNotIn("def _route_set_digest(", runner)
+        self.assertNotIn("def _route_probe_projection(", runner)
+        imports = _imports(ROOT / "wqb_agent/factory_probe.py")
+        self.assertNotIn("wqb_agent.agent", imports)
+        self.assertNotIn("wqb_agent.state", imports)
+
+    def test_proposal_execution_writes_lifecycle_audit_through_context_owner(self):
+        source = (ROOT / "wqb_agent/proposal_execution.py").read_text(encoding="utf-8")
+        self.assertNotIn("record_trial_phase: Callable", source)
+        self.assertNotIn("record_candidate_rejection: Callable", source)
+        self.assertIn("self._ctx.trial_ledger.record(", source)
 
     def test_package_import_graph_has_no_cycles(self):
         modules = {

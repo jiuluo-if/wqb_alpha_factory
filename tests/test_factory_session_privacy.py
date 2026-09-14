@@ -10,6 +10,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+from wqb_agent.factory_probe import route_probe_projection
 from wqb_agent.factory_runner import (
     AIFactoryRunner,
     FactoryControlStateError,
@@ -144,8 +145,7 @@ class TestFactorySessionPrivacy(unittest.TestCase):
             "dataset_route": ["dataset-a"],
             "research_question_fingerprints": ["question-a"],
         }
-        projection = getattr(AIFactoryRunner, "_route_probe_projection", None)
-        self.assertTrue(callable(projection))
+        projection = route_probe_projection
         first = projection(probe, session_id="session-a")
         second = projection(
             {key: list(reversed(value)) for key, value in probe.items()},
@@ -173,7 +173,7 @@ class TestFactorySessionPrivacy(unittest.TestCase):
             "dataset_route": ["dataset-a"],
             "research_question_fingerprints": ["question-a"],
         }
-        projection = AIFactoryRunner._route_probe_projection
+        projection = route_probe_projection
         changes = {
             "candidate_expression_fingerprints": ["expr-b"],
             "semantic_mechanism_fingerprints": ["mechanism-b"],
