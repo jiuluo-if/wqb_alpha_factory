@@ -17,6 +17,12 @@ from zoneinfo import ZoneInfo
 
 from .artifacts import atomic_write_json_if_changed
 from .discovery_selection import keyword_contribution, score_components
+from .field_catalog import (
+    catalog_scope,
+    manifest_is_complete,
+    normalize_dataset_ids,
+    valid_platform_count,
+)
 from .field_metadata import (
     dataset_description_frequency,
     frequency_evidence,
@@ -121,7 +127,7 @@ class FieldDiscovery:
             self.min_datasets = max(1, int(min_datasets))
         except (TypeError, ValueError):
             self.min_datasets = 2
-        self.dataset_pool = self._normalize_dataset_ids(dataset_pool)
+        self.dataset_pool = normalize_dataset_ids(dataset_pool)
         self.persist_catalog = bool(persist_catalog)
         self.catalog_root = catalog_root or (
             os.path.dirname(cache_path) if cache_path else None
@@ -170,21 +176,6 @@ class FieldDiscovery:
         # 没有目录时的跨运行回退，避免生产运行再次复制目录内容。
         self._using_catalog = self._catalog_provenance is not None
         self._disk_cache = catalog or self._load_disk_cache()
-
-    @staticmethod
-    def _normalize_dataset_ids(values):
-        normalized = []
-        if isinstance(values, (str, int)):
-            values = [values]
-        for value in values or []:
-            if isinstance(value, dict):
-                value = value.get("id") or value.get("name")
-            if not isinstance(value, (str, int)):
-                continue
-            value = str(value).strip()
-            if value and value not in normalized:
-                normalized.append(value)
-        return normalized
 
     def _load_latest_catalog(self, catalog_root=None):
         """Load the newest structurally valid metadata catalog, if present.
@@ -268,8 +259,8 @@ class FieldDiscovery:
         if not isinstance(field_completeness, dict):
             field_completeness = {}
         catalog_status = manifest.get("catalog_status", "LEGACY_UNVERIFIED")
-        if catalog_status == "COMPLETE" and not self._manifest_is_complete(
-            field_completeness, datasets
+        if catalog_status == "COMPLETE" and not manifest_is_complete(
+            field_completeness, datasets, self.FIELD_TYPES
         ):
             catalog_status = "INCOMPLETE"
         return {
@@ -283,27 +274,6 @@ class FieldDiscovery:
                 "source": "manifest",
             },
         }, datasets
-
-    def _manifest_is_complete(self, field_completeness, datasets):
-        if not isinstance(field_completeness, dict) or not isinstance(datasets, dict):
-            return False
-        expected_types = set(self.FIELD_TYPES)
-        for dataset_id in datasets:
-            rows = field_completeness.get(dataset_id)
-            if not isinstance(rows, dict) or set(rows) != expected_types:
-                return False
-            for field_type in self.FIELD_TYPES:
-                row = rows.get(field_type)
-                if (
-                    not isinstance(row, dict)
-                    or not self._valid_platform_count(row.get("expected_count"))
-                    or not self._valid_platform_count(row.get("loaded_count"))
-                    or row["expected_count"] != row["loaded_count"]
-                    or row.get("complete") is not True
-                    or row.get("truncation_reason") is not None
-                ):
-                    return False
-        return bool(datasets)
 
     def source_provenance(self):
         base = {
@@ -418,15 +388,6 @@ class FieldDiscovery:
         except OSError:
             pass
 
-    def _catalog_scope(self):
-        """Return the platform query scope, without any research result data."""
-        return {
-            "instrument_type": getattr(self.client, "instrument_type", "EQUITY"),
-            "region": getattr(self.client, "region", "USA"),
-            "delay": getattr(self.client, "delay", 1),
-            "universe": getattr(self.client, "universe", "TOP3000"),
-        }
-
     def _persist_field_catalog(self, dataset_ids):
         """Write a metadata-only, New-York-day field snapshot.
 
@@ -437,7 +398,7 @@ class FieldDiscovery:
         """
         if not self.persist_catalog or not self.catalog_root:
             return None
-        normalized = self._normalize_dataset_ids(dataset_ids)
+        normalized = normalize_dataset_ids(dataset_ids)
         if not normalized:
             return None
         local_day = datetime.now(UTC).astimezone(
@@ -460,7 +421,7 @@ class FieldDiscovery:
                 "schema": 1,
                 "dataset_id": dataset_id,
                 "fetched_at": fetched_at,
-                "scope": self._catalog_scope(),
+                "scope": catalog_scope(self.client),
                 "fields": fields,
             }
             encoded = json.dumps(
@@ -499,7 +460,7 @@ class FieldDiscovery:
             "kind": "platform_field_catalog",
             "fetched_at": fetched_at,
             "local_date": local_day,
-            "scope": self._catalog_scope(),
+            "scope": catalog_scope(self.client),
             "catalog_status": catalog_status,
             "field_completeness": completeness,
             "dataset_universe": deepcopy(self._dataset_universe_provenance),
@@ -529,10 +490,6 @@ class FieldDiscovery:
         return sorted(
             scores.keys(), key=lambda c: (scores[c], CATEGORY_VALUE[c]), reverse=True
         )
-
-    @staticmethod
-    def _valid_platform_count(value):
-        return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
     def _set_field_completeness(self, dataset_id, field_type, contract):
         dataset_contract = self._field_completeness.setdefault(dataset_id, {})
@@ -587,7 +544,7 @@ class FieldDiscovery:
             if not isinstance(results, list):
                 contract["truncation_reason"] = "MALFORMED_PAGE"
                 break
-            if not self._valid_platform_count(count):
+            if not valid_platform_count(count):
                 contract["truncation_reason"] = (
                     "MISSING_COUNT" if count is None else "INVALID_COUNT"
                 )
@@ -779,7 +736,7 @@ class FieldDiscovery:
         observed_at = datetime.now(UTC).isoformat() if status == "LIVE" else None
         self._dataset_snapshot = {
             "payload": payload or [],
-            "ids": self._normalize_dataset_ids(normalized),
+            "ids": normalize_dataset_ids(normalized),
             "description_map": {
                 str(item["id"]): str(item.get("description") or "")
                 for item in normalized
@@ -836,7 +793,7 @@ class FieldDiscovery:
 
     def _select_active_dataset_ids(self, dataset_ids, categories, keywords, round_no):
         """Bound dynamic dataset work before any field pagination starts."""
-        dataset_ids = self._normalize_dataset_ids(dataset_ids)
+        dataset_ids = normalize_dataset_ids(dataset_ids)
         if len(dataset_ids) <= self.MAX_ACTIVE_DATASETS:
             self._dataset_universe_provenance = {
                 **self._dataset_universe_provenance,
@@ -892,7 +849,7 @@ class FieldDiscovery:
         # "datasets" / "dataset_hints" or next-idea datasets). Only fields
         # matching the hypothesis keywords are kept, so the same dataset
         # can be reused across rounds without repeating formulas.
-        preferred_ids = self._normalize_dataset_ids(
+        preferred_ids = normalize_dataset_ids(
             hypothesis.get("datasets") or hypothesis.get("dataset_hints") or []
         )
         categories = self.categorize_hypothesis(hypothesis)
