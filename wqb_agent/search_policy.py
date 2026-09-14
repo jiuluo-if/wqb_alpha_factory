@@ -256,6 +256,7 @@ class BudgetAllocator:
         })
         self.proposals = {}
         self.consumed_budget = 0
+        self.last_rejection_code = None
 
     @staticmethod
     def arm_key(proposal):
@@ -272,14 +273,24 @@ class BudgetAllocator:
         return self.arms[self.arm_key(arm) if isinstance(arm, dict) else str(arm)]
 
     def can_reserve(self, proposal):
+        self.last_rejection_code = None
         key = self.proposal_key(proposal)
         existing = self.proposals.get(key)
         if existing and existing["status"] in _ACTIVE:
             return True
+        if existing and existing["status"] in _TERMINAL:
+            current_arm = self.arm_key(proposal)
+            if current_arm != existing.get("arm"):
+                self.last_rejection_code = "TERMINAL_PROPOSAL_KEY_ARM_REBIND"
+                return False
         if self.consumed_budget >= self.total_budget:
+            self.last_rejection_code = "SIMULATION_BUDGET"
             return False
         state = self._state(proposal)
-        return state["pending"] + state["running"] + state["unknown"] + state["reserved"] < self.max_pending_per_arm
+        available = state["pending"] + state["running"] + state["unknown"] + state["reserved"] < self.max_pending_per_arm
+        if not available:
+            self.last_rejection_code = "ARM_ADMISSION"
+        return available
 
     def reserve(self, proposal, *, committed=True):
         """Reserve an arm; legacy callers commit immediately by default."""
@@ -289,12 +300,19 @@ class BudgetAllocator:
             # replay is handled by transition(), so a second reserve cannot
             # look like a fresh budget grant.
             if self.proposals[key]["status"] not in _TERMINAL:
+                self.last_rejection_code = "PROPOSAL_LIFECYCLE_ACTIVE"
+                return False
+            current_arm = self.arm_key(proposal)
+            if current_arm != self.proposals[key].get("arm"):
+                self.last_rejection_code = "TERMINAL_PROPOSAL_KEY_ARM_REBIND"
                 return False
             if self.consumed_budget >= self.total_budget:
+                self.last_rejection_code = "SIMULATION_BUDGET"
                 return False
             arm = self.proposals[key]["arm"]
             state = self.arms[arm]
             if state["pending"] + state["running"] + state["unknown"] + state["reserved"] >= self.max_pending_per_arm:
+                self.last_rejection_code = "ARM_ADMISSION"
                 return False
             state["reserved"] += 1
             self.proposals[key]["status"] = "RESERVED"

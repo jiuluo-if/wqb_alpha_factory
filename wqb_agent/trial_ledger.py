@@ -148,10 +148,15 @@ class TrialLedger:
             )
         trial_id = self._trial_id(trial) or candidate_id
         expression = _text(self._value(trial, "expression", ""), "")
+        stored_fingerprint = self._value(trial, "submission_fingerprint", "")
         fingerprint = _text(
-            self._value(trial, "submission_fingerprint", "")
+            stored_fingerprint
             or hashlib.sha256(canonical_expression(expression).encode()).hexdigest(),
             "",
+        )
+        fingerprint_source = (
+            "submission_fingerprint" if stored_fingerprint not in (None, "")
+            else "legacy_derived"
         )
         state = _text(self._value(trial, "status"), "UNKNOWN")
         stable_settlement = (settlement or {}).get("settlement_id") if phase == "research_outcome_settled" else None
@@ -186,6 +191,7 @@ class TrialLedger:
             "fitness": self._value(self._value(trial, "metrics", {}) or {}, "fitness"),
             "round": self._value(trial, "round"),
             "expression_fingerprint": fingerprint,
+            "execution_fingerprint_source": fingerprint_source,
             "template_family": self._value(trial, "template_family") or "unknown",
             "research_role": self._value(trial, "research_role") or "EXPLORE",
             "experiment_stage": self._value(trial, "experiment_stage") or "BASELINE",
@@ -292,6 +298,29 @@ class TrialLedger:
                            reason=reason or payload.get("reason"),
                            reason_code="OPTIMIZATION_DECISION",
                            timestamp=timestamp)
+
+    def proposal_execution_bindings(self):
+        """Return exact proposal-to-execution bindings from experiment-backed rows.
+
+        Candidate-only legacy rows may contain a derived expression hash, so they
+        are deliberately excluded.  Rows carrying an Experiment id and its
+        persisted submission fingerprint are the durable evidence required for a
+        proposal-id rebind decision.
+        """
+        bindings = defaultdict(set)
+        rows = self._events if not self.path or not self.persist else iter_jsonl_objects(self.path)
+        for row in rows:
+            proposal_id = row.get("proposal_id")
+            experiment_id = row.get("experiment_id")
+            fingerprint = row.get("expression_fingerprint")
+            if proposal_id in (None, "") or experiment_id in (None, ""):
+                continue
+            if row.get("execution_fingerprint_source") != "submission_fingerprint":
+                continue
+            if not isinstance(fingerprint, str) or not fingerprint:
+                continue
+            bindings[str(proposal_id)].add(fingerprint)
+        return {proposal_id: frozenset(values) for proposal_id, values in bindings.items()}
 
     def summarize(self):
         phase_counts = Counter()

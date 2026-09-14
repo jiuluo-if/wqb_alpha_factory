@@ -40,7 +40,7 @@ def _round_files(state_dir: Path):
 def _checkpoint_complete(path: Path) -> bool:
     try:
         with path.open(encoding="utf-8") as handle:
-            return bool(json.load(handle).get("complete"))
+            return json.load(handle).get("complete") is True
     except (OSError, ValueError, TypeError):
         return False
 

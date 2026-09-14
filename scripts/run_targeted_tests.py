@@ -22,6 +22,11 @@ DIRECT_TESTS = {
     "main.py": ("tests/test_cli.py",),
     "scripts/run_targeted_tests.py": ("tests/test_targeted_ci.py",),
     "scripts/check_repo_privacy.py": ("tests/test_repo_privacy.py",),
+    "scripts/archive_completed_rounds.py": ("tests/test_architecture.py",),
+    "scripts/reconcile_pending.py": (
+        "tests/test_recovery.py",
+        "tests/test_proposal_safety.py",
+    ),
     "wqb_agent/client.py": (
         "tests/test_client_refactor.py",
         "tests/test_protocol_truth.py",
@@ -89,6 +94,10 @@ DIRECT_TESTS = {
     "wqb_agent/config.py": (
         "tests/test_runtime_config_boundary.py",
         "tests/test_runtime_safety.py",
+    ),
+    "wqb_agent/doctor.py": (
+        "tests/test_runtime_safety.py",
+        "tests/test_runtime_config_boundary.py",
     ),
     "wqb_agent/runtime_policy.py": (
         "tests/test_runtime_config_boundary.py",

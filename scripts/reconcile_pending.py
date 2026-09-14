@@ -142,7 +142,7 @@ def collect(state_dir):
                 checkpoint = json.load(handle)
         except (OSError, ValueError):
             continue
-        if checkpoint.get("complete"):
+        if checkpoint.get("complete") is True:
             continue
         sources.append(iter(checkpoint.get("experiments") or []))
     for e in (item for source in sources for item in source):

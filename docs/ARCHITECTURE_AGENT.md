@@ -68,6 +68,19 @@ Alpha result 或 validation payload。Optimizer 的 CHILD/ROBUSTNESS 以精确
 `parent_id == Experiment.id` 为权威；`parent_expression` 只作 cross-check，legacy
 expression-only 只有在 durable canonical history 中唯一时兼容。
 
+Checkpoint validator 还严格要求 `complete` 为 bool、Experiment status 属于
+`UNRESOLVED_STATUSES ∪ TERMINAL_STATUSES`，并校验 round、top-level hypothesis id
+及 execution set 内的 Experiment id、重算 fingerprint、proposal id 和 progress URL
+唯一性。`complete=true` 不能包含 unresolved execution；这些错误在恢复授权前
+fail closed，并以 bounded validation code 进入 audit。
+
+ProposalExecution 在 SearchPolicy admission 之前建立 transient
+`proposal_id -> effective_submission_fingerprint` binding；同 batch 冲突使用
+`PROPOSAL_ID_EXECUTION_COLLISION`，既有 Trajectory、checkpoint 或
+Experiment-backed TrialLedger 证明的重绑定使用 `PROPOSAL_ID_REBIND`。SearchPolicy
+只负责 allocation，不拥有 execution identity；BudgetAllocator 对 terminal proposal
+key 的跨 arm reserve 也 fail closed。
+
 TrialLedger 对 proposal lifecycle 的 candidate、execution fingerprint、research role
 和 arm 采用最早合法 committed/submitted identity；稀疏 terminal row 只能补充状态，
 不能把历史试验迁移到另一个 arm。identity 或 arm drift 由 `state audit` fail closed。

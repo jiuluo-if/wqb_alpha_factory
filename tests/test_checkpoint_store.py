@@ -12,6 +12,22 @@ from wqb_agent.locking import OwnerBusyError, single_instance_scope
 
 
 class TestCheckpointStore(unittest.TestCase):
+    @staticmethod
+    def _row(**overrides):
+        row = {
+            "id": "e1", "round": 4, "hypothesis_id": "h1",
+            "expression": "rank(close)", "settings": {"decay": 4},
+            "fields_used": ["close"], "status": "PENDING",
+        }
+        row.update(overrides)
+        return row
+
+    def _write_raw(self, store, payload):
+        with open(store.path(4), "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+        record = store.scan()[0]
+        return record["validation_code"]
+
     def test_write_from_unrelated_thread_is_blocked_by_outer_owner(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = CheckpointStore(tmp)
@@ -150,6 +166,84 @@ class TestCheckpointStore(unittest.TestCase):
                            "complete": False, "hypothesis": {}, "experiments": []}, handle)
             record = store.scan()[0]
             self.assertEqual(record["validation_code"], "UNSUPPORTED_FUTURE_CHECKPOINT_SCHEMA")
+
+    def test_checkpoint_completion_and_status_semantics_are_strict(self):
+        cases = (
+            ("false", "CHECKPOINT_COMPLETE_TYPE_INVALID", "PENDING"),
+            (1, "CHECKPOINT_COMPLETE_TYPE_INVALID", "PENDING"),
+            (True, "CHECKPOINT_COMPLETE_WITH_UNRESOLVED_EXECUTION", "SUBMIT_UNKNOWN"),
+            (True, "CHECKPOINT_COMPLETE_WITH_UNRESOLVED_EXECUTION", "RUNNING"),
+            (True, None, "DONE"),
+            (False, None, "DONE"),
+            (False, "CHECKPOINT_STATUS_INVALID", "NOT_A_STATUS"),
+        )
+        for complete, code, status in cases:
+            with self.subTest(complete=complete, status=status):
+                with tempfile.TemporaryDirectory() as tmp:
+                    store = CheckpointStore(tmp)
+                    actual = self._write_raw(store, {
+                        "round_no": 4, "complete": complete,
+                        "hypothesis": {"id": "h1"},
+                        "experiments": [self._row(status=status)],
+                    })
+                    if code is None:
+                        self.assertIsNotNone(store.load(4))
+                    else:
+                        self.assertEqual(actual, code)
+
+    def test_checkpoint_round_and_hypothesis_referential_integrity(self):
+        cases = (
+            (self._row(round=5), "CHECKPOINT_ROUND_IDENTITY_MISMATCH"),
+            (self._row(round=True), "CHECKPOINT_ROUND_IDENTITY_MISMATCH"),
+            (self._row(hypothesis_id="h2"), "CHECKPOINT_HYPOTHESIS_IDENTITY_MISMATCH"),
+        )
+        for row, code in cases:
+            with self.subTest(code=code):
+                with tempfile.TemporaryDirectory() as tmp:
+                    store = CheckpointStore(tmp)
+                    self.assertEqual(self._write_raw(store, {
+                        "round_no": 4, "complete": False,
+                        "hypothesis": {"id": "h1"}, "experiments": [row],
+                    }), code)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = CheckpointStore(tmp)
+            code = self._write_raw(store, {
+                "round_no": 4, "complete": False, "hypothesis": {},
+                "experiments": [self._row(hypothesis_id="legacy-h")],
+            })
+            self.assertIsNone(code)
+            self.assertIsNotNone(store.load(4))
+
+    def test_checkpoint_execution_set_uniqueness_is_fail_closed(self):
+        cases = (
+            ([self._row(id="e1"), self._row(id="e1", expression="rank(open)")],
+             "CHECKPOINT_DUPLICATE_EXPERIMENT_ID"),
+            ([self._row(id="e1"), self._row(id="e2")],
+             "CHECKPOINT_DUPLICATE_SUBMISSION_IDENTITY"),
+            ([self._row(id="e1", proposal_id="p1"), self._row(id="e2", expression="rank(open)", proposal_id="p1")],
+             "CHECKPOINT_DUPLICATE_PROPOSAL_ID"),
+            ([self._row(id="e1", progress_url="/simulations/1"),
+              self._row(id="e2", expression="rank(open)", progress_url="/simulations/1")],
+             "CHECKPOINT_PROGRESS_IDENTITY_COLLISION"),
+        )
+        for rows, code in cases:
+            with self.subTest(code=code):
+                with tempfile.TemporaryDirectory() as tmp:
+                    store = CheckpointStore(tmp)
+                    self.assertEqual(self._write_raw(store, {
+                        "round_no": 4, "complete": False,
+                        "hypothesis": {"id": "h1"}, "experiments": rows,
+                    }), code)
+
+    def test_legacy_missing_fingerprints_still_collide_after_recomputation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = CheckpointStore(tmp)
+            rows = [self._row(id="e1"), self._row(id="e2")]
+            self.assertEqual(self._write_raw(store, {
+                "round_no": 4, "complete": False, "hypothesis": {"id": "h1"},
+                "experiments": rows,
+            }), "CHECKPOINT_DUPLICATE_SUBMISSION_IDENTITY")
 
     def test_malformed_or_mismatched_checkpoint_is_not_treated_as_absent(self):
         with tempfile.TemporaryDirectory() as tmp:

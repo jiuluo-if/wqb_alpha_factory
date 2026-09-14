@@ -43,10 +43,23 @@ dataset 或 parent。存在的 `submission_fingerprint` 若与完整 payload 不
 `CHECKPOINT_SUBMISSION_IDENTITY_MISMATCH`，不能静默重算；malformed、unreadable 或
 future-schema 的 foreign checkpoint 即使 `force-new-round` 也不允许新写入。
 
+Checkpoint `complete` 必须是 JSON bool；合法 Experiment status 复用
+`UNRESOLVED_STATUSES ∪ TERMINAL_STATUSES`。每个 row 的 round 必须等于文件
+`round_no`，有 top-level hypothesis id 时必须一致。一个 checkpoint 内的 Experiment
+id、重算 submission fingerprint、非空 proposal id 不能重复；progress URL 不能指向
+多个 execution identity。`complete=true` 携带 unresolved status 会被标为
+`CHECKPOINT_COMPLETE_WITH_UNRESOLVED_EXECUTION`，不会释放 execution fence。
+
 远端 execution dedupe 使用当前 batch 内的 `batch_execution_fingerprints`，输入是
 `Agent._proposal_settings()` 产出的完整 effective settings。research expression 去重、
 SearchPolicy arm 和 execution dedupe 是三种不同判断；`DUPLICATE_EFFECTIVE_EXECUTION`
 在 SearchPolicy 关闭时仍然生效。
+
+写入 Simulation 前，ProposalExecution 建立 transient proposal binding；同 batch
+的同 proposal_id 多 fingerprint 使用 `PROPOSAL_ID_EXECUTION_COLLISION`，durable
+历史已证明的不同 fingerprint 使用 `PROPOSAL_ID_REBIND`。该检查发生在
+`SearchPolicy.accept()` 之前；BudgetAllocator 对 terminal proposal key 的不同 arm
+也拒绝 reserve，不把旧 lifecycle 静默迁移到新 arm。
 
 Optimizer child 的 `parent_id` 是 Experiment identity，`parent_expression` 只用于
 一致性核验；同表达式多个 DONE parent 时，legacy expression-only 引用保持

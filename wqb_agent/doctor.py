@@ -43,7 +43,7 @@ def run_doctor(raw_config, *, offline=True, snapshot=None):
     submit_unknown = 0
     for record in snapshot.checkpoint_records:
         checkpoint = record["checkpoint"]
-        if record["malformed"] or not checkpoint.get("complete", False):
+        if record["malformed"] or checkpoint.get("complete") is not True:
             result["checkpoint_consistency"] = "FAIL"
             unresolved += 1
         for row in checkpoint.get("experiments") or []:

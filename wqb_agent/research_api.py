@@ -594,7 +594,7 @@ def _targeted_recovery_barrier(runtime):
         if record.get("malformed"):
             return "MALFORMED_CHECKPOINT"
         checkpoint = record.get("checkpoint")
-        if not isinstance(checkpoint, Mapping) or not checkpoint.get("complete", False):
+        if not isinstance(checkpoint, Mapping) or checkpoint.get("complete") is not True:
             return "UNFINISHED_CHECKPOINT"
         for experiment in checkpoint.get("experiments") or ():
             if not isinstance(experiment, Mapping):

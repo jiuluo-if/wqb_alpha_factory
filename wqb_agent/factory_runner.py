@@ -1590,7 +1590,7 @@ class AIFactoryRunner:
         round_no = payload.get("round_no")
         if isinstance(round_no, int) and not isinstance(round_no, bool) and round_no > 0:
             checkpoint = self._load_checkpoint_payload(round_no)
-            if isinstance(checkpoint, dict) and checkpoint.get("complete"):
+            if isinstance(checkpoint, dict) and checkpoint.get("complete") is True:
                 return None
         return {**state, "round_no": payload.get("round_no")}
 
@@ -1611,9 +1611,9 @@ class AIFactoryRunner:
             except (TypeError, ValueError):
                 pass
         checkpoint = self._load_checkpoint_payload(round_no)
-        if checkpoint and checkpoint.get("complete"):
+        if checkpoint and checkpoint.get("complete") is True:
             return []
-        if checkpoint and not checkpoint.get("complete"):
+        if checkpoint and checkpoint.get("complete") is not True:
             return []
         try:
             with open(self.proposals_path, encoding="utf-8") as handle:
@@ -1713,7 +1713,7 @@ class AIFactoryRunner:
         checkpoints = getattr(self.agent, "checkpoints", None)
         if checkpoints is not None:
             for record in checkpoints.scan() or ():
-                if record.get("malformed") or not record.get("checkpoint", {}).get("complete"):
+                if record.get("malformed") or record.get("checkpoint", {}).get("complete") is not True:
                     continue
                 for row in record.get("checkpoint", {}).get("experiments") or ():
                     expression = row.get("expression") if isinstance(row, dict) else None

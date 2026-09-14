@@ -394,6 +394,18 @@ class TestRuntimeSafety(unittest.TestCase):
         self.assertIn("LIFECYCLE_CANDIDATE_ID_DRIFT", result["errors"])
         self.assertIn("LIFECYCLE_ARM_DRIFT", result["errors"])
 
+    def test_audit_reports_proposal_id_rebind_without_private_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "trial_ledger.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({
+                    "proposal_id": "p-rebind", "phase": "candidate_rejected",
+                    "reason_code": "PROPOSAL_ID_REBIND",
+                    "reason": "opaque binding conflict",
+                }) + "\n")
+            result = audit_state(tmp)
+        self.assertIn("proposal_id_execution_rebind", result["errors"])
+        self.assertNotIn("rank(", json.dumps(result, ensure_ascii=False))
+
     def test_valid_non_simulation_ledger_phases_are_not_lifecycle_degraded(self):
         with tempfile.TemporaryDirectory() as tmp:
             with open(os.path.join(tmp, "trial_ledger.jsonl"), "w", encoding="utf-8") as handle:

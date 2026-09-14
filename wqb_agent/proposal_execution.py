@@ -155,6 +155,38 @@ class ProposalExecutionWorkflow:
             exclude_round=round_no
         )
 
+    def _durable_proposal_bindings(self, checkpoint_records):
+        """Read exact proposal-id bindings from existing durable owners."""
+        bindings = {}
+
+        def add(proposal_id, fingerprint):
+            if proposal_id in (None, "") or fingerprint in (None, ""):
+                return
+            bindings.setdefault(str(proposal_id), set()).add(str(fingerprint))
+
+        trajectory = self._ctx.trajectory
+        if getattr(trajectory, "persist", True) and getattr(trajectory, "path", None):
+            rows = trajectory.iter_canonical_rows() or ()
+        else:
+            rows = (experiment.to_dict() for experiment in getattr(trajectory, "experiments", ()))
+        for row in rows:
+            if isinstance(row, dict):
+                add(row.get("proposal_id"), row.get("submission_fingerprint"))
+
+        for record in checkpoint_records:
+            if record.get("malformed"):
+                continue
+            for row in record.get("checkpoint", {}).get("experiments") or ():
+                if isinstance(row, dict):
+                    add(row.get("proposal_id"), row.get("submission_fingerprint"))
+
+        ledger = self._ctx.trial_ledger
+        if hasattr(ledger, "proposal_execution_bindings"):
+            for proposal_id, fingerprints in ledger.proposal_execution_bindings().items():
+                for fingerprint in fingerprints:
+                    add(proposal_id, fingerprint)
+        return bindings
+
     def _on_update(self, experiment, round_no, hypothesis, experiments, delegation):
         self._ctx.hooks.on_simulation_update(
             experiment, round_no, hypothesis, experiments, delegation
@@ -287,9 +319,9 @@ class ProposalExecutionWorkflow:
                 "保留原文件，需先人工对账。"
             )
             return None
-        if checkpoint and not checkpoint.get("complete"):
+        if checkpoint and checkpoint.get("complete") is not True:
             return self.resume_checkpoint(checkpoint)
-        if checkpoint and checkpoint.get("complete"):
+        if checkpoint and checkpoint.get("complete") is True:
             print(f"[CHECKPOINT COMPLETE] round {round_no} 已完成；不重新派发其中的 proposals。")
             return None
 
@@ -355,7 +387,13 @@ class ProposalExecutionWorkflow:
             [item.get("expression") for item in proposal_list if isinstance(item, dict)]
         )
         research_seen = set(terminal_expressions)
-        batch_execution_fingerprints = set(terminal_fingerprints)
+        batch_execution_fingerprints = {
+            str(fingerprint).removeprefix("settings::")
+            for fingerprint in terminal_fingerprints
+        }
+        durable_proposal_bindings = self._durable_proposal_bindings(checkpoint_records)
+        batch_proposal_bindings = {}
+        conflicting_proposal_ids = set()
         unresolved_identities = ctx.checkpoints.unresolved_submission_identities(
             exclude_round=round_no, records=checkpoint_records
         )
@@ -605,10 +643,57 @@ class ProposalExecutionWorkflow:
                 )
                 rejected.append((expression, [reason]))
                 continue
+            proposal_id = str(
+                proposal.get("proposal_id")
+                or "p-" + execution_fingerprint[:16]
+            )
+            durable_fingerprints = durable_proposal_bindings.get(proposal_id, set())
+            if durable_fingerprints and execution_fingerprint not in durable_fingerprints:
+                reason_code = "PROPOSAL_ID_REBIND"
+                hooks.record_candidate_rejection(
+                    proposal, "execution_identity", reason_code,
+                    "proposal_id 已经绑定其他 durable execution identity",
+                )
+                rejected.append((expression, [reason_code]))
+                continue
+            previous_fingerprint = batch_proposal_bindings.get(proposal_id)
+            if (
+                proposal_id in conflicting_proposal_ids
+                or (
+                    previous_fingerprint is not None
+                    and previous_fingerprint != execution_fingerprint
+                )
+            ):
+                reason_code = "PROPOSAL_ID_EXECUTION_COLLISION"
+                if proposal_id not in conflicting_proposal_ids and fresh:
+                    previous = next(
+                        (item for item in fresh
+                         if str(item.get("proposal_id") or
+                                "p-" + submission_fingerprint(
+                                    item["expression"],
+                                    effective_settings_by_candidate[item["candidate_id"]],
+                                )[:16]) == proposal_id),
+                        None,
+                    )
+                    if previous is not None:
+                        fresh.remove(previous)
+                        hooks.record_candidate_rejection(
+                            previous, "execution_identity", reason_code,
+                            "同一 batch 的 proposal_id 绑定多个 execution identity",
+                        )
+                        rejected.append((previous["expression"], [reason_code]))
+                conflicting_proposal_ids.add(proposal_id)
+                hooks.record_candidate_rejection(
+                    proposal, "execution_identity", reason_code,
+                    "同一 batch 的 proposal_id 绑定多个 execution identity",
+                )
+                rejected.append((expression, [reason_code]))
+                continue
+            batch_proposal_bindings[proposal_id] = execution_fingerprint
             batch_execution_fingerprints.add(execution_fingerprint)
             research_seen.add(research_key)
             effective_settings_by_candidate[proposal["candidate_id"]] = effective_settings
-            proposal.setdefault("proposal_id", "p-" + submission_fingerprint(expression, effective_settings)[:16])
+            proposal["proposal_id"] = proposal_id
             fresh.append(proposal)
 
         diverse, diverse_records = [], []
@@ -665,11 +750,19 @@ class ProposalExecutionWorkflow:
             if not ctx.search_policy.accept(proposal):
                 allocator = ctx.search_policy.allocator
                 budget_exhausted = allocator.consumed_budget >= allocator.total_budget
-                reason = "Simulation budget 已耗尽" if budget_exhausted else "同一 dataset/mechanism research arm 已有待定或预留预算"
+                allocator_reason = getattr(allocator, "last_rejection_code", None)
+                reason_code = allocator_reason or (
+                    "SIMULATION_BUDGET" if budget_exhausted else "ARM_ADMISSION"
+                )
+                reason = "Simulation budget 已耗尽" if reason_code == "SIMULATION_BUDGET" else (
+                    "terminal proposal_id 的 arm 不可重绑定"
+                    if reason_code == "TERMINAL_PROPOSAL_KEY_ARM_REBIND"
+                    else "同一 dataset/mechanism research arm 已有待定或预留预算"
+                )
                 hooks.record_candidate_rejection(
                     proposal,
-                    "simulation_budget" if budget_exhausted else "arm",
-                    "SIMULATION_BUDGET" if budget_exhausted else "ARM_ADMISSION",
+                    "simulation_budget" if reason_code == "SIMULATION_BUDGET" else "arm",
+                    reason_code,
                     reason,
                 )
                 diversity_rejected.append((proposal["expression"], [reason]))
@@ -1032,7 +1125,7 @@ class ProposalExecutionWorkflow:
             )
         if exp.status == "SKIPPED_STALE":
             return exp
-        if checkpoint.get("complete"):
+        if checkpoint.get("complete") is True:
             raise ValueError(f"round {round_no} has no unfinished checkpoint")
         history_path = os.path.join(self._ctx.state_dir, "reconcile_history.jsonl")
         attempts = [
@@ -1092,7 +1185,7 @@ class ProposalExecutionWorkflow:
             )
         if exp.status == "SKIPPED_UNKNOWN":
             return exp
-        if checkpoint.get("complete"):
+        if checkpoint.get("complete") is True:
             raise ValueError(f"round {round_no} has no unfinished checkpoint")
         # A progress-URL-less UNKNOWN is the same recovery-evidence gap as
         # SUBMIT_UNKNOWN: an ambiguous write result with no safe re-POST and no
@@ -1173,7 +1266,7 @@ class ProposalExecutionWorkflow:
         checkpoint = self._validate_finalize_checkpoint(
             checkpoint, experiments, int(round_no)
         )
-        if checkpoint is not None and not checkpoint.get("complete"):
+        if checkpoint is not None and checkpoint.get("complete") is not True:
             hypothesis = checkpoint.get("hypothesis") or {
                 "id": f"h-llm-r{round_no}", "_round": int(round_no)
             }

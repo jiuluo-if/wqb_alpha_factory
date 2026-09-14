@@ -71,6 +71,19 @@ class TestSearchRecovery(unittest.TestCase):
         self.assertEqual(allocator.arms["pv1::trend"]["skipped_local"], 1)
         self.assertFalse(allocator.admit(second))
 
+    def test_terminal_proposal_key_cannot_rebind_to_another_arm(self):
+        allocator = BudgetAllocator(total_budget=3, max_pending_per_arm=2)
+        first = {"proposal_id": "p-rebind", "datasets": ["pv1"], "template_family": "trend"}
+        other_arm = {"proposal_id": "p-rebind", "datasets": ["pv2"], "template_family": "trend"}
+
+        self.assertTrue(allocator.reserve(first))
+        self.assertTrue(allocator.complete(first, reward=0.0))
+        self.assertFalse(allocator.reserve(other_arm))
+        self.assertEqual(allocator.last_rejection_code, "TERMINAL_PROPOSAL_KEY_ARM_REBIND")
+
+        replay_same_arm = dict(first)
+        self.assertTrue(allocator.reserve(replay_same_arm))
+
 
 class TestSearchOutcome(unittest.TestCase):
     def test_raw_fitness_extremes_cannot_escape_reward_bounds(self):

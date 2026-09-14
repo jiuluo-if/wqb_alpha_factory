@@ -612,6 +612,119 @@ class TestProposalExecutionSafety(TmpStateMixin, unittest.TestCase):
             for row in rows
         ))
 
+    def test_same_batch_proposal_id_cannot_bind_two_effective_executions(self):
+        agent, client = make_agent(self._tmp, rounds=1)
+        first = self._force_round_proposal(agent, settings={"decay": 1})
+        second = self._force_round_proposal(agent, settings={"decay": 2})
+        first["proposal_id"] = second["proposal_id"] = "p-shared"
+        path = os.path.join(self._tmp, "proposals.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({
+                "round_no": 1,
+                "fields": [{"id": "returns", "dataset": "pv1", "type": "MATRIX",
+                            "description": "daily return", "semantic_status": "KNOWN"}],
+                "proposals": [first, second],
+            }, handle)
+
+        agent.run_proposals(path)
+
+        self.assertEqual(client.sim_calls, [])
+        rows = list(iter_jsonl_objects(agent.trial_ledger.path))
+        self.assertGreaterEqual(sum(
+            row.get("reason_code") == "PROPOSAL_ID_EXECUTION_COLLISION"
+            for row in rows
+        ), 2)
+
+    def test_durable_proposal_id_rebind_is_blocked_without_search_policy(self):
+        agent, client = make_agent(self._tmp, rounds=2)
+        first = self._force_round_proposal(agent, settings={"decay": 1})
+        first["proposal_id"] = "p-durable"
+        path = os.path.join(self._tmp, "proposals.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"round_no": 1, "fields": [{"id": "returns", "dataset": "pv1",
+                "type": "MATRIX", "description": "daily return", "semantic_status": "KNOWN"}],
+                "proposals": [first]}, handle)
+        agent.run_proposals(path)
+        self.assertEqual(len(client.sim_calls), 1)
+
+        rebound = self._force_round_proposal(agent, settings={"decay": 2})
+        rebound["proposal_id"] = "p-durable"
+        path2 = os.path.join(self._tmp, "proposals-2.json")
+        with open(path2, "w", encoding="utf-8") as handle:
+            json.dump({"round_no": 2, "fields": [{"id": "returns", "dataset": "pv1",
+                "type": "MATRIX", "description": "daily return", "semantic_status": "KNOWN"}],
+                "proposals": [rebound]}, handle)
+
+        agent.run_proposals(path2)
+
+        self.assertEqual(len(client.sim_calls), 1)
+        self.assertTrue(any(
+            row.get("reason_code") == "PROPOSAL_ID_REBIND"
+            for row in iter_jsonl_objects(agent.trial_ledger.path)
+        ))
+
+    def test_same_proposal_id_and_same_execution_replay_uses_duplicate_guard(self):
+        agent, client = make_agent(self._tmp, rounds=2)
+        first = self._force_round_proposal(agent, settings={"decay": 1})
+        first["proposal_id"] = "p-replay"
+        path = os.path.join(self._tmp, "proposals.json")
+        fields = [{"id": "returns", "dataset": "pv1", "type": "MATRIX",
+                   "description": "daily return", "semantic_status": "KNOWN"}]
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"round_no": 1, "fields": fields, "proposals": [first]}, handle)
+        agent.run_proposals(path)
+
+        replay = self._force_round_proposal(agent, settings={"decay": 1})
+        replay["proposal_id"] = "p-replay"
+        path2 = os.path.join(self._tmp, "proposals-2.json")
+        with open(path2, "w", encoding="utf-8") as handle:
+            json.dump({"round_no": 2, "fields": fields, "proposals": [replay]}, handle)
+        agent.run_proposals(path2)
+
+        self.assertEqual(len(client.sim_calls), 1)
+        rows = list(iter_jsonl_objects(agent.trial_ledger.path))
+        self.assertTrue(any(row.get("reason_code") == "DUPLICATE_EFFECTIVE_EXECUTION" for row in rows))
+        self.assertFalse(any(row.get("reason_code") == "PROPOSAL_ID_REBIND" for row in rows))
+
+    def test_duplicate_pending_checkpoint_identity_blocks_force_new_round(self):
+        agent, client = make_agent(self._tmp, rounds=8)
+        row = {
+            "round": 7, "hypothesis_id": "h7", "expression": "rank(returns)",
+            "settings": agent.simulation_settings, "fields_used": ["returns"],
+            "status": "PENDING",
+        }
+        row["id"] = "e1"
+        row2 = dict(row, id="e2")
+        with open(agent.checkpoints.path(7), "w", encoding="utf-8") as handle:
+            json.dump({"round_no": 7, "complete": False,
+                       "hypothesis": {"id": "h7"}, "experiments": [row, row2]}, handle)
+        path = os.path.join(self._tmp, "proposals.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"round_no": 8, "proposals": [self._force_round_proposal(agent)]}, handle)
+
+        agent.run_proposals(path, allow_unresolved_checkpoint=True)
+
+        self.assertEqual(client.sim_calls, [])
+
+    def test_complete_unresolved_checkpoint_blocks_force_new_round(self):
+        agent, client = make_agent(self._tmp, rounds=8)
+        row = {
+            "id": "e-unknown", "round": 7, "hypothesis_id": "h7",
+            "expression": "rank(returns)", "settings": agent.simulation_settings,
+            "fields_used": ["returns"], "status": "SUBMIT_UNKNOWN",
+            "proposal_id": "p-unknown",
+        }
+        with open(agent.checkpoints.path(7), "w", encoding="utf-8") as handle:
+            json.dump({"round_no": 7, "complete": True,
+                       "hypothesis": {"id": "h7"}, "experiments": [row]}, handle)
+        path = os.path.join(self._tmp, "proposals.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"round_no": 8, "proposals": [self._force_round_proposal(agent)]}, handle)
+
+        agent.run_proposals(path, allow_unresolved_checkpoint=True)
+
+        self.assertEqual(client.sim_calls, [])
+
     def test_proposal_priority_cap_never_spends_over_budget(self):
         agent, client = make_agent(self._tmp, rounds=1)
         agent.candidates_per_round = 1

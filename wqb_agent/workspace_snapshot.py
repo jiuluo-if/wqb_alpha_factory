@@ -72,6 +72,7 @@ class LedgerSummary:
     simulation_submitted: frozenset = frozenset()
     unsupported_schema_rows: int = 0
     lifecycle_identity_drift: dict = None
+    proposal_id_execution_rebind: int = 0
 
 
 @dataclass(frozen=True)
@@ -142,7 +143,7 @@ class WorkspaceSnapshot:
                 os.path.basename(record["path"])
                 for record in self.checkpoint_records
                 if record["malformed"]
-                or not record["checkpoint"].get("complete", False)
+                or record["checkpoint"].get("complete") is not True
             )
         )
 
@@ -415,8 +416,11 @@ def _ledger_summary(path):
     duplicate_settlements = 0
     lifecycle_stats = _new_lifecycle_stats()
     lifecycle_rows = {}
+    proposal_id_execution_rebind = 0
     read_stats = {}
     for row in iter_jsonl_objects(path, stats=read_stats):
+        if row.get("reason_code") == "PROPOSAL_ID_REBIND":
+            proposal_id_execution_rebind += 1
         _observe_lifecycle(
             row, lifecycle_stats, require_phase=True,
             expected_schema_version=TRIAL_LEDGER_VERSION,
@@ -467,6 +471,7 @@ def _ledger_summary(path):
         simulation_submitted=frozenset(simulation_submitted),
         unsupported_schema_rows=lifecycle_stats["unsupported_schema_rows"],
         lifecycle_identity_drift=drift,
+        proposal_id_execution_rebind=proposal_id_execution_rebind,
     )
 
 

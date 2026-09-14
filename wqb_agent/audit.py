@@ -89,6 +89,11 @@ def audit_state(state_dir, *, snapshot=None, lifecycle_persistent=True):
                violations=[list(item) for item in ledger_summary.phase_order_violations])
     for code, count in (ledger_summary.lifecycle_identity_drift or {}).items():
         record(code, "trial_ledger", rows=count)
+    if ledger_summary.proposal_id_execution_rebind:
+        record(
+            "proposal_id_execution_rebind", "trial_ledger",
+            rows=ledger_summary.proposal_id_execution_rebind,
+        )
     if snapshot.validation.invalid_rows:
         record("malformed_validation_evidence", "validation_reports",
                severity="WARN", invalid_rows=snapshot.validation.invalid_rows)
@@ -124,10 +129,38 @@ def audit_state(state_dir, *, snapshot=None, lifecycle_persistent=True):
     for checkpoint_record in snapshot.checkpoint_records:
         if checkpoint_record["malformed"]:
             validation_code = checkpoint_record.get("validation_code")
-            if validation_code == "CHECKPOINT_SUBMISSION_IDENTITY_MISMATCH":
-                record("checkpoint_submission_fingerprint_mismatch", "checkpoint",
+            checkpoint_codes = {
+                "CHECKPOINT_COMPLETE_TYPE_INVALID":
+                    "checkpoint_complete_type_invalid",
+                "CHECKPOINT_COMPLETE_WITH_UNRESOLVED_EXECUTION":
+                    "checkpoint_complete_with_unresolved_execution",
+                "CHECKPOINT_STATUS_INVALID":
+                    "checkpoint_status_invalid",
+                "CHECKPOINT_REQUIRED_IDENTITY_MISSING":
+                    "checkpoint_identity_invalid",
+                "CHECKPOINT_REQUIRED_IDENTITY_INVALID":
+                    "checkpoint_identity_invalid",
+                "CHECKPOINT_ROUND_IDENTITY_MISMATCH":
+                    "checkpoint_round_identity_mismatch",
+                "CHECKPOINT_HYPOTHESIS_IDENTITY_INVALID":
+                    "checkpoint_hypothesis_identity_invalid",
+                "CHECKPOINT_HYPOTHESIS_IDENTITY_MISMATCH":
+                    "checkpoint_hypothesis_identity_mismatch",
+                "CHECKPOINT_DUPLICATE_EXPERIMENT_ID":
+                    "checkpoint_duplicate_experiment_id",
+                "CHECKPOINT_DUPLICATE_SUBMISSION_IDENTITY":
+                    "checkpoint_duplicate_submission_identity",
+                "CHECKPOINT_DUPLICATE_PROPOSAL_ID":
+                    "checkpoint_duplicate_proposal_id",
+                "CHECKPOINT_PROGRESS_IDENTITY_COLLISION":
+                    "checkpoint_progress_identity_collision",
+                "CHECKPOINT_SUBMISSION_IDENTITY_MISMATCH":
+                    "checkpoint_submission_fingerprint_mismatch",
+            }
+            if validation_code in checkpoint_codes:
+                record(checkpoint_codes[validation_code], "checkpoint",
                        round=checkpoint_record["round_no"])
-            if not checkpoint_record["checkpoint"].get("complete", False):
+            if checkpoint_record["checkpoint"].get("complete") is not True:
                 record("unverifiable_unfinished_execution_identity", "checkpoint",
                        round=checkpoint_record["round_no"])
             record("checkpoint_unreadable", "checkpoint",

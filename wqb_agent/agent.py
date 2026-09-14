@@ -954,7 +954,7 @@ class Agent:
         # exactly-once and expression/fingerprint dedupe without restoring
         # local metrics or Alpha payloads.
         for record in self.checkpoints.scan():
-            if record["malformed"] or not record["checkpoint"].get("complete"):
+            if record["malformed"] or record["checkpoint"].get("complete") is not True:
                 continue
             for row in record["checkpoint"].get("experiments") or []:
                 apply(row)
@@ -1683,7 +1683,7 @@ class Agent:
         """Read-only projection of unfinished checkpoints for allocator restore."""
         rows = []
         for record in self.checkpoints.scan():
-            if not record["malformed"] and not record["checkpoint"].get("complete"):
+            if not record["malformed"] and record["checkpoint"].get("complete") is not True:
                 rows.extend(record["checkpoint"].get("experiments") or [])
         return rows
 
