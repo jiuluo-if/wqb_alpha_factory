@@ -16,7 +16,20 @@ from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 from .artifacts import atomic_write_json_if_changed
+from .discovery_selection import keyword_contribution, score_components
+from .field_metadata import (
+    dataset_description_frequency,
+    frequency_evidence,
+    normalize_coverage,
+    normalize_frequency,
+    profile_frequency_evidence,
+)
 from .schema import CREATED_BY_VERSION, FIELDS_CACHE_VERSION
+
+__all__ = [
+    "FieldDiscovery", "dataset_description_frequency", "frequency_evidence",
+    "normalize_coverage", "normalize_frequency", "profile_frequency_evidence",
+]
 
 DATASET_CATEGORIES = {
     "analyst": ["analyst4"],
@@ -67,193 +80,6 @@ CATEGORY_KEYWORDS = {
         "crowdsource", "score",
     ],
 }
-
-
-def frequency_evidence(field):
-    """Return auditable frequency evidence without hiding inference."""
-    if not isinstance(field, dict):
-        return {
-            "frequency": None, "source": "UNKNOWN", "status": "UNKNOWN",
-            "matched_evidence": [], "confidence": "NONE",
-        }
-    explicit = []
-    for key in ("frequency", "dataFrequency", "updateFrequency"):
-        value = field.get(key)
-        if isinstance(value, str) and value.strip():
-            explicit.append((key, value.strip()))
-    if explicit:
-        normalized = {_frequency_bucket(value) for _, value in explicit}
-        if len(normalized) != 1 or "unknown" in normalized:
-            return {
-                "frequency": None, "source": "EXPLICIT_PLATFORM",
-                "status": "CONFLICT", "matched_evidence": explicit,
-                "confidence": "NONE",
-            }
-        description = str(field.get("description") or "").lower()
-        inferred = _description_frequency_matches(description)
-        if inferred and set(inferred) != normalized:
-            return {
-                "frequency": None, "source": "CONFLICTING_PLATFORM_DESCRIPTION",
-                "status": "CONFLICT", "matched_evidence": explicit + inferred,
-                "confidence": "NONE",
-            }
-        return {
-            "frequency": next(iter(normalized)), "source": "EXPLICIT_PLATFORM",
-            "status": "KNOWN", "matched_evidence": explicit,
-            "confidence": "HIGH",
-        }
-    description = str(field.get("description") or "").lower()
-    inferred = _description_frequency_matches(description)
-    if len(inferred) == 1:
-        return {
-            "frequency": inferred[0], "source": "DESCRIPTION_INFERRED",
-            "status": "INFERRED", "matched_evidence": inferred,
-            "confidence": "MEDIUM",
-        }
-    if len(inferred) > 1:
-        return {
-            "frequency": None, "source": "DESCRIPTION_INFERRED",
-            "status": "AMBIGUOUS", "matched_evidence": inferred,
-            "confidence": "NONE",
-        }
-    return {
-        "frequency": None, "source": "UNKNOWN", "status": "UNKNOWN",
-        "matched_evidence": [], "confidence": "NONE",
-    }
-
-
-_PROFILE_FREQUENCY_SOURCES = frozenset({
-    "EXPLICIT_PLATFORM", "DESCRIPTION_INFERRED",
-    "DATASET_DESCRIPTION_INFERRED", "UNKNOWN", "CONFLICT",
-    "CONFLICTING_PLATFORM_DESCRIPTION", "AMBIGUOUS", "LEGACY_REDERIVED",
-})
-_PROFILE_FREQUENCY_STATUSES = frozenset({
-    "KNOWN", "INFERRED", "UNKNOWN", "CONFLICT", "AMBIGUOUS", "LEGACY",
-})
-
-
-def profile_frequency_evidence(profile):
-    """Consume normalized profile evidence without re-parsing raw metadata."""
-    nested = profile.get("frequency_evidence") if isinstance(profile, dict) else None
-    if isinstance(nested, dict):
-        source = str(nested.get("source") or "").strip().upper()
-        status = str(nested.get("status") or "").strip().upper()
-        if source in _PROFILE_FREQUENCY_SOURCES and status in _PROFILE_FREQUENCY_STATUSES:
-            return deepcopy(nested)
-    frequency = profile.get("frequency") if isinstance(profile, dict) else None
-    bucket = _frequency_bucket(frequency) if isinstance(frequency, str) else "unknown"
-    if bucket != "unknown":
-        return {
-            "frequency": bucket,
-            "source": "LEGACY_REDERIVED",
-            "status": "LEGACY",
-            "matched_evidence": [],
-            "confidence": "NONE",
-        }
-    return {
-        "frequency": None,
-        "source": "UNKNOWN",
-        "status": "UNKNOWN",
-        "matched_evidence": [],
-        "confidence": "NONE",
-    }
-
-
-def _frequency_bucket(value):
-    text = str(value or "").lower()
-    markers = (
-        ("intraday", "intraday"),
-        ("minute", "intraday"),
-        ("hour", "intraday"),
-        ("daily", "daily"),
-        ("day", "daily"),
-        ("weekly", "weekly"),
-        ("week", "weekly"),
-        ("monthly", "monthly"),
-        ("month", "monthly"),
-        ("quarterly", "quarterly"),
-        ("quarter", "quarterly"),
-        ("annual", "annual"),
-        ("yearly", "annual"),
-        ("year", "annual"),
-    )
-    for marker, normalized in markers:
-        if re.search(rf"\b{re.escape(marker)}\b", text):
-            return normalized
-    return "unknown"
-
-
-def _description_frequency_matches(description):
-    matches = []
-    markers = (
-        ("intraday", "intraday"), ("minute", "intraday"),
-        ("hour", "intraday"), ("daily", "daily"), ("day", "daily"),
-        ("weekly", "weekly"), ("week", "weekly"),
-        ("monthly", "monthly"), ("month", "monthly"),
-        ("quarterly", "quarterly"), ("quarter", "quarterly"),
-        ("annual", "annual"), ("yearly", "annual"), ("year", "annual"),
-    )
-    for marker, normalized in markers:
-        if re.search(rf"\b{re.escape(marker)}\b", description):
-            if normalized not in matches:
-                matches.append(normalized)
-    return matches
-
-
-def normalize_frequency(field):
-    """Return a frequency only when evidence is known and non-conflicting."""
-    evidence = frequency_evidence(field)
-    return evidence["frequency"] if evidence["status"] in {"KNOWN", "INFERRED"} else None
-
-
-def dataset_description_frequency(description):
-    """Fail-closed dataset-level frequency fallback from platform text.
-
-    The live platform does not expose per-field frequency; its *dataset*
-    descriptions do state cadence ("comprehensive daily volatility metrics",
-    "capturing daily snapshots").  When field-level evidence is unknown, a
-    dataset description that names exactly one unambiguous cadence bucket
-    supplies an auditable, platform-sourced value.  Anything ambiguous
-    (two buckets) or empty stays ``None`` (UNKNOWN) -- never a guess.
-    """
-    text = str(description or "").lower()
-    if not text.strip():
-        return None
-    matches = _description_frequency_matches(text)
-    if len(matches) != 1:
-        return None
-    bucket = matches[0]
-    return {
-        "frequency": bucket,
-        "source": "DATASET_DESCRIPTION_INFERRED",
-        "status": "INFERRED",
-        "matched_evidence": ["dataset_description:" + bucket],
-        "confidence": "MEDIUM",
-    }
-
-
-def normalize_coverage(field):
-    """Return coverage as a bounded 0.0-1.0 value, or None when unusable.
-
-    BRAIN fixtures and cached profiles have used both fractional and
-    percentage forms. The helper is derived-only and never mutates metadata.
-    """
-    if not isinstance(field, dict):
-        return None
-    for key in ("coverage", "coveragePercentage", "coverage_percent"):
-        if key not in field or field[key] is None:
-            continue
-        value = field[key]
-        if isinstance(value, bool):
-            return None
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            return None
-        if not math.isfinite(number) or number < 0 or number > 100:
-            return None
-        return number if number <= 1 else number / 100.0
-    return None
 
 
 class FieldDiscovery:
@@ -863,39 +689,13 @@ class FieldDiscovery:
         self._save_disk_cache()
 
     def _score_components(self, field, keywords):
-        haystack_id = str(field.get("id") or "").lower()
-        haystack_name = str(field.get("name") or "").lower()
-        haystack_desc = str(field.get("description") or "").lower()
-        keyword_contribution = self._keyword_contribution(
-            haystack_id, haystack_name, haystack_desc, keywords
-        )
-        coverage = normalize_coverage(field)
-        coverage_contribution = (
-            0.0 if coverage is None else min(2.0, max(0.0, coverage * 2.0))
-        )
-        alpha_count_penalty = 0.0
-        try:
-            alpha_count = float(self._alpha_count(field))
-            alpha_count_penalty = min(1.5, math.log1p(max(0.0, alpha_count)) / 10.0)
-        except (TypeError, ValueError):
-            pass
-        return {
-            "keyword_contribution": keyword_contribution,
-            "coverage_contribution": coverage_contribution,
-            "alpha_count_penalty": alpha_count_penalty,
-        }
+        return score_components(field, keywords, self._alpha_count(field))
 
     @staticmethod
     def _keyword_contribution(haystack_id, haystack_name, haystack_desc, keywords):
-        contribution = 0.0
-        for keyword in keywords:
-            if keyword in haystack_id:
-                contribution += 3.0
-            if keyword in haystack_name:
-                contribution += 2.0
-            if keyword in haystack_desc:
-                contribution += 1.0
-        return contribution
+        return keyword_contribution(
+            haystack_id, haystack_name, haystack_desc, keywords
+        )
 
     def _score_field(self, field, keywords):
         components = self._score_components(field, keywords)

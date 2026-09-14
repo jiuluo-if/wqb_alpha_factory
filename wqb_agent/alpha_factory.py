@@ -32,12 +32,12 @@ from .alpha_templates.validation import (
     effective_semantic_contract,
     evaluate_semantic_contract,
 )
-from .discovery import profile_frequency_evidence
 from .diversity import (
     extract_fields,
     select_budget_candidates,
 )
 from .expression import analyze_expression, canonical_expression
+from .field_metadata import profile_frequency_evidence
 from .proposal_contract import FACTORY_BATCH_SIZE
 
 __all__ = [

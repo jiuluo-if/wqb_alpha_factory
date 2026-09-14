@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from .discovery import normalize_coverage
+from .field_metadata import normalize_coverage
 
 _SEMANTIC_CONCEPT_RULES = (
     ("data_quality", ("missing", "null", "nan", "quality", "coverage", "stale")),

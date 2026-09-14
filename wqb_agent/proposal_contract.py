@@ -16,13 +16,13 @@ import os
 import re
 from importlib import resources
 
-from .discovery import profile_frequency_evidence
 from .diversity import extract_fields
 from .expression import (
     analyze_expression,
     expression_field_identifiers,
     submission_fingerprint,
 )
+from .field_metadata import profile_frequency_evidence
 from .research_guard import (
     is_direction_only_change,
     overfit_expression_reason,

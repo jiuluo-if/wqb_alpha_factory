@@ -6,9 +6,9 @@ import itertools
 from collections.abc import Callable, Iterable, Mapping
 
 from .alpha_semantics import derive_field_semantic_traits
-from .discovery import profile_frequency_evidence
 from .diversity import semantic_mechanism_key_from_traits
 from .expression import canonical_expression
+from .field_metadata import profile_frequency_evidence
 
 
 def assess_feasibility(

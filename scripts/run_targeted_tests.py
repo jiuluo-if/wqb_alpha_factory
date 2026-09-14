@@ -108,6 +108,13 @@ DIRECT_TESTS = {
         "tests/test_discovery_selection.py",
         "tests/test_discovery_semantics.py",
     ),
+    "wqb_agent/field_metadata.py": (
+        "tests/test_discovery_semantics.py",
+    ),
+    "wqb_agent/discovery_selection.py": (
+        "tests/test_discovery_selection.py",
+        "tests/test_discovery_semantics.py",
+    ),
     "wqb_agent/__init__.py": (
         "tests/test_runtime_composition.py",
         "tests/test_research_api.py",

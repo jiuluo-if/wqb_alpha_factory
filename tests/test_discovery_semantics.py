@@ -20,8 +20,9 @@ from wqb_agent.agent import (
     Agent,
 )
 from wqb_agent.artifacts import atomic_write_json_if_changed
-from wqb_agent.discovery import (
-    FieldDiscovery,
+from wqb_agent.discovery import FieldDiscovery
+from wqb_agent.discovery_selection import score_components, score_field
+from wqb_agent.field_metadata import (
     dataset_description_frequency,
     frequency_evidence,
     normalize_coverage,
@@ -50,6 +51,14 @@ class TestDiscoveryFieldSemantics(TmpStateMixin, unittest.TestCase):
         self.assertEqual(normalize_coverage({"coverage": 0}), 0.0)
         for value in (-1, 101, float("nan"), "not-a-number"):
             self.assertIsNone(normalize_coverage({"coverage": value}))
+
+    def test_selection_kernel_is_pure_and_explainable(self):
+        field = {"id": "daily_close", "description": "daily price", "coverage": 50}
+        before = dict(field)
+        components = score_components(field, ["price"], alpha_count=9)
+        self.assertEqual(field, before)
+        self.assertEqual(components["keyword_contribution"], 1.0)
+        self.assertGreater(score_field(field, ["price"], alpha_count=9), 0.0)
 
     def test_frequency_normalization_uses_explicit_description_evidence(self):
         self.assertEqual(
