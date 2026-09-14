@@ -482,7 +482,9 @@ def read_workspace_snapshot(state_dir):
     proposals = payloads.get("proposals.json")
     experience = payloads.get("experience.json")
     evidence_cache = payloads.get("evidence_cache.json")
-    unresolved_identities = CheckpointStore(state_dir).unresolved_submission_identities()
+    unresolved_identities = store.unresolved_submission_identities(
+        records=checkpoint_records
+    )
     return WorkspaceSnapshot(
         state_dir=state_dir,
         checkpoint_records=checkpoint_records,

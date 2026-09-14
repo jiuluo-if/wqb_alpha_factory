@@ -156,7 +156,7 @@ class CheckpointStore:
             return str(value)
         return None
 
-    def unresolved_submission_identities(self, *, exclude_round=None):
+    def unresolved_submission_identities(self, *, exclude_round=None, records=None):
         """Return unresolved execution keys from all incomplete checkpoints.
 
         The returned values are bounded local identity metadata only.  The
@@ -165,7 +165,8 @@ class CheckpointStore:
         """
         unresolved = defaultdict(list)
         excluded = int(exclude_round) if exclude_round is not None else None
-        for record in self.scan():
+        source = self.scan() if records is None else records
+        for record in source:
             if record["malformed"]:
                 continue
             checkpoint = record["checkpoint"]
