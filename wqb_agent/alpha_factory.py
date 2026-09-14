@@ -19,7 +19,7 @@ from .alpha_templates import (
     template_numeric_audit,
 )
 from .alpha_templates.validation import effective_relationship_contract
-from .discovery import frequency_evidence, normalize_coverage
+from .discovery import normalize_coverage, profile_frequency_evidence
 from .diversity import (
     extract_fields,
     select_budget_candidates,
@@ -382,14 +382,21 @@ class AlphaFactory:
             and str(field.get("description") or "").strip()
             and str(field.get("semantic_status", "UNKNOWN")).upper() != "UNKNOWN"
         )]
-        frequency_counts = {
-            "explicit": 0, "inferred": 0, "unknown": 0,
-        }
+        frequency_counts = {"explicit": 0, "inferred": 0, "unknown": 0}
+        frequency_source_counts = {}
+        frequency_value_counts = {}
         for profile in profiles:
-            source = frequency_evidence(profile)["source"]
+            evidence = profile_frequency_evidence(profile)
+            source = evidence["source"]
+            frequency_source_counts[source] = frequency_source_counts.get(source, 0) + 1
+            value = evidence.get("frequency") or "UNKNOWN"
+            frequency_value_counts[value] = frequency_value_counts.get(value, 0) + 1
             if source == "EXPLICIT_PLATFORM":
                 frequency_counts["explicit"] += 1
-            elif source == "DESCRIPTION_INFERRED":
+            elif source in {
+                "DESCRIPTION_INFERRED", "DATASET_DESCRIPTION_INFERRED",
+                "LEGACY_REDERIVED",
+            }:
                 frequency_counts["inferred"] += 1
             else:
                 frequency_counts["unknown"] += 1
@@ -505,6 +512,11 @@ class AlphaFactory:
             "explicit_frequency_count": frequency_counts["explicit"],
             "inferred_frequency_count": frequency_counts["inferred"],
             "unknown_frequency_count": frequency_counts["unknown"],
+            "frequency_evidence_source_counts": dict(sorted(frequency_source_counts.items())),
+            "frequency_evidence": ";".join(
+                f"{value}:{count}"
+                for value, count in sorted(frequency_value_counts.items())
+            ) or "UNKNOWN:0",
             "dataset_count": len({str(p.get("dataset")) for p in profiles if p.get("dataset") is not None}),
             "mechanism_family": sorted(mechanism_families)[0] if len(mechanism_families) == 1 else "mixed",
             "dataset_route": sorted({str(p.get("dataset")) for p in profiles if p.get("dataset") is not None}),
@@ -1840,6 +1852,9 @@ class AlphaFactory:
                     "semantic": profile_by_id[item].get("description"),
                     "coverage": profile_by_id[item].get("coverage"),
                     "frequency": profile_by_id[item].get("frequency"),
+                    "frequency_evidence": profile_frequency_evidence(
+                        profile_by_id[item]
+                    ),
                     "data_type": profile_by_id[item].get("type"),
                     "semantic_traits": _derive_field_semantic_traits(
                         profile_by_id[item]

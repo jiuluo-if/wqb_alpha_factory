@@ -15,6 +15,7 @@ import hashlib
 import os
 import re
 
+from .discovery import profile_frequency_evidence
 from .diversity import extract_fields
 from .expression import (
     analyze_expression,
@@ -535,6 +536,18 @@ def validate_proposal(p, discovered_fields=None, strict_experiment=False,
                         continue
                     if item.get("data_type") != profile.get("type"):
                         problems.append(f"field_analysis 的 {field_id} data_type 必须与 BRAIN discovery 一致")
+                    if item.get("frequency") != profile.get("frequency"):
+                        problems.append(
+                            f"FIELD_FREQUENCY_PROVENANCE_MISMATCH: field_analysis 的 {field_id} frequency 与 discovery 不一致"
+                        )
+                    if "frequency_evidence" in item:
+                        expected = profile_frequency_evidence(profile)
+                        actual = profile_frequency_evidence(item)
+                        if any(actual.get(key) != expected.get(key)
+                               for key in ("source", "status", "frequency")):
+                            problems.append(
+                                f"FIELD_FREQUENCY_PROVENANCE_MISMATCH: field_analysis 的 {field_id} frequency_evidence 与 discovery 不一致"
+                            )
             identifiers = set(expression_field_identifiers(analyze_expression(expression)))
             unknown = sorted(
                 ident for ident in identifiers

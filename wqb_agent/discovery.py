@@ -122,6 +122,43 @@ def frequency_evidence(field):
     }
 
 
+_PROFILE_FREQUENCY_SOURCES = frozenset({
+    "EXPLICIT_PLATFORM", "DESCRIPTION_INFERRED",
+    "DATASET_DESCRIPTION_INFERRED", "UNKNOWN", "CONFLICT",
+    "CONFLICTING_PLATFORM_DESCRIPTION", "AMBIGUOUS", "LEGACY_REDERIVED",
+})
+_PROFILE_FREQUENCY_STATUSES = frozenset({
+    "KNOWN", "INFERRED", "UNKNOWN", "CONFLICT", "AMBIGUOUS", "LEGACY",
+})
+
+
+def profile_frequency_evidence(profile):
+    """Consume normalized profile evidence without re-parsing raw metadata."""
+    nested = profile.get("frequency_evidence") if isinstance(profile, dict) else None
+    if isinstance(nested, dict):
+        source = str(nested.get("source") or "").strip().upper()
+        status = str(nested.get("status") or "").strip().upper()
+        if source in _PROFILE_FREQUENCY_SOURCES and status in _PROFILE_FREQUENCY_STATUSES:
+            return deepcopy(nested)
+    frequency = profile.get("frequency") if isinstance(profile, dict) else None
+    bucket = _frequency_bucket(frequency) if isinstance(frequency, str) else "unknown"
+    if bucket != "unknown":
+        return {
+            "frequency": bucket,
+            "source": "LEGACY_REDERIVED",
+            "status": "LEGACY",
+            "matched_evidence": [],
+            "confidence": "NONE",
+        }
+    return {
+        "frequency": None,
+        "source": "UNKNOWN",
+        "status": "UNKNOWN",
+        "matched_evidence": [],
+        "confidence": "NONE",
+    }
+
+
 def _frequency_bucket(value):
     text = str(value or "").lower()
     markers = (
@@ -278,7 +315,7 @@ class FieldDiscovery:
         self._platform_usage_status = {}
         self.last_dataset_selection = {}
         self._field_completeness = {}
-        self._dataset_description_cache = None
+        self._dataset_snapshot = None
         self._catalog_status = "UNKNOWN"
         self._catalog_has_legacy_unverified = False
         self._dataset_universe_provenance = {
@@ -912,6 +949,47 @@ class FieldDiscovery:
             limit = 12
         return ordered[:limit]
 
+    def _live_dataset_snapshot(self):
+        """Return one current-round dataset listing snapshot."""
+        if self._dataset_snapshot is not None:
+            return self._dataset_snapshot
+        getter = getattr(self.client, "get_datasets", None)
+        payload = None
+        status = "UNAVAILABLE"
+        if callable(getter):
+            try:
+                candidate = getter()
+            except Exception:
+                candidate = None
+            if isinstance(candidate, list):
+                payload = [item for item in candidate if isinstance(item, dict)]
+                status = "LIVE"
+        normalized = [
+            {
+                key: item[key]
+                for key in ("id", "name", "description", "category", "type")
+                if key in item and item[key] is not None
+            }
+            for item in (payload or [])
+            if item.get("id") is not None
+        ]
+        fingerprint = hashlib.sha256(
+            json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest() if status == "LIVE" else None
+        observed_at = datetime.now(UTC).isoformat() if status == "LIVE" else None
+        self._dataset_snapshot = {
+            "payload": payload or [],
+            "ids": self._normalize_dataset_ids(normalized),
+            "description_map": {
+                str(item["id"]): str(item.get("description") or "")
+                for item in normalized
+            },
+            "observed_at": observed_at,
+            "fingerprint": fingerprint,
+            "status": status,
+        }
+        return self._dataset_snapshot
+
     def _dynamic_dataset_ids(self):
         getter = getattr(self.client, "get_datasets", None)
         if not callable(getter):
@@ -921,23 +999,15 @@ class FieldDiscovery:
                 "reason": "CLIENT_CAPABILITY_UNAVAILABLE",
             }
             return []
-        try:
-            payload = getter()
-        except Exception:
+        snapshot = self._live_dataset_snapshot()
+        if snapshot["status"] != "LIVE":
             self._dataset_universe_provenance = {
                 "kind": "seed_fallback",
                 "source": "DATASET_CATEGORIES",
                 "reason": "DYNAMIC_LISTING_UNAVAILABLE",
             }
             return []
-        if not isinstance(payload, list):
-            self._dataset_universe_provenance = {
-                "kind": "seed_fallback",
-                "source": "DATASET_CATEGORIES",
-                "reason": "MALFORMED_DYNAMIC_LISTING",
-            }
-            return []
-        dataset_ids = self._normalize_dataset_ids(payload)
+        dataset_ids = snapshot["ids"]
         if not dataset_ids:
             self._dataset_universe_provenance = {
                 "kind": "seed_fallback",
@@ -959,21 +1029,7 @@ class FieldDiscovery:
         Read-only; fails closed to an empty map when the client or the
         listing is unavailable so the frequency fallback simply stays UNKNOWN.
         """
-        if self._dataset_description_cache is not None:
-            return self._dataset_description_cache
-        mapping = {}
-        getter = getattr(self.client, "get_datasets", None)
-        if callable(getter):
-            try:
-                payload = getter()
-            except Exception:
-                payload = []
-            if isinstance(payload, list):
-                for item in payload:
-                    if isinstance(item, dict) and item.get("id") is not None:
-                        mapping[str(item["id"])] = str(item.get("description") or "")
-        self._dataset_description_cache = mapping
-        return mapping
+        return self._live_dataset_snapshot()["description_map"]
 
     def _dataset_description(self, dataset_id):
         return self._dataset_description_map().get(str(dataset_id))
@@ -1022,6 +1078,7 @@ class FieldDiscovery:
         self.last_excluded_high_usage = []
         self.last_excluded_unknown_usage = []
         self._candidate_counts = {}
+        self._dataset_snapshot = None
         if self.heartbeat is not None:
             self.heartbeat.emit_stage(
                 "DISCOVERY", dataset_current=0, dataset_total=0,
@@ -1299,6 +1356,12 @@ class FieldDiscovery:
                 self._dataset_description(dataset_id)
             )
             if dataset_evidence is not None:
+                snapshot = self._live_dataset_snapshot()
+                dataset_evidence.update({
+                    "scope": "DATASET",
+                    "observed_at": snapshot.get("observed_at"),
+                    "fingerprint": snapshot.get("fingerprint"),
+                })
                 frequency = dataset_evidence["frequency"]
                 freq_ev = dataset_evidence
         return {

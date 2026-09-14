@@ -27,6 +27,7 @@ from wqb_agent.discovery import (
     frequency_evidence,
     normalize_coverage,
     normalize_frequency,
+    profile_frequency_evidence,
 )
 from wqb_agent.memory import ExperienceMemory
 from wqb_agent.proposal_contract import validate_proposal, validate_vector_inputs
@@ -75,6 +76,31 @@ class TestDiscoveryFieldSemantics(TmpStateMixin, unittest.TestCase):
         self.assertEqual(inferred["frequency"], "quarterly")
         self.assertEqual(unknown["source"], "UNKNOWN")
         self.assertIsNone(unknown["frequency"])
+
+    def test_profile_frequency_evidence_preserves_nested_provenance(self):
+        profile = {
+            "id": "field",
+            "frequency": "daily",
+            "frequency_evidence": {
+                "frequency": "daily",
+                "source": "DATASET_DESCRIPTION_INFERRED",
+                "status": "INFERRED",
+                "confidence": "MEDIUM",
+            },
+        }
+
+        evidence = profile_frequency_evidence(profile)
+
+        self.assertEqual(evidence["source"], "DATASET_DESCRIPTION_INFERRED")
+        self.assertEqual(evidence["status"], "INFERRED")
+        self.assertEqual(evidence["frequency"], "daily")
+
+    def test_profile_frequency_evidence_legacy_fallback_is_not_explicit(self):
+        evidence = profile_frequency_evidence({"frequency": "daily"})
+
+        self.assertEqual(evidence["source"], "LEGACY_REDERIVED")
+        self.assertNotEqual(evidence["source"], "EXPLICIT_PLATFORM")
+        self.assertEqual(evidence["frequency"], "daily")
 
     def test_frequency_evidence_conflict_is_fail_closed(self):
         field = {"frequency": "daily", "description": "quarterly earnings estimate"}
@@ -182,8 +208,13 @@ class TestDiscoveryFieldSemantics(TmpStateMixin, unittest.TestCase):
         self.assertIsNone(dataset_description_frequency("no cadence stated"))
 
     def test_profile_falls_back_to_dataset_cadence_only_when_field_unknown(self):
-        self.discovery._dataset_description_cache = {
-            "opt8": "comprehensive daily volatility metrics",
+        self.discovery._dataset_snapshot = {
+            "payload": [{"id": "opt8", "description": "comprehensive daily volatility metrics"}],
+            "ids": ["opt8"],
+            "description_map": {"opt8": "comprehensive daily volatility metrics"},
+            "observed_at": "2026-09-14T00:00:00Z",
+            "fingerprint": "snapshot",
+            "status": "LIVE",
         }
         # Field has no cadence evidence -> dataset daily applies.
         profile = self.discovery._profile_from_field(
@@ -191,6 +222,10 @@ class TestDiscoveryFieldSemantics(TmpStateMixin, unittest.TestCase):
         self.assertEqual(profile["frequency"], "daily")
         self.assertEqual(profile["frequency_evidence"]["source"],
                          "DATASET_DESCRIPTION_INFERRED")
+        self.assertEqual(profile["frequency_evidence"]["scope"], "DATASET")
+        self.assertEqual(profile["frequency_evidence"]["fingerprint"], "snapshot")
+        self.assertEqual(profile["frequency_evidence"]["observed_at"],
+                         "2026-09-14T00:00:00Z")
         # Field-level inferred cadence wins over the dataset fallback.
         profile2 = self.discovery._profile_from_field(
             "opt8",
@@ -200,8 +235,13 @@ class TestDiscoveryFieldSemantics(TmpStateMixin, unittest.TestCase):
                          "DESCRIPTION_INFERRED")
 
     def test_profile_dataset_fallback_never_overrides_field_conflict(self):
-        self.discovery._dataset_description_cache = {
-            "opt8": "comprehensive daily volatility metrics",
+        self.discovery._dataset_snapshot = {
+            "payload": [{"id": "opt8", "description": "comprehensive daily volatility metrics"}],
+            "ids": ["opt8"],
+            "description_map": {"opt8": "comprehensive daily volatility metrics"},
+            "observed_at": "2026-09-14T00:00:00Z",
+            "fingerprint": "snapshot",
+            "status": "LIVE",
         }
         # Field-level CONFLICT (daily key vs quarterly description) stays
         # unresolved; the dataset fallback must not paper over it.
@@ -212,8 +252,7 @@ class TestDiscoveryFieldSemantics(TmpStateMixin, unittest.TestCase):
         self.assertIsNone(profile["frequency"])
         self.assertEqual(profile["frequency_evidence"]["status"], "CONFLICT")
 
-    def test_dataset_description_map_caches_and_fails_closed(self):
-        self.discovery._dataset_description_cache = None
+    def test_dataset_snapshot_is_shared_by_ids_and_descriptions(self):
         calls = []
 
         def fake_get_datasets():
@@ -221,12 +260,59 @@ class TestDiscoveryFieldSemantics(TmpStateMixin, unittest.TestCase):
             return [{"id": "opt8", "description": "daily option data"}]
 
         self.client.get_datasets = fake_get_datasets
+        self.assertEqual(self.discovery._dynamic_dataset_ids(), ["opt8"])
         mapping = self.discovery._dataset_description_map()
         self.assertEqual(mapping, {"opt8": "daily option data"})
-        # Second call is served from cache, no second fetch.
+        # Both derived views share one live listing snapshot.
+        self.discovery._dynamic_dataset_ids()
         self.discovery._dataset_description_map()
         self.assertEqual(len(calls), 1)
-        # Without a get_datasets capability the map fails closed to empty.
-        del self.client.get_datasets
-        self.discovery._dataset_description_cache = None
-        self.assertEqual(self.discovery._dataset_description_map(), {})
+
+    def test_dataset_snapshot_refreshes_for_each_discovery_round(self):
+        class RoundClient(FakeClient):
+            def __init__(self):
+                super().__init__()
+                self.round = 0
+                self.calls = 0
+
+            def get_datasets(self):
+                self.calls += 1
+                cadence = "daily" if self.round == 0 else "weekly"
+                return [{"id": "opt8", "description": f"{cadence} option data"}]
+
+            def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
+                return [{"id": "model_score", "description": "model score", "type": field_type}], 1
+
+        client = RoundClient()
+        discovery = FieldDiscovery(client, selection_mode="random", max_pages=1)
+        first = discovery.discover({"datasets": ["opt8"]}, target_count=1)
+        client.round = 1
+        second = discovery.discover({"datasets": ["opt8"]}, target_count=1)
+
+        self.assertEqual(client.calls, 2)
+        self.assertEqual(first[0]["frequency"], "daily")
+        self.assertEqual(second[0]["frequency"], "weekly")
+
+    def test_dataset_snapshot_failure_does_not_reuse_previous_round(self):
+        class FailingRoundClient(FakeClient):
+            def __init__(self):
+                super().__init__()
+                self.fail = False
+
+            def get_datasets(self):
+                if self.fail:
+                    raise RuntimeError("listing unavailable")
+                return [{"id": "opt8", "description": "daily option data"}]
+
+            def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
+                return [{"id": "model_score", "description": "model score", "type": field_type}], 1
+
+        client = FailingRoundClient()
+        discovery = FieldDiscovery(client, selection_mode="random", max_pages=1)
+        first = discovery.discover({"datasets": ["opt8"]}, target_count=1)
+        client.fail = True
+        second = discovery.discover({"datasets": ["opt8"]}, target_count=1)
+
+        self.assertEqual(first[0]["frequency"], "daily")
+        self.assertIsNone(second[0]["frequency"])
+        self.assertEqual(second[0]["frequency_evidence"]["source"], "UNKNOWN")

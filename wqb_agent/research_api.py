@@ -287,7 +287,7 @@ def run_experiment(spec, *, agent=None, client=None, config=None, state_dir=None
             str(row["id"]): row.get("description", "")
             for row in used_profiles
         })
-        merged.setdefault("field_analysis", {
+        field_analysis = {
             str(row["id"]): {
                 "semantic": row.get("description", ""),
                 "coverage": row.get("coverage"),
@@ -295,7 +295,13 @@ def run_experiment(spec, *, agent=None, client=None, config=None, state_dir=None
                 "data_type": row.get("type"),
             }
             for row in used_profiles
-        })
+        }
+        for row in used_profiles:
+            if "frequency_evidence" in row:
+                field_analysis.setdefault(str(row["id"]), {})["frequency_evidence"] = (
+                    row["frequency_evidence"]
+                )
+        merged.setdefault("field_analysis", field_analysis)
         merged.setdefault("field_hypothesis_basis", {
             str(row["id"]): {
                 "description": row.get("description", ""),

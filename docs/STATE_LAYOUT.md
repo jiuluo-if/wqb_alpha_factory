@@ -50,6 +50,13 @@ Feasibility diagnostics are control-plane audit metadata only. They contain coun
 
 `factory_session.json` may contain bounded route decision metadata and the latest feasibility probe summary. These fields are control-plane observations; they do not contain metrics, checks, Alpha payloads or checkpoint recovery data. Optimizer handoff counters are likewise diagnostic and do not establish a second research-state store.
 
+Discovery profiles carry the bounded `frequency_evidence` that was established
+by the current discovery round. Feasibility and proposal preflight consume that
+nested evidence; the profile's top-level `frequency` is not permission to
+relabel an inferred value as `EXPLICIT_PLATFORM`. Dataset-description fallback
+is derived only from the single live dataset-listing snapshot for that round;
+an unavailable listing remains `UNKNOWN` and never reuses a prior round.
+
 # Feed freshness and heartbeat
 
 The existing `.alpha_feed_cache/weekly.json` remains the only Feed cache. Its `updated_at`/`expires_at` support a read-only freshness view; refresh attempts and failures are transient runtime metadata and do not replace the last successful timestamp. Heartbeat events are process-local and transient: no `heartbeat.jsonl`, metrics sidecar, checkpoint field, trajectory row, quota record, or separate scheduler is created.

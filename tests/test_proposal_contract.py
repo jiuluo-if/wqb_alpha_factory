@@ -33,6 +33,45 @@ from wqb_agent.submission import SubmissionPool, self_correlation_evidence
 
 class TestProposalContract(TmpStateMixin, unittest.TestCase):
 
+    def test_preflight_rejects_frequency_provenance_laundering(self):
+        proposal = {
+            "expression": "rank(field)",
+            "fields": ["field"],
+            "field_understanding": {"field": "model score"},
+            "field_analysis": {"field": {
+                "semantic": "model score", "coverage": None,
+                "frequency": "daily", "frequency_evidence": {
+                    "frequency": "daily", "source": "EXPLICIT_PLATFORM",
+                    "status": "KNOWN", "confidence": "HIGH",
+                },
+                "data_type": "MATRIX",
+            }},
+        }
+        discovered = [{
+            "id": "field", "description": "model score", "type": "MATRIX",
+            "frequency": "daily", "frequency_evidence": {
+                "frequency": "daily", "source": "DATASET_DESCRIPTION_INFERRED",
+                "status": "INFERRED", "confidence": "MEDIUM",
+            },
+            "semantic_status": "KNOWN",
+        }]
+
+        proposal.update({
+            "datasets": ["pv1"],
+            "expected_failure_modes": ["unknown"],
+            "tuning_risk": False,
+            "experiment_stage": "BASELINE",
+        })
+        ok, problems = validate_proposal(
+            proposal, discovered_fields=discovered, strict_experiment=True
+        )
+
+        self.assertFalse(ok)
+        self.assertTrue(any(
+            "FIELD_FREQUENCY_PROVENANCE_MISMATCH" in problem
+            for problem in problems
+        ))
+
     def test_validate_proposal_allows_retired_question_fields_to_be_omitted(self):
         """旧的解释性字段不再是生产预检条件。"""
         ok, problems = validate_proposal(

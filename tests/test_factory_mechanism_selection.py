@@ -166,6 +166,27 @@ class TestFactoryMechanismSelection(unittest.TestCase):
         self.assertTrue(decision["information_gain"])
         self.assertEqual(decision["change_type"], "research_information_change")
 
+    def test_route_ignores_frequency_source_relabel_but_detects_value_change(self):
+        previous = {
+            "frequency_evidence": "daily:2",
+            "frequency_evidence_source_counts": {
+                "DESCRIPTION_INFERRED": 2,
+            },
+        }
+        relabeled = dict(
+            previous,
+            frequency_evidence_source_counts={"EXPLICIT_PLATFORM": 2},
+        )
+        decision = AIFactoryRunner.route_decision(
+            previous, relabeled, route_attempt=0, no_gain_attempts=1,
+        )
+        self.assertFalse(decision["information_gain"])
+        changed = dict(relabeled, frequency_evidence="weekly:2")
+        decision = AIFactoryRunner.route_decision(
+            previous, changed, route_attempt=0, no_gain_attempts=1,
+        )
+        self.assertTrue(decision["information_gain"])
+
     def test_diversity_audit_is_deterministic_for_fixed_input(self):
         proposals = [
             diversity_proposal("rank(b)", dataset="d2", lineage_id="l2"),

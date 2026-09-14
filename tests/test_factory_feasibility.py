@@ -50,10 +50,18 @@ class TestFactoryFeasibilityCheck(unittest.TestCase):
         fields = [
             {"id": "eps_revision", "dataset": "analyst4", "type": "MATRIX",
              "description": "analyst EPS estimate revision", "frequency": "daily",
-             "category": "analyst", "semantic_status": "KNOWN"},
+             "category": "analyst", "semantic_status": "KNOWN",
+             "frequency_evidence": {
+                 "frequency": "daily", "source": "EXPLICIT_PLATFORM",
+                 "status": "KNOWN", "confidence": "HIGH",
+             }},
             {"id": "book_value", "dataset": "fundamental6", "type": "MATRIX",
              "description": "fundamental book value", "frequency": "quarterly",
-             "category": "fundamental", "semantic_status": "KNOWN"},
+             "category": "fundamental", "semantic_status": "KNOWN",
+             "frequency_evidence": {
+                 "frequency": "quarterly", "source": "EXPLICIT_PLATFORM",
+                 "status": "KNOWN", "confidence": "HIGH",
+             }},
         ]
         probe = AlphaFactory().assess_feasibility(
             {"id": "fingerprints"}, fields, {}, max_combinations=32,
@@ -72,10 +80,14 @@ class TestFactoryFeasibilityCheck(unittest.TestCase):
         fields = [
             {"id": "put_iv", "dataset": "pv1", "type": "MATRIX",
              "description": "put option implied volatility", "frequency": "daily",
-             "category": "options", "semantic_status": "KNOWN"},
+             "category": "options", "semantic_status": "KNOWN",
+             "frequency_evidence": {"frequency": "daily",
+                 "source": "EXPLICIT_PLATFORM", "status": "KNOWN"}},
             {"id": "call_iv", "dataset": "option8", "type": "MATRIX",
              "description": "call option implied volatility", "frequency": "daily",
-             "category": "options", "semantic_status": "KNOWN"},
+             "category": "options", "semantic_status": "KNOWN",
+             "frequency_evidence": {"frequency": "daily",
+                 "source": "EXPLICIT_PLATFORM", "status": "KNOWN"}},
         ]
         probe = AlphaFactory().assess_feasibility(
             {"id": "probe", "datasets": ["pv1", "option8"]},
@@ -92,3 +104,24 @@ class TestFactoryFeasibilityCheck(unittest.TestCase):
         self.assertGreaterEqual(probe["novel_cross_dataset_relationship_count"], 1)
         self.assertTrue(probe["batch_gate"]["feasible"])
         self.assertIn("failure_taxonomy", probe)
+
+    def test_feasibility_counts_normalized_profile_evidence_without_relabeling(self):
+        fields = [{
+            "id": "field", "dataset": "pv1", "type": "MATRIX",
+            "description": "model score", "frequency": "daily",
+            "frequency_evidence": {
+                "frequency": "daily", "source": "DATASET_DESCRIPTION_INFERRED",
+                "status": "INFERRED", "confidence": "MEDIUM",
+            },
+            "category": "model", "semantic_status": "KNOWN",
+        }]
+
+        probe = AlphaFactory().assess_feasibility(
+            {"id": "provenance"}, fields, {}, max_combinations=1,
+        )
+
+        self.assertEqual(probe["explicit_frequency_count"], 0)
+        self.assertEqual(probe["inferred_frequency_count"], 1)
+        self.assertEqual(probe["frequency_evidence_source_counts"], {
+            "DATASET_DESCRIPTION_INFERRED": 1,
+        })
