@@ -551,7 +551,8 @@ class AlphaFactory:
         )
 
     def generate(self, hypothesis, fields, count=6, *, operator_mapping=None,
-                 operator_capability=None):
+                 operator_capability=None, _prepared_facts=None,
+                 _relationship_memo=None, _expression_memo=None):
         """Fill a bounded template set from verified field slots.
 
         Field descriptions and type checks remain the responsibility of the
@@ -610,7 +611,10 @@ class AlphaFactory:
                 continue
             slot_profiles = list(normalized_profiles[:template.economic_field_count])
             if template.economic_field_count > 1:
-                relation = self._relationship_gate(slot_profiles, template)
+                relation = self._relationship_gate_cached(
+                    slot_profiles, template,
+                    _relationship_memo if _relationship_memo is not None else {},
+                )
                 if relation["admission"] != "ALLOW":
                     continue
             else:
@@ -619,7 +623,10 @@ class AlphaFactory:
                 expression = template.render(values, operator_mapping)
             except (KeyError, ValueError):
                 continue
-            identity = canonical_expression(expression)
+            expression_facts = self._expression_facts(
+                expression, normalized, _expression_memo
+            )
+            identity = expression_facts["identity"]
             if identity in seen:
                 continue
             seen.add(identity)
@@ -649,7 +656,7 @@ class AlphaFactory:
                     "frequency_compatibility": relation["frequency_compatibility"],
                     "symmetric": relation["symmetric"],
                 }
-            used_ids = extract_fields(expression, normalized)
+            used_ids = expression_facts["fields"]
             profile_by_id = {}
             for profile in normalized_profiles:
                 profile_by_id.setdefault(str(profile.get("id")), profile)
@@ -714,7 +721,7 @@ class AlphaFactory:
                     "factory_version": "alpha-factory-v1",
                     "economic_mechanism": self._field_mechanism(
                         normalized_profiles[0],
-                        _derive_field_semantic_traits(normalized_profiles[0]),
+                        self._prepared_traits(normalized_profiles[0], _prepared_facts),
                         template,
                         relation,
                     ),
@@ -761,6 +768,55 @@ class AlphaFactory:
             return (None, None)
         value = profile.get("id")
         return cls._profile_dataset(profile), str(value) if value is not None else None
+
+    @staticmethod
+    def _prepare_batch_facts(fields):
+        """Prepare derived facts for one factory batch only."""
+        facts = {}
+        for profile in fields or []:
+            if not isinstance(profile, dict) or profile.get("id") is None:
+                continue
+            key = AlphaFactory._profile_key(profile)
+            if key in facts:
+                continue
+            facts[key] = {
+                "profile": profile,
+                "traits": _derive_field_semantic_traits(profile),
+                "field_type": str(profile.get("type") or "").upper(),
+            }
+        return facts
+
+    @classmethod
+    def _prepared_traits(cls, profile, prepared_facts):
+        if prepared_facts is not None:
+            fact = prepared_facts.get(cls._profile_key(profile))
+            if fact is not None:
+                return fact["traits"]
+        return _derive_field_semantic_traits(profile)
+
+    @staticmethod
+    def _expression_facts(expression, normalized, expression_memo=None):
+        if expression_memo is not None and expression in expression_memo:
+            return expression_memo[expression]
+        facts = {
+            "identity": canonical_expression(expression),
+            "fields": extract_fields(expression, normalized),
+            "analysis": analyze_expression(expression),
+        }
+        if expression_memo is not None:
+            expression_memo[expression] = facts
+        return facts
+
+    def _relationship_gate_cached(self, profiles, template, relationship_memo):
+        """Memoize only within one call, preserving ordered slot semantics."""
+        key = (
+            tuple(self._profile_key(profile) for profile in profiles),
+            effective_relationship_contract(template),
+            tuple(str(profile.get("type") or "").upper() for profile in profiles),
+        )
+        if key not in relationship_memo:
+            relationship_memo[key] = self._relationship_gate(profiles, template)
+        return relationship_memo[key]
 
     @staticmethod
     def derive_field_semantic_traits(profile):
@@ -1068,12 +1124,12 @@ class AlphaFactory:
             reasons=("template-specific relationship contract passed",),
         )
 
-    def rank_compatible_templates(self, profile, templates=None):
+    def rank_compatible_templates(self, profile, templates=None, traits=None):
         """Rank a small, deterministic view of templates for one field."""
         templates = list(templates or self.registry.economic_templates())
         ranked = []
         for template in templates:
-            compatibility = self._template_semantic_compatibility(template, profile)
+            compatibility = self._template_semantic_compatibility(template, profile, traits)
             if compatibility["admission"] == "REJECT":
                 continue
             if template.economic_field_count > 1:
@@ -1119,7 +1175,8 @@ class AlphaFactory:
         return mechanism
 
     def _select_companion_profiles(self, fields, primary, required_count, offset,
-                                   template=None):
+                                   template=None, *, prepared_facts=None,
+                                   relationship_memo=None):
         """Select distinct, type-compatible companion fields for generic slots.
 
         When the discovery pool contains multiple datasets, prefer companions
@@ -1133,7 +1190,7 @@ class AlphaFactory:
         primary_key = self._profile_key(primary)
         primary_id = str(primary.get("id"))
         primary_type = str(primary.get("type") or "").upper()
-        primary_traits = _derive_field_semantic_traits(primary)
+        primary_traits = self._prepared_traits(primary, prepared_facts)
         candidates = []
         for candidate in list(fields[offset + 1:]) + list(fields[:offset]):
             if not isinstance(candidate, dict) or not candidate.get("id"):
@@ -1146,7 +1203,7 @@ class AlphaFactory:
             if str(candidate.get("semantic_status", "UNKNOWN")).upper() == "UNKNOWN":
                 continue
             if template is not None:
-                candidate_traits = _derive_field_semantic_traits(candidate)
+                candidate_traits = self._prepared_traits(candidate, prepared_facts)
                 if effective_relationship_contract(template) == "MULTI_FIELD_CONFIRMATION":
                     analyst_family = {
                         "analyst_revision", "analyst_dispersion", "sentiment",
@@ -1169,7 +1226,10 @@ class AlphaFactory:
                         "labels": [],
                     }
                 else:
-                    relation = self._relationship_gate([primary, candidate], template)
+                    relation = self._relationship_gate_cached(
+                        [primary, candidate], template,
+                        relationship_memo if relationship_memo is not None else {},
+                    )
                 if relation["admission"] != "ALLOW":
                     continue
             candidate_type = str(candidate.get("type") or "").upper()
@@ -1562,7 +1622,9 @@ class AlphaFactory:
         return out
 
     def assemble_proposals(self, hypothesis, fields, operator_reference,
-                           max_candidates=8, excluded_expressions=None):
+                           max_candidates=8, excluded_expressions=None,
+                           _prepared_facts=None, _relationship_memo=None,
+                           _expression_memo=None):
         """Create auditable EXPLORE proposals from one discovery bundle.
 
         This is the unattended factory's deterministic AI adapter: it only
@@ -1579,6 +1641,16 @@ class AlphaFactory:
             return []
         if limit == 0 or not isinstance(operator_reference, dict):
             return []
+        prepared_facts = (
+            _prepared_facts
+            if _prepared_facts is not None else self._prepare_batch_facts(fields)
+        )
+        relationship_memo = (
+            _relationship_memo if _relationship_memo is not None else {}
+        )
+        expression_memo = (
+            _expression_memo if _expression_memo is not None else {}
+        )
         operators = {
             str(operator) for operator in (operator_reference.get("operators") or [])
             if isinstance(operator, (str, int))
@@ -1637,7 +1709,7 @@ class AlphaFactory:
             if primary_key in used_fields:
                 continue
             selected = None
-            traits = _derive_field_semantic_traits(profile)
+            traits = self._prepared_traits(profile, prepared_facts)
             compatible_templates = []
             for template in template_catalog:
                 compatibility = self._template_semantic_compatibility(
@@ -1664,13 +1736,17 @@ class AlphaFactory:
                 ]
                 slot_profiles = [profile]
                 slot_profiles.extend(self._select_companion_profiles(
-                    fields, profile, len(companion_slots), offset, template
+                    fields, profile, len(companion_slots), offset, template,
+                    prepared_facts=prepared_facts,
+                    relationship_memo=relationship_memo,
                 ))
                 if len(slot_profiles) != len(companion_slots) + 1:
                     continue
                 relation = None
                 if companion_slots:
-                    relation = self._relationship_gate(slot_profiles, template)
+                    relation = self._relationship_gate_cached(
+                        slot_profiles, template, relationship_memo
+                    )
                     if relation["admission"] != "ALLOW":
                         continue
                 mappings = self._operator_mappings(template, operator_reference)
@@ -1683,6 +1759,9 @@ class AlphaFactory:
                         count=1,
                         operator_mapping=mapping,
                         operator_capability=operator_reference,
+                        _prepared_facts=prepared_facts,
+                        _relationship_memo=relationship_memo,
+                        _expression_memo=expression_memo,
                     )
                     if generated:
                         selected_mapping = mapping
@@ -1694,13 +1773,18 @@ class AlphaFactory:
                 if (
                     field_type != "VECTOR"
                     and {"vec_avg", "vec_sum"}.intersection(
-                        analyze_expression(generated_expression).operators
+                        self._expression_facts(
+                            generated_expression, fields, expression_memo
+                        )["analysis"].operators
                     )
                 ):
                     continue
-                if canonical_expression(generated_expression) in excluded:
+                generated_facts = self._expression_facts(
+                    generated_expression, fields, expression_memo
+                )
+                if generated_facts["identity"] in excluded:
                     continue
-                actual_ops = list(analyze_expression(generated_expression).operators)
+                actual_ops = list(generated_facts["analysis"].operators)
                 if not set(actual_ops).issubset(operators):
                     continue
                 selected = (
@@ -1980,6 +2064,9 @@ class AlphaFactory:
             and field.get("description", "").strip()
             and str(field.get("semantic_status", "UNKNOWN")).upper() != "UNKNOWN"
         ]
+        prepared_facts = self._prepare_batch_facts(verified)
+        relationship_memo = {}
+        expression_memo = {}
         # Explore field order, but derive template order from each field's
         # semantic compatibility.  Only a small top-ranked pool is explored;
         # the full catalog is never treated as an interchangeable shuffle.
@@ -1991,7 +2078,10 @@ class AlphaFactory:
         for offset, profile in enumerate(verified):
             if len(exploration_pool) >= pool_limit:
                 break
-            ranked = self.rank_compatible_templates(profile, templates)
+            ranked = self.rank_compatible_templates(
+                profile, templates,
+                prepared_facts[self._profile_key(profile)]["traits"],
+            )
             if not ranked:
                 continue
             top_score = ranked[0]["score"]
@@ -2037,6 +2127,9 @@ class AlphaFactory:
                          template_ids=[template.template_id]),
                     slots, operator_reference, max_candidates=3,
                     excluded_expressions=excluded,
+                    _prepared_facts=prepared_facts,
+                    _relationship_memo=relationship_memo,
+                    _expression_memo=expression_memo,
                 )
                 if not generated:
                     continue
