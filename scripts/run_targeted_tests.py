@@ -163,6 +163,11 @@ DIRECT_TESTS = {
         "tests/test_proposal_execution.py",
         "tests/test_research_loop.py",
     ),
+    "wqb_agent/factory_route.py": (
+        "tests/test_factory_route.py",
+        "tests/test_factory_boundaries.py",
+        "tests/test_research_loop.py",
+    ),
     "wqb_agent/weekly_quota.py": (
         "tests/test_factory_boundaries.py",
     ),
