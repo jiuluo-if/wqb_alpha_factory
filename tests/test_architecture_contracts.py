@@ -166,8 +166,10 @@ class ArchitectureDependencyContracts(unittest.TestCase):
             "wqb_agent/execution_plan.py",
             "wqb_agent/proposal_inbox.py",
             "wqb_agent/proposal_schema.py",
+            "wqb_agent/proposal_batch.py",
         )
         imports = _package_imports(paths)
+        self.assertNotIn("wqb_agent.proposal_contract", imports["wqb_agent/proposal_batch.py"])
         forbidden = {
             "wqb_agent.agent", "wqb_agent.client", "wqb_agent.memory",
             "wqb_agent.reflection", "wqb_agent.optimizer_workflow",

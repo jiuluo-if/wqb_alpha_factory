@@ -599,6 +599,16 @@ def validate_proposal(p, discovered_fields=None, strict_experiment=False,
     return not problems, problems
 
 
+# Compatibility facade: batch-envelope ownership lives in proposal_batch.
+from .proposal_batch import (  # noqa: E402,F401
+    factory_batch_stats,  # noqa: F811
+    proposal_budget_cap,  # noqa: F811
+    targeted_batch_state,  # noqa: F811
+    validate_factory_batch,  # noqa: F811
+    validate_targeted_batch,  # noqa: F811
+)
+
+
 def validate_self_correlation_impact(value):
     """Validate a pre-simulation correlation-impact forecast.
 
