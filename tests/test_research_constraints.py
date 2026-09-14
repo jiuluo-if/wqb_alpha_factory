@@ -153,7 +153,7 @@ class TestResearchConstraints(unittest.TestCase):
         self.assertIn("doctor", result)
         self.assertIn("state", result)
 
-    def test_takeover_preflight_accepts_ephemeral_terminal_checkpoint(self):
+    def test_takeover_preflight_blocks_terminal_checkpoint_without_canonical_evidence(self):
         with tempfile.TemporaryDirectory() as state_dir:
             with open(os.path.join(state_dir, "round_1.checkpoint.json"), "w", encoding="utf-8") as handle:
                 import json
@@ -167,8 +167,8 @@ class TestResearchConstraints(unittest.TestCase):
                 "simulation": {},
                 "agent": {"state_dir": state_dir},
             })
-        self.assertEqual(result["status"], "READY")
-        self.assertNotIn("ledger_missing", result["blocking"])
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertIn("TERMINAL_CHECKPOINT_MISSING_CANONICAL_EVIDENCE", result["blocking"])
 
     def test_economic_factory_proposals_carry_mechanism_and_corr_forecast(self):
         root = os.path.dirname(os.path.dirname(__file__))

@@ -63,12 +63,14 @@ DIRECT_TESTS = {
     "wqb_agent/audit.py": (
         "tests/test_runtime_safety.py",
         "tests/test_workspace_snapshot.py",
+        "tests/test_research_constraints.py",
         "tests/test_cli.py",
         "tests/test_canonical_ops.py",
     ),
     "wqb_agent/workspace_snapshot.py": (
         "tests/test_runtime_safety.py",
         "tests/test_workspace_snapshot.py",
+        "tests/test_research_constraints.py",
         "tests/test_canonical_ops.py",
     ),
     "wqb_agent/state.py": (
