@@ -26,6 +26,11 @@ from .failures import (
     is_research_relevant,
 )
 from .metrics import check_pass, checks_passed, normalized_metrics, score_of
+from .reflection_evaluation import (
+    categorize_check,
+    diagnosis_from,
+    quality_gate,
+)
 from .research_guard import (
     is_direction_only_change,
     overfit_expression_reason,
@@ -242,86 +247,19 @@ class Reflector:
     def _quality_gate(self, metrics):
         """Comprehensive judgment over all six metrics + submission checks.
         Returns (hard_issues, soft_notes)."""
-        metrics = normalized_metrics(metrics)
-        hard, soft = [], []
-        checks = metrics.get("checks") or []
-        failed_checks = [c.get("name") for c in checks if check_pass(c) is not True]
-        if failed_checks:
-            hard.append(f"checks failed: {failed_checks}")
-        elif not checks:
-            hard.append("submission checks missing/unverified")
-
-        sharpe = metrics.get("sharpe")
-        fitness = metrics.get("fitness")
-        turnover = metrics.get("turnover")
-        margin = metrics.get("margin")
-        returns = metrics.get("returns")
-        drawdown = metrics.get("drawdown")
-
-        missing = [
-            name for name, value in (
-                ("sharpe", sharpe), ("fitness", fitness),
-                ("turnover", turnover), ("returns", returns),
-                ("drawdown", drawdown), ("margin", margin),
-            )
-            if value is None
-        ]
-        if missing:
-            hard.append(f"missing metrics: {missing}")
-
-        if sharpe is not None and sharpe < self.success_sharpe:
-            hard.append(f"sharpe {sharpe:.2f} < {self.success_sharpe}")
-        if fitness is not None and fitness < self.success_fitness:
-            hard.append(f"fitness {fitness:.2f} < {self.success_fitness}")
-        if turnover is not None:
-            if turnover > self.max_turnover:
-                hard.append(f"turnover {turnover:.2f} too high")
-            elif turnover < self.min_turnover:
-                soft.append(f"turnover {turnover:.3f} very low (thin book)")
-        if margin is not None and margin <= 0:
-            hard.append(f"margin {margin:.4f} <= 0 (loses per dollar traded)")
-        if drawdown is not None and drawdown > self.max_drawdown:
-            hard.append(f"drawdown {drawdown:.2f} too deep")
-        if returns is not None and sharpe is not None and (returns > 0) != (sharpe > 0):
-            soft.append("returns/sharpe sign mismatch")
-
-        return hard, soft
+        return quality_gate(
+            metrics, success_sharpe=self.success_sharpe,
+            success_fitness=self.success_fitness, min_turnover=self.min_turnover,
+            max_turnover=self.max_turnover, max_drawdown=self.max_drawdown,
+        )
 
     @staticmethod
     def _diagnosis_from(issues):
-        diagnosis = []
-        for issue in issues:
-            if "missing metrics" in issue:
-                diagnosis.append("missing_metrics")
-            elif "submission checks missing" in issue:
-                diagnosis.append("missing_checks")
-            elif "sharpe" in issue:
-                diagnosis.append("sharpe")
-            elif "fitness" in issue:
-                diagnosis.append("fitness")
-            elif "turnover" in issue:
-                diagnosis.append("turnover")
-            elif "margin" in issue:
-                diagnosis.append("margin")
-            elif "drawdown" in issue:
-                diagnosis.append("drawdown")
-            elif "checks" in issue:
-                for check in re.findall(r"\[([^\]]+)\]", issue):
-                    cat = Reflector._categorize_check(check)
-                    if cat and cat not in diagnosis:
-                        diagnosis.append(cat)
-                if not diagnosis:
-                    diagnosis.append("checks_failed")
-            elif "returns" in issue:
-                diagnosis.append("returns_sign")
-        return diagnosis or ["no_signal"]
+        return diagnosis_from(issues, CHECK_DIAGNOSIS)
 
     @staticmethod
     def _categorize_check(name):
-        for pattern, category in CHECK_DIAGNOSIS:
-            if pattern.search(name or ""):
-                return category
-        return None
+        return categorize_check(name, CHECK_DIAGNOSIS)
 
     def _diagnose_error(self, exp):
         error = exp.error or ""
