@@ -4,6 +4,8 @@ import math
 
 from .field_metadata import normalize_coverage
 
+_UNSET = object()
+
 
 def keyword_contribution(haystack_id, haystack_name, haystack_desc, keywords):
     """Score textual evidence; this function performs no selection or I/O."""
@@ -18,12 +20,14 @@ def keyword_contribution(haystack_id, haystack_name, haystack_desc, keywords):
     return contribution
 
 
-def score_components(field, keywords, alpha_count=None):
+def score_components(field, keywords, alpha_count=None, coverage_value=_UNSET):
     """Return explainable ranking components from one raw field row."""
     haystack_id = str(field.get("id") or "").lower()
     haystack_name = str(field.get("name") or "").lower()
     haystack_desc = str(field.get("description") or "").lower()
-    coverage = normalize_coverage(field)
+    coverage = (
+        normalize_coverage(field) if coverage_value is _UNSET else coverage_value
+    )
     try:
         count = float(alpha_count)
         alpha_count_penalty = min(1.5, math.log1p(max(0.0, count)) / 10.0)

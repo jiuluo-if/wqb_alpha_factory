@@ -60,6 +60,25 @@ class TestDiscoveryFieldSemantics(TmpStateMixin, unittest.TestCase):
         self.assertEqual(components["keyword_contribution"], 1.0)
         self.assertGreater(score_field(field, ["price"], alpha_count=9), 0.0)
 
+    def test_selection_kernel_reuses_request_local_coverage(self):
+        field = {"id": "daily_close", "description": "daily price", "coverage": 50}
+        with mock.patch(
+            "wqb_agent.discovery_selection.normalize_coverage",
+            wraps=normalize_coverage,
+        ) as normalize:
+            components = score_components(
+                field, ["price"], alpha_count=1, coverage_value=0.5
+            )
+        normalize.assert_not_called()
+        self.assertEqual(components["coverage_contribution"], 1.0)
+
+        with mock.patch(
+            "wqb_agent.discovery_selection.normalize_coverage",
+            wraps=normalize_coverage,
+        ) as normalize:
+            score_components(field, ["price"], alpha_count=1)
+        normalize.assert_called_once_with(field)
+
     def test_frequency_normalization_uses_explicit_description_evidence(self):
         self.assertEqual(
             normalize_frequency({"description": "daily close price"}),

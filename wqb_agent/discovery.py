@@ -1034,7 +1034,7 @@ class FieldDiscovery:
             else:
                 cheap_rank = cheap_score
             cheap_candidates.append((
-                cheap_rank, noise, field, actual_dataset, field_id
+                cheap_rank, noise, field, actual_dataset, field_id, coverage
             ))
 
         cheap_candidates.sort(
@@ -1044,8 +1044,10 @@ class FieldDiscovery:
         self._candidate_counts[dataset_id] = len(cheap_candidates)
 
         ranked = []
-        for _cheap_rank, noise, field, actual_dataset, _field_id in cheap_candidates:
-            components = score_components(field, keywords, self._alpha_count(field))
+        for _cheap_rank, noise, field, actual_dataset, _field_id, coverage in cheap_candidates:
+            components = score_components(
+                field, keywords, self._alpha_count(field), coverage
+            )
             score = (
                 components["keyword_contribution"]
                 + components["coverage_contribution"]
