@@ -177,6 +177,10 @@ DIRECT_TESTS = {
         "tests/test_memory_tiers.py",
         "tests/test_replay_idempotency.py",
     ),
+    "wqb_agent/memory_policy.py": (
+        "tests/test_memory_tiers.py",
+        "tests/test_replay_idempotency.py",
+    ),
     "wqb_agent/reflection.py": (
         "tests/test_memory_tiers.py",
         "tests/test_agent_evaluation.py",

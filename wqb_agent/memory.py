@@ -31,7 +31,6 @@ import os
 import re
 import time
 import uuid
-from functools import lru_cache
 
 from .artifacts import atomic_write_json_if_changed
 from .expression import canonical_expression
@@ -41,6 +40,7 @@ from .memory_codec import (
     stable_payload,
     unpack_expressions,
 )
+from .memory_policy import expiration_partition, promotion_allowed, similar
 from .schema import MEMORY_VERSION
 
 _CJK_RUN = re.compile(r"[\u4e00-\u9fff]+")
@@ -336,7 +336,7 @@ class ExperienceMemory:
             return replay
         lineage = detail.get("lineage") if isinstance(detail, dict) else None
         for entry in self.short_term:
-            if entry.get("kind") == kind and self._similar(
+            if entry.get("kind") == kind and similar(
                 entry.get("text", ""), text, threshold=0.7
             ):
                 entry["hits"] = entry.get("hits", 1) + 1
@@ -405,12 +405,10 @@ class ExperienceMemory:
         move to the garbage tier (soft delete). Returns (promoted, trashed)."""
         now_round = now_round if now_round is not None else self.updated_round
         promoted, trashed = [], []
-        kept = []
-        for entry in self.short_term:
-            age = now_round - entry.get("round", now_round)
-            if age < self.short_term_window:
-                kept.append(entry)
-                continue
+        kept, expired = expiration_partition(
+            self.short_term, now_round, self.short_term_window
+        )
+        for entry in expired:
             new_lesson = self._promote_short_term(entry, now_round)
             if new_lesson is not None:
                 promoted.append(new_lesson)
@@ -428,15 +426,10 @@ class ExperienceMemory:
     def _promote_short_term(self, entry, now_round):
         """Observation entries that kept being repeated (hits >= threshold)
         become long-term lessons; other kinds never auto-promote."""
-        if entry.get("kind") != "observation":
-            return None
-        confirmed = entry.get("confirmation_status") == "INDEPENDENT_CONFIRMED"
-        if not confirmed and entry.get("hits", 0) < self.promote_hits:
-            return None
         # Repeating a result in the same lineage is not independent evidence.
         # Legacy entries with no lineage are deliberately retained as
         # observations rather than promoted on hit count alone.
-        if not confirmed and len(set(entry.get("lineages") or [])) < 2:
+        if not promotion_allowed(entry, self.promote_hits):
             return None
         evidence = entry.get("evidence", 1) * min(entry.get("hits", 1), 3)
         confidence = min(0.6, 0.2 + 0.1 * entry.get("hits", 0))
@@ -577,7 +570,7 @@ class ExperienceMemory:
         if replay is not None:
             return replay
         for lesson in self.lessons:
-            if self._similar(lesson["claim"], claim, threshold=0.8):
+            if similar(lesson["claim"], claim, threshold=0.8):
                 self._stamp_source(lesson, source_key, semantic)
                 lesson["source_round"] = source_round
                 lesson["evidence"] = lesson.get("evidence", 0) + evidence
@@ -1060,7 +1053,7 @@ class ExperienceMemory:
         for lesson in sorted(
             self.lessons, key=lambda x: -self._number(x.get("evidence"))
         ):
-            if not any(self._similar(lesson["claim"], m["claim"], threshold=0.75) for m in merged):
+            if not any(similar(lesson["claim"], m["claim"], threshold=0.75) for m in merged):
                 merged.append(lesson)
         self.lessons = merged[: self.max_lessons]
         self.avoid = sorted(
@@ -1106,34 +1099,3 @@ class ExperienceMemory:
 
     # ------------------------------------------------------------- helpers
 
-    @staticmethod
-    def _similar(a, b, threshold=0.8):
-        ta = ExperienceMemory._tokens(a)
-        tb = ExperienceMemory._tokens(b)
-        if not ta or not tb:
-            return False
-        inter = len(set(ta) & set(tb))
-        union = len(set(ta) | set(tb))
-        return inter / union >= threshold
-
-    @staticmethod
-    @lru_cache(maxsize=256)
-    def _tokens(text):
-        # Keep words (>2 chars) and numeric tokens (any length) so claims
-        # differing only by numbers are not collapsed by similarity dedupe.
-        tokens = [
-            w
-            for w in re.split(r"[^a-z0-9]+", text.lower())
-            if len(w) > 2 or w.isdigit()
-        ]
-        # Chinese: split each CJK run into overlapping 2-char shingles so
-        # similarity reflects real character overlap, not "one run = one token".
-        for cjk in _CJK_RUN.findall(text):
-            cjk = cjk.strip()
-            if len(cjk) < 2:
-                continue
-            if len(cjk) <= 4:
-                tokens.append(cjk)
-            else:
-                tokens.extend(cjk[i:i + 2] for i in range(len(cjk) - 1))
-        return tokens
