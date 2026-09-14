@@ -174,6 +174,34 @@ class ArchitectureDependencyContracts(unittest.TestCase):
                 f"{sorted(forbidden & dependencies)}",
             )
 
+    def test_package_import_graph_has_no_cycles(self):
+        modules = {
+            _module_name(path): path
+            for path in PACKAGE_ROOT.rglob("*.py")
+        }
+        graph = {
+            module: {dependency for dependency in _imports(path) if dependency in modules}
+            for module, path in modules.items()
+        }
+        visiting, visited = set(), set()
+
+        def visit(module):
+            if module in visiting:
+                return [module]
+            if module in visited:
+                return None
+            visiting.add(module)
+            for dependency in graph[module]:
+                cycle = visit(dependency)
+                if cycle:
+                    return [module, *cycle]
+            visiting.remove(module)
+            visited.add(module)
+            return None
+
+        cycles = [cycle for module in graph if (cycle := visit(module))]
+        self.assertEqual(cycles, [], f"package import cycle(s): {cycles}")
+
 
 if __name__ == "__main__":
     unittest.main()
