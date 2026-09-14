@@ -50,6 +50,24 @@ id、重算 submission fingerprint、非空 proposal id 不能重复；progress 
 多个 execution identity。`complete=true` 携带 unresolved status 会被标为
 `CHECKPOINT_COMPLETE_WITH_UNRESOLVED_EXECUTION`，不会释放 execution fence。
 
+Checkpoint 写入和读取共用 `CheckpointStore._validate_with_code()`；写入端拒绝
+`"false"`、`"true"`、`0/1`、`None` 等非 JSON bool，并在 atomic write 前验证最终
+recovery-only projection。raw JSON 的 `complete=true` 不是归档授权；archive 只消费
+`CheckpointStore.scan()` 的 `malformed == False` 且 `complete is True` 结果。不可验证、
+未完成或 future-schema checkpoint 永远留在 live state，`--apply` 遇到不可验证对象时
+不移动任何 checkpoint。
+
+`reconcile_pending.py` 是 `READ_ONLY=YES` 的远端观测工具：target 只来自 canonical
+Trajectory rows 与 validated incomplete checkpoint rows，身份使用 Experiment id、
+proposal id、submission fingerprint 和已知 progress URL，不以 expression 猜配对。
+它可以写派生 reconcile report/history，但不写 Trajectory、Checkpoint、TrialLedger 或
+ExperienceMemory；`--commit` 已退役，canonical recovery 仍由 `run-proposals` owner 完成。
+
+Trajectory canonical projection 还为 `state audit` 提供历史 remote-execution 检测：
+多个 Experiment IDs 共享非空 fingerprint 且共享 progress URL，或共享 fingerprint
+且共享 alpha ID，报告 `DUPLICATE_REMOTE_EXECUTION_PROJECTION`。这是只读人工审核信号，
+不会删除、合并或重写历史状态。
+
 远端 execution dedupe 使用当前 batch 内的 `batch_execution_fingerprints`，输入是
 `Agent._proposal_settings()` 产出的完整 effective settings。research expression 去重、
 SearchPolicy arm 和 execution dedupe 是三种不同判断；`DUPLICATE_EFFECTIVE_EXECUTION`

@@ -89,6 +89,13 @@ def audit_state(state_dir, *, snapshot=None, lifecycle_persistent=True):
                violations=[list(item) for item in ledger_summary.phase_order_violations])
     for code, count in (ledger_summary.lifecycle_identity_drift or {}).items():
         record(code, "trial_ledger", rows=count)
+    if trajectory_summary.duplicate_remote_execution_projection:
+        record(
+            "DUPLICATE_REMOTE_EXECUTION_PROJECTION",
+            "trajectory",
+            collision_count=trajectory_summary.duplicate_remote_execution_projection,
+            round_count=len(trajectory_summary.duplicate_remote_execution_projection_rounds),
+        )
     if ledger_summary.proposal_id_execution_rebind:
         record(
             "proposal_id_execution_rebind", "trial_ledger",

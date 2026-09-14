@@ -6,7 +6,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from wqb_agent.checkpoints import CheckpointStore
+from wqb_agent.checkpoints import CheckpointStore, CheckpointWriteError
 from wqb_agent.expression import submission_fingerprint
 from wqb_agent.locking import OwnerBusyError, single_instance_scope
 
@@ -93,6 +93,65 @@ class TestCheckpointStore(unittest.TestCase):
             self.assertEqual(loaded["round_no"], 4)
             self.assertFalse(loaded["complete"])
             self.assertEqual(loaded["experiments"][0]["status"], "SUBMIT_UNKNOWN")
+
+    def test_write_rejects_non_bool_complete_without_changing_existing_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = CheckpointStore(tmp)
+            experiment = SimpleNamespace(to_dict=lambda: self._row(status="DONE"))
+            store.write(4, {"id": "h1"}, [experiment], complete=True)
+            path = store.path(4)
+            with open(path, "rb") as handle:
+                before = handle.read()
+            for complete in ("false", "true", 0, 1, None):
+                with self.subTest(complete=complete):
+                    with self.assertRaises(CheckpointWriteError) as raised:
+                        store.write(4, {"id": "h1"}, [experiment], complete=complete)
+                    self.assertEqual(raised.exception.code, "CHECKPOINT_COMPLETE_TYPE_INVALID")
+                    with open(path, "rb") as handle:
+                        self.assertEqual(handle.read(), before)
+
+    def test_write_projection_uses_read_validator_and_preserves_existing_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = CheckpointStore(tmp)
+            valid = SimpleNamespace(to_dict=lambda: self._row(status="DONE"))
+            store.write(4, {"id": "h1"}, [valid], complete=True)
+            path = store.path(4)
+            with open(path, "rb") as handle:
+                before = handle.read()
+            invalid = SimpleNamespace(to_dict=lambda: self._row(status="SUBMIT_UNKNOWN"))
+            with self.assertRaises(CheckpointWriteError) as raised:
+                store.write(4, {"id": "h1"}, [invalid], complete=True)
+            self.assertEqual(raised.exception.code, "CHECKPOINT_COMPLETE_WITH_UNRESOLVED_EXECUTION")
+            with open(path, "rb") as handle:
+                self.assertEqual(handle.read(), before)
+
+    def test_write_projection_rejects_execution_set_collisions(self):
+        cases = (
+            ([self._row(id="e1"), self._row(id="e1", expression="rank(open)")],
+             "CHECKPOINT_DUPLICATE_EXPERIMENT_ID"),
+            ([self._row(id="e1"), self._row(id="e2")],
+             "CHECKPOINT_DUPLICATE_SUBMISSION_IDENTITY"),
+            ([self._row(id="e1", proposal_id="p1"),
+              self._row(id="e2", expression="rank(open)", proposal_id="p1")],
+             "CHECKPOINT_DUPLICATE_PROPOSAL_ID"),
+            ([self._row(id="e1", progress_url="/simulations/1"),
+              self._row(id="e2", expression="rank(open)", progress_url="/simulations/1")],
+             "CHECKPOINT_PROGRESS_IDENTITY_COLLISION"),
+            ([self._row(id="e1", submission_fingerprint="bad")],
+             "CHECKPOINT_SUBMISSION_IDENTITY_MISMATCH"),
+        )
+        for rows, code in cases:
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as tmp:
+                store = CheckpointStore(tmp)
+                with self.assertRaises(CheckpointWriteError) as raised:
+                    store.write(
+                        4,
+                        {"id": "h1"},
+                        [SimpleNamespace(to_dict=lambda row=row: dict(row)) for row in rows],
+                        complete=False,
+                    )
+                self.assertEqual(raised.exception.code, code)
+                self.assertFalse(os.path.exists(store.path(4)))
 
     def test_checkpoint_excludes_result_evidence_for_restart_recovery(self):
         with tempfile.TemporaryDirectory() as tmp:

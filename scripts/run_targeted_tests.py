@@ -22,10 +22,14 @@ DIRECT_TESTS = {
     "main.py": ("tests/test_cli.py",),
     "scripts/run_targeted_tests.py": ("tests/test_targeted_ci.py",),
     "scripts/check_repo_privacy.py": ("tests/test_repo_privacy.py",),
-    "scripts/archive_completed_rounds.py": ("tests/test_architecture.py",),
+    "scripts/archive_completed_rounds.py": (
+        "tests/test_architecture.py",
+        "tests/test_canonical_ops.py",
+    ),
     "scripts/reconcile_pending.py": (
         "tests/test_recovery.py",
         "tests/test_proposal_safety.py",
+        "tests/test_canonical_ops.py",
     ),
     "wqb_agent/client.py": (
         "tests/test_client_refactor.py",
@@ -54,13 +58,16 @@ DIRECT_TESTS = {
     "wqb_agent/checkpoints.py": (
         "tests/test_checkpoint_store.py",
         "tests/test_recovery.py",
+        "tests/test_canonical_ops.py",
     ),
     "wqb_agent/audit.py": (
         "tests/test_runtime_safety.py",
         "tests/test_cli.py",
+        "tests/test_canonical_ops.py",
     ),
     "wqb_agent/workspace_snapshot.py": (
         "tests/test_runtime_safety.py",
+        "tests/test_canonical_ops.py",
     ),
     "wqb_agent/state.py": (
         "tests/test_state.py",

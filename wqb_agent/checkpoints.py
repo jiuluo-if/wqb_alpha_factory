@@ -34,6 +34,14 @@ _CHECKPOINT_IDENTITY_FIELDS = tuple(dict.fromkeys(
 _LEGAL_EXPERIMENT_STATUSES = UNRESOLVED_STATUSES | TERMINAL_STATUSES
 
 
+class CheckpointWriteError(ValueError):
+    """Bounded failure raised before an invalid checkpoint reaches disk."""
+
+    def __init__(self, code):
+        self.code = code
+        super().__init__(code)
+
+
 class CheckpointStore:
     """Own only checkpoint file mechanics; never submits or appends trajectory."""
 
@@ -58,7 +66,8 @@ class CheckpointStore:
 
     def _write_owned(self, round_no, hypothesis, experiments, complete):
         path = self.path(round_no)
-        os.makedirs(self.state_dir, exist_ok=True)
+        if not isinstance(complete, bool):
+            raise CheckpointWriteError("CHECKPOINT_COMPLETE_TYPE_INVALID")
         checkpoint_experiments = []
         for exp in experiments:
             row = exp.to_dict()
@@ -77,9 +86,13 @@ class CheckpointStore:
             "round_no": int(round_no),
             "hypothesis": hypothesis,
             "experiments": checkpoint_experiments,
-            "complete": bool(complete),
+            "complete": complete,
             "updated_at": time.time(),
         }
+        _, validation_code = self._validate_with_code(round_no, data)
+        if validation_code is not None:
+            raise CheckpointWriteError(validation_code)
+        os.makedirs(self.state_dir, exist_ok=True)
         with self._lock:
             return atomic_write_json_if_changed(
                 path, data, ignored_keys=("updated_at",)

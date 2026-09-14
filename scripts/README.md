@@ -4,7 +4,7 @@
 
 | 工具 | 用途 | 边界 |
 |---|---|---|
-| `reconcile_pending.py` | 只读对账 UNKNOWN/PENDING Simulation | 已知 URL 只轮询，绝不重 POST |
+| `reconcile_pending.py` | `READ_ONLY=YES` 的 UNKNOWN/PENDING Simulation 观测 | 已知 URL 只轮询，绝不重 POST；`--commit` 已退役，使用 canonical checkpoint recovery / `run-proposals` |
 | `validate_integrity.py` | 审计本地证据、账本和状态一致性 | 输出是派生诊断，不替代事实源 |
 | `archive_completed_rounds.py` | 归档已完成的派生 round/checkpoint | 默认 dry-run；`--apply` 前需锁、checkpoint 审计和用户确认 |
 | `check_correlation.py` | 读取 BRAIN self-correlation | 只读平台检查 |

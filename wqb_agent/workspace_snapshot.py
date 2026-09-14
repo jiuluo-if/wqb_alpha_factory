@@ -117,6 +117,8 @@ class TrajectorySummary:
     unsupported_schema_rows: int = 0
     identity_mismatch_rows: int = 0
     parent_identity_issues: dict = None
+    duplicate_remote_execution_projection: int = 0
+    duplicate_remote_execution_projection_rounds: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -304,6 +306,23 @@ def _trajectory_summary(state_dir):
                 parent_issues["PARENT_REFERENCE_AMBIGUOUS"] = parent_issues.get("PARENT_REFERENCE_AMBIGUOUS", 0) + 1
             elif not candidates:
                 parent_issues["PARENT_NOT_FOUND"] = parent_issues.get("PARENT_NOT_FOUND", 0) + 1
+    remote_groups = {}
+    for criterion in ("progress_url", "alpha_id"):
+        grouped = {}
+        for row in canonical_rows.values():
+            fingerprint = row.get("submission_fingerprint")
+            value = row.get(criterion)
+            if fingerprint in (None, "") or value in (None, ""):
+                continue
+            grouped.setdefault((str(fingerprint), str(value)), set()).add(str(row.get("id")))
+        for key, ids in grouped.items():
+            if len(ids) > 1:
+                remote_groups[frozenset(ids)] = key
+    remote_rounds = set()
+    for ids in remote_groups:
+        for row in canonical_rows.values():
+            if str(row.get("id")) in ids and row.get("round") not in (None, ""):
+                remote_rounds.add(str(row["round"]))
     return TrajectorySummary(
         records=summary["records"],
         latest_round=summary["latest_round"],
@@ -328,6 +347,8 @@ def _trajectory_summary(state_dir):
         unsupported_schema_rows=lifecycle_stats["unsupported_schema_rows"],
         identity_mismatch_rows=identity_mismatch_rows,
         parent_identity_issues=parent_issues,
+        duplicate_remote_execution_projection=len(remote_groups),
+        duplicate_remote_execution_projection_rounds=tuple(sorted(remote_rounds)),
     )
 
 

@@ -33,6 +33,10 @@ Agent → SuggestionWorkflow / ProposalExecutionWorkflow / AlphaFeedWorkflow / O
 | BRAIN transport | `client.py` | 认证、Retry-After、分类错误、只读 GET 与 Simulation submit |
 | Simulation execution | `ProposalExecutionWorkflow` → `Simulator` | checkpoint、预算、exactly-once、`SUBMIT_UNKNOWN` |
 | Research evidence | `Trajectory` / `TrialLedger` | append-only 事实与生命周期审计 |
+| Checkpoint recovery boundary | `CheckpointStore` | canonical semantic validation、unfinished scan 与 atomic recovery envelope |
+| Remote reconciliation observation | `scripts/reconcile_pending.py` | 只读 GET/poll/get-alpha；不写 canonical research state |
+| Completed-state archive | `scripts/archive_completed_rounds.py` | 只移动 `CheckpointStore.scan()` 已验证的 complete checkpoint |
+| Historical projection audit | `workspace_snapshot.py` → `audit.py` | 只报告 duplicate remote execution projection，不自动修复 |
 | Compressed memory | `ExperienceMemory` | lessons、avoid、next、bounded short-term experience |
 | Optimization | `OptimizerWorkflow` | 只筛已有 DONE evidence，消费 Agent-authored decision |
 | Optimization read surface | `optimization_interfaces.py` | 只读 Alpha detail、aggregates、allow-listed PnL、correlation；不拥有状态 |
@@ -73,6 +77,25 @@ Checkpoint validator 还严格要求 `complete` 为 bool、Experiment status 属
 及 execution set 内的 Experiment id、重算 fingerprint、proposal id 和 progress URL
 唯一性。`complete=true` 不能包含 unresolved execution；这些错误在恢复授权前
 fail closed，并以 bounded validation code 进入 audit。
+
+`CheckpointStore.write()` 先构造 recovery-only persisted projection，再复用同一
+`_validate_with_code()`；禁止 `complete` coercion，validator 失败时抛出带 code 的
+`CheckpointWriteError`，不会创建或覆盖 checkpoint bytes。raw JSON 的 `complete=true`
+不等于 canonical completed checkpoint，只有 `CheckpointStore.scan()` 验证通过且
+`complete is True` 才可由 `archive_completed_rounds.py` 归档；任何 malformed、
+future-schema、identity mismatch 或 unresolved checkpoint 都留在 live state，
+`--apply` 发现不可验证 checkpoint 时整体 fail closed。
+
+`reconcile_pending.py` 只读取 `Trajectory.iter_canonical_rows()` 与
+`CheckpointStore.scan()` 的 validated incomplete projection。它只观察已知
+`progress_url`，不使用 expression 猜远端身份，不写 Trajectory、Checkpoint、TrialLedger
+或 ExperienceMemory；旧 `--commit` 仅返回 `RECONCILE_COMMIT_RETIRED`，已知 URL 的
+settlement 必须回到 `ProposalExecutionWorkflow.resume_checkpoint()`。
+
+`state audit` 还对 canonical Trajectory projection 检查同一非空
+`submission_fingerprint + progress_url` 或 `submission_fingerprint + alpha_id` 被多个
+Experiment IDs 表示的历史 remote execution projection，报告 bounded
+`DUPLICATE_REMOTE_EXECUTION_PROJECTION`，不自动合并、删除或修复历史。
 
 ProposalExecution 在 SearchPolicy admission 之前建立 transient
 `proposal_id -> effective_submission_fingerprint` binding；同 batch 冲突使用

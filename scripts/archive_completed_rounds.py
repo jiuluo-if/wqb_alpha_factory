@@ -8,13 +8,13 @@ Incomplete checkpoints and the newest ``--keep`` round summaries stay in
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import shutil
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from wqb_agent.checkpoints import CheckpointStore
 from wqb_agent.locking import acquire_os_owner_lock, release_os_owner_lock
 
 SUMMARY_RE = re.compile(r"round_(\d+)\.json$")
@@ -37,14 +37,6 @@ def _round_files(state_dir: Path):
     return summaries, checkpoints
 
 
-def _checkpoint_complete(path: Path) -> bool:
-    try:
-        with path.open(encoding="utf-8") as handle:
-            return json.load(handle).get("complete") is True
-    except (OSError, ValueError, TypeError):
-        return False
-
-
 def ensure_archive_dir_safe(state_dir: Path, archive_dir: Path):
     """Reject an archive target inside live state before any planning/apply."""
     try:
@@ -58,13 +50,21 @@ def ensure_archive_dir_safe(state_dir: Path, archive_dir: Path):
 
 def plan(state_dir: Path, archive_dir: Path, keep: int):
     summaries, checkpoints = _round_files(state_dir)
+    checkpoint_records = {
+        record["round_no"]: record
+        for record in CheckpointStore(str(state_dir)).scan()
+    }
     newest = sorted(summaries)[-keep:] if keep else []
     incomplete = {
         round_no
-        for round_no, path in checkpoints.items()
-        if not _checkpoint_complete(path)
+        for round_no, record in checkpoint_records.items()
+        if not record["malformed"] and record["checkpoint"].get("complete") is not True
     }
-    protected = set(newest) | incomplete
+    unverifiable = {
+        round_no for round_no, record in checkpoint_records.items()
+        if record["malformed"]
+    }
+    protected = set(newest) | incomplete | unverifiable
     summary_moves = [
         (path, archive_dir / "rounds" / path.name)
         for round_no, path in sorted(summaries.items())
@@ -73,9 +73,28 @@ def plan(state_dir: Path, archive_dir: Path, keep: int):
     checkpoint_moves = [
         (path, archive_dir / "checkpoints" / path.name)
         for round_no, path in sorted(checkpoints.items())
-        if round_no not in protected and _checkpoint_complete(path)
+        if (
+            round_no not in protected
+            and round_no in checkpoint_records
+            and checkpoint_records[round_no]["malformed"] is False
+            and checkpoint_records[round_no]["checkpoint"].get("complete") is True
+        )
     ]
-    return summary_moves, checkpoint_moves, protected
+    validation_rows = []
+    for round_no, record in sorted(checkpoint_records.items()):
+        if record["malformed"]:
+            code = record["validation_code"] or "CHECKPOINT_UNREADABLE"
+        elif record["checkpoint"].get("complete") is True:
+            code = "CHECKPOINT_VALID_COMPLETE"
+        else:
+            code = "CHECKPOINT_INCOMPLETE_PROTECTED"
+        validation_rows.append((round_no, code))
+    return summary_moves, checkpoint_moves, protected, {
+        "valid_complete_candidates": len(checkpoint_moves),
+        "incomplete_protected": len(incomplete),
+        "unverifiable_protected": len(unverifiable),
+        "validation_rows": validation_rows,
+    }
 
 
 def _move(source: Path, target: Path):
@@ -125,16 +144,18 @@ def main(argv=None):
         raise SystemExit("active research owner exists; refusing state archive")
 
     try:
-        summary_moves, checkpoint_moves, protected = plan(
+        summary_moves, checkpoint_moves, protected, counts = plan(
             state_dir, archive_dir, args.keep
         )
-        print(
-            f"round summaries: {len(summary_moves)} planned, "
-            f"checkpoints: {len(checkpoint_moves)} planned, "
-            f"protected rounds: {len(protected)}"
-        )
-        for source, target in summary_moves + checkpoint_moves:
-            print(f"  {source} -> {target}")
+        print(f"valid-complete candidate count: {counts['valid_complete_candidates']}")
+        print(f"incomplete protected count: {counts['incomplete_protected']}")
+        print(f"unverifiable protected count: {counts['unverifiable_protected']}")
+        for round_no, code in counts["validation_rows"]:
+            print(f"round={round_no} validation_code={code}")
+        if args.apply and counts["unverifiable_protected"]:
+            print("ARCHIVE_BLOCKED_UNVERIFIABLE_CHECKPOINT")
+            return 2
+        print(f"protected round count: {len(protected)}")
         if not args.apply:
             print("[dry-run] no files moved")
             return 0

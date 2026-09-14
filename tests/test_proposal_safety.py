@@ -429,7 +429,7 @@ class TestProposalExecutionSafety(TmpStateMixin, unittest.TestCase):
         exp_url.status = "UNKNOWN"
         exp_url.progress_url = "https://api.worldquantbrain.com/simulations/remote-1799"
         exp_url.proposal_id = "p-known-url-unknown"
-        exp_pending = Experiment(1799, "h-1799", "rank(put_iv)", BASE_CONFIG["simulation"], ["put_iv"], ["option8"])
+        exp_pending = Experiment(1799, "h-1799", "rank(ask_iv)", BASE_CONFIG["simulation"], ["ask_iv"], ["option8"])
         exp_pending.id = "other"
         exp_pending.status = "PENDING"
         exp_pending.proposal_id = "p-pending"

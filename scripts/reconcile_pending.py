@@ -19,17 +19,11 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from wqb_agent.artifacts import atomic_write_json_if_changed, iter_jsonl_objects
+from wqb_agent.checkpoints import CheckpointStore
 from wqb_agent.client import WQBClient
-from wqb_agent.evidence import load_evidence_cache
 from wqb_agent.locking import acquire_os_owner_lock, release_os_owner_lock
-from wqb_agent.metrics import (
-    check_pass,
-    checks_passed,
-)
-from wqb_agent.metrics import (
-    extract_metrics as _extract_metrics,
-)
-from wqb_agent.state import RECOVERABLE_STATUSES, Experiment, Trajectory
+from wqb_agent.metrics import extract_metrics as _extract_metrics
+from wqb_agent.state import RECOVERABLE_STATUSES, Trajectory
 
 
 def _scalar_key(value):
@@ -120,93 +114,58 @@ def _append_unique_history_locked(path, entries):
     return added
 
 
-def collect(state_dir):
+def collect(state_dir, *, blockers=None):
     path = os.path.join(state_dir, "trajectory.jsonl")
     # Deduplicate while streaming instead of retaining every historical
     # active row and then materialising a second list.  This matters after a
     # day-long run with repeated UNKNOWN/PENDING observations.
     uniq = {}
+    accepted = []
     sources = []
+    trajectory = Trajectory(path=path)
     if os.path.exists(path):
-        sources.append(iter_jsonl_objects(path))
-    # A checkpoint may predate the first trajectory append.  Include its
-    # recoverable, known-URL experiments so read-only reconciliation can
-    # produce the audit evidence required by skip-stale.
-    for checkpoint_path in sorted(
-        os.path.join(state_dir, name)
-        for name in os.listdir(state_dir)
-        if name.endswith(".checkpoint.json")
-    ):
-        try:
-            with open(checkpoint_path, encoding="utf-8") as handle:
-                checkpoint = json.load(handle)
-        except (OSError, ValueError):
+        sources.append(trajectory.iter_canonical_rows())
+    checkpoint_store = CheckpointStore(state_dir)
+    for record in checkpoint_store.scan():
+        if record["malformed"]:
+            if blockers is not None:
+                blockers.append({
+                    "code": "RECONCILE_CHECKPOINT_UNVERIFIABLE",
+                    "round": record["round_no"],
+                })
             continue
-        if checkpoint.get("complete") is True:
+        if record["checkpoint"].get("complete") is True:
             continue
-        sources.append(iter(checkpoint.get("experiments") or []))
+        sources.append(iter(record["checkpoint"].get("experiments") or []))
     for e in (item for source in sources for item in source):
+        if not isinstance(e, dict):
+            continue
         if e.get("status") not in RECOVERABLE_STATUSES:
             continue
         progress_url = e.get("progress_url")
         if not isinstance(progress_url, str) or not progress_url.strip():
             continue
         round_value = _scalar_key(e.get("round"))
-        identity = _scalar_key(e.get("submission_fingerprint"))
-        if identity is None:
-            identity = _scalar_key(e.get("expression"))
-        if round_value is None or identity is None:
+        identity = _scalar_key(e.get("id"))
+        fingerprint = _scalar_key(e.get("submission_fingerprint"))
+        proposal_id = _scalar_key(e.get("proposal_id"))
+        if round_value is None or not any((identity, fingerprint, proposal_id)):
             continue
-        uniq[(round_value, identity)] = e
-    return list(uniq.values())
+        aliases = []
+        if identity:
+            aliases.append(("id", identity))
+        if fingerprint:
+            aliases.append(("remote", fingerprint, progress_url))
+        if proposal_id:
+            aliases.append(("proposal", proposal_id, progress_url))
+        if not any(alias in uniq for alias in aliases):
+            accepted.append(e)
+            for alias in aliases:
+                uniq[alias] = e
+    return accepted
 
 
-def commit_reconciled(state_dir, exp, alpha_id, metrics, known_ids=None,
-                      trajectory=None):
-    """把对账确认的 DONE 结果以新记录追加进 trajectory（append-only）。
-
-    - 新 id（原 UNKNOWN 记录保留作审计线索，不重写历史）；
-    - 表达式不变 → 终态表达式去重集合自动纳入，防止预算重放；
-    - SELF_CORRELATION 以 correlations/self 的结算值叠加。
-    """
-    settled = load_evidence_cache(state_dir).get(alpha_id)
-    if settled:
-        by_name = {c.get("name"): c for c in settled.get("checks") or []}
-        for check in metrics.get("checks") or []:
-            rep = by_name.get(check.get("name"))
-            if check_pass(check) is None and rep and check_pass(rep) is not None:
-                check["pass"] = check_pass(rep)
-                check["result"] = rep.get("result", check.get("result"))
-                check["value"] = rep.get("value", check.get("value"))
-                check["limit"] = rep.get("limit", check.get("limit"))
-        metrics["passed"] = checks_passed(metrics)
-    rec = Experiment.from_dict(exp)
-    rec.id = (rec.id or "x") + "rc"  # 新 id：同一实验的对账更新记录
-    rec.status = "DONE"
-    rec.alpha_id = alpha_id
-    rec.metrics = metrics
-    path = os.path.join(state_dir, "trajectory.jsonl")
-    lock_handle = acquire_os_owner_lock(os.path.join(state_dir, "run.lock"))
-    if lock_handle is None:
-        raise RuntimeError("active research owner exists; trajectory reconciliation refused")
-    try:
-        writer = trajectory or Trajectory(max_len=1, path=path)
-        if known_ids is not None:
-            # Compatibility for older callers.  New callers should pass the
-            # bounded writer so it can reconcile a batch without an
-            # unbounded process-wide ID set.
-            if rec.id in known_ids:
-                return rec
-            writer.add(rec)
-            known_ids.add(rec.id)
-        else:
-            writer.add(rec)
-    finally:
-        release_os_owner_lock(lock_handle)
-    return rec
-
-
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--state-dir", default=".wqb_state")
     ap.add_argument("--timeout", type=int, default=120,
@@ -214,10 +173,16 @@ def main():
     ap.add_argument("--simulation-id", default=None,
                     help="only reconcile this known simulation id")
     ap.add_argument("--commit", action="store_true",
-                    help="append COMPLETE outcomes into trajectory.jsonl (append-only)")
-    args = ap.parse_args()
+                    help="retired; canonical recovery is owned by run-proposals")
+    args = ap.parse_args(argv)
+    if args.commit:
+        print("RECONCILE_COMMIT_RETIRED: use canonical checkpoint recovery via run-proposals")
+        return 2
 
-    targets = collect(args.state_dir)
+    blockers = []
+    targets = collect(args.state_dir, blockers=blockers)
+    for blocker in blockers:
+        print(f"{blocker['code']} round={blocker['round']}")
     if args.simulation_id:
         targets = [e for e in targets
                    if e.get("progress_url", "").rstrip("/").split("/")[-1]
@@ -229,23 +194,6 @@ def main():
     client = WQBClient()
     reconciled_at = time.strftime("%Y-%m-%dT%H:%M:%S")
     report = {"reconciled_at": reconciled_at, "results": []}
-    trajectory_writer = None
-    trajectory_batch_started = False
-    if args.commit:
-        # Keep only this reconciliation batch's bounded IDs.  The first
-        # COMPLETE result performs one full-history check; later rows in the
-        # same batch are protected by the writer without materializing every
-        # historical ID in memory.
-        trajectory_writer = Trajectory(
-            max_len=max(1, len(targets)),
-            path=os.path.join(args.state_dir, "trajectory.jsonl"),
-        )
-        trajectory_batch = []
-        for target in targets:
-            planned = Experiment.from_dict(target)
-            planned.id = (planned.id or "x") + "rc"
-            trajectory_batch.append(planned)
-
     for exp in targets:
         url = exp["progress_url"]
         rid = url.rstrip("/").split("/")[-1]
@@ -303,20 +251,6 @@ def main():
             (entry.get("metrics") or {}).get("fitness"),
             (entry.get("metrics") or {}).get("turnover")))
 
-        if outcome == "COMPLETE" and args.commit:
-            metrics_full = _extract_metrics(client.get_alpha(entry["alpha_id"]))
-            if not trajectory_batch_started:
-                trajectory_writer.begin_append_batch(trajectory_batch)
-                trajectory_batch_started = True
-            rec = commit_reconciled(
-                args.state_dir, exp, entry["alpha_id"], metrics_full,
-                trajectory=trajectory_writer,
-            )
-            print(f"[COMMIT] {rec.id} status=DONE appended")
-
-    if trajectory_batch_started:
-        trajectory_writer.end_append_batch()
-
     out_path = os.path.join(args.state_dir, "reconcile_report.json")
     atomic_write_json_if_changed(out_path, report, ignored_keys=("reconciled_at",))
     history_path = os.path.join(args.state_dir, "reconcile_history.jsonl")
@@ -325,4 +259,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
