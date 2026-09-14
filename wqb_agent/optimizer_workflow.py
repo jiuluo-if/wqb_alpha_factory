@@ -24,7 +24,7 @@ from .optimization_decision import (
     validation_candidate_values,
     validation_rejections,
 )
-from .optimizer_selection import parent_rejections
+from .optimizer_selection import optimization_priority, parent_rejections
 from .pre_correlation import READINESS_BANDS, failing_check_names
 from .research_guard import overfit_expression_reason, parameter_only_change_reason
 from .research_yield import ResearchYieldFunnel, child_generation_bound
@@ -118,19 +118,6 @@ def _next_action(readiness, *, self_correlation_status="UNKNOWN",
     if band == "PRE_CORRELATION_READY":
         return "CHECK_SELF_CORRELATION"
     return _NEXT_ACTION_BY_READINESS.get(band, "REROUTE_OR_STOP")
-
-
-def _metric_gap_distance(context):
-    """到过线门槛的综合距离（越小越接近）；缺失证据视为最远，不假设已过线。"""
-    if not isinstance(context, Mapping):
-        return float("inf")
-    distance = 0.0
-    for key in ("sharpe_gap", "fitness_gap"):
-        gap = context.get(key)
-        if isinstance(gap, bool) or not isinstance(gap, (int, float)):
-            return float("inf")
-        distance = max(distance, abs(float(gap)))
-    return distance
 
 
 def _same_value(left, right):
@@ -365,17 +352,7 @@ class OptimizerWorkflow:
 
     @staticmethod
     def _optimization_priority(summary):
-        """§41：readiness → 结构 blocker → 可修 blocker → 过线距离。"""
-        context = summary.get("metric_optimization_context") or {}
-        readiness = str(context.get("readiness") or "LOW_INFORMATION")
-        return (
-            _READINESS_PRIORITY.get(readiness, len(READINESS_BANDS)),
-            len(context.get("structural_blockers") or ()),
-            len(context.get("repairable_blockers") or ()),
-            _metric_gap_distance(context),
-            summary.get("opportunity") == "NO_CLEAR_OPPORTUNITY",
-            str(summary.get("parent_id") or ""),
-        )
+        return optimization_priority(summary, _READINESS_PRIORITY)
 
     def _bounded_parent_summaries(self, limit):
         """有限、只读的 (record, summary) 对；不泄漏无限历史。"""
