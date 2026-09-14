@@ -22,8 +22,8 @@ import os
 import random
 import sys
 import tempfile
-import tracemalloc
 import time
+import tracemalloc
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
