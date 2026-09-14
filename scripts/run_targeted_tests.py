@@ -345,6 +345,12 @@ DIRECT_TESTS = {
         "tests/test_discovery.py",
         "tests/test_proposal_contract.py",
     ),
+    "wqb_agent/factory_control.py": (
+        "tests/test_factory_blocker_control.py",
+        "tests/test_factory_mechanism_selection.py",
+        "tests/test_factory_session_privacy.py",
+        "tests/test_architecture_contracts.py",
+    ),
     "scripts/benchmark_local_io.py": ("tests/test_benchmark_harness.py",),
 }
 
