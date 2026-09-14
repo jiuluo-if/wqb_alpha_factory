@@ -44,6 +44,15 @@ DIRECT_TESTS = {
         "tests/test_runtime_composition.py",
         "tests/test_runtime_safety.py",
     ),
+    "wqb_agent/research_planning.py": (
+        "tests/test_research_planning.py",
+        "tests/test_agent_flow.py",
+    ),
+    "wqb_agent/evidence_projection.py": (
+        "tests/test_evidence_projection.py",
+        "tests/test_agent_evaluation.py",
+        "tests/test_runtime_settlement.py",
+    ),
     "wqb_agent/discovery.py": (
         "tests/test_discovery.py",
         "tests/test_discovery_selection.py",

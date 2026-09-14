@@ -25,6 +25,7 @@ from .evidence import (
     overlay_cached_checks,
     refresh_self_correlation_cache,
 )
+from .evidence_projection import alpha_rating
 from .expression import canonical_expression, submission_fingerprint
 from .heartbeat import HeartbeatSink
 from .identity import candidate_identity
@@ -37,16 +38,17 @@ from .metrics import (
 )
 from .optimization_decision import optimization_decision_identity
 from .optimizer_workflow import OptimizerHooks
-from .pre_correlation import (
-    delay_metric_thresholds,
-    pre_self_correlation_eligibility,
-    turnover_bounds,
-)
+from .pre_correlation import pre_self_correlation_eligibility
 from .proposal_contract import (
     SETTING_OVERRIDES,
 )
 from .proposal_execution import ProposalExecutionHooks
 from .research_evidence import ResearchEvidenceBundle, classify_research
+from .research_planning import (
+    form_research_space,
+    iterate_best_hypothesis,
+    select_exploration_seed,
+)
 from .runtime_components import build_runtime_components
 from .runtime_composition import AgentWorkflowHooks, build_agent_workflows
 from .runtime_policy import build_agent_runtime_policy
@@ -716,22 +718,7 @@ class Agent:
         selected field descriptions and must cite them verbatim.
         """
         seed = self._form_hypothesis(round_no)
-        datasets = list(seed.get("datasets") or seed.get("dataset_hints") or [])
-        # The configured pool is a real sampling scope, not merely a hint in
-        # the prompt.  Include the complete pool while preserving the seed's
-        # research direction; discovery will stratify it and record failures.
-        for dataset_id in self.dataset_pool:
-            if dataset_id not in datasets:
-                datasets.append(dataset_id)
-        if not datasets:
-            datasets = list(self.dataset_pool)
-        return {
-            "id": seed.get("id", f"space-r{round_no}"),
-            "statement": "Which low-usage, semantically documented fields can test a new mechanism?",
-            "tags": list(seed.get("tags") or []),
-            "datasets": datasets,
-            "parent_best": seed.get("parent_best"),
-        }
+        return form_research_space(round_no, seed, self.dataset_pool)
 
     def _form_hypothesis(self, round_no):
         """Prefer iterating on current best; when that branch is exhausted
@@ -777,39 +764,12 @@ class Agent:
 
     def _exploration_seed(self, round_no):
         """Rotate through non-analyst4 families once best is submit-blocked."""
-        return dict(EXPLORATION_HYPOTHESES[round_no % len(EXPLORATION_HYPOTHESES)])
+        return select_exploration_seed(round_no, EXPLORATION_HYPOTHESES)
 
     def _iterate_best_hypothesis(self, round_no, best=None):
         best = best or self._trusted_current_best()
-        metrics = best.get("metrics") or {}
-        sharpe = metrics.get("sharpe")
-        direction = "reversal" if (sharpe is not None and sharpe < 0) else "long"
-        fields = best.get("fields_used") or []
-        datasets = best.get("datasets") or []
-        tags = ["iterate", "best"]
-        if fields:
-            tags.append(fields[0])
-
         idea = self.memory.next_with_fields(round_no)
-        if idea:
-            statement = (
-                f"{idea['idea']} (iterating on current best: {best['expression']})"
-            )
-            if idea.get("datasets"):
-                datasets = sorted(set(datasets) | set(idea["datasets"]))
-        else:
-            statement = (
-                f"Iterate on current best {best['expression']} with bounded "
-                f"single-variable mutations."
-            )
-        return {
-            "id": f"h-iter-r{round_no}",
-            "statement": statement,
-            "tags": tags,
-            "direction": direction,
-            "datasets": datasets,
-            "parent_best": best.get("id"),
-        }
+        return iterate_best_hypothesis(round_no, best, idea)
 
     def _ensure_best_field(self, fields):
         best = self._trusted_current_best()
@@ -1555,47 +1515,11 @@ class Agent:
         return result
 
     def _alpha_rating(self, metrics):
-        """Internal Excellent/Spectacular discipline from AGENTS.md."""
-        required = ("sharpe", "turnover", "fitness", "margin")
-        if any(metrics.get(key) is None for key in required):
-            return "UNRATED"
-        sharpe = num(metrics["sharpe"])
-        turnover = num(metrics["turnover"])
-        fitness = num(metrics["fitness"])
-        margin = num(metrics["margin"])
-        if any(value is None for value in (sharpe, turnover, fitness, margin)):
-            return "UNRATED"
-        excellent = self.quality_policy.get("excellent", {})
-        spectacular = self.quality_policy.get("spectacular", {})
-        if not isinstance(excellent, dict):
-            excellent = {}
-        if not isinstance(spectacular, dict):
-            spectacular = {}
-        def threshold(policy, name, default):
-            value = num(policy.get(name, default))
-            return default if value is None else value
-        # Platform margins are fractional values; thresholds live in config.
-        if (sharpe > threshold(spectacular, "min_sharpe", 2.0)
-                and threshold(spectacular, "min_turnover", 0.10) <= turnover <= threshold(spectacular, "max_turnover", 0.20)
-                and fitness > threshold(spectacular, "min_fitness", 2.5)
-                and margin > threshold(spectacular, "min_margin", 0.0006)):
-            return "SPECTACULAR"
-        if (sharpe > threshold(excellent, "min_sharpe", 1.58)
-                and threshold(excellent, "min_turnover", 0.049) <= turnover <= threshold(excellent, "max_turnover", 0.30)
-                and fitness > threshold(excellent, "min_fitness", 1.5)
-                and margin > threshold(excellent, "min_margin", 0.0004)):
-            return "EXCELLENT"
-        # Delay-aware 过线纪律：delay 0 与 delay 1 的门槛不同，未知 delay 不晋级。
-        thresholds = delay_metric_thresholds(
-            (self.simulation_settings or {}).get("delay")
+        return alpha_rating(
+            metrics,
+            self.quality_policy,
+            delay=(getattr(self, "simulation_settings", None) or {}).get("delay"),
         )
-        min_turnover, max_turnover = turnover_bounds(self.quality_policy)
-        if (thresholds is not None
-                and sharpe > thresholds["sharpe"]
-                and min_turnover <= turnover <= max_turnover
-                and fitness > thresholds["fitness"]):
-            return "GOOD"
-        return "BELOW_GOOD"
 
     def _print_summary(self, summary, elapsed=None):
         print(
