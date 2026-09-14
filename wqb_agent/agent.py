@@ -214,9 +214,6 @@ class Agent:
                 set_last_round_skipped=lambda value: setattr(
                     self, "_last_round_skipped", value
                 ),
-                reset_best_exhausted=lambda: setattr(
-                    self.memory, "best_exhausted", False
-                ),
             ),
             alpha_feed=AlphaFeedHooks(
                 get_all_user_alphas=getattr(

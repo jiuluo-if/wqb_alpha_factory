@@ -246,8 +246,12 @@ schema vocabulary owner，而 `proposal_contract.py` 保留兼容 facade re-expo
 改为 owner-local exact SQLite membership projection：JSONL 先 append+fsync，索引失败只使 projection
 invalid 并触发后续 rebuild，不重写第二条 durable event；启动、文件签名变化和外部 owner append 都会重建。
 
-当前静态计量为 `Agent` 1,600 行/78 defs、`ProposalExecutionWorkflow` 1,327 行/24 defs、
-`AIFactoryRunner` 1,679 行/54 defs、`proposal_contract.py` 670 行/14 defs。离线基准命令为
+当前静态计量为 `Agent` 1,577 行/77 defs、`ProposalExecutionWorkflow` 1,342 行/24 defs、
+`ProposalExecutionHooks` 19 callbacks、`AIFactoryRunner` 1,576 行/51 defs、
+`proposal_contract.py` 45 行/0 defs、`proposal_batch.py` 236 行/5 defs、
+`proposal_validation.py` 344 行/9 defs。相对本阶段早期 snapshot，已删除 3 个执行 hooks、
+3 个 checkpoint forwarding wrappers、3 个 FactoryRunner probe wrappers，并移除 Agent 的
+candidate-rejection forwarding method。离线基准命令为
 `python scripts/benchmark_local_io.py --rows 10000,100000,500000 --workloads trial_ledger_startup,trial_ledger_append --repeat 1`：
 
 | rows | startup rebuild ms | append ms | startup/append Python peak KB |

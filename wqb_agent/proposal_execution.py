@@ -82,7 +82,6 @@ class ProposalExecutionHooks:
     write_sims_results: Callable[..., None]
     validation_candidates: Callable[[], Any]
     set_last_round_skipped: Callable[[bool], None]
-    reset_best_exhausted: Callable[[], None]
 
 
 @dataclass(frozen=True)
@@ -961,7 +960,7 @@ class ProposalExecutionWorkflow:
             hooks.write_context()
             return None
         hooks.set_last_round_skipped(False)
-        hooks.reset_best_exhausted()
+        ctx.memory.best_exhausted = False
         self.last_run_stats = {
             "accepted": len(fresh),
             "rejected": len(rejected) + len(diversity_rejected) + len(settings_rejected),
