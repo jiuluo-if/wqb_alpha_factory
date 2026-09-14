@@ -96,3 +96,42 @@ CONTROL_TOKENS = frozenset({
 }) | SESSION_STATUSES | SESSION_ACTIONS | RESULT_STATUSES | frozenset(
     BLOCKER_STOP_ACTIONS.values()
 )
+
+
+def begin_route_episode(session, round_no):
+    """Reset route-local observations when the round changes."""
+    if session.get("route_episode_round") == round_no:
+        return
+    session["route_episode_round"] = round_no
+    session["route_attempt"] = 0
+    session["no_gain_attempts"] = 0
+    session["last_feasibility_check"] = None
+    session["last_budget_probe"] = None
+    session["last_preflight_probe"] = None
+
+
+def finish_route_episode(session, round_no):
+    """Clear route-local observations after an episode settles."""
+    session["route_episode_round"] = round_no
+    session["route_attempt"] = 0
+    session["no_gain_attempts"] = 0
+    session["last_feasibility_check"] = None
+    session["last_budget_probe"] = None
+    session["last_preflight_probe"] = None
+
+
+def advance_route_episode(session):
+    """Project a bounded route transition; persistence stays in the runner."""
+    round_no = session.get("last_round")
+    begin_route_episode(session, round_no)
+    finish_route_episode(session, round_no)
+    session["last_action"] = "ADVANCE_ROUTE_EPISODE"
+    try:
+        probe_offset = max(0, int(session.get("probe_offset", 0)))
+    except (TypeError, ValueError):
+        probe_offset = 0
+    session["last_result"] = {
+        "round_no": round_no,
+        "status": "ADVANCE_ROUTE_EPISODE",
+        "probe_offset": probe_offset,
+    }

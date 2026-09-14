@@ -37,6 +37,9 @@ from .factory_control import (
     SESSION_ACTIONS,
     SESSION_STATUSES,
     TERMINAL_RECONCILE_ACTIONS,
+    advance_route_episode,
+    begin_route_episode,
+    finish_route_episode,
 )
 from .factory_probe import route_probe_projection, selection_probe
 from .factory_quota import (
@@ -147,38 +150,6 @@ class AIFactoryRunner:
             kind, probe, now=now, previous=session.get("blocker"),
             recheck_sec=config.get("blocker_recheck_sec", self.BLOCKER_RECHECK_SEC),
         )
-
-    @staticmethod
-    def _begin_route_episode(session, round_no):
-        if session.get("route_episode_round") == round_no:
-            return
-        session["route_episode_round"] = round_no
-        session["route_attempt"] = 0
-        session["no_gain_attempts"] = 0
-        session["last_feasibility_check"] = None
-        session["last_budget_probe"] = None
-        session["last_preflight_probe"] = None
-
-    @staticmethod
-    def _finish_route_episode(session, round_no):
-        session["route_episode_round"] = round_no
-        session["route_attempt"] = 0
-        session["no_gain_attempts"] = 0
-        session["last_feasibility_check"] = None
-        session["last_budget_probe"] = None
-        session["last_preflight_probe"] = None
-
-    @classmethod
-    def _advance_route_episode(cls, session):
-        round_no = session.get("last_round")
-        cls._begin_route_episode(session, round_no)
-        cls._finish_route_episode(session, round_no)
-        session["last_action"] = "ADVANCE_ROUTE_EPISODE"
-        session["last_result"] = {
-            "round_no": round_no,
-            "status": "ADVANCE_ROUTE_EPISODE",
-            "probe_offset": cls._safe_nonnegative_count(session.get("probe_offset")),
-        }
 
     @staticmethod
     def route_decision(previous_probe, current_probe, *, route_attempt,
@@ -372,7 +343,7 @@ class AIFactoryRunner:
                 self._save_session(session)
                 return session
             if blocker.get("kind") == "BUDGET_SHORTAGE":
-                self._advance_route_episode(session)
+                advance_route_episode(session)
                 session.pop("blocker", None)
                 session["status"] = "RUNNING"
                 self._save_session(session)
@@ -587,7 +558,7 @@ class AIFactoryRunner:
                 session["last_result"] = self._compact_result(
                     session.get("last_round"), result, proposal_count
                 )
-                self._finish_route_episode(session, session.get("last_round"))
+                finish_route_episode(session, session.get("last_round"))
                 self._save_session(session)
                 continue
             foreign = self._unfinished_checkpoint()
@@ -663,7 +634,7 @@ class AIFactoryRunner:
                 session["last_result"] = self._compact_result(
                     checkpoint_round, recovery_result, self._checkpoint_experiment_count(foreign)
                 )
-                self._finish_route_episode(session, checkpoint_round)
+                finish_route_episode(session, checkpoint_round)
                 self._save_session(session)
 
             if round_cap and session["rounds_completed"] >= round_cap:
@@ -678,7 +649,7 @@ class AIFactoryRunner:
                 break
 
             round_no = self.agent.next_round_no()
-            self._begin_route_episode(session, round_no)
+            begin_route_episode(session, round_no)
             try:
                 probe_offset = max(0, int(session.get("probe_offset", 0)))
             except (TypeError, ValueError):
@@ -1076,7 +1047,7 @@ class AIFactoryRunner:
             session["rounds_completed"] += 1
             session["last_action"] = "ROUND_COMPLETE"
             session["last_result"] = self._compact_result(round_no, result, len(proposals))
-            self._finish_route_episode(session, round_no)
+            finish_route_episode(session, round_no)
             self._save_session(session)
 
         if session["status"] == "RUNNING":

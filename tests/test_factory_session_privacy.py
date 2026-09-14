@@ -10,6 +10,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+from wqb_agent.factory_control import advance_route_episode, finish_route_episode
 from wqb_agent.factory_probe import route_probe_projection
 from wqb_agent.factory_runner import (
     AIFactoryRunner,
@@ -111,7 +112,7 @@ class TestFactorySessionPrivacy(unittest.TestCase):
             "last_preflight_probe": {"failure_taxonomy": "READY"},
             "quota": {"weekly_reserved": 7},
         }
-        AIFactoryRunner._finish_route_episode(session, 3)
+        finish_route_episode(session, 3)
         self.assertEqual(session["route_attempt"], 0)
         self.assertEqual(session["no_gain_attempts"], 0)
         self.assertIsNone(session["last_feasibility_check"])
@@ -127,7 +128,7 @@ class TestFactorySessionPrivacy(unittest.TestCase):
             "simulations_reserved": 9,
             "last_budget_probe": {"dataset_route": ["private-dataset"]},
         }
-        AIFactoryRunner._advance_route_episode(session)
+        advance_route_episode(session)
         self.assertEqual(session["last_action"], "ADVANCE_ROUTE_EPISODE")
         self.assertEqual(session["probe_offset"], 2)
         self.assertEqual(session["simulations_reserved"], 9)
