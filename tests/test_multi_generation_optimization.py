@@ -188,7 +188,9 @@ class TestMultiGenerationOptimization(unittest.TestCase):
         self.assertEqual(row_c1["final_outcome"], c1.final_outcome)
         self.assertEqual(row_c1["incremental_evidence"], c1.incremental_evidence)
         flow2 = self.workflow(reader2.trajectory)
-        self.assertEqual(flow2._parent_rejections(row_c1), [])
+        from wqb_agent.optimizer_selection import parent_rejections
+
+        self.assertEqual(parent_rejections(row_c1), [])
         parent_ids = [item["parent_id"] for item in flow2.inspect_optimizer_parents()] 
         self.assertIn("e1", parent_ids)
 

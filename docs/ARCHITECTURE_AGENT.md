@@ -220,11 +220,12 @@ metadata acquisition 与编排；parent evidence gate 位于 `optimizer_selectio
 known progress URL GET-only contract 未改变。
 
 基线（Phase II 收口后 `f7735a9`）为 92 个 production Python 文件 / 30340 行、96 个
-测试文件 / 24543 行；本阶段收口为 98 / 30383 与 96 / 24552。重点 owner 当前指标为：
-`discovery.py` 1217 行（35 函数，1 类），`memory.py` 1139 行（50 函数，2 类），
-`reflection.py` 881 行（26 函数，1 类），`optimizer_workflow.py` 1064 行（34 函数，
-3 类），`state.py` 977 行、`client.py` 945 行。新增纯模块合计 376 行、19 函数、0 类；
-删除旧实现 377 行，净 production 增长来自显式边界和契约测试。
+测试文件 / 24543 行；当前收口为 101 个 production Python 文件 / 30413 行、96 个
+测试文件 / 24577 行。重点 owner 当前指标为：`discovery.py` 1174 行（31 函数，1 类），
+`memory.py` 1101 行（48 函数，2 类），`reflection.py` 844 行（26 函数，1 类），
+`optimizer_workflow.py` 1041 行（33 函数，3 类），`state.py` 977 行、`client.py` 945
+行。新增纯模块合计 547 行、34 函数、0 类；相对基线删除旧实现 809 行、增加显式
+边界与契约代码 747 行，净变化包含本轮 architecture tests 与文档/映射开销。
 
 本阶段未对 `state.py` 做风险性 wholesale 拆分，也未宣称未建立的性能收益；仅完成离线
 AST/LOC 结构计量。Phase III 影响范围的定向映射测试共 333 个通过；最终 Ruff、九个

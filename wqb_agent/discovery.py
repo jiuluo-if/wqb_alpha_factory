@@ -645,23 +645,6 @@ class FieldDiscovery:
         }
         self._save_disk_cache()
 
-    def _score_components(self, field, keywords):
-        return score_components(field, keywords, self._alpha_count(field))
-
-    @staticmethod
-    def _keyword_contribution(haystack_id, haystack_name, haystack_desc, keywords):
-        return keyword_contribution(
-            haystack_id, haystack_name, haystack_desc, keywords
-        )
-
-    def _score_field(self, field, keywords):
-        components = self._score_components(field, keywords)
-        return (
-            components["keyword_contribution"]
-            + components["coverage_contribution"]
-            - components["alpha_count_penalty"]
-        )
-
     @staticmethod
     def _dataset_id(field):
         dataset = field.get("dataset")
@@ -1025,16 +1008,16 @@ class FieldDiscovery:
             haystack_id = str(field.get("id") or "").lower()
             haystack_name = str(field.get("name") or "").lower()
             haystack_desc = str(field.get("description") or "").lower()
-            keyword_contribution = self._keyword_contribution(
+            keyword_score = keyword_contribution(
                 haystack_id, haystack_name, haystack_desc, keywords
             )
-            if self.selection_mode == "semantic" and keyword_contribution <= 0:
+            if self.selection_mode == "semantic" and keyword_score <= 0:
                 continue
             coverage = normalize_coverage(field)
             coverage_score = (
                 0.0 if coverage is None else min(2.0, max(0.0, coverage * 2.0))
             )
-            cheap_score = keyword_contribution + coverage_score
+            cheap_score = keyword_score + coverage_score
             if cheap_score <= 0 and self.selection_mode not in {
                 "random", "semantic_random", "broad"
             }:
@@ -1062,7 +1045,7 @@ class FieldDiscovery:
 
         ranked = []
         for _cheap_rank, noise, field, actual_dataset, _field_id in cheap_candidates:
-            components = self._score_components(field, keywords)
+            components = score_components(field, keywords, self._alpha_count(field))
             score = (
                 components["keyword_contribution"]
                 + components["coverage_contribution"]

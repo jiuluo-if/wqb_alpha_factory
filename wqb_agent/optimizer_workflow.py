@@ -202,7 +202,7 @@ def optimization_eligibility_map(parents):
         if key in (None, ""):
             continue
         plain = dict(record)
-        reasons = list(OptimizerWorkflow._parent_rejections(plain))
+        reasons = list(parent_rejections(plain))
         decision = _decision_for_parent(plain)
         result[str(key)] = {
             "eligible": not reasons,
@@ -240,10 +240,6 @@ class OptimizerWorkflow:
         self.hooks = hooks
         self.last_handoff_report: dict[str, int] = {}
 
-    @staticmethod
-    def _parent_rejections(parent):
-        return parent_rejections(parent)
-
     def optimizable_signal_records(self, limit=128):
         """返回 trajectory 中已有 DONE 证据，并按 cloud metadata 排序。"""
         records = []
@@ -251,7 +247,7 @@ class OptimizerWorkflow:
         cloud_ids = self._cloud_alpha_ids()
         for position, exp in enumerate(reversed(self.trajectory.recent(limit))):
             record = exp.to_dict()
-            reasons = self._parent_rejections(record)
+            reasons = parent_rejections(record)
             if reasons:
                 rejected += 1
                 continue
@@ -350,10 +346,6 @@ class OptimizerWorkflow:
         delay = hook() if callable(hook) else None
         return delay, self.quality_policy
 
-    @staticmethod
-    def _optimization_priority(summary):
-        return optimization_priority(summary, _READINESS_PRIORITY)
-
     def _bounded_parent_summaries(self, limit):
         """有限、只读的 (record, summary) 对；不泄漏无限历史。"""
         self.hooks.ensure_loaded()
@@ -367,14 +359,14 @@ class OptimizerWorkflow:
             if not isinstance(record, Mapping):
                 continue
             record = dict(record)
-            if self._parent_rejections(record):
+            if parent_rejections(record):
                 continue
             record = self._overlay_resolved_correlation(record)
             summary = summarize_parent(
                 record, delay=delay, quality_policy=quality_policy
             )
             rows.append((record, summary))
-        rows.sort(key=lambda row: self._optimization_priority(row[1]))
+        rows.sort(key=lambda row: optimization_priority(row[1], _READINESS_PRIORITY))
         return rows[:limit]
 
     def _overlay_resolved_correlation(self, record):
@@ -639,7 +631,7 @@ class OptimizerWorkflow:
                 continue
             report["done_parent_count"] += 1
             record = parent if isinstance(parent, dict) else parent.to_dict()
-            evidence = list(self._parent_rejections(record))
+            evidence = list(parent_rejections(record))
             missing = list(evidence)
             decision = _decision_for_parent(record)
             # Readiness needs an Agent-authored *CHILD* decision: either the
@@ -917,7 +909,7 @@ class OptimizerWorkflow:
                                          "decision_id": optimization_decision_identity(decision),
                                          "_optimization_decision_index": decision_index})
                 continue
-            reasons = list(self._parent_rejections(parent))
+            reasons = list(parent_rejections(parent))
             if not reasons and decision.is_validate:
                 request, validation_reasons = self._resolve_validation_request(
                     decision, parent
