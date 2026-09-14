@@ -69,6 +69,24 @@ class RecordingFactory:
 
 
 class TestOptimizerWorkflow(unittest.TestCase):
+    def test_optimizable_records_use_one_trajectory_snapshot(self):
+        class CountingTrajectory(FakeTrajectory):
+            def __init__(self, rows):
+                super().__init__(rows)
+                self.recent_calls = 0
+
+            def recent(self, limit):
+                self.recent_calls += 1
+                return super().recent(limit)
+
+        row = SimpleNamespace(
+            status="DONE", alpha_id="a",
+            to_dict=lambda: _parent("rank(a)", alpha_id="a"),
+        )
+        trajectory = CountingTrajectory([row])
+        self.workflow(trajectory).optimizable_signal_records()
+        self.assertEqual(trajectory.recent_calls, 1)
+
     def test_done_parent_requires_complete_local_evidence_contract(self):
         incomplete = _parent()
         incomplete.pop("economic_mechanism")

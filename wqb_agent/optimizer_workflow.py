@@ -245,7 +245,8 @@ class OptimizerWorkflow:
         records = []
         rejected = 0
         cloud_ids = self._cloud_alpha_ids()
-        for position, exp in enumerate(reversed(self.trajectory.recent(limit))):
+        experiments = list(self.trajectory.recent(limit))
+        for position, exp in enumerate(reversed(experiments)):
             record = exp.to_dict()
             reasons = parent_rejections(record)
             if reasons:
@@ -272,7 +273,7 @@ class OptimizerWorkflow:
         )
         self.last_handoff_report = {
             "simulation_done": sum(
-                1 for exp in self.trajectory.recent(limit)
+                1 for exp in experiments
                 if str(getattr(exp, "status", "")).upper() == "DONE"
             ),
             "trajectory_recorded": len(records),
