@@ -73,6 +73,9 @@ DIRECT_TESTS = {
         "tests/test_proposal_execution.py",
         "tests/test_research_loop.py",
     ),
+    "wqb_agent/weekly_quota.py": (
+        "tests/test_factory_boundaries.py",
+    ),
     "wqb_agent/config.py": (
         "tests/test_runtime_config_boundary.py",
         "tests/test_runtime_safety.py",
