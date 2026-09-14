@@ -17,6 +17,7 @@ from typing import Any
 
 from .artifacts import append_jsonl_best_effort, iter_jsonl_objects
 from .diversity import extract_fields, is_redundant
+from .execution_recovery import merge_checkpoint_with_trajectory
 from .expression import canonical_expression, submission_fingerprint
 from .identity import candidate_identity
 from .proposal_contract import (
@@ -42,6 +43,7 @@ from .state import (
     ResearchState,
     same_execution_identity,
 )
+from .terminal_evidence import failure_category, has_full_terminal_evidence
 
 
 @dataclass(frozen=True)
@@ -211,31 +213,11 @@ class ProposalExecutionWorkflow:
     @staticmethod
     def _has_full_terminal_evidence(experiment):
         """Return whether a terminal row is safe for research consumers."""
-        status = str(getattr(experiment, "status", "") or "").upper()
-        if status == "DONE":
-            return isinstance(getattr(experiment, "metrics", None), dict) and bool(
-                experiment.metrics
-            )
-        if status == "FAILED":
-            return bool(getattr(experiment, "error", None))
-        if status in {"SKIPPED", "SKIPPED_STALE", "SKIPPED_UNKNOWN"}:
-            return bool(getattr(experiment, "skip_record", None) or getattr(experiment, "error", None))
-        return False
+        return has_full_terminal_evidence(experiment)
 
     @staticmethod
     def _failure_category(experiment):
-        if str(getattr(experiment, "status", "") or "").upper() != "FAILED":
-            return None
-        error = str(getattr(experiment, "error", "") or "").upper()
-        if any(token in error for token in (
-            "TIMEOUT", "RATE_LIMIT", "AUTH", "INFRA", "NETWORK", "HTTP",
-        )):
-            return "INFRA"
-        if any(token in error for token in (
-            "SIMULATION REJECTED", "SYNTAX", "INVALID SETTINGS", "INVALID FIELD",
-        )):
-            return "RESEARCH"
-        return None
+        return failure_category(experiment)
 
     def _canonical_rows_for(self, experiments):
         ids = [experiment.id for experiment in experiments]
@@ -277,28 +259,12 @@ class ProposalExecutionWorkflow:
     def _merge_checkpoint_with_trajectory(self, experiments, round_no):
         """Monotonically merge checkpoint execution rows with canonical rows."""
         rows = self._canonical_rows_for(experiments)
-        merged = []
-        for experiment in experiments:
-            row = rows.get(experiment.id)
-            if row is not None and not same_execution_identity(experiment.to_dict(), row):
-                raise ValueError(
-                    f"CHECKPOINT_TRAJECTORY_IDENTITY_MISMATCH: round {round_no} experiment {experiment.id}"
-                )
-            if row is not None:
-                canonical = Experiment.from_dict(row)
-                if canonical.status in TERMINAL_STATUSES and self._has_full_terminal_evidence(canonical):
-                    merged.append(canonical)
-                    continue
-            if experiment.status in TERMINAL_STATUSES:
-                if not experiment.progress_url:
-                    raise ValueError(
-                        f"TERMINAL_EVIDENCE_UNRECOVERABLE: round {round_no} experiment {experiment.id}"
-                    )
-                # A sparse terminal checkpoint with a durable remote identity
-                # is repolled, never POSTed again.
-                experiment.status = "RUNNING"
-            merged.append(experiment)
-        return merged
+        return merge_checkpoint_with_trajectory(
+            experiments,
+            rows,
+            round_no,
+            terminal_statuses=TERMINAL_STATUSES,
+        )
 
     def _finalize_round_projection(self, round_no, hypothesis, experiments,
                                    *, total_elapsed_sec=None,

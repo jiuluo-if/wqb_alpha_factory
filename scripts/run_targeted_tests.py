@@ -140,6 +140,16 @@ DIRECT_TESTS = {
         "tests/test_runtime_safety.py",
         "tests/test_search_policy.py",
     ),
+    "wqb_agent/terminal_evidence.py": (
+        "tests/test_execution_projections.py",
+        "tests/test_proposal_execution.py",
+        "tests/test_recovery.py",
+    ),
+    "wqb_agent/execution_recovery.py": (
+        "tests/test_execution_projections.py",
+        "tests/test_recovery.py",
+        "tests/test_proposal_execution.py",
+    ),
     "wqb_agent/simulator.py": (
         "tests/test_simulator.py",
         "tests/test_proposal_execution.py",
