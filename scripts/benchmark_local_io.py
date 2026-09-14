@@ -22,6 +22,7 @@ import os
 import random
 import sys
 import tempfile
+import tracemalloc
 import time
 from pathlib import Path
 
@@ -336,6 +337,27 @@ def workload_trial_ledger_append(rows, root, codec):
     return run
 
 
+def workload_trial_ledger_startup(rows, root, codec):
+    """Measure rebuilding the transient membership index from JSONL."""
+    directory = os.path.join(root, f"trial_ledger_startup_{rows}")
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, "trial_ledger.jsonl")
+    with open(path, "w", encoding="utf-8") as handle:
+        for index in range(rows):
+            handle.write(json.dumps({
+                "event_id": f"synthetic-{index:08d}",
+                "phase": "candidate_generated",
+                "candidate_id": f"candidate-{index:08d}",
+            }) + "\n")
+
+    def run():
+        ledger = TrialLedger(path)
+        ledger.initialize_history_completeness(path)
+        ledger._close_membership_db_unlocked()
+
+    return run
+
+
 def workload_discovery_local_catalog(rows, root, codec):
     base = _load_catalog(root, rows)
     cache_path = os.path.join(base, "fields_cache.json")
@@ -382,6 +404,7 @@ WORKLOADS = {
     "artifacts_write_json_unchanged": workload_artifacts_write_json_unchanged,
     "artifacts_write_jsonl_unchanged": workload_artifacts_write_jsonl_unchanged,
     "trial_ledger_append": workload_trial_ledger_append,
+    "trial_ledger_startup": workload_trial_ledger_startup,
     "discovery_local_catalog": workload_discovery_local_catalog,
     "discovery_disk_cache": workload_discovery_disk_cache,
     "jsonl_decode": workload_jsonl_decode,
@@ -397,11 +420,17 @@ def _p95(samples):
 def _measure(run, repeat):
     run()  # warmup, never reported
     samples = []
+    peak_bytes = 0
     for _ in range(repeat):
+        tracemalloc.start()
+        tracemalloc.reset_peak()
         start = time.perf_counter()
         run()
         samples.append((time.perf_counter() - start) * 1000.0)
-    return samples
+        _, current_peak = tracemalloc.get_traced_memory()
+        peak_bytes = max(peak_bytes, current_peak)
+        tracemalloc.stop()
+    return samples, peak_bytes / 1024.0
 
 
 def _parse_rows(raw):
@@ -443,7 +472,7 @@ def run_benchmarks(*, rows_list, workloads, codecs, repeat):
                     except SkipWorkload as exc:
                         print(f"skip {name} rows={rows} codec={codec}: {exc}", file=sys.stderr)
                         continue
-                    samples = _measure(run, repeat)
+                    samples, peak_kb = _measure(run, repeat)
                     results.append(
                         {
                             "workload": name,
@@ -451,6 +480,7 @@ def run_benchmarks(*, rows_list, workloads, codecs, repeat):
                             "implementation": codec,
                             "median_ms": statistics_median(samples),
                             "p95_ms": _p95(samples),
+                            "python_peak_kb": peak_kb,
                         }
                     )
     return results
@@ -466,12 +496,12 @@ def statistics_median(samples):
 
 def _format_table(results):
     lines = [
-        f"{'workload':<34}{'rows':>8}{'implementation':>16}{'median_ms':>12}{'p95_ms':>10}"
+        f"{'workload':<34}{'rows':>8}{'implementation':>16}{'median_ms':>12}{'p95_ms':>10}{'peak_kb':>12}"
     ]
     for row in results:
         lines.append(
             f"{row['workload']:<34}{row['rows']:>8}{row['implementation']:>16}"
-            f"{row['median_ms']:>12.3f}{row['p95_ms']:>10.3f}"
+            f"{row['median_ms']:>12.3f}{row['p95_ms']:>10.3f}{row['python_peak_kb']:>12.1f}"
         )
     return "\n".join(lines)
 

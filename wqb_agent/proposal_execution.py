@@ -18,6 +18,7 @@ from typing import Any
 from .artifacts import append_jsonl_best_effort, iter_jsonl_objects
 from .diversity import extract_fields, is_redundant
 from .execution_identity import ExecutionBindingIndex
+from .execution_plan import plan_checkpoint_disposition
 from .execution_recovery import merge_checkpoint_with_trajectory
 from .expression import canonical_expression, submission_fingerprint
 from .identity import candidate_identity
@@ -38,6 +39,7 @@ from .proposal_contract import (
     validate_targeted_batch,
     validate_vector_inputs,
 )
+from .proposal_inbox import parse_proposal_payload
 from .research_guard import ResearchLoopGuard, structural_family_key
 from .state import (
     OPERATOR_PROVENANCE_FIELDS,
@@ -343,30 +345,23 @@ class ProposalExecutionWorkflow:
             print(f"[PROPOSALS ERROR] {path} 顶层必须是对象（含 round_no/proposals）。")
             return None
 
-        raw_round_no = payload.get("round_no")
-        if raw_round_no is None:
-            round_no = hooks.next_round_no()
-        elif isinstance(raw_round_no, bool):
-            print("[PROPOSALS ERROR] round_no 必须是正整数；未执行任何提案。")
+        request, parse_errors = parse_proposal_payload(
+            payload, default_round_no=hooks.next_round_no()
+        )
+        if parse_errors:
+            for error in parse_errors:
+                print(f"[PROPOSALS ERROR] {error}；未执行任何提案。")
             return None
-        else:
-            try:
-                round_no = int(raw_round_no)
-            except (TypeError, ValueError):
-                print("[PROPOSALS ERROR] round_no 必须是正整数；未执行任何提案。")
-                return None
-            if round_no <= 0:
-                print("[PROPOSALS ERROR] round_no 必须是正整数；未执行任何提案。")
-                return None
+        round_no = request.round_no
         checkpoint_records = self._ctx.checkpoints.scan()
-        foreign_record = self._ctx.checkpoints.unfinished_record_except(
-            round_no, records=checkpoint_records
+        checkpoint_plan = plan_checkpoint_disposition(
+            checkpoint_records,
+            round_no,
+            allow_force=allow_unresolved_checkpoint,
         )
-        current_record = next(
-            (record for record in checkpoint_records
-             if record["round_no"] == round_no),
-            None,
-        )
+        foreign_record = checkpoint_plan.foreign
+        current_record = checkpoint_plan.current
+        checkpoint_path = self._ctx.checkpoints.path(round_no)
         if foreign_record and foreign_record.get("validation_code") not in (None,):
             print(
                 f"[CHECKPOINT BLOCKED] {os.path.basename(foreign_record['path'])} "
@@ -374,35 +369,31 @@ class ProposalExecutionWorkflow:
                 "force-new-round 不能绕过。"
             )
             return None
-        if foreign_record and not allow_unresolved_checkpoint:
-            print(
-                f"[CHECKPOINT BLOCKED] 存在未完成 {os.path.basename(foreign_record['path'])}；"
-                "必须先以原 proposals.json 恢复，禁止开启新轮。"
-            )
-            return None
-        if foreign_record and allow_unresolved_checkpoint:
-            print(
-                f"[FORCE NEW ROUND] 保留未完成 {os.path.basename(foreign_record['path'])} "
-                "及其原 progress_url；按用户明确授权开启新轮。"
-            )
-        checkpoint_path = self._ctx.checkpoints.path(round_no)
-        checkpoint = current_record.get("checkpoint") if current_record else None
-        if current_record and current_record.get("malformed"):
+        if checkpoint_plan.reason == "CURRENT_MALFORMED":
             print(
                 f"[CHECKPOINT ERROR] {checkpoint_path} 无法解析或轮次不匹配；"
                 "保留原文件，需先人工对账。"
             )
             return None
-        if checkpoint and checkpoint.get("complete") is not True:
+        if checkpoint_plan.disposition == "BLOCK":
+            print(
+                f"[CHECKPOINT BLOCKED] 存在未完成 {os.path.basename(foreign_record['path'])}；"
+                "必须先以原 proposals.json 恢复，禁止开启新轮。"
+            )
+            return None
+        if checkpoint_plan.disposition == "FORCE_NEW_AUTHORIZED":
+            print(
+                f"[FORCE NEW ROUND] 保留未完成 {os.path.basename(foreign_record['path'])} "
+                "及其原 progress_url；按用户明确授权开启新轮。"
+            )
+        checkpoint = current_record.get("checkpoint") if current_record else None
+        if checkpoint_plan.disposition == "RESUME":
             return self.resume_checkpoint(checkpoint)
-        if checkpoint and checkpoint.get("complete") is True:
+        if checkpoint_plan.disposition == "COMPLETE":
             print(f"[CHECKPOINT COMPLETE] round {round_no} 已完成；不重新派发其中的 proposals。")
             return None
 
-        proposal_list = payload.get("proposals") or []
-        if not isinstance(proposal_list, list):
-            print("[PROPOSALS ERROR] proposals 必须是数组；未执行任何提案。")
-            return None
+        proposal_list = list(request.proposals)
         if not proposal_list:
             print("No proposals in file; nothing to run.")
             return None
@@ -441,7 +432,7 @@ class ProposalExecutionWorkflow:
                 }
                 return None
 
-        hypothesis = payload.get("hypothesis")
+        hypothesis = request.hypothesis
         if hypothesis is None:
             hypothesis = {
                 "id": f"h-llm-r{round_no}",
