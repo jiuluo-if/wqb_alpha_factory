@@ -168,7 +168,7 @@ class ProposalExecutionWorkflow:
 
         trajectory = self._ctx.trajectory
         if getattr(trajectory, "persist", True) and getattr(trajectory, "path", None):
-            rows = trajectory.iter_canonical_rows() or ()
+            rows = trajectory.iter_canonical_rows(strict=True) or ()
         else:
             rows = (experiment.to_dict() for experiment in getattr(trajectory, "experiments", ()))
         for row in rows:
@@ -549,7 +549,10 @@ class ProposalExecutionWorkflow:
             for item in proposal_list
             if isinstance(item, dict) and item.get("parent_id") not in (None, "")
         }
-        parent_rows = ctx.trajectory.find_rows(parent_ids) if parent_ids else {}
+        parent_rows = (
+            ctx.trajectory.find_rows(parent_ids, strict=True)
+            if parent_ids else {}
+        )
         legacy_parent_candidates = ctx.trajectory.find_completed_parent_candidates(
             [item.get("parent_expression") for item in proposal_list if isinstance(item, dict)]
         )

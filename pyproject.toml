@@ -37,6 +37,7 @@ include = ["wqb_agent*"]
 
 [tool.setuptools.package-data]
 "wqb_agent.alpha_templates" = ["catalog/*.toml"]
+"wqb_agent.reference" = ["*.md"]
 
 [tool.ruff.lint]
 select = [

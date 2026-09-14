@@ -44,7 +44,6 @@ from .pre_correlation import (
 )
 from .proposal_contract import (
     SETTING_OVERRIDES,
-    load_operator_syntax_reference,
 )
 from .proposal_execution import ProposalExecutionHooks
 from .research_evidence import ResearchEvidenceBundle, classify_research
@@ -141,13 +140,8 @@ class Agent:
         self._init_iteration_state()
         self._init_caches()
         self._init_heartbeat()
-        operator_path = os.path.abspath(
-            os.path.join(
-                os.path.dirname(__file__), "..", "docs", "reference",
-                "OPERATORS_CHEATSHEET.md",
-            )
-        )
-        self.operator_reference = load_operator_syntax_reference(operator_path)
+        from .proposal_contract import load_packaged_operator_syntax_reference
+        self.operator_reference = load_packaged_operator_syntax_reference()
         self._init_workflows()
 
     def _mutation_scope(self, operation):

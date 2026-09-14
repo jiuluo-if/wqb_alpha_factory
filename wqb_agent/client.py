@@ -34,6 +34,7 @@ import math
 import random
 import threading
 import time
+from urllib.parse import urljoin, urlparse, urlunsplit
 
 import requests
 
@@ -199,6 +200,32 @@ class WQBClient:
 
     def _set_authenticated(self, value):
         self._local.authenticated = value
+
+    def _normalize_progress_url(self, progress_url):
+        """Resolve and validate a progress URL before any network request."""
+        if not isinstance(progress_url, str) or not progress_url.strip():
+            raise WQBSimulationError("Progress URL is missing or malformed.")
+        base = urlparse(self.base_url)
+        resolved = urlparse(urljoin(self.base_url.rstrip("/") + "/", progress_url.strip()))
+        try:
+            base_port = base.port
+            resolved_port = resolved.port
+        except ValueError as exc:
+            raise WQBSimulationError("Progress URL has an invalid port.") from exc
+        base_effective_port = base_port or (443 if base.scheme == "https" else 80)
+        resolved_effective_port = resolved_port or (443 if resolved.scheme == "https" else 80)
+        if (
+            not base.scheme or not base.hostname or base.username or base.password
+            or not resolved.scheme or not resolved.hostname
+            or resolved.username or resolved.password or resolved.fragment
+            or (resolved.scheme, resolved.hostname.lower(), resolved_effective_port)
+            != (base.scheme, base.hostname.lower(), base_effective_port)
+        ):
+            raise WQBSimulationError(
+                "Progress URL must be same-origin and contain no credentials or fragment."
+            )
+        return urlunsplit((resolved.scheme, resolved.netloc, resolved.path or "/",
+                           resolved.query, ""))
 
     # ---- authentication ----
 
@@ -657,7 +684,13 @@ class WQBClient:
             raise WQBSubmitUnknownError(
                 "Simulation response missing Location header; backend acceptance is unknown."
             )
-        return location
+        try:
+            return self._normalize_progress_url(location)
+        except WQBError as exc:
+            raise WQBSubmitUnknownError(
+                "Simulation response contained an invalid progress Location; "
+                "backend acceptance is unknown."
+            ) from exc
 
     def poll_progress(self, progress_url, timeout_sec=1500, progress_callback=None):
         # MECHANISM_INVARIANT:
@@ -667,6 +700,7 @@ class WQBClient:
         400/403/404/422 fail fast (permanent), 401 re-auths, 429 honors
         Retry-After, 5xx backs off, and the overall deadline is enforced.
         """
+        progress_url = self._normalize_progress_url(progress_url)
         timeout_sec = _finite_nonnegative(timeout_sec, 1500.0)
         start = time.monotonic()
         polls = 0
@@ -771,6 +805,7 @@ class WQBClient:
         and the thread-local session inside the client while returning only a
         transport-neutral snapshot to the caller.
         """
+        progress_url = self._normalize_progress_url(progress_url)
         timeout = _finite_nonnegative(timeout, 60.0)
         start = time.monotonic()
         auth_attempts = 0

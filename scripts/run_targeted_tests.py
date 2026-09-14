@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 COMMON_CONTRACT_TESTS = (
     "tests/test_runtime_safety.py",
     "tests/test_agent_flow.py",
+    "tests/test_security_hardening_batch.py",
 )
 
 DIRECT_TESTS = {
@@ -34,6 +35,7 @@ DIRECT_TESTS = {
     "wqb_agent/client.py": (
         "tests/test_client_refactor.py",
         "tests/test_protocol_truth.py",
+        "tests/test_security_hardening_batch.py",
     ),
     "wqb_agent/protocol.py": ("tests/test_protocol_truth.py",),
     "wqb_agent/discovery.py": (
@@ -45,6 +47,9 @@ DIRECT_TESTS = {
         "tests/test_runtime_composition.py",
         "tests/test_research_api.py",
     ),
+    "wqb_agent/reference/__init__.py": (
+        "tests/test_security_hardening_batch.py",
+    ),
     "wqb_agent/candidate.py": (
         "tests/test_alpha_template_catalog.py",
         "tests/test_runtime_composition.py",
@@ -54,6 +59,7 @@ DIRECT_TESTS = {
         "tests/test_proposal_execution.py",
         "tests/test_runtime_composition.py",
         "tests/test_runtime_safety.py",
+        "tests/test_security_hardening_batch.py",
     ),
     "wqb_agent/checkpoints.py": (
         "tests/test_checkpoint_store.py",
@@ -79,6 +85,16 @@ DIRECT_TESTS = {
         "tests/test_settled_evidence_durability.py",
         "tests/test_trajectory_batch_reads.py",
         "tests/test_factory_provenance_persistence.py",
+        "tests/test_security_hardening_batch.py",
+    ),
+    "wqb_agent/artifacts.py": (
+        "tests/test_artifacts.py",
+        "tests/test_security_hardening_batch.py",
+    ),
+    "wqb_agent/validation_report.py": (
+        "tests/test_validation_report.py",
+        "tests/test_evaluation.py",
+        "tests/test_security_hardening_batch.py",
     ),
     "wqb_agent/memory.py": (
         "tests/test_memory_tiers.py",
@@ -132,6 +148,7 @@ DIRECT_TESTS = {
         "tests/test_factory_batch_contract.py",
         "tests/test_factory_provenance_persistence.py",
         "tests/test_targeted_batch_contract.py",
+        "tests/test_security_hardening_batch.py",
     ),
     "wqb_agent/optimizer_workflow.py": (
         "tests/test_optimizer_workflow.py",

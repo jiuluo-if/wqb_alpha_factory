@@ -223,12 +223,20 @@ def pbo_proxy(aligned_return_series, n_splits=4):
         splits = int(n_splits)
     except (TypeError, ValueError):
         splits = 0
-    if len(lengths) != 1 or not lengths or next(iter(lengths)) < 2 * splits or splits < 2 or splits % 2:
+    if len(lengths) != 1 or not lengths or next(iter(lengths)) < 2 * splits or splits < 4 or splits % 2:
         return annotate_evidence({"status": "UNAVAILABLE", "reason": "need equal aligned series and even CSCV splits >= 4"}, status="UNAVAILABLE")
     n_obs = next(iter(lengths))
+    if n_obs % splits:
+        return annotate_evidence(
+            {"status": "UNAVAILABLE",
+             "reason": "CSCV requires equal non-overlapping folds",
+             "n_observations": n_obs, "n_splits": splits},
+            status="UNAVAILABLE",
+        )
+    fold_size = n_obs // splits
+    folds = [range(i * fold_size, (i + 1) * fold_size) for i in range(splits)]
     logits = []
     for train_indices in itertools.combinations(range(splits), splits // 2):
-        folds = [range(i * (n_obs // splits), (i + 1) * (n_obs // splits)) for i in range(splits)]
         train = set(index for fold in train_indices for index in folds[fold])
         test = set(range(n_obs)) - train
         train_means = [statistics.fmean(row[i] for i in train) for row in rows]

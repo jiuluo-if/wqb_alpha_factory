@@ -14,6 +14,7 @@ execution, and state updates without owning every validation rule itself.
 import hashlib
 import os
 import re
+from importlib import resources
 
 from .discovery import profile_frequency_evidence
 from .diversity import extract_fields
@@ -357,6 +358,24 @@ def load_operator_syntax_reference(path):
     operators = sorted(set(re.findall(r"`([a-z][a-z0-9_]*)\s*\(", text)))
     return {
         "path": os.path.abspath(path),
+        "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "operators": operators,
+        "source": "STATIC_SYNTAX_REFERENCE",
+        "availability": "UNKNOWN",
+        "status": "UNKNOWN",
+        "evidence_status": "UNAVAILABLE",
+    }
+
+
+def load_packaged_operator_syntax_reference():
+    """Load the runtime syntax reference from the installed package."""
+    resource = resources.files("wqb_agent.reference").joinpath(
+        "OPERATORS_CHEATSHEET.md"
+    )
+    text = resource.read_text(encoding="utf-8")
+    operators = sorted(set(re.findall(r"`([a-z][a-z0-9_]*)\s*\(", text)))
+    return {
+        "path": "wqb_agent.reference/OPERATORS_CHEATSHEET.md",
         "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
         "operators": operators,
         "source": "STATIC_SYNTAX_REFERENCE",

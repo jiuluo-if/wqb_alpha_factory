@@ -14,6 +14,7 @@ import uuid
 from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
 
+from .artifacts import _fsync_parent_directory
 from .expression import canonical_expression, submission_fingerprint
 from .schema import CREATED_BY_VERSION, TRAJECTORY_VERSION
 
@@ -52,6 +53,10 @@ OPERATOR_PROVENANCE_FIELDS = (
 # (canonical first append plus settlement revisions), so a restart only needs
 # to read enough tail lines to reconstruct the recent in-memory window.
 _LOAD_LINES_PER_EXPERIMENT = 4
+
+
+class TrajectoryIntegrityError(RuntimeError):
+    """Canonical trajectory corruption that blocks safety-sensitive reads."""
 
 
 def same_execution_identity(left, right):
@@ -169,7 +174,7 @@ class Experiment:
     settings: dict
     fields_used: list
     datasets: list | None = None
-    id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    id: str = field(default_factory=lambda: uuid.uuid4().hex)
     candidate_id: object = None
     proposal_id: object = None
     submission_fingerprint: object = None
@@ -320,6 +325,12 @@ class Trajectory:
             return []
         candidate_ids = {experiment.id for experiment in experiments}
         known_ids = candidate_ids & self._recent_ids
+        existing_rows = {}
+        recent_rows = {
+            experiment.id: experiment.to_dict()
+            for experiment in self.experiments
+            if experiment.id in candidate_ids
+        }
         scoped_ids = set()
         if self._append_batch_scope is not None:
             scoped_ids = candidate_ids & self._append_batch_scope
@@ -327,10 +338,30 @@ class Trajectory:
         if self.path:
             uncached_ids = candidate_ids - known_ids - scoped_ids
             if uncached_ids:
-                known_ids.update(self.contains_ids(uncached_ids))
+                existing_rows = self.find_rows(uncached_ids, strict=True)
+                known_ids.update(
+                    experiment_id for experiment_id, row in existing_rows.items()
+                    if row is not None
+                )
+        batch_identities = {}
         added = []
         to_persist = []
         for experiment in experiments:
+            previous = batch_identities.get(experiment.id)
+            if previous is not None and not same_execution_identity(
+                previous, experiment.to_dict()
+            ):
+                raise TrajectoryIntegrityError(
+                    f"Experiment identity collision: {experiment.id}"
+                )
+            batch_identities[experiment.id] = experiment.to_dict()
+            existing = existing_rows.get(experiment.id) or recent_rows.get(experiment.id)
+            if existing is not None and not same_execution_identity(
+                existing, experiment.to_dict()
+            ):
+                raise TrajectoryIntegrityError(
+                    f"Experiment identity collision: {experiment.id}"
+                )
             if experiment.id in known_ids:
                 continue
             self.experiments.append(experiment)
@@ -357,7 +388,11 @@ class Trajectory:
         }
         known = scope & self._recent_ids
         if self.path and scope - known:
-            known.update(self.contains_ids(scope - known))
+            known.update(
+                experiment_id for experiment_id, row in self.find_rows(
+                    scope - known, strict=True
+                ).items() if row is not None
+            )
         self._append_batch_scope = scope
         self._append_batch_known = known
 
@@ -394,7 +429,7 @@ class Trajectory:
         candidate_ids = {item.id for item in pending}
         references = {}
         latest = {}
-        for row in self.iter_rows() or ():
+        for row in self.iter_rows(strict=True) or ():
             row_id = row.get("id")
             if row_id not in candidate_ids:
                 continue
@@ -444,6 +479,7 @@ class Trajectory:
         """Append a batch with one flush/fsync while preserving JSONL order."""
         if not experiments:
             return
+        new_file = not os.path.exists(self.path)
         with open(self.path, "a", encoding="utf-8") as f:
             for experiment in experiments:
                 row = experiment.to_dict()
@@ -452,12 +488,14 @@ class Trajectory:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
             f.flush()
             os.fsync(f.fileno())
+        if new_file:
+            _fsync_parent_directory(self.path)
 
     def contains_id(self, experiment_id):
         """Check an append-only trajectory id without materializing history."""
         return experiment_id in self.contains_ids({experiment_id})
 
-    def contains_ids(self, experiment_ids):
+    def contains_ids(self, experiment_ids, *, strict=False):
         """Find a set of IDs in one streaming pass over trajectory."""
         if not self.persist:
             return set()
@@ -473,7 +511,7 @@ class Trajectory:
             else None
         )
         found = set()
-        for row in self.iter_rows(prefilter=prefilter) or ():
+        for row in self.iter_rows(prefilter=prefilter, strict=strict) or ():
             row_id = row.get("id")
             if row_id in targets:
                 found.add(row_id)
@@ -487,7 +525,7 @@ class Trajectory:
             if row.get("id"):
                 yield row["id"]
 
-    def iter_rows(self, *, stats=None, prefilter=None):
+    def iter_rows(self, *, stats=None, prefilter=None, strict=False):
         """Stream valid raw trajectory objects without retaining history.
 
         This is a read-only primitive for bounded identity/audit passes.  It
@@ -505,23 +543,54 @@ class Trajectory:
             return
         if not self.path or not os.path.exists(self.path):
             return
-        matcher = literal_line_matcher(prefilter)
+        matcher = None if strict else literal_line_matcher(prefilter)
         try:
-            with open(self.path, encoding="utf-8") as handle:
-                for line in handle:
+            with open(self.path, "rb") as handle:
+                for line_number, raw_line in enumerate(handle, 1):
+                    final_partial = not raw_line.endswith(b"\n")
+                    try:
+                        line = raw_line.decode("utf-8-sig" if line_number == 1 else "utf-8")
+                    except UnicodeDecodeError as exc:
+                        if strict and final_partial:
+                            if isinstance(stats, dict):
+                                stats["torn_tail"] = stats.get("torn_tail", 0) + 1
+                            continue
+                        if strict:
+                            raise TrajectoryIntegrityError(
+                                f"trajectory line {line_number} is not UTF-8"
+                            ) from exc
+                        if isinstance(stats, dict):
+                            stats["invalid_rows"] = stats.get("invalid_rows", 0) + 1
+                        continue
                     if matcher and "\\" not in line and not _line_matches(matcher, line):
                         continue
                     try:
                         row = json.loads(line)
-                    except (ValueError, TypeError, json.JSONDecodeError):
+                    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                        if strict and final_partial:
+                            if isinstance(stats, dict):
+                                stats["torn_tail"] = stats.get("torn_tail", 0) + 1
+                            continue
+                        if strict:
+                            raise TrajectoryIntegrityError(
+                                f"malformed canonical trajectory line {line_number}"
+                            ) from exc
                         if isinstance(stats, dict):
                             stats["invalid_rows"] = stats.get("invalid_rows", 0) + 1
                         continue
                     if isinstance(row, dict):
                         yield row
+                    elif strict:
+                        raise TrajectoryIntegrityError(
+                            f"canonical trajectory line {line_number} is not an object"
+                        )
                     elif isinstance(stats, dict):
                         stats["invalid_rows"] = stats.get("invalid_rows", 0) + 1
-        except OSError:
+        except OSError as exc:
+            if strict:
+                raise TrajectoryIntegrityError(
+                    "cannot read canonical trajectory"
+                ) from exc
             return
 
     def find_completed_expression(self, expression):
@@ -558,7 +627,7 @@ class Trajectory:
             latest = row
         return latest
 
-    def find_rows(self, experiment_ids):
+    def find_rows(self, experiment_ids, *, strict=False):
         """Resolve several experiment identities with one streaming pass.
 
         ``find_row`` streams the append-only file per identity, so comparing a
@@ -584,16 +653,32 @@ class Trajectory:
         )
         references = {}
         latest = {}
-        for row in self.iter_rows(prefilter=prefilter) or ():
+        for row in self.iter_rows(prefilter=prefilter, strict=strict) or ():
             row_id = str(row.get("id"))
             if row_id in targets:
+                if references.get(row_id) is not None and not same_execution_identity(
+                    references[row_id], row
+                ):
+                    if strict:
+                        raise TrajectoryIntegrityError(
+                            f"Experiment identity collision: {row_id}"
+                        )
+                    continue
                 merge_canonical_candidate(references, latest, row_id, row)
             proposal_id = str(row.get("proposal_id"))
             if proposal_id in targets and proposal_id != row_id:
+                if references.get(proposal_id) is not None and not same_execution_identity(
+                    references[proposal_id], row
+                ):
+                    if strict:
+                        raise TrajectoryIntegrityError(
+                            f"Experiment identity collision: {proposal_id}"
+                        )
+                    continue
                 merge_canonical_candidate(references, latest, proposal_id, row)
         return {target: latest.get(target) for target in targets}
 
-    def iter_canonical_rows(self, *, since=None, until=None, stats=None):
+    def iter_canonical_rows(self, *, since=None, until=None, stats=None, strict=False):
         """Stream the latest valid canonical row per experiment identity.
 
         ``iter_rows`` intentionally yields the append-only revisions (an early
@@ -609,7 +694,7 @@ class Trajectory:
             return
         merged = {}
         read_stats = stats if isinstance(stats, dict) else {}
-        for row in self.iter_rows(stats=read_stats) or ():
+        for row in self.iter_rows(stats=read_stats, strict=strict) or ():
             row_id = row.get("id")
             if not row_id:
                 continue
@@ -623,6 +708,10 @@ class Trajectory:
                     continue
             reference = merged.get(row_id)
             if reference is not None and not same_execution_identity(reference, row):
+                if strict:
+                    raise TrajectoryIntegrityError(
+                        f"Experiment identity collision: {row_id}"
+                    )
                 read_stats["identity_mismatch_rows"] = read_stats.get(
                     "identity_mismatch_rows", 0
                 ) + 1
@@ -631,7 +720,7 @@ class Trajectory:
         for row in merged.values():
             yield row
 
-    def iter_canonical_round(self, round_no, *, stats=None):
+    def iter_canonical_round(self, round_no, *, stats=None, strict=False):
         """Stream one durable round as canonical Experiment revisions.
 
         The append-only trajectory is the evidence owner.  This helper makes
@@ -644,7 +733,7 @@ class Trajectory:
         result_stats = stats if isinstance(stats, dict) else {}
         references = {}
         latest = {}
-        for row in self.iter_rows(stats=result_stats) or ():
+        for row in self.iter_rows(stats=result_stats, strict=strict) or ():
             if row.get("round") != target_round:
                 continue
             row_id = row.get("id")
@@ -669,6 +758,10 @@ class Trajectory:
             if reference is not None and not same_execution_identity(
                 reference, normalized
             ):
+                if strict:
+                    raise TrajectoryIntegrityError(
+                        f"Experiment identity collision: {row_id}"
+                    )
                 result_stats["identity_mismatch_rows"] = result_stats.get(
                     "identity_mismatch_rows", 0
                 ) + 1
@@ -678,7 +771,7 @@ class Trajectory:
         for row in latest.values():
             yield row
 
-    def find_completed_expressions(self, expressions):
+    def find_completed_expressions(self, expressions, *, strict=False):
         """Resolve several old parents with one streaming history pass.
 
         Proposal batches commonly validate multiple CHILD/ROBUSTNESS entries.
@@ -700,27 +793,24 @@ class Trajectory:
         identities = {}
         if pending:
             try:
-                with open(self.path, encoding="utf-8") as handle:
-                    for line in handle:
-                        try:
-                            row = json.loads(line)
-                            if not isinstance(row, dict):
-                                continue
-                            target = canonical_expression(row.get("expression", ""))
-                            if target not in pending:
-                                continue
-                            if row.get("status") != "DONE" or not row.get("metrics"):
-                                continue
-                            row_id = row.get("id")
-                            reference = identities.get(row_id)
-                            if reference is not None and not same_execution_identity(
-                                reference, row
-                            ):
-                                continue
-                            identities[row_id] = row
-                            found[target] = Experiment.from_dict(row)
-                        except (ValueError, KeyError, TypeError, json.JSONDecodeError):
-                            continue
+                for row in self.iter_rows(strict=strict) or ():
+                    target = canonical_expression(row.get("expression", ""))
+                    if target not in pending:
+                        continue
+                    if row.get("status") != "DONE" or not row.get("metrics"):
+                        continue
+                    row_id = row.get("id")
+                    reference = identities.get(row_id)
+                    if reference is not None and not same_execution_identity(
+                        reference, row
+                    ):
+                        if strict:
+                            raise TrajectoryIntegrityError(
+                                f"Experiment identity collision: {row_id}"
+                            )
+                        continue
+                    identities[row_id] = row
+                    found[target] = Experiment.from_dict(row)
             except OSError:
                 pass
             self._completed_expression_cache.update(
@@ -754,7 +844,7 @@ class Trajectory:
         if not targets:
             return result
         if self.persist and self.path and os.path.exists(self.path):
-            rows = self.iter_canonical_rows() or ()
+            rows = self.iter_canonical_rows(strict=True) or ()
         else:
             rows = (experiment.to_dict() for experiment in self.experiments)
         for row in rows:

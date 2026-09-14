@@ -12,6 +12,8 @@
 | 当前工作项 | `suggestions.json`、`proposals.json` | 当前 discovery 证据包与待执行提案；长时工厂复用同一 inbox | 只由规定流程生成/审阅；逻辑内容不变不重写；targeted inbox 的 read/check/write 在同一 owner transaction 内完成 |
 | 工厂控制面 | `factory_session.json` | Factory session 的 deadline、最近动作、`stop_requested`、本地配额、bounded retry/route counters、blocker 和 opaque route aggregate | 固定单文件且是 Factory quota 的唯一 owner；quota lifecycle 按纽约本地日/ISO week 连续，session renewal 不等于 quota renewal；只保存 bounded control-plane projection、counts 和 session-bound set digest，不保存 Alpha/field/expression/template/dataset/research/metrics payload；blocker 仅为去私有化 control-plane projection，不创建第二 state store；阶段配额为每周 11200、每日 1600（纽约本地日刷新）；`factory status` 只读，`factory stop` 原子请求安全停止；不按轮次复制 session/log |
 | TrialLedger | `.wqb_state/trial_ledger.jsonl` | 唯一 durable append-only lifecycle、optimization selection 与 settlement accounting owner | 本地 private research state；所有 durable append 由 root owner thread 或显式 delegated Simulation worker 执行；首次真实 accounting mutation 时才记录 `COMPLETE_FROM_START` 或 `INCOMPLETE_LEGACY` 边界；构造和只读 inspection 不写盘，不从 Trajectory 伪造遗漏 selection |
+| Atomic persistence boundary | existing artifact owners | replace 后 POSIX parent directory durability；首次创建 append-only 文件时同步 parent directory，普通 append 仍只同步 file |
+| Runtime operator reference | `wqb_agent/reference/OPERATORS_CHEATSHEET.md` | package-owned static syntax resource；安装 wheel 后可独立读取，`docs/reference` 必须保持镜像一致 |
 | Trajectory / ExperienceMemory | `trajectory.jsonl` / existing memory owner | Trajectory 只拥有 executed Experiment evidence；ExperienceMemory 只保留派生 decision/learning view；同一结算回放通过稳定 `source_key` 幂等 | settlement revision 通过同一 Experiment identity；selection fact 不再写入 ExperienceMemory；source 冲突由 `MEMORY_SETTLEMENT_CONFLICT` 审计，不新增 state owner |
 | 当日结果视图 | 进程内 `DailyResearchCache` | 当前进程内的模拟结果、Alpha 和颜色视图 | 跨纽约本地日自动清空；不写研究状态 |
 | 滚动 7 日 Alpha 元数据缓存 | `.alpha_feed_cache/weekly.json` | 远端提交/模拟 Alpha 的轻量 ID、状态、时间戳，按纽约本地日分桶 | 保留当前工作日前推 7 个自然日；`updated_at`/`expires_at`；模拟元数据上限 `11200（7*1600）`；每次同步清理窗口外和过期资源 |
@@ -35,6 +37,17 @@
 `force-new-round` 只解除旧轮次的编排阻塞，不能解除未决 Simulation execution identity；
 同一表达式但不同 settings 的 fingerprint 不同，不能把它们按表达式折叠。`state audit`
 以持久化 Trajectory、TrialLedger 和 checkpoint 做只读 parity 检查，不把任一身份推断成另一身份。
+
+Trajectory 的兼容报告读取可以 tolerant 地跳过历史坏行；执行、恢复、parent binding
+和 durable mutation 使用 strict reader。strict reader 对中间 malformed JSON、非
+object、非法 UTF-8 和同一 Experiment ID 的 immutable identity collision fail closed；
+只有文件末尾未完整写入的 torn tail 可记录 bounded diagnostic 并忽略，不自动截断或
+修复原文件。新 Experiment ID 为 128-bit hex，legacy 短 ID 仍可读但不改变其身份。
+
+远端 `Location` 与持久化 `progress_url` 在任何 GET 前都必须相对当前 BRAIN base URL
+解析并通过同源 scheme/host/effective-port 校验；拒绝 userinfo、fragment、跨 host、
+跨 port 和 scheme downgrade。非法 Location 仍保持 `SUBMIT_UNKNOWN`，绝不因不明写结果
+重发 POST。
 
 checkpoint 的 recovery envelope 与 `state.IDENTITY_FIELDS` 机械共用字段声明，另保留
 必要的 template/operator provenance 与 `progress_url`。legacy row 缺少新增 provenance

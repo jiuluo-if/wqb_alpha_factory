@@ -124,6 +124,7 @@ def append_jsonl_best_effort(path, payload, identity_keys, *, lock=None):
                         return False
         except OSError:
             pass
+        was_present = os.path.exists(path)
         parent = os.path.dirname(os.path.abspath(path))
         os.makedirs(parent, exist_ok=True)
         line = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
@@ -131,6 +132,8 @@ def append_jsonl_best_effort(path, payload, identity_keys, *, lock=None):
             handle.write(line)
             handle.flush()
             os.fsync(handle.fileno())
+        if not was_present:
+            _fsync_parent_directory(path)
         return True
 
 
@@ -184,7 +187,10 @@ def atomic_write_jsonl_if_changed(path, rows):
                     return False
             except OSError:
                 pass
+        was_present = os.path.exists(path)
         os.replace(tmp, path)
+        if not was_present:
+            _fsync_parent_directory(path)
         return True
     finally:
         try:
@@ -206,6 +212,7 @@ def _atomic_replace(path, content):
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp, path)
+        _fsync_parent_directory(path)
     finally:
         try:
             os.unlink(tmp)
@@ -214,3 +221,16 @@ def _atomic_replace(path, content):
         except OSError:
             pass
     return True
+
+
+def _fsync_parent_directory(path):
+    """Durably publish a successful rename on POSIX; explicit Windows no-op."""
+    if os.name != "posix":
+        return
+    parent = os.path.dirname(os.path.abspath(path))
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_fd = os.open(parent, flags)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)

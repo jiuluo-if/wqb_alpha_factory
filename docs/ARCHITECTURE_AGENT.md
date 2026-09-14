@@ -34,6 +34,8 @@ Agent → SuggestionWorkflow / ProposalExecutionWorkflow / AlphaFeedWorkflow / O
 | Simulation execution | `ProposalExecutionWorkflow` → `Simulator` | checkpoint、预算、exactly-once、`SUBMIT_UNKNOWN` |
 | Research evidence | `Trajectory` / `TrialLedger` | append-only 事实与生命周期审计 |
 | TrialLedger append index | `TrialLedger` 内存 | owner-local event-id/completeness membership，可从 `trial_ledger.jsonl` 重建；不成为 durable owner |
+| Persistence durability | `artifacts.py` / existing append owners | POSIX atomic replace 后同步 parent directory；首次 append 创建文件时同步目录，普通 append 保持 file fsync |
+| Runtime operator reference | `wqb_agent.reference` package resource | installed package 是运行时 syntax reference owner；`docs/reference` 仅作同步的人类镜像 |
 | Checkpoint recovery boundary | `CheckpointStore` | canonical semantic validation、unfinished scan 与 atomic recovery envelope |
 | Remote reconciliation observation | `scripts/reconcile_pending.py` | 只读 GET/poll/get-alpha；不写 canonical research state |
 | Completed-state archive | `scripts/archive_completed_rounds.py` | 只移动 `CheckpointStore.scan()` 已验证的 complete checkpoint |
@@ -97,6 +99,18 @@ settlement 必须回到 `ProposalExecutionWorkflow.resume_checkpoint()`。
 `submission_fingerprint + progress_url` 或 `submission_fingerprint + alpha_id` 被多个
 Experiment IDs 表示的历史 remote execution projection，报告 bounded
 `DUPLICATE_REMOTE_EXECUTION_PROJECTION`，不自动合并、删除或修复历史。
+
+Trajectory 的兼容报告读取可以 tolerant 地跳过历史坏行；执行、恢复、parent
+binding 和 durable mutation 使用 strict reader。strict reader 对中间 malformed
+JSON、非 object、非法 UTF-8 和同一 Experiment ID 的 immutable identity collision
+fail closed；只有文件末尾未完整写入的 torn tail 可记录为 bounded diagnostic 并忽略，
+不自动截断或修复原文件。`Experiment.id` 新写入使用 128-bit hex，旧短 ID 仍可读但不
+改变其身份。
+
+远端 `Location`/persisted `progress_url` 在任何 GET 前都必须相对当前 BRAIN base URL
+解析并通过同源 scheme/host/effective-port 校验；拒绝 userinfo、fragment、跨 host、
+跨 port 和 scheme downgrade。提交后收到非法 Location 仍保持 `SUBMIT_UNKNOWN`，绝不
+因不明写结果重发 POST。
 
 ProposalExecution 在 SearchPolicy admission 之前建立 transient
 `proposal_id -> effective_submission_fingerprint` binding；同 batch 冲突使用
