@@ -25,6 +25,13 @@ from copy import deepcopy
 from .artifacts import atomic_write_json_if_changed
 from .diversity import field_concept_keys, semantic_mechanism_key
 from .expression import canonical_expression
+from .factory_quota import (
+    carry_forward_quota,
+    prepare_quota,
+    quota_release,
+    quota_remaining,
+    quota_reserve,
+)
 from .factory_route import route_decision
 from .locking import OwnerBusyError, single_instance_scope
 from .proposal_contract import (
@@ -557,71 +564,24 @@ class AIFactoryRunner:
         quota = WeeklySimulationQuota(
             weekly_cap=weekly_cap, daily_cap=daily_cap, clock=self._clock
         )
-        raw_state = session.get("quota")
-        if raw_state is None:
-            # Migrate the legacy aggregate reservation conservatively.  The
-            # old envelope had no local-day field, so keeping today's bucket
-            # at least as full as the legacy reservation fails closed.
-            try:
-                legacy_reserved = max(0, int(session.get("simulations_reserved", 0)))
-            except (TypeError, ValueError):
-                legacy_reserved = 0
-            if legacy_reserved > weekly_cap:
-                raise ValueError("legacy reservation exceeds weekly quota")
-            state = quota.initial_state()
-            state["weekly_reserved"] = legacy_reserved
-            state["daily_reserved"] = min(legacy_reserved, daily_cap)
-        else:
-            state = quota.normalize_state(raw_state)
-        session["quota"] = state
-        # Keep the legacy field as a compatibility projection for existing
-        # status consumers; quota.remaining() is the admission source of truth.
-        session["simulation_cap"] = weekly_cap
-        session["simulations_reserved"] = state["weekly_reserved"]
-        return quota
+        return prepare_quota(session, quota)
 
     @staticmethod
     def _carry_forward_quota(previous_session, quota):
         """Carry the canonical quota across a renewed session envelope."""
-        if not previous_session:
-            return quota.initial_state()
-        raw_state = previous_session.get("quota")
-        if raw_state is None:
-            # Legacy envelopes have no local-day metadata.  Project their
-            # aggregate conservatively into today's bucket, then let the
-            # quota owner validate caps and calendar rollover.
-            legacy_reserved = previous_session.get("simulations_reserved", 0)
-            if isinstance(legacy_reserved, bool):
-                raise ValueError("legacy reservation must be an integer")
-            try:
-                legacy_reserved = int(legacy_reserved)
-            except (TypeError, ValueError, OverflowError) as exc:
-                raise ValueError("legacy reservation must be an integer") from exc
-            if legacy_reserved < 0:
-                raise ValueError("legacy reservation must be non-negative")
-            raw_state = quota.initial_state()
-            raw_state["daily_reserved"] = min(legacy_reserved, quota.daily_cap)
-            raw_state["weekly_reserved"] = legacy_reserved
-        return quota.normalize_state(raw_state)
+        return carry_forward_quota(previous_session, quota)
 
     @staticmethod
     def _quota_remaining(session, quota):
-        state = quota.normalize_state(session.get("quota"))
-        session["quota"] = state
-        session["simulations_reserved"] = state["weekly_reserved"]
-        return quota.remaining(state)
+        return quota_remaining(session, quota)
 
     @staticmethod
     def _quota_reserve(session, quota, count):
-        state = quota.reserve(session.get("quota"), count)
-        session["quota"] = state
-        session["simulations_reserved"] = state["weekly_reserved"]
+        quota_reserve(session, quota, count)
 
     @staticmethod
     def _quota_release(session, quota, count):
-        state = quota.release(session.get("quota"), count)
-        session["quota"] = state
-        session["simulations_reserved"] = state["weekly_reserved"]
+        quota_release(session, quota, count)
 
     def run(self, duration_sec=86400, max_rounds=0, idle_sleep_sec=30,
             max_simulations=240, daily_simulation_cap=None,
