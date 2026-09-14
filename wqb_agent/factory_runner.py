@@ -33,6 +33,15 @@ from .factory_quota import (
     quota_reserve,
 )
 from .factory_route import route_decision
+from .factory_session import (
+    read_session as read_session_projection,
+)
+from .factory_session import (
+    request_stop as request_stop_projection,
+)
+from .factory_session import (
+    status_view as status_view_projection,
+)
 from .locking import OwnerBusyError, single_instance_scope
 from .proposal_contract import (
     FACTORY_BATCH_SIZE,
@@ -462,92 +471,26 @@ class AIFactoryRunner:
     @classmethod
     def read_session(cls, state_dir):
         """Read the single factory envelope without constructing an Agent."""
-        path = os.path.join(state_dir, cls.SESSION_FILE)
-        try:
-            with open(path, encoding="utf-8") as handle:
-                session = json.load(handle)
-            if not isinstance(session, dict) or not isinstance(session.get("session_id"), str):
-                return None
-            return session
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
-            return None
+        return read_session_projection(state_dir, cls.SESSION_FILE)
 
     @classmethod
     def request_stop(cls, state_dir):
         """Set a durable stop request in the canonical session envelope."""
-        try:
-            with single_instance_scope(state_dir, operation="factory-stop"):
-                return cls._request_stop_owned(state_dir)
-        except OwnerBusyError:
-            return {
-                "status": "LOCAL_OWNER_BUSY",
-                "last_action": "LOCAL_OWNER_BUSY",
-            }
-
-    @classmethod
-    def _request_stop_owned(cls, state_dir):
-        session = cls.read_session(state_dir)
-        if not session or session.get("status") != "RUNNING":
-            return None
-        try:
-            float(session["deadline"])
-        except (KeyError, TypeError, ValueError):
-            return None
-        source = deepcopy(session)
-        source["stop_requested"] = True
-        source["last_action"] = "STOP_REQUESTED"
-        cls._validate_internal_control_state(source)
-        session = cls._control_plane_session(source)
-        atomic_write_json_if_changed(
-            os.path.join(state_dir, cls.SESSION_FILE), session,
-            ignored_keys=("updated_at",),
+        return request_stop_projection(
+            state_dir,
+            session_file=cls.SESSION_FILE,
+            validate=cls._validate_internal_control_state,
+            project=cls._control_plane_session,
         )
-        return session
 
     @classmethod
     def status_view(cls, state_dir):
         """Return only the stable, decision-useful session fields."""
-        raw_session = cls.read_session(state_dir)
-        if not raw_session:
-            if os.path.exists(os.path.join(state_dir, cls.SESSION_FILE)):
-                return {
-                    "status": "RECONCILE_REQUIRED",
-                    "last_action": "INVALID_SESSION",
-                }
-            return None
-        session = cls._control_plane_session(raw_session)
-        keys = (
-            "schema_version", "session_id", "started_at", "deadline", "status",
-            "stop_requested", "rounds_completed", "simulations_reserved",
-            "simulation_cap", "quota", "last_round", "last_action", "last_result",
-            "blocker",
+        return status_view_projection(
+            state_dir,
+            session_file=cls.SESSION_FILE,
+            project=cls._control_plane_session,
         )
-        view = {key: session[key] for key in keys if key in session}
-        if isinstance(view.get("quota"), dict):
-            view["quota"] = {
-                key: view["quota"][key]
-                for key in (
-                    "schema_version", "timezone", "local_date", "week_start",
-                    "daily_cap", "weekly_cap", "daily_reserved", "weekly_reserved",
-                )
-                if key in view["quota"]
-            }
-        if isinstance(view.get("last_result"), dict):
-            view["last_result"] = {
-                key: view["last_result"][key]
-                for key in ("round_no", "proposals", "summary_round", "verdict_count",
-                            "verdict_class_counts", "best_present", "status", "error_type")
-                if key in view["last_result"]
-            }
-        if isinstance(view.get("blocker"), dict):
-            view["blocker"] = {
-                key: view["blocker"].get(key)
-                for key in (
-                    "kind", "consecutive_same_count", "next_recheck_at", "resume_hint",
-                )
-                if key in view["blocker"]
-            }
-        return view
 
     def __init__(self, agent, *, factory=None, clock=None, sleeper=None, quiet=True):
         self.agent = agent

@@ -89,6 +89,11 @@ DIRECT_TESTS = {
         "tests/test_factory_boundaries.py",
         "tests/test_research_loop.py",
     ),
+    "wqb_agent/factory_session.py": (
+        "tests/test_factory_session.py",
+        "tests/test_factory_session_privacy.py",
+        "tests/test_factory_boundaries.py",
+    ),
     "wqb_agent/discovery.py": (
         "tests/test_discovery.py",
         "tests/test_discovery_selection.py",
