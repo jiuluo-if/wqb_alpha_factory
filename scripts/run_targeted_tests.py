@@ -339,6 +339,12 @@ DIRECT_TESTS = {
         "tests/test_search_calibration.py",
         "tests/test_trial_ledger_io.py",
     ),
+    "wqb_agent/research_catalog.py": (
+        "tests/test_research_catalog.py",
+        "tests/test_agent_flow.py",
+        "tests/test_discovery.py",
+        "tests/test_proposal_contract.py",
+    ),
     "scripts/benchmark_local_io.py": ("tests/test_benchmark_harness.py",),
 }
 

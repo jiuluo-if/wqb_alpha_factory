@@ -160,6 +160,7 @@ class ArchitectureDependencyContracts(unittest.TestCase):
             "wqb_agent/reflection_learning.py",
             "wqb_agent/optimizer_selection.py",
             "wqb_agent/client_transport.py",
+            "wqb_agent/research_catalog.py",
         )
         imports = _package_imports(paths)
         forbidden = {

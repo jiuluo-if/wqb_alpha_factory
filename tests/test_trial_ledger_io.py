@@ -40,6 +40,24 @@ class TrialLedgerIOTests(unittest.TestCase):
             self.assertFalse(TrialLedger(path).record(trial, "candidate_generated"))
             self.assertEqual(_event_ids(path), before)
 
+    def test_membership_projection_is_disposable_and_not_python_history_set(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "trial_ledger.jsonl")
+            ledger = TrialLedger(path)
+            self.assertTrue(ledger.record(_trial("bounded"), "candidate_generated"))
+            self.assertFalse(hasattr(ledger, "_event_ids"))
+            self.assertTrue(os.path.exists(ledger._membership_db_path))
+
+    def test_external_owner_append_invalidates_and_rebuilds_membership(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "trial_ledger.jsonl")
+            first = TrialLedger(path)
+            second = TrialLedger(path)
+            self.assertTrue(first.record(_trial("first"), "candidate_generated"))
+            self.assertTrue(second.record(_trial("external"), "candidate_generated"))
+            self.assertFalse(first.record(_trial("external"), "candidate_generated"))
+            self.assertEqual(first._reconciliation_count, 2)
+
     def test_duplicate_and_new_events_mix_without_reordering_existing_rows(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "trial_ledger.jsonl")

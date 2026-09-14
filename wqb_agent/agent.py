@@ -43,11 +43,17 @@ from .proposal_contract import (
     SETTING_OVERRIDES,
 )
 from .proposal_execution import ProposalExecutionHooks
+from .research_catalog import (
+    EXPLORATION_HYPOTHESES,  # noqa: F401 - public compatibility export
+    SEED_HYPOTHESES,
+    exploration_hypothesis,
+    fallback_research_hypotheses,
+    seed_hypothesis,
+)
 from .research_evidence import ResearchEvidenceBundle, classify_research
 from .research_planning import (
     form_research_space,
     iterate_best_hypothesis,
-    select_exploration_seed,
 )
 from .runtime_components import build_runtime_components
 from .runtime_composition import AgentWorkflowHooks, build_agent_workflows
@@ -71,62 +77,6 @@ from .validation_report import (
     build_validation_report,
     default_validation_plan,
 )
-
-SEED_HYPOTHESES = [
-    {
-        "id": "h-seed-reversal",
-        "statement": "Short-term return reversal: stocks that rose sharply over the last 5 days tend to revert in the near term.",
-        "tags": ["reversal", "return", "price", "short-term"],
-        "direction": "reversal",
-        "datasets": ["pv1", "pv13"],
-    },
-    {
-        "id": "h-seed-analyst",
-        "statement": "Analyst target-price revisions upward predict short-term outperformance.",
-        "tags": ["analyst", "forecast", "revision", "target"],
-        "direction": "long",
-        "datasets": ["analyst4"],
-    },
-    {
-        "id": "h-seed-option",
-        "statement": "Stocks with elevated implied volatility earn lower forward returns.",
-        "tags": ["option", "volatility", "implied", "risk"],
-        "direction": "reversal",
-        "datasets": ["option8", "option9"],
-    },
-    {
-        "id": "h-seed-model",
-        "statement": "High model risk scores predict lower forward returns.",
-        "tags": ["model", "score", "risk", "composite"],
-        "direction": "reversal",
-        "datasets": ["model16", "model51"],
-    },
-    {
-        "id": "h-seed-news",
-        "statement": "Positive news sentiment predicts short-term positive returns.",
-        "tags": ["news", "sentiment", "positive"],
-        "direction": "long",
-        "datasets": ["news18", "news12"],
-    },
-    {
-        "id": "h-seed-fundamental",
-        "statement": "Firms with strong earnings growth continue to outperform.",
-        "tags": ["fundamental", "growth", "earning"],
-        "direction": "long",
-        "datasets": ["fundamental6", "fundamental2"],
-    },
-]
-
-EXPLORATION_HYPOTHESES = [
-    {"id": "h-explore-fund-cashflow", "statement": "Strong operating cash flow quality predicts outperformance.", "tags": ["cashflow", "operating", "quality"], "direction": "long", "datasets": ["fundamental6", "fundamental2"]},
-    {"id": "h-explore-fund-leverage", "statement": "High leverage and debt burden predict lower forward returns.", "tags": ["debt", "leverage", "liability"], "direction": "reversal", "datasets": ["fundamental6", "fundamental2"]},
-    {"id": "h-explore-fund-value", "statement": "Low valuation relative to book value or enterprise value predicts outperformance.", "tags": ["value", "book", "enterprise"], "direction": "long", "datasets": ["fundamental6", "fundamental2"]},
-    {"id": "h-explore-fund-assets", "statement": "Efficient asset utilization and profitability predict outperformance.", "tags": ["asset", "profitability", "efficiency"], "direction": "long", "datasets": ["fundamental6", "fundamental2"]},
-    {"id": "h-explore-news-attention", "statement": "Abnormally high news attention is followed by short-term reversal.", "tags": ["attention", "buzz", "count"], "direction": "reversal", "datasets": ["news18", "news12"]},
-    {"id": "h-explore-news-novelty", "statement": "Novel company news contains information that persists into future returns.", "tags": ["novelty", "novel", "unique"], "direction": "long", "datasets": ["news18", "news12"]},
-    {"id": "h-explore-news-relevance", "statement": "Highly relevant company-specific news predicts short-term returns.", "tags": ["relevance", "relevant", "company"], "direction": "long", "datasets": ["news18", "news12"]},
-    {"id": "h-explore-news-volume", "statement": "Extreme news volume reflects overreaction and predicts reversal.", "tags": ["volume", "story", "article"], "direction": "reversal", "datasets": ["news18", "news12"]},
-]
 
 
 class Agent:
@@ -239,7 +189,7 @@ class Agent:
                 ensure_best_field=self._ensure_best_field,
                 optimizer_gate_report=self.optimizer_gate_report,
                 optimizer_context=self.optimizer_context,
-                fallback_templates=lambda: list(EXPLORATION_HYPOTHESES) + list(SEED_HYPOTHESES),
+                fallback_templates=fallback_research_hypotheses,
             ),
             proposal_execution=ProposalExecutionHooks(
                 ensure_loaded=self._ensure_loaded,
@@ -510,8 +460,8 @@ class Agent:
     # ----------------------------------------------------- crash recovery
 
     def _proposal_checkpoint_path(self, round_no):
-        """Compatibility wrapper; checkpoint ownership is the workflow's."""
-        return self.proposal_execution._proposal_checkpoint_path(round_no)
+        """Compatibility projection to the canonical checkpoint owner."""
+        return self.checkpoints.path(round_no)
 
     def skip_stale_reconciled(self, round_no, simulation_id, min_attempts=3):
         try:
@@ -539,16 +489,16 @@ class Agent:
             return self._local_owner_busy()
 
     def _unfinished_checkpoint_except(self, round_no):
-        return self.proposal_execution._unfinished_checkpoint_except(round_no)
+        return self.checkpoints.unfinished_except(round_no)
 
     def _write_proposal_checkpoint(self, round_no, hypothesis, experiments, complete,
                                     delegation=None):
-        return self.proposal_execution._write_proposal_checkpoint(
+        return self.checkpoints.write(
             round_no, hypothesis, experiments, complete, delegation=delegation
         )
 
     def _load_proposal_checkpoint(self, round_no):
-        return self.proposal_execution._load_proposal_checkpoint(round_no)
+        return self.checkpoints.load(round_no)
 
     def _resume_proposal_checkpoint(self, checkpoint):
         return self.proposal_execution.resume_checkpoint(checkpoint)
@@ -752,7 +702,7 @@ class Agent:
             if seed["id"] not in self.memory.used_hypotheses:
                 return dict(seed)
         # all seeds used: cycle deterministically to the least-recently failed
-        return dict(SEED_HYPOTHESES[round_no % len(SEED_HYPOTHESES)])
+        return seed_hypothesis(round_no)
 
     def _best_family_is_occupied(self):
         """Prefer an unused cross-family seed when best is analyst4-based."""
@@ -763,7 +713,7 @@ class Agent:
 
     def _exploration_seed(self, round_no):
         """Rotate through non-analyst4 families once best is submit-blocked."""
-        return select_exploration_seed(round_no, EXPLORATION_HYPOTHESES)
+        return exploration_hypothesis(round_no)
 
     def _iterate_best_hypothesis(self, round_no, best=None):
         best = best or self._trusted_current_best()

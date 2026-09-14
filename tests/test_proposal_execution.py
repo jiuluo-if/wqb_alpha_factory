@@ -232,7 +232,7 @@ class TestProposalExecutionBoundary(unittest.TestCase):
                 json.dump({"round_no": 1, "proposals": []}, handle)
 
             direct_result = direct_agent.proposal_execution.resume_checkpoint(
-                direct_agent.proposal_execution._load_proposal_checkpoint(1)
+                direct_agent.checkpoints.load(1)
             )
             facade_result = facade_agent.run_proposals(path)
 
@@ -241,10 +241,10 @@ class TestProposalExecutionBoundary(unittest.TestCase):
             self.assertEqual(direct_agent.client.sim_calls, [])
             self.assertEqual(facade_agent.client.sim_calls, [])
             self.assertFalse(
-                direct_agent.proposal_execution._load_proposal_checkpoint(1)["complete"]
+                direct_agent.checkpoints.load(1)["complete"]
             )
             self.assertFalse(
-                facade_agent.proposal_execution._load_proposal_checkpoint(1)["complete"]
+                facade_agent.checkpoints.load(1)["complete"]
             )
 
     def test_workflow_does_not_reference_agent_or_direct_client_submission(self):

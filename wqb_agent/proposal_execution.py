@@ -140,26 +140,6 @@ class ProposalExecutionWorkflow:
     def _ctx(self):
         return self.context
 
-    def _proposal_checkpoint_path(self, round_no):
-        return self._ctx.checkpoints.path(round_no)
-
-    def _write_proposal_checkpoint(self, round_no, hypothesis, experiments, complete,
-                                   delegation=None):
-        return self._ctx.checkpoints.write(
-            round_no, hypothesis, experiments, complete, delegation=delegation
-        )
-
-    def _load_proposal_checkpoint(self, round_no):
-        return self._ctx.checkpoints.load(round_no)
-
-    def _unfinished_checkpoint_except(self, round_no):
-        return self._ctx.checkpoints.unfinished_except(round_no)
-
-    def _unresolved_submission_identities(self, round_no):
-        return self._ctx.checkpoints.unresolved_submission_identities(
-            exclude_round=round_no
-        )
-
     def _durable_proposal_bindings(self, checkpoint_records):
         """Read exact proposal-id bindings from existing durable owners."""
         trajectory = self._ctx.trajectory
@@ -305,7 +285,7 @@ class ProposalExecutionWorkflow:
         )
         self._ctx.hooks.save_state(state)
         if close_checkpoint:
-            self._write_proposal_checkpoint(round_no, hypothesis, experiments, complete=True)
+            self._ctx.checkpoints.write(round_no, hypothesis, experiments, True)
         self._ctx.hooks.write_context()
         if total_elapsed_sec is not None:
             self._ctx.hooks.write_sims_results(
@@ -405,7 +385,7 @@ class ProposalExecutionWorkflow:
                 f"[FORCE NEW ROUND] 保留未完成 {os.path.basename(foreign_record['path'])} "
                 "及其原 progress_url；按用户明确授权开启新轮。"
             )
-        checkpoint_path = self._proposal_checkpoint_path(round_no)
+        checkpoint_path = self._ctx.checkpoints.path(round_no)
         checkpoint = current_record.get("checkpoint") if current_record else None
         if current_record and current_record.get("malformed"):
             print(
@@ -1048,8 +1028,8 @@ class ProposalExecutionWorkflow:
             ctx.memory.remember_expression(exp.expression)
 
         ctx.memory.register_hypothesis(hypothesis)
-        checkpoint_path = self._proposal_checkpoint_path(round_no)
-        self._write_proposal_checkpoint(round_no, hypothesis, experiments, complete=False)
+        checkpoint_path = self._ctx.checkpoints.path(round_no)
+        self._ctx.checkpoints.write(round_no, hypothesis, experiments, False)
         round_start = time.time()
         self._run_simulator(experiments, round_no, hypothesis, experiments)
         elapsed = time.time() - round_start
@@ -1061,7 +1041,7 @@ class ProposalExecutionWorkflow:
                      "dataset_family": exp.datasets, "template_family": exp.template_family},
                     status="UNKNOWN" if exp.status in UNKNOWN_STATUSES else "PENDING",
                 )
-            self._write_proposal_checkpoint(round_no, hypothesis, experiments, complete=False)
+            self._ctx.checkpoints.write(round_no, hypothesis, experiments, False)
             hooks.write_sims_results(round_no, experiments, total_elapsed_sec=elapsed)
             print(
                 f"[CHECKPOINT] {len(unresolved)} 个任务未定论，已保留 {checkpoint_path}；"
@@ -1108,7 +1088,7 @@ class ProposalExecutionWorkflow:
             self._run_simulator(runnable, round_no, hypothesis, experiments)
         unresolved = [exp for exp in experiments if exp.status in UNRESOLVED_STATUSES]
         if unresolved:
-            self._write_proposal_checkpoint(round_no, hypothesis, experiments, complete=False)
+            self._ctx.checkpoints.write(round_no, hypothesis, experiments, False)
             ctx.hooks.write_sims_results(round_no, experiments)
             return None
         return self._settle_complete_round(round_no, hypothesis, experiments)
@@ -1175,7 +1155,7 @@ class ProposalExecutionWorkflow:
         return checkpoint
 
     def skip_stale_reconciled(self, round_no, simulation_id, min_attempts=3):
-        checkpoint = self._load_proposal_checkpoint(int(round_no))
+        checkpoint = self._ctx.checkpoints.load(int(round_no))
         if not checkpoint:
             raise ValueError(f"round {round_no} has no legal checkpoint")
         experiments = [Experiment.from_dict(row) for row in checkpoint["experiments"]]
@@ -1221,8 +1201,8 @@ class ProposalExecutionWorkflow:
             exp, "SKIPPED_STALE", exp.error
         )
         unresolved = [item for item in experiments if item.status in UNRESOLVED_STATUSES]
-        self._write_proposal_checkpoint(
-            int(round_no), checkpoint.get("hypothesis") or {}, experiments, complete=not unresolved
+        self._ctx.checkpoints.write(
+            int(round_no), checkpoint.get("hypothesis") or {}, experiments, not unresolved
         )
         self._ctx.trajectory.add(exp)
         audit_path = os.path.join(self._ctx.state_dir, "stale_skip_log.jsonl")
@@ -1238,7 +1218,7 @@ class ProposalExecutionWorkflow:
         return exp
 
     def skip_submit_unknown_authorized(self, round_no, proposal_id):
-        checkpoint = self._load_proposal_checkpoint(int(round_no))
+        checkpoint = self._ctx.checkpoints.load(int(round_no))
         if not checkpoint:
             raise ValueError(f"round {round_no} has no legal checkpoint")
         experiments = [Experiment.from_dict(row) for row in checkpoint["experiments"]]
@@ -1291,8 +1271,8 @@ class ProposalExecutionWorkflow:
             exp, "SKIPPED_UNKNOWN", exp.error
         )
         unresolved = [item for item in experiments if item.status in UNRESOLVED_STATUSES]
-        self._write_proposal_checkpoint(
-            int(round_no), checkpoint.get("hypothesis") or {}, experiments, complete=not unresolved
+        self._ctx.checkpoints.write(
+            int(round_no), checkpoint.get("hypothesis") or {}, experiments, not unresolved
         )
         self._ctx.trajectory.add(exp)
         audit_path = os.path.join(self._ctx.state_dir, "stale_skip_log.jsonl")
@@ -1326,8 +1306,8 @@ class ProposalExecutionWorkflow:
         active = [exp for exp in experiments if exp.status in UNRESOLVED_STATUSES]
         if active:
             raise ValueError(f"FINALIZE_UNRESOLVED_EXECUTION: round {round_no}")
-        checkpoint_path = self._proposal_checkpoint_path(int(round_no))
-        checkpoint = self._load_proposal_checkpoint(int(round_no))
+        checkpoint_path = self._ctx.checkpoints.path(int(round_no))
+        checkpoint = self._ctx.checkpoints.load(int(round_no))
         if os.path.exists(checkpoint_path) and checkpoint is None:
             raise ValueError(f"FINALIZE_EXECUTION_SET_MISMATCH: round {round_no}")
         checkpoint = self._validate_finalize_checkpoint(

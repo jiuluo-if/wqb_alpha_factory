@@ -8,9 +8,12 @@ Append-only, bounded-memory trial lifecycle ledger."""
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
 import os
+import sqlite3
+import tempfile
 import threading
 import time
 from collections import Counter, defaultdict
@@ -68,14 +71,65 @@ class TrialLedger:
         self.trajectory_path = trajectory_path
         self._events = []
         self._append_lock = threading.Lock()
-        # Owner-local, rebuildable projections.  The JSONL remains the only
+        # Owner-local, rebuildable exact membership projection.  The SQLite
+        # file is process-local and disposable; JSONL remains the only
         # durable source of lifecycle/accounting truth.
-        self._event_ids = set()
+        self._membership_db = None
+        self._membership_db_path = None
         self._membership_initialized = False
         self._membership_signature = None
         self._history_completeness = None
         self._history_completeness_exists = False
         self._reconciliation_count = 0
+        atexit.register(self._close_membership_db_unlocked)
+
+    def _open_membership_db_unlocked(self):
+        if self._membership_db is not None:
+            return self._membership_db
+        if self.persist and self.path:
+            fd, db_path = tempfile.mkstemp(prefix="wqb-trial-membership-", suffix=".sqlite3")
+            os.close(fd)
+            self._membership_db_path = db_path
+            target = db_path
+        else:
+            target = ":memory:"
+        try:
+            self._membership_db = sqlite3.connect(target, check_same_thread=False)
+            self._membership_db.execute(
+                "CREATE TABLE IF NOT EXISTS event_ids (event_id TEXT PRIMARY KEY)"
+            )
+            self._membership_db.commit()
+        except (OSError, sqlite3.Error):
+            self._close_membership_db_unlocked()
+            raise
+        return self._membership_db
+
+    def _close_membership_db_unlocked(self):
+        if self._membership_db is not None:
+            try:
+                self._membership_db.close()
+            except sqlite3.Error:
+                pass
+        self._membership_db = None
+        if self._membership_db_path:
+            try:
+                os.remove(self._membership_db_path)
+            except OSError:
+                pass
+        self._membership_db_path = None
+
+    def _invalidate_membership_unlocked(self):
+        self._membership_initialized = False
+        self._membership_signature = None
+
+    def _membership_contains_unlocked(self, event_id):
+        if event_id is None:
+            return False
+        db = self._open_membership_db_unlocked()
+        row = db.execute(
+            "SELECT 1 FROM event_ids WHERE event_id = ? LIMIT 1", (str(event_id),)
+        ).fetchone()
+        return row is not None
 
     def _durable_scope(self, operation, delegation=None):
         if not self.persist or not self.path:
@@ -89,6 +143,8 @@ class TrialLedger:
 
     @staticmethod
     def _file_signature(path):
+        if not path:
+            return None
         try:
             stat = os.stat(path)
         except OSError:
@@ -96,17 +152,33 @@ class TrialLedger:
         return stat.st_size, stat.st_mtime_ns
 
     def _reconcile_membership_unlocked(self, trajectory_path):
-        event_ids = set()
         completeness = None
         completeness_exists = False
-        if self.path and os.path.exists(self.path):
-            for row in iter_jsonl_objects(self.path):
+        has_event_rows = False
+        db = self._open_membership_db_unlocked()
+        try:
+            db.execute("DELETE FROM event_ids")
+            source = (
+                iter_jsonl_objects(self.path)
+                if self.path and os.path.exists(self.path)
+                else self._events
+            )
+            for row in source:
                 event_id = row.get("event_id")
                 if event_id is not None:
-                    event_ids.add(event_id)
+                    has_event_rows = True
+                    db.execute(
+                        "INSERT OR IGNORE INTO event_ids(event_id) VALUES (?)",
+                        (str(event_id),),
+                    )
                 if row.get("phase") == "history_completeness":
                     completeness = str(row.get("outcome") or "UNKNOWN")
                     completeness_exists = True
+            db.commit()
+        except sqlite3.Error:
+            db.rollback()
+            self._invalidate_membership_unlocked()
+            raise
         trajectory_has_rows = False
         if trajectory_path and os.path.exists(trajectory_path):
             try:
@@ -117,10 +189,9 @@ class TrialLedger:
         if completeness is None:
             completeness = (
                 "INCOMPLETE_LEGACY"
-                if trajectory_has_rows or event_ids
+                if trajectory_has_rows or has_event_rows
                 else "COMPLETE_FROM_START"
             )
-        self._event_ids = event_ids
         self._history_completeness = completeness
         self._history_completeness_exists = completeness_exists
         self._membership_initialized = True
@@ -139,7 +210,7 @@ class TrialLedger:
 
     def _append_jsonl_unique_unlocked(self, row):
         event_id = row.get("event_id")
-        if event_id in self._event_ids:
+        if self._membership_contains_unlocked(event_id):
             return False
         parent = os.path.dirname(os.path.abspath(self.path))
         os.makedirs(parent, exist_ok=True)
@@ -149,9 +220,18 @@ class TrialLedger:
             handle.flush()
             os.fsync(handle.fileno())
         if event_id is not None:
-            self._event_ids.add(event_id)
-        self._membership_initialized = True
-        self._membership_signature = self._file_signature(self.path)
+            try:
+                self._membership_db.execute(
+                    "INSERT INTO event_ids(event_id) VALUES (?)", (str(event_id),)
+                )
+                self._membership_db.commit()
+            except sqlite3.Error:
+                # The canonical append already succeeded.  Never write a
+                # second durable record; rebuild the disposable index later.
+                self._invalidate_membership_unlocked()
+                return True
+        if self._membership_initialized:
+            self._membership_signature = self._file_signature(self.path)
         return True
 
     def _write_history_completeness_unlocked(self, outcome):
@@ -279,10 +359,16 @@ class TrialLedger:
             "recorded_at": timestamp if timestamp is not None else time.time(),
         }
         if not self.path or not self.persist:
-            if any(item.get("event_id") == row["event_id"] for item in self._events):
-                return False
-            self._events.append(row)
-            return True
+            with self._append_lock:
+                self._ensure_membership_unlocked(None)
+                if self._membership_contains_unlocked(row["event_id"]):
+                    return False
+                self._events.append(row)
+                self._membership_db.execute(
+                    "INSERT INTO event_ids(event_id) VALUES (?)", (str(row["event_id"]),)
+                )
+                self._membership_db.commit()
+                return True
         with self._durable_scope("trial-ledger-record", delegation=delegation):
             with self._append_lock:
                 if self.trajectory_path:
