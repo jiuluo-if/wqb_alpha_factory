@@ -42,6 +42,29 @@ def _package_imports(relative_paths: tuple[str, ...]) -> dict[str, set[str]]:
 
 
 class ArchitectureDependencyContracts(unittest.TestCase):
+    def test_package_root_exports_only_agent_facing_api(self):
+        package = ast.parse(
+            (ROOT / "wqb_agent/__init__.py").read_text(encoding="utf-8")
+        )
+        exports = next(
+            node for node in package.body
+            if isinstance(node, ast.Assign)
+            and any(getattr(target, "id", None) == "__all__" for target in node.targets)
+        )
+        values = {item.value for item in exports.value.elts}
+        self.assertEqual(
+            values,
+            {
+                "Agent", "WQBClient", "ExperimentSpec", "inspect_state",
+                "discover_fields", "get_operator_reference",
+                "get_operator_syntax_reference", "run_experiment",
+                "get_experiment", "compare_experiments", "search_history",
+                "reconcile", "inspect_optimizer_parents",
+                "inspect_optimizer_context", "propose_optimization",
+                "materialize_targeted_batch",
+            },
+        )
+
     def test_workflows_do_not_import_agent_or_transport(self):
         workflow_paths = (
             "wqb_agent/suggestion_workflow.py",

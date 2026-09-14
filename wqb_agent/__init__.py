@@ -2,105 +2,26 @@
 
 Public agent-facing API lives in :mod:`wqb_agent.research_api`.
 Other modules are implementation details unless a task explicitly requires
-them.  Legacy exports below remain available for compatibility and tests.
+them.  The package root keeps only the agent-facing facade and research API.
 """
-
-from .alpha_pool import AlphaPoolSnapshot, build_pool_snapshot
-from .behavior import extract_behavior_series
-from .diagnostics import DiagnosticEvent
-from .diversity import deduplicate, extract_fields, is_redundant
-from .failures import (
-    FailureKind,
-    classify_error,
-    classify_experiment,
-    is_research_relevant,
-)
-from .identity import candidate_identity
-from .incremental_policy import IncrementalValuePolicy, incremental_gate
-from .incremental_value import (
-    IncrementalValueEvidence,
-    build_incremental_value,
-    select_trusted_pool,
-)
-from .optimization_decision import optimization_decision_identity
-from .optimization_interfaces import (
-    ClientOptimizationEvidenceProvider,
-    OptimizationEvidenceProvider,
-    OptimizationEvidenceSnapshot,
-    OptimizationTrial,
-    diagnose_optimization,
-    record_optimization_trial,
-)
-from .research_evidence import ResearchEvidenceBundle, classify_research
-from .robustness import RobustnessEvidence, evaluate_robustness, retention
-from .search_calibration import SearchPolicyReplay, build_search_calibration, reward_v2
-from .search_outcome import (
-    SearchOutcome,
-    extract_statistical_decision,
-    parent_relative_delta,
-    resolve_reward,
-    reward_v1,
-    settle_search_outcome,
-    staged_promotion,
-)
-from .search_policy import BudgetAllocator, SearchPolicy
-from .search_snapshot import SearchSnapshot
 
 __all__ = [
     "Agent",
     "WQBClient",
-    "extract_fields",
-    "is_redundant",
-    "deduplicate",
-    "BudgetAllocator",
-    "SearchPolicy",
-    "SearchSnapshot",
-    "SearchOutcome",
-    "parent_relative_delta",
-    "reward_v1",
-    "extract_statistical_decision",
-    "resolve_reward",
-    "settle_search_outcome",
-    "staged_promotion",
-    "SearchPolicyReplay",
-    "build_search_calibration",
-    "reward_v2",
-    "RobustnessEvidence",
-    "evaluate_robustness",
-    "retention",
-    "IncrementalValueEvidence",
-    "build_incremental_value",
-    "select_trusted_pool",
-    "IncrementalValuePolicy",
-    "incremental_gate",
-    "AlphaPoolSnapshot",
-    "build_pool_snapshot",
-    "extract_behavior_series",
-    "DiagnosticEvent",
-    "ResearchEvidenceBundle",
-    "classify_research",
-    "ClientOptimizationEvidenceProvider",
-    "OptimizationEvidenceProvider",
-    "OptimizationEvidenceSnapshot",
-    "OptimizationTrial",
-    "optimization_decision_identity",
-    "diagnose_optimization",
-    "record_optimization_trial",
-    "candidate_identity",
-    "HighSignalValidator",
-    "FailureKind",
-    "classify_error",
-    "classify_experiment",
-    "is_research_relevant",
     "ExperimentSpec",
     "inspect_state",
     "discover_fields",
     "get_operator_reference",
+    "get_operator_syntax_reference",
     "run_experiment",
     "get_experiment",
     "compare_experiments",
     "search_history",
     "reconcile",
+    "inspect_optimizer_parents",
+    "inspect_optimizer_context",
+    "propose_optimization",
+    "materialize_targeted_batch",
 ]
 
 
@@ -131,6 +52,8 @@ def __getattr__(name):
         "get_operator_reference", "get_operator_syntax_reference",
         "run_experiment", "get_experiment",
         "compare_experiments", "search_history", "reconcile",
+        "inspect_optimizer_parents", "inspect_optimizer_context",
+        "propose_optimization", "materialize_targeted_batch",
     }:
         from . import research_api
 
