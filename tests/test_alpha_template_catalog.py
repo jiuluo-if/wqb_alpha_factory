@@ -13,7 +13,6 @@ from wqb_agent.alpha_templates.registry import (
     template_numeric_audit,
 )
 from wqb_agent.alpha_templates.validation import validate_template_contract
-from wqb_agent.candidate import CandidateBuilder
 
 
 class TestAlphaTemplateCatalog(unittest.TestCase):

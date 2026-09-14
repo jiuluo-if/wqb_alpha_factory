@@ -22,7 +22,6 @@ from wqb_agent.agent import (
     Agent,
 )
 from wqb_agent.artifacts import atomic_write_json_if_changed, iter_jsonl_objects
-from wqb_agent.candidate import CandidateBuilder
 from wqb_agent.discovery import FieldDiscovery
 from wqb_agent.expression import submission_fingerprint
 from wqb_agent.memory import ExperienceMemory

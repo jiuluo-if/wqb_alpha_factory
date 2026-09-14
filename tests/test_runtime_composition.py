@@ -98,7 +98,7 @@ class TestAgentRuntimeComposition(unittest.TestCase):
             "fields_per_discovery", "context_experiments", "quality_policy",
             "statistical_policy", "robustness_policy", "incremental_policy",
             "max_field_alpha_count", "dataset_pool", "search_policy", "memory",
-            "trajectory", "trial_ledger", "builder", "alpha_factory", "discovery",
+            "trajectory", "trial_ledger", "alpha_factory", "discovery",
             "simulator", "reflector", "checkpoints", "submission_pool",
             "suggestion_workflow", "proposal_execution", "daily_cache",
             "alpha_feed_cache", "alpha_feed_workflow", "optimizer_workflow",

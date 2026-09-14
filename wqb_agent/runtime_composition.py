@@ -51,7 +51,7 @@ def build_agent_workflows(
         discovery=components.discovery,
         memory=components.memory,
         trajectory=components.trajectory,
-        alpha_factory=components.builder.factory,
+        alpha_factory=components.alpha_factory,
         state_dir=policy.state_dir,
         fields_per_discovery=policy.fields_per_discovery,
         context_experiments=policy.context_experiments,
@@ -91,7 +91,7 @@ def build_agent_workflows(
     optimizer = OptimizerWorkflow(
         trajectory=components.trajectory,
         alpha_feed_cache=weekly_cache,
-        alpha_factory=components.builder.factory,
+        alpha_factory=components.alpha_factory,
         quality_policy=policy.quality_policy,
         operator_reference=operator_reference,
         hooks=hooks.optimizer,

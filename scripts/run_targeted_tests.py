@@ -67,6 +67,14 @@ DIRECT_TESTS = {
         "tests/test_alpha_assembly.py",
         "tests/test_factory_mechanism_selection.py",
     ),
+    "wqb_agent/alpha_feasibility.py": (
+        "tests/test_alpha_feasibility.py",
+        "tests/test_factory_feasibility.py",
+    ),
+    "wqb_agent/runtime_composition.py": (
+        "tests/test_runtime_composition.py",
+        "tests/test_architecture_contracts.py",
+    ),
     "wqb_agent/proposal_admission.py": (
         "tests/test_proposal_execution.py",
         "tests/test_proposal_safety.py",
@@ -82,10 +90,6 @@ DIRECT_TESTS = {
     ),
     "wqb_agent/reference/__init__.py": (
         "tests/test_security_hardening_batch.py",
-    ),
-    "wqb_agent/candidate.py": (
-        "tests/test_alpha_template_catalog.py",
-        "tests/test_runtime_composition.py",
     ),
     "wqb_agent/agent.py": (
         "tests/test_agent_flow.py",
@@ -329,6 +333,14 @@ def select_tests(changed_files: list[str]) -> tuple[str, ...]:
             continue
         if path.endswith(".md") or path.endswith(".txt"):
             continue
+        if not (ROOT / path).is_file():
+            deleted = subprocess.run(
+                ["git", "cat-file", "-e", f"HEAD:{path}"],
+                cwd=ROOT,
+                capture_output=True,
+            ).returncode == 0
+            if deleted:
+                continue
         if path.startswith("wqb_agent/") or path.endswith(".py"):
             unmapped.append(path)
 

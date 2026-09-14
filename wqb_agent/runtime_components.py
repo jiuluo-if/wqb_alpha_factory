@@ -6,7 +6,7 @@ import os
 import threading
 from dataclasses import dataclass
 
-from .candidate import CandidateBuilder
+from .alpha_factory import AlphaFactory
 from .checkpoints import CheckpointStore
 from .discovery import FieldDiscovery
 from .memory import ExperienceMemory
@@ -26,7 +26,7 @@ class RuntimeComponents:
     memory: ExperienceMemory
     trajectory: Trajectory
     trial_ledger: TrialLedger
-    builder: CandidateBuilder
+    alpha_factory: AlphaFactory
     discovery: FieldDiscovery
     simulator: Simulator
     reflector: Reflector
@@ -77,7 +77,7 @@ def build_runtime_components(client, config):
         persist=True,
         trajectory_path=trajectory.path,
     )
-    builder = CandidateBuilder(
+    alpha_factory = AlphaFactory(
         neutralization=config.simulation_config.settings["neutralization"],
         catalog_path=config.runtime.alpha_template_catalog,
         require_private=True,
@@ -137,7 +137,7 @@ def build_runtime_components(client, config):
         memory=memory,
         trajectory=trajectory,
         trial_ledger=trial_ledger,
-        builder=builder,
+        alpha_factory=alpha_factory,
         discovery=discovery,
         simulator=simulator,
         reflector=reflector,

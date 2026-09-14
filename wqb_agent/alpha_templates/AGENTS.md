@@ -29,4 +29,4 @@ family. Materialization uses only declared operators intersected with the curren
 `LIVE_VERIFIED` BRAIN capability. Static syntax and fixture data are never availability
 truth, and recovery never re-renders an already materialized proposal.
 
-`AlphaFactory` and `CandidateBuilder` consume this owner. Do not add skeletons, fixed field combinations, parameter grids, or historical success rationale elsewhere.
+`AlphaFactory` consumes this owner. Do not add skeletons, fixed field combinations, parameter grids, or historical success rationale elsewhere.

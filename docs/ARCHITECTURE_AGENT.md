@@ -24,9 +24,9 @@ RuntimeComponents
 Agent → SuggestionWorkflow / ProposalExecutionWorkflow / AlphaFeedWorkflow / OptimizerWorkflow
 ```
 
-架构现代化后的纯领域投影位于 workflow 之前：`research_planning.py` 负责已解析输入的研究空间/假设组装，`evidence_projection.py` 负责严格质量与 correlation gate，`alpha_semantics.py` 负责字段语义 traits，`alpha_relationships.py` 负责字段关系与频率准入，`alpha_assembly.py` 负责字段机制文本组装，`terminal_evidence.py`/`execution_recovery.py` 负责终态证据和 checkpoint 合并，`proposal_admission.py` 负责提案拒绝统计，`factory_route.py` 负责 legacy route episode 决策。它们均不拥有状态、不调用远端写操作；旧 facade 只委托 canonical 函数。
+架构现代化后的纯领域投影位于 workflow 之前：`research_planning.py` 负责已解析输入的研究空间/假设组装，`evidence_projection.py` 负责严格质量与 correlation gate，`alpha_semantics.py` 负责字段语义 traits，`alpha_relationships.py` 负责字段关系与频率准入，`alpha_feasibility.py` 负责有界可行性诊断，`alpha_assembly.py` 负责字段机制文本组装，`terminal_evidence.py`/`execution_recovery.py` 负责终态证据和 checkpoint 合并，`proposal_admission.py` 负责提案拒绝统计，`factory_route.py` 负责 legacy route episode 决策。它们均不拥有状态、不调用远端写操作；旧 facade 只委托 canonical 函数。
 
-## 本轮架构审计结果（2026-09-14）
+## 第一阶段架构审计结果（2026-09-14）
 
 | 指标 | before | after |
 |---|---:|---:|
@@ -40,25 +40,43 @@ Agent → SuggestionWorkflow / ProposalExecutionWorkflow / AlphaFeedWorkflow / O
 | `AIFactoryRunner` LOC / methods | 2,024 / 57 | 1,948 / 56 |
 | import cycles | 0 | 0 |
 
-新增文件数增加是因为纯职责被拆成可独立测试的模块；本轮未删除 production/test/script 文件，也未删除任何安全 invariant。`CandidateBuilder`、`diagnostics.py`、`smoke.py` 和 legacy public surface 仍有当前 consumer，继续保留为 compatibility/operational code。
+本轮已将 `CandidateBuilder` 中间层从 production runtime graph 移除；`diagnostics.py`、`smoke.py` 和其他 legacy public surface 仍有当前 consumer，继续保留为 compatibility/operational code。
+
+## 第二阶段当前审计结果（2026-09-15）
+
+| 指标 | 第二阶段起点 | 当前 |
+|---|---:|---:|
+| production Python files | 86 | 86 |
+| production LOC | 30,253 | 30,304 |
+| test Python files | 92 | 93 |
+| test LOC | 24,303 | 24,365 |
+| `Agent` LOC / methods | 1,651 / 79 | 1,650 / 78 |
+| `AlphaFactory` LOC / methods | 1,801 / 31 | 1,655 / 30 |
+| `ProposalExecutionWorkflow` LOC / methods | 1,365 / 29 | 1,365 / 28 |
+| `AIFactoryRunner` LOC / methods | 1,948 / 56 | 1,948 / 53 |
+| import cycles | 0 | 0 |
+
+本阶段已完成 AlphaFactory feasibility 的 canonical 迁移，并删除 `wqb_agent/candidate.py`（20 行）及 11 个只导入不使用 `CandidateBuilder` 的测试 import；新增 feasibility 行为测试和删除文件的 targeted 选择规则。由于纯 feasibility 模块保留了完整诊断字段，当前 production LOC 暂时净增 51 行；candidate assembly、ProposalExecution pipeline 和 FactoryRunner control-plane 收敛仍是本阶段剩余工作。
 
 ## 已完成的提取
 
 - `alpha_factory.py` → `alpha_semantics.py`：字段语义 profile；`AlphaFactory` 通过 canonical alias 复用。
 - `alpha_factory.py` → `alpha_relationships.py`：关系标签、频率 bucket/compatibility、关系类型。
+- `alpha_factory.py` → `alpha_feasibility.py`：有界字段/模板可行性诊断与 fingerprint 投影。
 - `alpha_factory.py` → `alpha_assembly.py`：字段机制说明与关系证据文本组装。
 - `agent.py` → `research_planning.py`：研究空间、best iteration、探索 seed 的纯组装。
 - `agent.py` → `evidence_projection.py`：严格 correlation gate 与质量 rating。
 - `proposal_execution.py` → `terminal_evidence.py`、`execution_recovery.py`：终态证据判定、失败分类、canonical recovery merge。
 - `proposal_execution.py` → `proposal_admission.py`：有界拒绝原因统计。
 - `factory_runner.py` → `factory_route.py`：route episode information-gain decision；runner 仍是兼容 facade。
+- `runtime_components.py` → `AlphaFactory`：运行时直接持有 canonical factory，不再经过 `CandidateBuilder`。
 
 ## Remaining architecture debt
 
 - `discovery.py`、`memory.py` 和 `factory_runner.py` 仍较大：它们同时承载现有持久化/兼容 consumer，下一刀需要先建立更细 owner contract，不能只按行数拆。
-- `alpha_factory.py` 仍包含 feasibility、candidate assembly 和 optimization screening；这些部分共享 template registry、prepared-facts memo 与 proposal provenance，下一阶段应先以纯输入/输出 contract 测试隔离，再移动实现。
+- `alpha_factory.py` 仍包含 candidate assembly 和 optimization screening；candidate construction 仍共享 template registry、prepared-facts memo 与 proposal provenance，下一步应先以纯输入/输出 contract 测试隔离，再移动实现。
 - `proposal_execution.py` 仍包含 admission、durable identity binding 和 manual recovery mutation；这些路径共同维护 exactly-once fence，当前只提取了无状态阶段，避免产生第二 owner。
-- 本轮没有足够证据安全删除脚本或 public compatibility symbols；后续删除必须继续满足零 imports/CLI/docs/tests/`__all__`/dynamic references。
+- 本阶段尚未删除脚本或 root public symbols；它们仍需满足零 imports/CLI/docs/tests/`__all__`/dynamic references 后才能删除。
 
 `RuntimeComponents` 只创建一次 memory、trajectory、ledger、discovery、simulator、checkpoint 和 cache；workflow 不反向导入 Agent，不重新创建这些 owner。
 

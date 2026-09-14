@@ -14,7 +14,6 @@ from wqb_agent.agent import (
     Agent,
 )
 from wqb_agent.artifacts import atomic_write_json_if_changed
-from wqb_agent.candidate import CandidateBuilder
 from wqb_agent.discovery import FieldDiscovery
 from wqb_agent.memory import ExperienceMemory
 from wqb_agent.proposal_contract import validate_proposal, validate_vector_inputs

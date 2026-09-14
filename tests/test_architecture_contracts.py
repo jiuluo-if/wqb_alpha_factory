@@ -72,6 +72,19 @@ class ArchitectureDependencyContracts(unittest.TestCase):
                 f"{path} imports forbidden modules: {sorted(forbidden & dependencies)}",
             )
 
+    def test_canonical_factory_modules_do_not_depend_on_legacy_facades(self):
+        paths = (
+            "wqb_agent/alpha_assembly.py",
+            "wqb_agent/alpha_feasibility.py",
+            "wqb_agent/alpha_relationships.py",
+            "wqb_agent/alpha_semantics.py",
+        )
+        imports = _package_imports(paths)
+        for path, dependencies in imports.items():
+            self.assertNotIn("wqb_agent.candidate", dependencies, path)
+            self.assertNotIn("wqb_agent.factory_runner", dependencies, path)
+            self.assertNotIn("wqb_agent.runtime_components", dependencies, path)
+
     def test_state_owners_do_not_import_orchestration(self):
         state_paths = (
             "wqb_agent/artifacts.py",

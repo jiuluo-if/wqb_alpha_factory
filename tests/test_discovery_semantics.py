@@ -20,7 +20,6 @@ from wqb_agent.agent import (
     Agent,
 )
 from wqb_agent.artifacts import atomic_write_json_if_changed
-from wqb_agent.candidate import CandidateBuilder
 from wqb_agent.discovery import (
     FieldDiscovery,
     dataset_description_frequency,

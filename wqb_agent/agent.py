@@ -194,8 +194,7 @@ class Agent:
         self.memory = components.memory
         self.trajectory = components.trajectory
         self.trial_ledger = components.trial_ledger
-        self.builder = components.builder
-        self.alpha_factory = components.builder.factory
+        self.alpha_factory = components.alpha_factory
         self.discovery = components.discovery
         self.simulator = components.simulator
         self.reflector = components.reflector
