@@ -584,7 +584,7 @@ class TrialLedger:
                 result[arm]["completed"] += 1
                 if str(row.get("reason_code") or row.get("reason") or "").upper() in {"INFRA", "RATE_LIMIT", "AUTH", "TIMEOUT", "NETWORK", "HTTP"}:
                     result[arm]["failed_infra"] += 1
-                elif str(row.get("reason_code") or row.get("reason") or "").upper() in {"RESEARCH", "FAIL"}:
+                elif str(row.get("reason_code") or row.get("reason") or "").upper() in {"RESEARCH", "FAIL", "QUALITY_GATE", "SYNTAX", "DATA"}:
                     result[arm]["failed_research"] += 1
         return dict(result)
 
@@ -742,6 +742,6 @@ class TrialLedger:
                 category = str(rows[-1].get("reason_code") or rows[-1].get("reason") or "").upper()
                 if category in {"INFRA", "RATE_LIMIT", "AUTH", "TIMEOUT", "SUBMIT_UNKNOWN", "NETWORK", "HTTP"}:
                     state["failed_infra"] += 1
-                elif category in {"RESEARCH", "FAIL"}:
+                elif category in {"RESEARCH", "FAIL", "QUALITY_GATE", "SYNTAX", "DATA"}:
                     state["failed_research"] += 1
         return dict(result)
