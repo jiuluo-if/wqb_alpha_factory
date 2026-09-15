@@ -827,7 +827,7 @@ def assess_experiment(experiment_id, *, state_dir=".wqb_state"):
     return assess_experiment_quality(experiment_id, state_dir=state_dir)
 
 
-def execute_pending_round(*, state_dir=".wqb_state", agent=None, client=None, config=None):
+def execute_pending_round(*, state_dir=None, agent=None, client=None, config=None):
     """Execute the existing canonical proposals through Agent.run_proposals only."""
     runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
     path = os.path.join(_state_dir(runtime, state_dir), "proposals.json")
