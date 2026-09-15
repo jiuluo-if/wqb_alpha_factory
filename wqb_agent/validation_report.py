@@ -19,6 +19,7 @@ import re
 import time
 
 from .evidence_status import annotate_evidence
+from .expression import canonical_expression
 from .metrics import checks_passed, num, score_of
 from .robustness import evaluate_robustness
 from .schema import CREATED_BY_VERSION, VALIDATION_PLAN_VERSION, VALIDATION_VERSION
@@ -37,6 +38,75 @@ REQUIRED_VARIABLES = (
     "universe_robustness",
     "yearly_aggregates",
 )
+
+
+def _row_value(row, key, default=None):
+    if isinstance(row, dict):
+        return row.get(key, default)
+    return getattr(row, key, default)
+
+
+def resolve_validation_bindings(children, rows):
+    """Bind robustness rows to one exact DONE parent without I/O.
+
+    New rows use ``parent_id`` as the binding.  Legacy rows without it may
+    use an expression only when exactly one DONE parent is compatible.  The
+    reducer returns rejected children separately so callers cannot silently
+    attach ambiguous evidence to a different parent.
+    """
+    parents_by_id = {
+        str(_row_value(row, "id")): row
+        for row in rows or ()
+        if _row_value(row, "id") not in (None, "")
+        and str(_row_value(row, "status", "")).upper() == "DONE"
+        and isinstance(_row_value(row, "metrics"), dict)
+    }
+    by_expression = {}
+    for parent in parents_by_id.values():
+        key = canonical_expression(_row_value(parent, "expression", ""))
+        by_expression.setdefault(key, []).append(parent)
+
+    groups = {}
+    rejected = []
+    for child in children or ():
+        if str(_row_value(child, "experiment_stage", "")).upper() != "ROBUSTNESS":
+            continue
+        parent_id = _row_value(child, "parent_id")
+        if parent_id not in (None, ""):
+            parent = parents_by_id.get(str(parent_id))
+            reason = None if parent is not None else "PARENT_NOT_FOUND"
+        else:
+            expression = _row_value(child, "parent_expression")
+            candidates = by_expression.get(canonical_expression(expression), [])
+            parent = candidates[0] if len(candidates) == 1 else None
+            reason = (
+                None if parent is not None
+                else "PARENT_REFERENCE_AMBIGUOUS" if len(candidates) > 1
+                else "PARENT_NOT_FOUND"
+            )
+        if parent is None:
+            rejected.append((child, reason))
+            continue
+        child_expression = canonical_expression(_row_value(child, "parent_expression", ""))
+        parent_expression = canonical_expression(_row_value(parent, "expression", ""))
+        if not child_expression or child_expression != parent_expression:
+            rejected.append((child, "PARENT_EXPRESSION_MISMATCH"))
+            continue
+        plan = _row_value(child, "validation_plan")
+        plan_parent_id = plan.get("parent_id") if isinstance(plan, dict) else None
+        if plan_parent_id not in (None, "") and str(plan_parent_id) != str(_row_value(parent, "id")):
+            rejected.append((child, "PARENT_PLAN_ID_MISMATCH"))
+            continue
+        plan_fingerprint = plan.get("parent_fingerprint") if isinstance(plan, dict) else None
+        child_fingerprint = _row_value(child, "parent_fingerprint")
+        expected_fingerprint = child_fingerprint or plan_fingerprint
+        parent_fingerprint = _row_value(parent, "submission_fingerprint")
+        if expected_fingerprint and parent_fingerprint != expected_fingerprint:
+            rejected.append((child, "PARENT_FINGERPRINT_MISMATCH"))
+            continue
+        key = str(_row_value(parent, "id"))
+        groups.setdefault(key, []).append(child)
+    return groups, parents_by_id, rejected
 
 
 class ValidationPlan(dict):
@@ -66,6 +136,7 @@ def default_validation_plan(parent, *, budget=7, pnl_capability="UNKNOWN", times
                             statistical_policy="required_when_available",
                             robustness_policy=None):
     expression = parent.get("expression") if isinstance(parent, dict) else getattr(parent, "expression", "")
+    parent_id = parent.get("id") if isinstance(parent, dict) else getattr(parent, "id", None)
     fingerprint = parent.get("submission_fingerprint") if isinstance(parent, dict) else getattr(parent, "submission_fingerprint", None)
     settings = parent.get("settings", {}) if isinstance(parent, dict) else getattr(parent, "settings", {})
     fields = parent.get("fields_used", []) if isinstance(parent, dict) else getattr(parent, "fields_used", [])
@@ -114,6 +185,7 @@ def default_validation_plan(parent, *, budget=7, pnl_capability="UNKNOWN", times
             item["acceptance"] = dict(policy)
     canonical = {
         "schema_version": VALIDATION_PLAN_VERSION,
+        "parent_id": parent_id,
         "parent_fingerprint": fingerprint,
         "parent_expression": expression,
         "settings": settings or {},
@@ -129,6 +201,7 @@ def default_validation_plan(parent, *, budget=7, pnl_capability="UNKNOWN", times
     return ValidationPlan({
         "schema_version": VALIDATION_PLAN_VERSION,
         "plan_id": hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16],
+        "parent_id": parent_id,
         "parent_expression": expression,
         "parent_fingerprint": fingerprint,
         "variables": variables,

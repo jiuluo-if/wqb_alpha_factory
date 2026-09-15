@@ -99,6 +99,7 @@ class ReplayAuditSummary:
     lineage_replay_double_counts: tuple = ()
     duplicate_round_recaps: tuple = ()
     legacy_unverifiable_entries: int = 0
+    memory_receipt_compactions: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -620,10 +621,17 @@ def _replay_summary(experience):
         return ReplayAuditSummary()
     source_rows = []
     legacy = 0
+    compactions = set()
     for kind in ("short_term", "lessons", "avoid", "next", "active_hypotheses"):
         for row in experience.get(kind) or []:
             if not isinstance(row, dict):
                 continue
+            compaction = row.get("_source_receipt_compaction")
+            if isinstance(compaction, dict) and compaction.get("opaque_digest"):
+                compactions.add((
+                    str(compaction["opaque_digest"]),
+                    int(compaction.get("compacted_count", 0)),
+                ))
             source = row.get("source_key")
             if source:
                 source_rows.append((str(source), kind, row.get("_source_semantic")))
@@ -657,7 +665,7 @@ def _replay_summary(experience):
     return ReplayAuditSummary(
         tuple(sorted(set(duplicate))), tuple(sorted(set(conflicts))),
         tuple(sorted(set(lineage_double))), tuple(sorted(set(duplicate_recaps))),
-        legacy,
+        legacy, tuple(sorted(compactions)),
     )
 
 

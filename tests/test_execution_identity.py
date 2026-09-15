@@ -7,7 +7,7 @@ from wqb_agent.proposal_admission import admit_execution_identity, admit_proposa
 class ExecutionBindingIndexTests(unittest.TestCase):
     def test_proposal_admission_projects_settings_and_local_duplicates(self):
         def resolve(value):
-            return {"universe": value or "TOP1000"}
+            return value if isinstance(value, dict) else {"universe": "TOP1000"}
         first = admit_proposal(
             {"expression": "rank(close)"}, settings_resolver=resolve,
             batch_execution_fingerprints=set(), research_seen=set(),
@@ -27,6 +27,40 @@ class ExecutionBindingIndexTests(unittest.TestCase):
             batch_execution_fingerprints=set(), research_seen=set(),
         )
         self.assertEqual((result.status, result.reason_code), ("REJECTED", "INVALID_SETTINGS"))
+
+    def test_different_effective_settings_are_not_expression_duplicates(self):
+        def resolve(value):
+            return value if isinstance(value, dict) else {"universe": "TOP1000"}
+
+        first = admit_proposal(
+            {"expression": "rank(close)"}, settings_resolver=resolve,
+            batch_execution_fingerprints=set(), research_seen=set(),
+        )
+        changed = admit_proposal(
+            {"expression": "rank(close)", "settings": {"universe": "TOP500"}},
+            settings_resolver=resolve,
+            batch_execution_fingerprints=set(),
+            research_seen={first.research_key},
+        )
+        self.assertEqual(first.effective_settings, {"universe": "TOP1000"})
+        self.assertEqual(changed.status, "ACCEPTED")
+        self.assertNotEqual(first.execution_fingerprint, changed.execution_fingerprint)
+
+    def test_implicit_default_and_explicit_equivalent_share_execution_identity(self):
+        def resolve(value):
+            return value if isinstance(value, dict) else {"universe": "TOP1000"}
+
+        implicit = admit_proposal(
+            {"expression": "rank(close)"}, settings_resolver=resolve,
+            batch_execution_fingerprints=set(), research_seen=set(),
+        )
+        explicit = admit_proposal(
+            {"expression": "rank(close)", "settings": {"universe": "TOP1000"}},
+            settings_resolver=resolve,
+            batch_execution_fingerprints={implicit.execution_fingerprint},
+            research_seen=set(),
+        )
+        self.assertEqual(explicit.reason_code, "DUPLICATE_EFFECTIVE_EXECUTION")
 
     def test_identity_admission_rejects_durable_rebinding(self):
         decision = admit_execution_identity(

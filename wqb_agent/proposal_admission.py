@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
 
-from .expression import canonical_expression, submission_fingerprint
+from .expression import submission_fingerprint
 
 
 @dataclass(frozen=True)
@@ -77,10 +77,11 @@ def admit_proposal(
             "相同的完整 effective Simulation settings 已存在，禁止重复执行",
             settings, fingerprint,
         )
-    research_key = (
-        "settings::" + fingerprint if proposal.get("settings")
-        else canonical_expression(expression)
-    )
+    # Research-family policy may inspect expression/structure later, but the
+    # local replay gate must be keyed by the complete effective execution
+    # settings. A global/default change is a distinct trial unless the
+    # resulting fingerprint is actually identical.
+    research_key = "settings::" + fingerprint
     if research_key in research_seen:
         return ProposalAdmission(
             "SKIPPED", expression, "DUPLICATE_LOCAL",

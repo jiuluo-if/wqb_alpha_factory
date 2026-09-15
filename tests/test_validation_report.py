@@ -16,6 +16,7 @@ from wqb_agent.validation_report import (
     deflated_sharpe_ratio,
     pbo_cscv,
     probabilistic_sharpe_ratio,
+    resolve_validation_bindings,
     validate_plan,
 )
 
@@ -44,6 +45,44 @@ class TestValidationReport(unittest.TestCase):
         self.assertTrue(valid, errors)
         self.assertEqual({item["variable"] for item in self.plan["variables"]} & set(REQUIRED_VARIABLES), set(REQUIRED_VARIABLES))
         self.assertEqual(self.plan["preregistered_at"], 1.0)
+
+    def test_validation_bindings_isolate_same_expression_parents_by_id(self):
+        parents = [
+            {"id": "parent-a", "expression": "rank(signal)", "status": "DONE",
+             "metrics": _metrics(), "submission_fingerprint": "fp-a"},
+            {"id": "parent-b", "expression": "rank(signal)", "status": "DONE",
+             "metrics": _metrics(), "submission_fingerprint": "fp-b"},
+        ]
+        children = [
+            {"id": "child-a", "experiment_stage": "ROBUSTNESS", "parent_id": "parent-a",
+             "parent_expression": "rank(signal)", "validation_plan": {"parent_fingerprint": "fp-a"}},
+            {"id": "child-b", "experiment_stage": "ROBUSTNESS", "parent_id": "parent-b",
+             "parent_expression": "rank(signal)", "validation_plan": {"parent_fingerprint": "fp-b"}},
+        ]
+        groups, resolved, rejected = resolve_validation_bindings(children, parents)
+        self.assertEqual(set(groups), {"parent-a", "parent-b"})
+        self.assertIs(resolved["parent-a"], parents[0])
+        self.assertEqual(rejected, [])
+
+    def test_legacy_expression_only_binding_is_ambiguous_fail_closed(self):
+        parents = [
+            {"id": "parent-a", "expression": "rank(signal)", "status": "DONE", "metrics": _metrics()},
+            {"id": "parent-b", "expression": "rank(signal)", "status": "DONE", "metrics": _metrics()},
+        ]
+        child = {"experiment_stage": "ROBUSTNESS", "parent_expression": "rank(signal)"}
+        groups, _resolved, rejected = resolve_validation_bindings([child], parents)
+        self.assertEqual(groups, {})
+        self.assertEqual(rejected[0][1], "PARENT_REFERENCE_AMBIGUOUS")
+
+    def test_parent_expression_and_fingerprint_mismatch_fail_closed(self):
+        parent = {"id": "parent-a", "expression": "rank(signal)", "status": "DONE",
+                  "metrics": _metrics(), "submission_fingerprint": "fp-a"}
+        child = {"experiment_stage": "ROBUSTNESS", "parent_id": "parent-a",
+                 "parent_expression": "rank(other)",
+                 "validation_plan": {"parent_fingerprint": "fp-b"}}
+        groups, _resolved, rejected = resolve_validation_bindings([child], [parent])
+        self.assertEqual(groups, {})
+        self.assertIn(rejected[0][1], {"PARENT_EXPRESSION_MISMATCH", "PARENT_FINGERPRINT_MISMATCH"})
 
     def test_one_robustness_success_cannot_be_stable(self):
         child = {"status": "DONE", "changed_variable": "window_locality", "metrics": _metrics()}

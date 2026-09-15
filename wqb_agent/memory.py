@@ -56,10 +56,19 @@ from .memory_projection import (
     top_next as project_top_next,
 )
 from .memory_replay import MemorySourceReplayConflict as _MemorySourceReplayConflict
-from .memory_replay import find_source_entry, replay_source, source_receipt
+from .memory_replay import (
+    MemorySourceReplayUnverifiable as _MemorySourceReplayUnverifiable,
+)
+from .memory_replay import (
+    find_source_entry,
+    merge_receipt_provenance,
+    replay_source,
+    source_receipt,
+)
 from .schema import MEMORY_VERSION
 
 MemorySourceReplayConflict = _MemorySourceReplayConflict
+MemorySourceReplayUnverifiable = _MemorySourceReplayUnverifiable
 
 _CJK_RUN = re.compile(r"[\u4e00-\u9fff]+")
 # Hypothesis ids generated solely from a round are reconstructable from the
@@ -459,29 +468,21 @@ class ExperienceMemory:
                 if key in entry
             },
         )
-        receipts = [
-            receipt for receipt in entry.get("_source_receipts", [])
-            if isinstance(receipt, dict) and receipt.get("source_key")
-        ]
-        if entry.get("source_key") and not any(
-            receipt.get("source_key") == entry["source_key"]
-            for receipt in receipts
+        if entry.get("source_key") and not entry.get("_source_receipt_compaction") and not any(
+            isinstance(receipt, dict)
+            and receipt.get("source_key") == entry["source_key"]
+            for receipt in entry.get("_source_receipts", [])
         ):
-            receipts.append({
+            entry = dict(entry)
+            entry.setdefault("_source_receipts", []).append({
                 "source_key": entry["source_key"],
                 "_source_semantic": entry.get("_source_semantic"),
             })
-        if receipts:
-            existing = [
-                receipt for receipt in lesson.get("_source_receipts", [])
-                if isinstance(receipt, dict)
-            ]
-            by_key = {
-                receipt.get("source_key"): receipt
-                for receipt in existing + receipts
-                if receipt.get("source_key")
-            }
-            lesson["_source_receipts"] = list(by_key.values())[-_SOURCE_RECEIPT_LIMIT:]
+        merged_lesson = merge_receipt_provenance(
+            lesson, entry, _SOURCE_RECEIPT_LIMIT
+        )
+        lesson.clear()
+        lesson.update(merged_lesson)
         return lesson
 
     def _expire_note(self, entry):

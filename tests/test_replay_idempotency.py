@@ -3,7 +3,11 @@ import json
 import tempfile
 import unittest
 
-from wqb_agent.memory import ExperienceMemory, MemorySourceReplayConflict
+from wqb_agent.memory import (
+    ExperienceMemory,
+    MemorySourceReplayConflict,
+    MemorySourceReplayUnverifiable,
+)
 from wqb_agent.reflection import Reflector
 from wqb_agent.research_settlement import (
     SettlementReplayConflict,
@@ -27,6 +31,45 @@ class ReplayIdempotencyTests(unittest.TestCase):
             "reward": 0.8,
         }
 
+        self.assertEqual(settlement_id(first), settlement_id(second))
+        self.assertEqual(compare_settlements(first, second), "NO_OP")
+
+    def test_trial_denominator_is_settlement_semantics(self):
+        first = {
+            "reward": 0.8,
+            "effective_trial_count": 12,
+            "research_evidence_bundle": {"statistical_decision": "PASS"},
+        }
+        second = dict(first, effective_trial_count=13)
+        self.assertNotEqual(settlement_id(first), settlement_id(second))
+        self.assertEqual(compare_settlements(first, second), "DIFFERENT")
+
+    def test_snapshot_identity_is_evidence_not_provenance(self):
+        first = {
+            "reward": 0.8,
+            "snapshot_id": "time-dependent-a",
+            "incremental_evidence": {
+                "decision": "PASS", "pool_snapshot_id": "pool-a",
+            },
+        }
+        second = {
+            "reward": 0.8,
+            "snapshot_id": "time-dependent-b",
+            "incremental_evidence": {
+                "decision": "PASS", "pool_snapshot_id": "pool-b",
+            },
+        }
+        self.assertNotEqual(settlement_id(first), settlement_id(second))
+        self.assertEqual(compare_settlements(first, second), "DIFFERENT")
+
+    def test_provenance_timestamps_remain_replay_noop(self):
+        first = {
+            "reward": 0.8,
+            "effective_trial_count": 12,
+            "settled_at": 1,
+            "recorded_at": 2,
+        }
+        second = dict(first, settled_at=101, recorded_at=202)
         self.assertEqual(settlement_id(first), settlement_id(second))
         self.assertEqual(compare_settlements(first, second), "NO_OP")
 
@@ -135,6 +178,48 @@ class ReplayIdempotencyTests(unittest.TestCase):
             restored.lessons[0],
         )
         self.assertEqual(before, json.dumps(restored.__dict__, sort_keys=True, default=str))
+
+    def test_compacted_memory_receipts_fail_closed_after_save_load_and_tier_moves(self):
+        state_dir = tempfile.mkdtemp()
+        memory = ExperienceMemory(
+            state_dir=state_dir, short_term_window=3, promote_hits=2,
+        )
+        for index in range(75):
+            memory.add_short_term(
+                "observation", "compacted shared observation", 100 + index,
+                detail={"lineage": f"lineage-{index}"},
+                source_key=f"settlement:{index}",
+            )
+        self.assertGreater(
+            memory.short_term[0].get("_source_receipt_compaction", {}).get("compacted_count", 0),
+            0,
+        )
+        memory.save()
+        restored = ExperienceMemory(state_dir=state_dir).load()
+        with self.assertRaises(MemorySourceReplayUnverifiable):
+            restored.add_short_term(
+                "observation", "compacted shared observation", 100,
+                detail={"lineage": "lineage-0"}, source_key="settlement:0",
+            )
+        restored.add_short_term(
+            "observation", "compacted shared observation", 200,
+            detail={"lineage": "lineage-new"}, source_key="settlement:new",
+        )
+        promoted, _trashed = restored.expire_short_term(now_round=300)
+        self.assertTrue(promoted)
+        tomb = restored.move_to_garbage(
+            "lesson", restored.lessons[0], reason="superseded", round_no=300,
+        )
+        restored.lessons = []
+        restored.restore_from_garbage(tomb["id"])
+        restored.compress()
+        restored.save()
+        restored = ExperienceMemory(state_dir=state_dir).load()
+        with self.assertRaises(MemorySourceReplayUnverifiable):
+            restored.add_short_term(
+                "observation", "compacted shared observation", 100,
+                detail={"lineage": "lineage-0"}, source_key="settlement:0",
+            )
 
     def test_lineage_replay_does_not_double_count_and_replacement_is_exactly_once(self):
         memory = ExperienceMemory(state_dir=tempfile.mkdtemp())

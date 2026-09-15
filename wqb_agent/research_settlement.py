@@ -12,7 +12,10 @@ from collections.abc import Mapping
 
 _VOLATILE_KEYS = frozenset({
     "settled_at", "recorded_at", "timestamp", "updated_at", "settlement_id",
-    "effective_trial_count", "snapshot_id", "pool_snapshot_id",
+    # AlphaPoolSnapshot.snapshot_id includes the wall-clock as_of. The
+    # incremental reducer's pool_snapshot_id is the stable member-set digest
+    # and remains semantic below.
+    "snapshot_id",
 })
 
 

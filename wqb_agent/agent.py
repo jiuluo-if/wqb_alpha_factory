@@ -11,6 +11,7 @@ import json
 import os
 import time
 from contextlib import nullcontext
+from copy import copy
 
 from .alpha_colors import classify_alpha_color
 from .alpha_feed_cache import WEEKLY_SIMULATION_CAP, WeeklyAlphaFeedCache, refresh_due
@@ -56,6 +57,7 @@ from .research_planning import (
 )
 from .research_settlement import (
     SettlementReplayConflict,
+    compare_settlements,
     experiment_settlement_semantic,
 )
 from .runtime_components import build_runtime_components
@@ -79,6 +81,7 @@ from .suggestion_workflow import SuggestionHooks
 from .validation_report import (
     build_validation_report,
     default_validation_plan,
+    resolve_validation_bindings,
 )
 
 
@@ -866,8 +869,14 @@ class Agent:
         """Compatibility view containing only canonical expressions."""
         return self._terminal_identities()[0]
 
-    def _completed_parent(self, expression, resolved=None):
+    def _completed_parent(self, expression, resolved=None, parent_id=None):
         """Return the resolved parent evidence for an evidence-dependent role."""
+        if parent_id not in (None, ""):
+            for exp in reversed(self.trajectory.experiments):
+                if (str(getattr(exp, "id", "")) == str(parent_id)
+                        and exp.status == "DONE" and exp.metrics):
+                    return exp
+            return None
         if not isinstance(expression, str) or not expression.strip():
             return None
         target = canonical_expression(expression)
@@ -1007,7 +1016,10 @@ class Agent:
         outcome = SearchOutcome.from_experiment(
             exp,
             validation=getattr(exp, "validation_report", None),
-            parent=self._completed_parent(getattr(exp, "parent_expression", None)),
+            parent=self._completed_parent(
+                getattr(exp, "parent_expression", None),
+                parent_id=getattr(exp, "parent_id", None),
+            ),
             quality_label=verdict.get("label"),
         )
         exp.provisional_outcome = outcome.as_dict()
@@ -1296,25 +1308,20 @@ class Agent:
             if (getattr(row, "validation_status", None) == "STABLE"
                     and not (report.get("status") == "PASS" and report.get("candidate") == "parent")):
                 row.validation_status = "UNVALIDATED"
-        children_by_parent = {}
-        plans = {}
-        for child in all_rows:
-            if child.experiment_stage != "ROBUSTNESS":
-                continue
-            parent_expression = child.parent_expression
-            if not isinstance(parent_expression, str) or not parent_expression.strip():
-                continue
-            key = canonical_expression(parent_expression)
-            children_by_parent.setdefault(key, []).append(child)
-            if isinstance(child.validation_plan, dict) and key not in plans:
-                plans[key] = child.validation_plan
+        children_by_parent, parents_by_id, _rejected_bindings = resolve_validation_bindings(
+            all_rows, all_rows
+        )
 
         trial_summary = self.trial_ledger.summarize()
-        for key, children in children_by_parent.items():
-            parent = self._completed_parent(children[0].parent_expression)
+        for parent_id, children in children_by_parent.items():
+            parent = parents_by_id.get(parent_id)
             if parent is None:
                 continue
-            plan = plans.get(key)
+            plan = next(
+                (child.validation_plan for child in children
+                 if isinstance(child.validation_plan, dict)),
+                None,
+            )
             if not isinstance(plan, dict):
                 plan = default_validation_plan(
                     parent, statistical_policy=self.statistical_policy,
@@ -1358,7 +1365,9 @@ class Agent:
         provisional = getattr(experiment, "provisional_outcome", None) or getattr(experiment, "search_outcome", None)
         if not isinstance(provisional, dict) or not isinstance(report, dict):
             return None
-        experiment.validation_report = report
+        existing_final = getattr(experiment, "final_outcome", None)
+        existing_rows = self.trajectory.find_rows([experiment.id])
+        existing_row = existing_rows.get(experiment.id) if isinstance(existing_rows, dict) else None
         incremental = self._settle_incremental_evidence(experiment)
         incremental_decision = incremental.get("decision", "UNAVAILABLE") if isinstance(incremental, dict) else "UNAVAILABLE"
         platform = (report.get("dimensions") or {}).get("platform_quality") or {}
@@ -1373,13 +1382,11 @@ class Agent:
         quality = "STABLE" if report.get("status") == "PASS" else provisional.get("base_quality")
         robustness = "PASS" if report.get("status") == "PASS" else "FAIL"
         statistical = extract_statistical_decision(report)
-        experiment.final_outcome = final
-        experiment.search_outcome = final
-        experiment.research_classification = classify_research(
+        research_classification = classify_research(
             quality, robustness, statistical, incremental_decision,
             "PASS" if platform_pass else "FAIL",
         )
-        experiment.research_evidence_bundle = ResearchEvidenceBundle.from_parts(
+        research_evidence_bundle = ResearchEvidenceBundle.from_parts(
             {"label": quality, "effective_trial_count": self.trial_ledger.summarize_cached(
                 os.path.join(self.state_dir, "trial_ledger.summary.json")
             ).get("effective_trial_count")},
@@ -1389,38 +1396,44 @@ class Agent:
             getattr(experiment, "yearly_evidence", None) or {},
             platform,
         ).as_dict()
+        candidate = copy(experiment)
+        candidate.validation_report = report
+        candidate.final_outcome = final
+        candidate.search_outcome = final
+        candidate.research_classification = research_classification
+        candidate.research_evidence_bundle = research_evidence_bundle
+        candidate.incremental_evidence = incremental
         settlement_payload = self.trial_ledger.build_outcome_settlement(
-            experiment, reward=final.get("reward"),
+            candidate, reward=final.get("reward"),
             reward_version=final.get("reward_version", "reward_v1"),
             reward_quality=final.get("reward_quality", "FINAL_EVIDENCE"),
             base_quality=quality, robustness=robustness,
             statistical_decision=statistical,
             incremental_decision=incremental_decision,
-            research_classification=experiment.research_classification,
+            research_classification=research_classification,
             incremental_evidence=incremental,
-            research_evidence_bundle=experiment.research_evidence_bundle,
+            research_evidence_bundle=research_evidence_bundle,
             validation_report=report,
             timestamp=final.get("settled_at") or time.time(),
         )
-        existing_final = getattr(experiment, "final_outcome", None)
-        existing_id = existing_final.get("settlement_id") if isinstance(existing_final, dict) else None
-        if existing_id and existing_id != settlement_payload["settlement_id"]:
-            raise SettlementReplayConflict(
-                f"SETTLEMENT_REPLAY_CONFLICT: experiment={experiment.id}"
-            )
         final["settlement_id"] = settlement_payload["settlement_id"]
-        experiment.final_outcome = final
-        existing_rows = self.trajectory.find_rows([experiment.id])
-        existing_row = existing_rows.get(experiment.id) if isinstance(existing_rows, dict) else None
+        candidate.final_outcome = final
+        if isinstance(existing_final, dict) and existing_final.get("settlement_id"):
+            compare_settlements(existing_final, final)
         if (
             isinstance(existing_row, dict)
             and existing_row.get("trajectory_revision") == "RESEARCH_SETTLED"
             and experiment_settlement_semantic(existing_row)
-            != experiment_settlement_semantic(experiment)
+            != experiment_settlement_semantic(candidate)
         ):
             raise SettlementReplayConflict(
                 f"SETTLEMENT_REPLAY_CONFLICT: experiment={experiment.id}"
             )
+        experiment.validation_report = report
+        experiment.final_outcome = final
+        experiment.search_outcome = final
+        experiment.research_classification = research_classification
+        experiment.research_evidence_bundle = research_evidence_bundle
         self.trial_ledger.record_outcome_settled(
             experiment, reward=final.get("reward"),
             reward_version=final.get("reward_version", "reward_v1"),

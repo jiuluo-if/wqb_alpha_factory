@@ -480,7 +480,7 @@ class ProposalExecutionWorkflow:
         """Collect one bounded read-only fact set for candidate admission."""
         ctx = self._ctx
         hooks = ctx.hooks
-        terminal_expressions, terminal_fingerprints = hooks.terminal_identities(
+        _terminal_expressions, terminal_fingerprints = hooks.terminal_identities(
             [item.get("expression") for item in proposal_list if isinstance(item, dict)]
         )
         discovered_profiles = {}
@@ -533,7 +533,10 @@ class ProposalExecutionWorkflow:
              if isinstance(item, dict)]
         )
         return AdmissionFacts(
-            research_seen=frozenset(terminal_expressions),
+            research_seen=frozenset({
+                "settings::" + str(fingerprint).removeprefix("settings::")
+                for fingerprint in terminal_fingerprints
+            }),
             batch_execution_fingerprints=frozenset({
                 str(fingerprint).removeprefix("settings::")
                 for fingerprint in terminal_fingerprints

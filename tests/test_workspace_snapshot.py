@@ -7,6 +7,22 @@ from wqb_agent.workspace_snapshot import read_workspace_snapshot
 
 
 class TestWorkspaceSnapshotBoundaries(unittest.TestCase):
+    def test_memory_replay_compaction_is_audited_opaquely(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "experience.json"), "w", encoding="utf-8") as handle:
+                json.dump({
+                    "short_term": [{
+                        "source_key": "current-source",
+                        "_source_receipt_compaction": {
+                            "opaque_digest": "deadbeef12345678",
+                            "compacted_count": 11,
+                        },
+                    }],
+                }, handle)
+            snapshot = read_workspace_snapshot(tmp)
+        self.assertEqual(snapshot.replay.memory_receipt_compactions,
+                         (("deadbeef12345678", 11),))
+
     def test_malformed_checkpoint_and_json_remain_visible_as_unreadable(self):
         with tempfile.TemporaryDirectory() as tmp:
             with open(os.path.join(tmp, "round_1.checkpoint.json"), "w", encoding="utf-8") as handle:

@@ -46,6 +46,12 @@ def audit_state(state_dir, *, snapshot=None, lifecycle_persistent=True):
     if replay.legacy_unverifiable_entries:
         record("LEGACY_MEMORY_REPLAY_UNVERIFIABLE", "experience_memory",
                severity="WARN", entries=replay.legacy_unverifiable_entries)
+    if replay.memory_receipt_compactions:
+        record("MEMORY_REPLAY_COMPACTION", "experience_memory",
+               severity="WARN", compactions=[
+                   {"opaque_digest": digest, "compacted_count": count}
+                   for digest, count in replay.memory_receipt_compactions
+               ])
     trajectory_ids = set(trajectory_summary.trajectory_ids)
     observed_committed = set(trajectory_summary.observed_committed)
     observed_submitted = set(trajectory_summary.observed_submitted)
