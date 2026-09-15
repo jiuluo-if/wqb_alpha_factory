@@ -312,6 +312,59 @@ pin 已由当前 SHA run 193 验证成功；多轮性能 benchmark 不因本轮�
 workflow、manager 或 dependency framework。Phase V architecture contracts 报告 0 个 import cycle
 和 0 个 forbidden dependency violation。
 
+## Architecture Modernization Phase VI（2026-09-15）
+
+本阶段把 targeted runner 作为 verification routing infrastructure，并收紧模型/owner 与测试归属：
+
+| 指标 | Phase VI 开始 | 当前 |
+|---|---:|---:|
+| 活跃 production Python boundary | 116 | 117 |
+| 有显式 route 的 production boundary | 75 | 117 |
+| 映射目标缺失 | 0（未审计） | 0 |
+| active test unreachable | 20（未分类） | 0 |
+| `DIRECT_TESTS` entries | 115 | 128 |
+| mapping fan-out median / p95 / max | 未记录 | 2 / 5 / 8 |
+| `tests/test_architecture.py` LOC | 421 | deleted |
+| `tests/test_architecture_contracts.py` LOC | 236 | 280 |
+| `tests/test_security_hardening_batch.py` LOC | 165 | deleted |
+| `state.py` LOC | 916 | 801 |
+| `experiment.py` LOC | 0 | 203 |
+| `memory.py` LOC | 1023 | 1048 |
+| `memory_policy.py` / `memory_projection.py` LOC | 41 / 0 | 41 / 106 |
+
+`scripts/run_targeted_tests.py` 现在对 active production boundary、missing target、duplicate key 和
+显式 test route 做 fail-closed inventory；不会把 unmapped code fallback 到全仓测试。当前 mapping graph
+为 117/117，mapped target 与 active test 均无 stale/unreachable 项。高 fan-out 仍集中在
+`trial_ledger.py`（8）、`proposal_execution.py`/`alpha_factory.py`（7），均对应跨 owner lifecycle、
+exactly-once 或 proposal safety；普通 owner 维持 median 2、p95 5，不以扩大 common contract set
+伪造安全性。
+
+`test_architecture.py` 的 dependency/config/safety assertions 已按 owner 迁移或删除：长期唯一静态
+architecture suite 是 `test_architecture_contracts.py`，行为安全仍由 runtime/proposal/checkpoint/client
+owner tests 负责。Security batch 的 15 个行为测试迁入 `test_artifacts.py`、`test_state.py`、
+`test_client_refactor.py`、`test_validation_statistics.py` 和 `test_research_api.py`，旧文件及其
+target routes 已删除。
+
+`wqb_agent.experiment` 只拥有 Experiment schema、dataset normalization、execution/settlement identity
+projection 和 status vocabulary，不导入 state/filesystem/workflow/client；`state.py` 通过兼容 re-export
+保留外部旧 import，Trajectory 仍是唯一 append-only JSONL owner。Experiment 的字段、JSON keys、legacy
+decode、schema versions 与 32-hex ID 均未改变。
+
+ExperienceMemory 仍唯一拥有 `experience.json` 与 `garbage.json`、source replay、mutation 和 save/load。
+只下沉短期排序、next freshness、garbage statistics、learning-context 的无副作用 projection；没有新增
+durable index、SQLite memory store、第二套 state 或 framework fixture。
+
+删除证据：
+
+| deleted item | classification | replacement contract / owner |
+|---|---|---|
+| `tests/test_architecture.py` | HISTORICAL_SHAPE / duplicate dependency assertions | `test_architecture_contracts.py`、runtime/config owner tests |
+| `tests/test_security_hardening_batch.py` | DEAD batch container | artifacts/state/client/statistics/research_api owner tests |
+| stale batch and old architecture routes | DEAD | explicit owner-local routes in `run_targeted_tests.py` |
+
+Phase VI 未改变经济机制、研究阈值、PSR/DSR/PBO、quota、Simulation/recovery、Trajectory strict read、
+TrialLedger durable truth 或 ExperienceMemory persistence contract。
+
 ## 变更规则
 
 触碰 owner、proposal/schema、state merge 或安全边界时，必须增加行为/回归测试并更新本文件。公共文档只保留当前 contract；历史由 Git 承担，隐私规则见 [`PRIVACY.md`](PRIVACY.md)，研究方法见 [`RESEARCH_POLICY.md`](RESEARCH_POLICY.md)。
