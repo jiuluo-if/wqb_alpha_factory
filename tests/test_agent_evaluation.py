@@ -134,6 +134,22 @@ class TmpStateMixin:
 
 
 class TestReflection(TmpStateMixin, unittest.TestCase):
+    def test_reflect_normalizes_effective_evidence_once_per_experiment(self):
+        from wqb_agent import reflection_evaluation
+
+        memory = ExperienceMemory(state_dir=self._tmp)
+        reflector = Reflector(memory)
+        exp = Experiment(1, "h", "rank(x)", {}, ["x"])
+        exp.status = "DONE"
+        exp.metrics = _fake_metrics("rank(x)")
+        with mock.patch.object(
+            reflection_evaluation,
+            "normalized_metrics",
+            wraps=reflection_evaluation.normalized_metrics,
+        ) as normalize:
+            reflector.reflect(1, {"id": "h", "direction": "long"}, [exp])
+        self.assertEqual(normalize.call_count, 1)
+
     def test_failed_high_score_does_not_replace_best(self):
         memory = ExperienceMemory(state_dir=self._tmp)
         reflector = Reflector(memory)

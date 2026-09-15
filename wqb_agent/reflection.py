@@ -19,18 +19,13 @@ sign mismatch) do not block SUCCESS on their own.
 
 import re
 
-from .evidence import overlay_cached_checks
 from .experiment import research_settlement_identity
 from .failures import (
     classify_experiment,
     is_research_relevant,
 )
-from .metrics import check_pass, checks_passed, normalized_metrics, score_of
-from .reflection_evaluation import (
-    categorize_check,
-    diagnosis_from,
-    quality_gate,
-)
+from .metrics import checks_passed, score_of
+from .reflection_evaluation import diagnose_error, evaluate_experiment
 from .reflection_learning import (
     direction_key,
     experiment_score,
@@ -106,9 +101,10 @@ class Reflector:
         )
         results = []
         for exp in experiments:
-            verdict = self._classify(exp)
-            results.append({"experiment": exp, "verdict": verdict})
-            self._learn(round_no, hypothesis, exp, verdict)
+            evaluation = self._evaluation(exp)
+            verdict = evaluation["verdict"]
+            results.append({"experiment": exp, "verdict": verdict, "evaluation": evaluation})
+            self._learn(round_no, hypothesis, exp, verdict, evaluation=evaluation)
 
         old_best_id = (self.memory.current_best or {}).get("id")
         best = self._update_best(results, validation_candidates=validation_candidates)
@@ -143,142 +139,23 @@ class Reflector:
     # ----------------------------------------------------------- classify
 
     def _classify(self, exp):
-        if exp.status in ("SKIPPED_STALE", "SKIPPED_UNKNOWN"):
-            return {
-                "label": "SKIPPED",
-                "reason": "execution skipped after repeated read-only reconciliation; no research conclusion",
-                "diagnosis": ["reconciliation_stale"],
-                "kind": None,
-                "notes": [],
-            }
-        if exp.status == "UNKNOWN":
-            # 本地异常不证明 POST 未发生：先只读对账，不当作方向结论。
-            return {
-                "label": "FAIL",
-                "reason": "UNKNOWN: requires read-only reconciliation before retry",
-                "diagnosis": ["unknown"],
-                "kind": None,
-                "notes": [],
-            }
-        if exp.status == "FAILED":
-            kind = classify_experiment(exp)
-            return {
-                "label": "FAIL",
-                "reason": self._diagnose_error(exp),
-                "diagnosis": ["runtime"],
-                "kind": kind,
-                "notes": [],
-            }
-        metrics = exp.metrics or {}
-        # 平台证据缓存叠加：SELF_CORRELATION 等异步检查在模拟完成时通常仍为
-        # PENDING；缓存侧车提供平台侧已结算结果，仅用于本判定视图。
-        cached = (self.evidence_cache or {}).get(getattr(exp, "alpha_id", None))
-        if cached:
-            metrics = overlay_cached_checks(
-                metrics, cached, self.self_correlation_limit
-            )
-        metrics = normalized_metrics(metrics)
-        required_metrics = ("sharpe", "fitness", "turnover", "returns", "drawdown", "margin")
-        checks = metrics.get("checks")
-        malformed_checks = not (
-            isinstance(checks, list) and checks
-            and all(isinstance(check, dict) and check.get("name")
-                    and check_pass(check) is not None for check in checks)
-        )
-        missing_metrics = [name for name in required_metrics if metrics.get(name) is None]
-        if malformed_checks or missing_metrics:
-            return {
-                "label": "RECONCILE",
-                "reason": "mandatory checks/metrics incomplete; promotion and research decision deferred",
-                "diagnosis": (
-                    (["missing_checks"] if malformed_checks else [])
-                    + (["missing_metrics"] if missing_metrics else [])
-                ),
-                "kind": None,
-                "notes": [],
-            }
-        sharpe = metrics.get("sharpe")
-        if sharpe is None:
-            return {"label": "FAIL", "reason": "missing sharpe metric",
-                    "diagnosis": ["missing_metrics"], "kind": None, "notes": []}
+        return self._evaluation(exp)["verdict"]
 
-        # 仅权重集中/极窄持仓才是噪声陷阱。健康检查还会报告
-        # LOW_SUB_UNIVERSE_SHARPE；把后者误标为 weight_concentration 会污染
-        # 后续的失败模式学习，因此它应继续走真实 checks 的诊断路径。
-        health = getattr(exp, "health", None)
-        health_reasons = (health or {}).get("reasons") or []
-        concentrated = any(
-            "concentrated_weight" in str(reason).lower()
-            or "longcount=" in str(reason).lower()
-            or "shortcount=" in str(reason).lower()
-            for reason in health_reasons
-        )
-        if concentrated:
-            return {
-                "label": "FAIL",
-                "reason": "NOISE_TRAP: " + "; ".join(health_reasons),
-                "diagnosis": ["weight_concentration"],
-                "notes": [],
-            }
-
-        fitness = metrics.get("fitness")
-        if (sharpe is not None and sharpe > 3) or (fitness is not None and fitness > 8):
-            return {
-                "label": "SUSPICIOUS_HIGH_SIGNAL",
-                "reason": "SUSPICIOUS_HIGH_SIGNAL: requires independent perturbation validation",
-                "diagnosis": ["high_signal_unvalidated"],
-                "notes": [],
-            }
-
-        hard, soft = self._quality_gate(metrics)
-        if not hard:
-            reason = " or ".join(soft) or "passed comprehensive gate"
-            return {"label": "SUCCESS", "reason": reason,
-                    "diagnosis": [], "notes": soft}
-
-        reason = " or ".join(hard + soft) or "below quality gate"
-        # 2026-08-22 用户政策：sharpe>promising_sharpe OR fitness>promising_fitness
-        # 且换手在允许范围内（hard 中未含换手问题时）即视为有信号，可进入优化。
-        signal = (sharpe is not None and sharpe > self.promising_sharpe) or (
-            fitness is not None and fitness > self.promising_fitness
-        )
-        turnover_ok = not any("turnover" in h for h in hard)
-        if signal and turnover_ok:
-            return {"label": "PROMISING", "reason": reason,
-                    "diagnosis": self._diagnosis_from(hard + soft), "notes": soft}
-        return {"label": "FAIL", "reason": reason,
-                "diagnosis": self._diagnosis_from(hard + soft), "notes": soft}
-
-    def _quality_gate(self, metrics):
-        """Comprehensive judgment over all six metrics + submission checks.
-        Returns (hard_issues, soft_notes)."""
-        return quality_gate(
-            metrics, success_sharpe=self.success_sharpe,
-            success_fitness=self.success_fitness, min_turnover=self.min_turnover,
-            max_turnover=self.max_turnover, max_drawdown=self.max_drawdown,
+    def _evaluation(self, exp):
+        return evaluate_experiment(
+            exp, evidence_cache=self.evidence_cache,
+            self_correlation_limit=self.self_correlation_limit,
+            success_sharpe=self.success_sharpe,
+            promising_sharpe=self.promising_sharpe,
+            promising_fitness=self.promising_fitness,
+            success_fitness=self.success_fitness,
+            min_turnover=self.min_turnover,
+            max_turnover=self.max_turnover,
+            max_drawdown=self.max_drawdown,
+            check_diagnosis=CHECK_DIAGNOSIS,
         )
 
-    @staticmethod
-    def _diagnosis_from(issues):
-        return diagnosis_from(issues, CHECK_DIAGNOSIS)
-
-    @staticmethod
-    def _categorize_check(name):
-        return categorize_check(name, CHECK_DIAGNOSIS)
-
-    def _diagnose_error(self, exp):
-        error = exp.error or ""
-        if "Simulation rejected" in error or "422" in error or "400" in error:
-            return f"syntax/settings rejection: {error[:120]}"
-        if "timed out" in error.lower():
-            return "polling timed out"
-        if "PLATFORM_ERROR" in error or "500" in error:
-            return f"platform error (not an alpha-quality issue): {error[:120]}"
-        return f"runtime error: {error[:120]}"
-
-    # -------------------------------------------------------------- learn
-
-    def _learn(self, round_no, hypothesis, exp, verdict):
+    def _learn(self, round_no, hypothesis, exp, verdict, *, evaluation=None):
         if exp.status in ("SKIPPED_STALE", "SKIPPED_UNKNOWN"):
             return
         if exp.status == "UNKNOWN":
@@ -322,14 +199,14 @@ class Reflector:
                 )
                 return
             self.memory.add_avoid(
-                self._direction_key(exp),
-                self._diagnose_error(exp),
+                direction_key(exp),
+                diagnose_error(exp.error),
                 round_no,
                 source_key=self._settlement_key(exp, "avoid-failure"),
             )
             return
 
-        metrics = normalized_metrics(exp.metrics or {})
+        metrics = (evaluation or self._evaluation(exp))["metrics"]
         fields = exp.fields_used
         field_label = ",".join(fields) if fields else "?"
 
@@ -352,7 +229,7 @@ class Reflector:
             )
         else:
             self.memory.add_avoid(
-                self._direction_key(exp),
+                direction_key(exp),
                 f"sharpe={metrics.get('sharpe')}, fitness={metrics.get('fitness')}, "
                 f"turnover={metrics.get('turnover')}, drawdown={metrics.get('drawdown')}, "
                 f"margin={metrics.get('margin')}; diagnosis={verdict.get('diagnosis')}",
@@ -371,16 +248,7 @@ class Reflector:
                 source_key=self._settlement_key(exp, "turnover"),
             )
 
-    @staticmethod
-    def _direction_key(exp):
-        return direction_key(exp)
-
     # --------------------------------------------------------------- best
-
-    @staticmethod
-    def _exp_score(exp):
-        """实验统一评分（复用 metrics.score_of，只算有指标的实验）。"""
-        return experiment_score(exp)
 
     def _update_best(self, results, validation_candidates=None):
         done = [
@@ -409,8 +277,8 @@ class Reflector:
                     and report.get("candidate") == "parent"):
                 return current
             return None
-        best_exp = max(done, key=lambda r: self._exp_score(r["experiment"]))["experiment"]
-        best_score = self._exp_score(best_exp)
+        best_exp = max(done, key=lambda r: experiment_score(r["experiment"]))["experiment"]
+        best_score = experiment_score(best_exp)
         current_score = None
         if self.memory.current_best and self.memory.current_best.get("metrics"):
             current_score = score_of(self.memory.current_best["metrics"])
@@ -433,7 +301,7 @@ class Reflector:
             # 纪律只适用于已达可提交标准（过硬质量门 SUCCESS）的候选；有信号但
             # 未达标（PROMISING）或未定论的谱系不因次数关闭，换优化变量类别继续。
             decision = self.memory.record_lineage_result(
-                lineage_id, self._exp_score(exp), label, round_no,
+                lineage_id, experiment_score(exp), label, round_no,
                 counts_toward_stop=(label == "SUCCESS"),
                 source_key=self._settlement_key(exp, "lineage"),
                 experiment_id=exp.id,
@@ -519,15 +387,6 @@ class Reflector:
     def _interpretation(hypothesis):
         return interpretation(hypothesis, HYPOTHESIS_OUTCOMES)
 
-    def _metrics_view(self, exp):
-        metrics = exp.metrics or {}
-        cached = (self.evidence_cache or {}).get(getattr(exp, "alpha_id", None))
-        if cached:
-            metrics = overlay_cached_checks(
-                metrics, cached, self.self_correlation_limit
-            )
-        return normalized_metrics(metrics)
-
     def _evidence_complete(self, result):
         exp = result["experiment"]
         label = result["verdict"]["label"]
@@ -536,7 +395,7 @@ class Reflector:
         if label == "SUSPICIOUS_HIGH_SIGNAL":
             if not self._validation_confirmed(exp):
                 return False
-        metrics = self._metrics_view(exp)
+        metrics = (result.get("evaluation") or self._evaluation(exp))["metrics"]
         required = ("sharpe", "fitness", "turnover", "returns", "drawdown", "margin")
         if any(metrics.get(key) is None for key in required):
             return False
