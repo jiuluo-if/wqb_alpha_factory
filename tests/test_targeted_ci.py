@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from scripts.run_targeted_tests import TargetSelectionError, select_tests
+from scripts.run_targeted_tests import (
+    TargetSelectionError,
+    mapping_inventory,
+    select_tests,
+    validate_mapping_integrity,
+)
 
 
 class TargetedCiSelectionTests(unittest.TestCase):
@@ -24,3 +29,16 @@ class TargetedCiSelectionTests(unittest.TestCase):
 
     def test_docs_only_change_has_no_unit_test_selection(self):
         self.assertEqual(select_tests(["docs/TESTING.md", "AGENTS.md"]), ())
+
+    def test_mapping_graph_is_complete_and_stale_free(self):
+        inventory = validate_mapping_integrity()
+
+        self.assertEqual(inventory["unmapped_production_files"], set())
+        self.assertEqual(inventory["mapped_missing_tests"], set())
+        self.assertEqual(inventory["duplicate_keys"], False)
+
+    def test_mapping_inventory_reports_every_active_test_route(self):
+        inventory = mapping_inventory()
+
+        self.assertNotIn("tests/test_targeted_ci.py", inventory["unreachable_tests"])
+        self.assertNotIn("tests/test_dependency_constraints.py", inventory["unreachable_tests"])
