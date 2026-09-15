@@ -193,7 +193,10 @@ class OptimizerWorkflow:
         iterate = getattr(self.trajectory, "iter_canonical_rows", None)
         if callable(iterate) and getattr(self.trajectory, "persist", True):
             rows = list(iterate())
-            return OptimizerLocalEvidenceView.from_rows(rows[-max(1, int(limit or 256)):])
+            if rows:
+                return OptimizerLocalEvidenceView.from_rows(
+                    rows[-max(1, int(limit or 256)):]
+                )
         return OptimizerLocalEvidenceView.from_rows(
             self.trajectory.recent(max(1, int(limit or 256)))
         )
