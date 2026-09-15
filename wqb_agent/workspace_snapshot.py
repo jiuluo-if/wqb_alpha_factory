@@ -152,6 +152,7 @@ class WorkspaceSnapshot:
     evidence_cache_entries: int = 0
     unresolved_submission_identity_collisions: int = 0
     replay: ReplayAuditSummary = ReplayAuditSummary()
+    read_passes: tuple = ()
 
     @property
     def unfinished_checkpoint_paths(self):
@@ -222,7 +223,9 @@ def _observe_lifecycle(row, stats, *, require_phase, expected_schema_version):
         stats["missing_alpha_id_rows"] += 1
 
 
-def _trajectory_summary(state_dir, checkpoint_records=()):
+def _trajectory_summary(state_dir, checkpoint_records=(), read_passes=None):
+    if read_passes is not None:
+        read_passes["trajectory.jsonl"] = read_passes.get("trajectory.jsonl", 0) + 1
     trajectory = Trajectory(path=os.path.join(state_dir, "trajectory.jsonl"))
     lifecycle_stats = _new_lifecycle_stats()
     read_stats = {}
@@ -485,7 +488,9 @@ def _inventory(state_dir, names, checkpoint_records):
     return ArtifactInventory(tuple(entries)), payloads
 
 
-def _ledger_summary(path):
+def _ledger_summary(path, read_passes=None):
+    if read_passes is not None:
+        read_passes["trial_ledger.jsonl"] = read_passes.get("trial_ledger.jsonl", 0) + 1
     committed = set()
     submitted = set()
     simulation_submitted = set()
@@ -554,7 +559,9 @@ def _ledger_summary(path):
     )
 
 
-def _validation_summary(path):
+def _validation_summary(path, read_passes=None):
+    if read_passes is not None:
+        read_passes["validation_reports.jsonl"] = read_passes.get("validation_reports.jsonl", 0) + 1
     parent_ids = set()
     plan_pairs = []
     read_stats = {}
@@ -654,6 +661,7 @@ def read_workspace_snapshot(state_dir):
         names = []
     store = CheckpointStore(state_dir)
     checkpoint_records = tuple(store.scan(names=names))
+    read_passes = {"checkpoints": 1}
     inventory, payloads = _inventory(state_dir, names, checkpoint_records)
     proposals = payloads.get("proposals.json")
     experience = payloads.get("experience.json")
@@ -665,10 +673,10 @@ def read_workspace_snapshot(state_dir):
     return WorkspaceSnapshot(
         state_dir=state_dir,
         checkpoint_records=checkpoint_records,
-        trajectory=_trajectory_summary(state_dir, checkpoint_records),
+        trajectory=_trajectory_summary(state_dir, checkpoint_records, read_passes),
         inventory=inventory,
-        ledger=_ledger_summary(os.path.join(state_dir, "trial_ledger.jsonl")),
-        validation=_validation_summary(os.path.join(state_dir, "validation_reports.jsonl")),
+        ledger=_ledger_summary(os.path.join(state_dir, "trial_ledger.jsonl"), read_passes),
+        validation=_validation_summary(os.path.join(state_dir, "validation_reports.jsonl"), read_passes),
         submission_pool=_submission_pool_summary(payloads.get("submission_pool.json")),
         proposal_round=_safe_proposal_round(
             proposals.get("round_no") if isinstance(proposals, dict) else None
@@ -683,4 +691,5 @@ def read_workspace_snapshot(state_dir):
             1 for entries in unresolved_identities.values() if len(entries) > 1
         ),
         replay=replay,
+        read_passes=tuple(sorted(read_passes.items())),
     )

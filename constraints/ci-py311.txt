@@ -1,0 +1,9 @@
+# Generated from the CI Python 3.11 tool environment; refresh intentionally.
+requests==2.32.2
+setuptools==84.0.0
+ruff==0.16.5
+coverage==7.16.0
+mypy==1.20.2
+pytest==9.1.1
+pytest-xdist==3.8.0
+py-spy==0.4.2

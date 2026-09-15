@@ -1,8 +1,8 @@
 import ast
 import os
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from wqb_agent import credentials
@@ -22,6 +22,8 @@ class TestCredentialResolver(unittest.TestCase):
 
     def write_home(self, text):
         self.home_file.write_text(text, encoding="utf-8")
+        if os.name == "posix":
+            self.home_file.chmod(0o600)
 
     def test_complete_environment_pair_wins(self):
         os.environ["WQB_USERNAME"] = "env-user"
@@ -112,6 +114,8 @@ class TestCredentialResolver(unittest.TestCase):
             "BRAIN_USERNAME=dotenv-user\nBRAIN_PASSWORD=dotenv-password\n",
             encoding="utf-8",
         )
+        if os.name == "posix":
+            env_file.chmod(0o600)
         os.environ["WQB_CREDENTIALS_ENV_FILE"] = str(env_file)
 
         source = credentials.resolve_credentials(
@@ -136,6 +140,8 @@ class TestCredentialResolver(unittest.TestCase):
 
         env_file = Path(self.tmp.name) / "malformed.env"
         env_file.write_text("WQB_USERNAME=only-user\n", encoding="utf-8")
+        if os.name == "posix":
+            env_file.chmod(0o600)
         os.environ["WQB_CREDENTIALS_ENV_FILE"] = str(env_file)
         with self.assertRaises(credentials.CredentialError) as ctx:
             credentials.resolve_credentials(
@@ -155,6 +161,22 @@ class TestCredentialResolver(unittest.TestCase):
             str(ctx.exception),
             "Explicit credential environment file path must be absolute",
         )
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission contract")
+    def test_overbroad_permissions_fail_closed(self):
+        self.write_home("file-user\nfile-password\n")
+        self.home_file.chmod(0o644)
+        with self.assertRaisesRegex(credentials.CredentialError, "permissions are unsafe"):
+            credentials.resolve_credentials(credentials_file=str(self.home_file))
+
+    @unittest.skipUnless(os.name == "posix", "POSIX symlink contract")
+    def test_credential_symlink_fails_closed(self):
+        target = Path(self.tmp.name) / "target"
+        target.write_text("file-user\nfile-password\n", encoding="utf-8")
+        target.chmod(0o600)
+        self.home_file.symlink_to(target)
+        with self.assertRaisesRegex(credentials.CredentialError, "symbolic link"):
+            credentials.resolve_credentials(credentials_file=str(self.home_file))
 
     def test_implicit_cwd_and_parent_dotenv_files_are_ignored(self):
         cwd_parent = Path(self.tmp.name) / "cwd-parent"

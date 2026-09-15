@@ -3,7 +3,7 @@
 from collections import Counter, defaultdict
 
 from .schema import CREATED_BY_VERSION, SEARCH_SNAPSHOT_VERSION
-from .search_policy import BudgetAllocator, structural_fingerprint
+from .search_evidence import research_arm_key, structural_fingerprint
 
 
 class SearchSnapshot(dict):
@@ -28,7 +28,7 @@ class SearchSnapshot(dict):
             return item.get(key, default) if isinstance(item, dict) else getattr(item, key, default)
 
         def arm(item):
-            return BudgetAllocator.arm_key({
+            return research_arm_key({
                 "datasets": value(item, "datasets") or value(item, "dataset_family"),
                 "template_family": value(item, "template_family") or value(item, "mechanism_family"),
             })

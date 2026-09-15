@@ -38,6 +38,7 @@ from .proposal_contract import (
     TARGETED_BATCH_TTL_SEC,
     TARGETED_BATCH_TYPE,
     load_operator_syntax_reference,
+    load_packaged_operator_syntax_reference,
     validate_targeted_batch,
 )
 from .state import Trajectory
@@ -175,12 +176,11 @@ def _state_dir(agent=None, state_dir=None) -> str:
 def inspect_state(*, state_dir=".wqb_state", limit=10) -> dict[str, Any]:
     """Return a compact view of immutable experiment evidence and workspace files."""
     trajectory = Trajectory(max_len=max(1, int(limit)), path=os.path.join(state_dir, "trajectory.jsonl"))
-    trajectory.load()
-    recent = [row.to_dict() for row in trajectory.recent(max(1, int(limit)))]
+    summary = trajectory.load_summary(max(1, int(limit)))
     return {
         "state_dir": os.path.abspath(state_dir),
-        "experiment_count": sum(1 for _ in trajectory.iter_rows()),
-        "recent_experiments": recent,
+        "experiment_count": summary["experiment_count"],
+        "recent_experiments": [row.to_dict() for row in summary["recent_experiments"]],
         "derived_files": sorted(
             name for name in os.listdir(state_dir) if name.endswith((".json", ".md"))
         ) if os.path.isdir(state_dir) else [],
@@ -210,7 +210,7 @@ def discover_fields(query, *, agent=None, client=None, config=None, state_dir=No
 def get_operator_syntax_reference(path=None) -> dict[str, Any]:
     """Return evergreen syntax hints, never current capability truth."""
     if path is None:
-        path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs", "reference", "OPERATORS_CHEATSHEET.md")
+        return load_packaged_operator_syntax_reference()
     return load_operator_syntax_reference(path)
 
 

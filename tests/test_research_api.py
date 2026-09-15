@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 
 from wqb_agent.research_api import (
     ExperimentSpec,
@@ -138,6 +139,55 @@ class TestResearchApi(unittest.TestCase):
             self.assertEqual(result["experiment_count"], 0)
             self.assertEqual(result["recent_experiments"], [])
             self.assertEqual(compare_experiments(["missing"], state_dir=directory)["missing"], ["missing"])
+
+    def test_inspect_state_streams_trajectory_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(
+                Trajectory, "iter_rows", autospec=True, side_effect=Trajectory.iter_rows
+            ) as reader:
+                inspect_state(state_dir=directory, limit=2)
+            self.assertEqual(reader.call_count, 1)
+
+    def test_operator_reference_uses_installed_package_resource(self):
+        with mock.patch(
+            "wqb_agent.research_api.load_packaged_operator_syntax_reference",
+            return_value={"source": "STATIC_SYNTAX_REFERENCE", "operators": ["rank"]},
+        ) as loader:
+            result = __import__("wqb_agent.research_api", fromlist=["get_operator_syntax_reference"]).get_operator_syntax_reference()
+        self.assertEqual(result["operators"], ["rank"])
+        loader.assert_called_once_with()
+
+    def test_clean_wheel_reads_operator_resource_outside_checkout(self):
+        import pathlib
+        import subprocess
+        import sys
+        import zipfile
+
+        root = pathlib.Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            wheel_dir = pathlib.Path(directory) / "wheel"
+            install_dir = pathlib.Path(directory) / "install"
+            outside_dir = pathlib.Path(directory) / "outside"
+            wheel_dir.mkdir()
+            install_dir.mkdir()
+            outside_dir.mkdir()
+            subprocess.run(
+                [sys.executable, "-m", "pip", "wheel", str(root), "--no-deps", "--no-build-isolation", "-w", str(wheel_dir)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            wheel = next(wheel_dir.glob("*.whl"))
+            with zipfile.ZipFile(wheel) as archive:
+                archive.extractall(install_dir)
+            probe = (
+                "import os, sys; "
+                f"sys.path.insert(0, {str(install_dir)!r}); "
+                f"os.chdir({str(outside_dir)!r}); "
+                "from wqb_agent.research_api import get_operator_syntax_reference; "
+                "assert 'rank' in get_operator_syntax_reference()['operators']"
+            )
+            subprocess.run([sys.executable, "-c", probe], check=True, capture_output=True, text=True)
 
     def test_optimizer_context_facade_is_bounded_and_needs_no_agent_object(self):
         agent = _FakeAgent(tempfile.gettempdir())

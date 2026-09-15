@@ -28,7 +28,7 @@ from .identity import candidate_identity
 from .locking import StateMutationDelegation, single_instance_scope
 from .optimization_decision import optimization_decision_identity
 from .schema import CREATED_BY_VERSION, TRIAL_LEDGER_VERSION
-from .search_policy import structural_fingerprint
+from .search_evidence import structural_fingerprint
 
 PHASES = {
     "generated", "preflight", "submitted", "completed",

@@ -878,17 +878,39 @@ class Trajectory:
             self._completed_expression_cache.clear()
         return self
 
+    def load_summary(self, recent_limit=10):
+        """Stream raw rows once and return the existing bounded recent view."""
+        try:
+            recent_limit = max(1, int(recent_limit))
+        except (TypeError, ValueError):
+            recent_limit = 10
+        tail_limit = recent_limit * _LOAD_LINES_PER_EXPERIMENT
+        recent_rows = []
+        count = 0
+        for row in self.iter_rows() or ():
+            count += 1
+            recent_rows.append(row)
+            if len(recent_rows) > tail_limit:
+                del recent_rows[0]
+        self.experiments = self._merge_rows(recent_rows)[-self.max_len:]
+        self._recent_ids = {experiment.id for experiment in self.experiments}
+        self._completed_expression_cache.clear()
+        return {"experiment_count": count, "recent_experiments": self.recent(recent_limit)}
+
     def _merge_rows(self, lines):
         """Merge append-only rows into the canonical current Experiment view."""
         merged = {}
         for line in lines or ():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-            except (TypeError, ValueError, json.JSONDecodeError):
-                continue
+            if isinstance(line, dict):
+                row = line
+            else:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
             if not isinstance(row, dict) or not row.get("id"):
                 continue
             try:

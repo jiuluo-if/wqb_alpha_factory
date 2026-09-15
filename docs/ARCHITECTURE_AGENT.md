@@ -275,6 +275,35 @@ candidate-rejection forwarding method。离线基准命令为
 proposal/factory/architecture lane 262 tests 也通过。TrialLedger 基准为单次离线样本，不能替代
 多轮稳定性比较。
 
+## Architecture Modernization Phase V（2026-09-15）
+
+本阶段停止按 LOC 继续拆分大模块，改为收紧统计、搜索、安装态、安全和可复现性边界：
+
+| owner | baseline LOC | current LOC | result |
+|---|---:|---:|---|
+| `validation_report.py` | 628 | 429 | 纯 PSR/DSR/PBO 实现迁至 `validation_statistics.py`（171 LOC）；旧导入路径保留 |
+| `search_policy.py` | 571 | 381 | `BudgetAllocator`/lifecycle 留在原 owner；证据迁至 `search_evidence.py`（186 LOC） |
+| `search_snapshot.py` | 139 | 139 | 不再依赖 mutable `BudgetAllocator`，直接使用 `search_evidence` |
+| `research_api.py` | 639 | 639 | 默认 operator reference 改为 package resource；显式 path 兼容保留 |
+| `credentials.py` | 147 | 167 | POSIX 同 descriptor 验证 regular/private/non-symlink；Windows 跳过 chmod 语义并依赖 ACL |
+| `workspace_snapshot.py` | 686 | 695 | 保持单一 read-only owner，加入 request-local `read_passes` instrumentation |
+
+`research_api.inspect_state()` 由 `Trajectory.load()` + 第二次完整扫描改为一次 bounded streaming pass，
+保留原始 row count 与 bounded canonical recent records。clean-wheel smoke 在脱离仓库 cwd 的临时
+解压环境读取 `wqb_agent.reference/OPERATORS_CHEATSHEET.md` 成功，无 credential/BRAIN 依赖。
+
+CI reproducibility 使用 `constraints/ci-py311.txt` 约束当前 runtime/dev/perf direct dependencies；
+dependency drift test 会对 `pyproject.toml` 的 direct entries fail closed。Actions 从 2 个 floating
+major refs 收紧为 0 个：checkout `v4.2.2` 使用已验证 SHA
+`11bd71901bbe5b1630ceea73d27597364c9af683`，setup-python `v5.6.0` 使用已验证 SHA
+`a26af69be951a213d495a4c3e4e4022e16d87065`。CI 不新增 coverage gate，默认仍为 explicit targeted
+Fast Lane + syntax/Ruff/typed frontier/offline doctor/audit/privacy。
+
+Phase V architecture lane 增加统计内核、搜索证据、snapshot 反向依赖、installed facade 与 dependency
+constraint contracts；本阶段未改变 PSR/DSR/PBO、UCB/novelty、credential source priority、workspace
+state ownership 或任一冻结 Simulation/recovery contract。当前真实剩余债务仅包括：CI 新约束与 Action
+pin 需要当前 SHA 的最终 workflow 成功证据；多轮性能 benchmark 不因本轮未触碰的路径重复运行。
+
 ## 变更规则
 
 触碰 owner、proposal/schema、state merge 或安全边界时，必须增加行为/回归测试并更新本文件。公共文档只保留当前 contract；历史由 Git 承担，隐私规则见 [`PRIVACY.md`](PRIVACY.md)，研究方法见 [`RESEARCH_POLICY.md`](RESEARCH_POLICY.md)。

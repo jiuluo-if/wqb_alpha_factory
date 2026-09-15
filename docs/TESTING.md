@@ -39,7 +39,7 @@ typed frontier 是配置、运行时装配、凭据、Suggestion/Alpha Feed/Opti
 
 ## Coverage
 
-覆盖率不是 CI 的全仓测试入口。若未来需要覆盖率，必须对明确选定的相关测试模块运行，并单独说明范围；不得通过 coverage 恢复全量测试。安全关键 production 模块不得通过 omit 排除。
+覆盖率是可选的本地工具，不是 CI gate 或全仓测试入口。若未来需要覆盖率，必须对明确选定的相关测试模块运行，并单独说明范围；不得通过 coverage 恢复全量测试。安全关键 production 模块不得通过 omit 排除。
 
 ## Slow / Benchmark Tests
 

@@ -184,6 +184,28 @@ class ArchitectureDependencyContracts(unittest.TestCase):
                 f"{sorted(forbidden & dependencies)}",
             )
 
+    def test_phase_five_statistics_and_search_boundaries(self):
+        statistics_imports = _imports(ROOT / "wqb_agent/validation_statistics.py")
+        self.assertTrue({
+            "wqb_agent.state", "wqb_agent.client", "wqb_agent.proposal_execution",
+            "wqb_agent.optimizer_workflow",
+        }.isdisjoint(statistics_imports))
+        search_imports = _imports(ROOT / "wqb_agent/search_evidence.py")
+        self.assertTrue({
+            "wqb_agent.search_policy", "wqb_agent.search_snapshot", "wqb_agent.agent",
+            "wqb_agent.client",
+        }.isdisjoint(search_imports))
+        snapshot_imports = _imports(ROOT / "wqb_agent/search_snapshot.py")
+        self.assertNotIn("wqb_agent.search_policy", snapshot_imports)
+        validation = (ROOT / "wqb_agent/validation_report.py").read_text(encoding="utf-8")
+        self.assertNotIn("def pbo_proxy(", validation)
+        self.assertIn("from .validation_statistics", validation)
+
+    def test_installed_facade_delegates_operator_resource(self):
+        source = (ROOT / "wqb_agent/research_api.py").read_text(encoding="utf-8")
+        self.assertIn("load_packaged_operator_syntax_reference", source)
+        self.assertNotIn("importlib.resources", source)
+
     def test_factory_probe_is_canonical_and_runner_has_no_probe_wrappers(self):
         runner = (ROOT / "wqb_agent/factory_runner.py").read_text(encoding="utf-8")
         self.assertNotIn("def _selection_probe(", runner)

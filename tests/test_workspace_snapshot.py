@@ -149,6 +149,16 @@ class TestWorkspaceSnapshotBoundaries(unittest.TestCase):
         self.assertEqual(snapshot.trajectory.records, 0)
         self.assertEqual(snapshot.ledger.committed, frozenset())
 
+    def test_read_pass_inventory_is_request_local_and_bounded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot = read_workspace_snapshot(tmp)
+        self.assertEqual(dict(snapshot.read_passes), {
+            "checkpoints": 1,
+            "trajectory.jsonl": 1,
+            "trial_ledger.jsonl": 1,
+            "validation_reports.jsonl": 1,
+        })
+
     def test_large_trajectory_uses_bounded_summary_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "trajectory.jsonl")

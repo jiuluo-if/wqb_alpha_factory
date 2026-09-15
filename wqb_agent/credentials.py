@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import os
+import stat
 from dataclasses import dataclass, field
-
 
 DEFAULT_CREDENTIALS_FILE = os.path.expanduser("~/.brain_credentials.txt")
 EXPLICIT_ENV_FILE_VARIABLE = "WQB_CREDENTIALS_ENV_FILE"
@@ -42,9 +42,30 @@ def _complete_pair(username, password, *, source):
 
 
 def _read_text_lines(path, *, source):
+    if os.name == "posix" and os.path.islink(path):
+        raise CredentialError(f"{source} must not be a symbolic link")
     try:
+        if os.name == "posix":
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(path, flags)
+            try:
+                file_info = os.fstat(descriptor)
+                if not stat.S_ISREG(file_info.st_mode):
+                    raise CredentialError(f"{source} must be a regular file")
+                if file_info.st_mode & 0o077:
+                    raise CredentialError(
+                        f"{source} permissions are unsafe; credential file permissions must be private"
+                    )
+                with os.fdopen(descriptor, encoding="utf-8") as stream:
+                    descriptor = None
+                    return [line.strip() for line in stream if line.strip()]
+            finally:
+                if descriptor is not None:
+                    os.close(descriptor)
         with open(path, encoding="utf-8") as stream:
             return [line.strip() for line in stream if line.strip()]
+    except CredentialError:
+        raise
     except (OSError, UnicodeError) as exc:
         raise CredentialError(f"{source} exists but is unreadable") from exc
 
@@ -59,19 +80,18 @@ def _read_credentials_file(path):
 
 
 def _parse_env_file(path, *, username_env, password_env):
+    values = {}
     try:
-        with open(path, encoding="utf-8") as stream:
-            values = {}
-            for line in stream:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, _, value = line.partition("=")
-                values[key.strip()] = value.strip().strip('"').strip("'")
-    except (OSError, UnicodeError) as exc:
-        raise CredentialError(
-            "Explicit credential environment file is unreadable"
-        ) from exc
+        lines = _read_text_lines(path, source="Explicit credential environment file")
+    except CredentialError as exc:
+        if any(token in str(exc) for token in ("permissions are unsafe", "symbolic link", "regular file")):
+            raise
+        raise CredentialError("Explicit credential environment file is unreadable") from exc
+    for line in lines:
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        values[key.strip()] = value.strip().strip('"').strip("'")
 
     username = values.get(username_env) or values.get("BRAIN_USERNAME")
     password = values.get(password_env) or values.get("BRAIN_PASSWORD")

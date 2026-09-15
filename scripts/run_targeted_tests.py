@@ -175,6 +175,21 @@ DIRECT_TESTS = {
         "tests/test_evaluation.py",
         "tests/test_security_hardening_batch.py",
     ),
+    "wqb_agent/validation_statistics.py": (
+        "tests/test_validation_statistics.py",
+        "tests/test_validation_report.py",
+        "tests/test_evaluation.py",
+        "tests/test_security_hardening_batch.py",
+    ),
+    "wqb_agent/search_evidence.py": (
+        "tests/test_search_policy.py",
+        "tests/test_evaluation.py",
+    ),
+    "wqb_agent/search_snapshot.py": (
+        "tests/test_search_policy.py",
+        "tests/test_evaluation.py",
+        "tests/test_runtime_safety.py",
+    ),
     "wqb_agent/memory.py": (
         "tests/test_memory_tiers.py",
         "tests/test_agent_evaluation.py",
@@ -337,6 +352,10 @@ DIRECT_TESTS = {
         "tests/test_research_api.py",
         "tests/test_proposal_safety.py",
         "tests/test_targeted_batch_contract.py",
+    ),
+    "wqb_agent/credentials.py": (
+        "tests/test_credentials.py",
+        "tests/test_runtime_safety.py",
     ),
     "wqb_agent/runtime_components.py": (
         "tests/test_runtime_composition.py",

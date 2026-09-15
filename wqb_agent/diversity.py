@@ -20,7 +20,7 @@ from collections import Counter
 
 from .expression import analyze_expression, canonical_expression
 from .metrics import score_of
-from .search_policy import research_arm_key
+from .search_evidence import research_arm_key
 
 _FIELD_TOKEN_RE = re.compile(r"[a-z0-9_]+")
 _BUDGET_PRIORITY_ORDER = {"HIGH": 0, "NORMAL": 1, "LOW": 2}

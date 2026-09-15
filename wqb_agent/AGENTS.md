@@ -79,7 +79,7 @@ python -m ruff check <changed-python-files>
 
 仅当 typed frontier 被改动时，运行对应的 mypy。typed frontier 只包含上述九个边界清晰模块；全局 mypy 保持非 strict，不为类型检查重写 `agent.py`、`client.py`、`simulator.py` 或 `proposal_execution.py`。
 
-CI 先执行由 `scripts/run_targeted_tests.py` 显式映射选择的 targeted Fast Lane，映射缺失时 fail-closed；随后执行 whole-repository test 作为最终回归门禁。静态检查和 offline doctor/audit/privacy 仍按 workflow 需要执行。
+CI 先执行由 `scripts/run_targeted_tests.py` 显式映射选择的 targeted Fast Lane，映射缺失时 fail-closed；不把 whole-repository test 或 coverage 作为每次回归门禁。静态检查和 offline doctor/audit/privacy 仍按 workflow 需要执行。
 
 ```powershell
 python scripts/run_targeted_tests.py --base-sha <CI base SHA>
