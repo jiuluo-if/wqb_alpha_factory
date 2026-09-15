@@ -291,6 +291,9 @@ proposal/factory/architecture lane 262 tests 也通过。TrialLedger 基准为�
 `research_api.inspect_state()` 由 `Trajectory.load()` + 第二次完整扫描改为一次 bounded streaming pass，
 保留原始 row count 与 bounded canonical recent records。clean-wheel smoke 在脱离仓库 cwd 的临时
 解压环境读取 `wqb_agent.reference/OPERATORS_CHEATSHEET.md` 成功，无 credential/BRAIN 依赖。
+read-pass instrumentation 的当前证据为：trajectory `2 → 1`，trial ledger `1 → 1`，validation
+reports `1 → 1`，checkpoint scan `1 → 1`；snapshot 仍不建立 durable cache，且没有把完整历史
+加载进 Python object graph。
 
 CI reproducibility 使用 `constraints/ci-py311.txt` 约束当前 runtime/dev/perf direct dependencies；
 dependency drift test 会对 `pyproject.toml` 的 direct entries fail closed。Actions 从 2 个 floating
@@ -302,7 +305,12 @@ Fast Lane + syntax/Ruff/typed frontier/offline doctor/audit/privacy。
 Phase V architecture lane 增加统计内核、搜索证据、snapshot 反向依赖、installed facade 与 dependency
 constraint contracts；本阶段未改变 PSR/DSR/PBO、UCB/novelty、credential source priority、workspace
 state ownership 或任一冻结 Simulation/recovery contract。当前真实剩余债务仅包括：CI 新约束与 Action
-pin 需要当前 SHA 的最终 workflow 成功证据；多轮性能 benchmark 不因本轮未触碰的路径重复运行。
+pin 已由当前 SHA run 193 验证成功；多轮性能 benchmark 不因本轮未触碰的路径重复运行。
+
+精准 cleanup：删除 `validation_report.py` 中 7 个统计实现、`search_policy.py` 中 10 个纯证据实现
+及无 consumer 的 `subtree_fingerprints()`；生产 imports 改指向 canonical owners，未新增 state、
+workflow、manager 或 dependency framework。Phase V architecture contracts 报告 0 个 import cycle
+和 0 个 forbidden dependency violation。
 
 ## 变更规则
 
