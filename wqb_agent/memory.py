@@ -70,6 +70,7 @@ _EPHEMERAL_HYPOTHESIS_ID = re.compile(
 
 # Kinds allowed in the short-term tier.
 SHORT_KINDS = ("recap", "pending", "observation")
+_SOURCE_RECEIPT_LIMIT = 64
 
 
 class MemorySourceReplayConflict(ValueError):
@@ -310,11 +311,21 @@ class ExperienceMemory:
             ("hypothesis", self.active_hypotheses),
         ):
             for entry in entries:
-                if isinstance(entry, dict) and entry.get("source_key") == key:
-                    return kind, entry
+                if isinstance(entry, dict):
+                    if entry.get("source_key") == key:
+                        return kind, entry
+                    if any(isinstance(receipt, dict)
+                           and receipt.get("source_key") == key
+                           for receipt in entry.get("_source_receipts", [])):
+                        return kind, entry
         for tomb in self.garbage:
             entry = tomb.get("entry") if isinstance(tomb, dict) else None
-            if isinstance(entry, dict) and entry.get("source_key") == key:
+            if isinstance(entry, dict) and (
+                entry.get("source_key") == key
+                or any(isinstance(receipt, dict)
+                       and receipt.get("source_key") == key
+                       for receipt in entry.get("_source_receipts", []))
+            ):
                 return tomb.get("kind", "garbage"), entry
         return None
 
@@ -325,7 +336,15 @@ class ExperienceMemory:
         if found is None:
             return None
         old_kind, old = found
-        if old_kind != kind or old.get("_source_semantic") != stable_payload(semantic):
+        expected = stable_payload(semantic)
+        receipts = old.get("_source_receipts") or []
+        old_semantic = next(
+            (receipt.get("_source_semantic") for receipt in receipts
+             if isinstance(receipt, dict)
+             and receipt.get("source_key") == str(source_key)),
+            old.get("_source_semantic"),
+        )
+        if old_kind != kind or old_semantic != expected:
             raise MemorySourceReplayConflict(
                 f"MEMORY_SOURCE_REPLAY_CONFLICT: source_key={source_key}"
             )
@@ -333,8 +352,15 @@ class ExperienceMemory:
 
     def _stamp_source(self, entry, source_key, semantic):
         if source_key:
-            entry["source_key"] = str(source_key)
-            entry["_source_semantic"] = stable_payload(semantic)
+            key = str(source_key)
+            payload = stable_payload(semantic)
+            entry.setdefault("source_key", key)
+            entry.setdefault("_source_semantic", payload)
+            receipts = [receipt for receipt in entry.get("_source_receipts", [])
+                        if isinstance(receipt, dict)
+                        and receipt.get("source_key") != key]
+            receipts.append({"source_key": key, "_source_semantic": payload})
+            entry["_source_receipts"] = receipts[-_SOURCE_RECEIPT_LIMIT:]
         return entry
 
     def add_short_term(self, kind, text, round_no, evidence=1, detail=None,
@@ -362,6 +388,7 @@ class ExperienceMemory:
                     entry["lineages"] = sorted(
                         set(entry.get("lineages") or []) | {lineage}
                     )
+                self._stamp_source(entry, source_key, semantic)
                 self._merge_learning_metadata(entry, detail)
                 return entry
         entry = {

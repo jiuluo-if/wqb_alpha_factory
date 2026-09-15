@@ -5,10 +5,74 @@ import unittest
 
 from wqb_agent.memory import ExperienceMemory, MemorySourceReplayConflict
 from wqb_agent.reflection import Reflector
+from wqb_agent.research_settlement import (
+    SettlementReplayConflict,
+    compare_settlements,
+    settlement_id,
+)
 from wqb_agent.state import Experiment, research_settlement_identity
+from wqb_agent.trial_ledger import TrialLedger
 
 
 class ReplayIdempotencyTests(unittest.TestCase):
+    def test_canonical_settlement_identity_is_time_and_order_invariant(self):
+        first = {
+            "reward": 0.8,
+            "research_evidence_bundle": {"status": "PASS", "metrics": {"sharpe": 1.2}},
+            "settled_at": 1,
+        }
+        second = {
+            "settled_at": 999,
+            "research_evidence_bundle": {"metrics": {"sharpe": 1.2}, "status": "PASS"},
+            "reward": 0.8,
+        }
+
+        self.assertEqual(settlement_id(first), settlement_id(second))
+        self.assertEqual(compare_settlements(first, second), "NO_OP")
+
+    def test_same_settlement_id_with_different_semantics_fails_closed(self):
+        first = {"settlement_id": "s1", "reward": 0.8}
+        second = {"settlement_id": "s1", "reward": 0.2}
+
+        with self.assertRaises(SettlementReplayConflict):
+            compare_settlements(first, second)
+
+    def test_trial_ledger_uses_canonical_settlement_id(self):
+        state_dir = tempfile.mkdtemp()
+        ledger = TrialLedger(f"{state_dir}/trial_ledger.jsonl")
+        experiment = Experiment(1, "h1", "rank(x)", {}, ["x"])
+        ledger.record_outcome_settled(experiment, reward=0.8, timestamp=1)
+
+        with open(ledger.path, encoding="utf-8") as handle:
+            row = json.loads(handle.readline())
+        self.assertEqual(row["settlement"]["settlement_id"], settlement_id(row["settlement"]))
+
+    def test_interleaved_sources_remain_idempotent_after_restart(self):
+        state_dir = tempfile.mkdtemp()
+        memory = ExperienceMemory(state_dir=state_dir)
+        memory.add_short_term(
+            "observation", "shared derived observation", 7,
+            detail={"evidence": "A"}, source_key="settlement:A",
+        )
+        memory.add_short_term(
+            "observation", "shared derived observation", 8,
+            detail={"evidence": "B"}, source_key="settlement:B",
+        )
+        memory.save()
+        before = json.dumps(memory.__dict__, sort_keys=True, default=str)
+
+        restored = ExperienceMemory(state_dir=state_dir).load()
+        restored.add_short_term(
+            "observation", "shared derived observation", 7,
+            detail={"evidence": "A"}, source_key="settlement:A",
+        )
+        restored.add_short_term(
+            "observation", "shared derived observation", 8,
+            detail={"evidence": "B"}, source_key="settlement:B",
+        )
+
+        self.assertEqual(before, json.dumps(restored.__dict__, sort_keys=True, default=str))
+
     def test_memory_source_key_replay_is_byte_stable_and_conflicts_fail_closed(self):
         memory = ExperienceMemory(state_dir=tempfile.mkdtemp())
         entry = memory.add_short_term(

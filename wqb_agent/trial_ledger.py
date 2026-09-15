@@ -27,6 +27,7 @@ from .expression import canonical_expression
 from .identity import candidate_identity
 from .locking import StateMutationDelegation, single_instance_scope
 from .optimization_decision import optimization_decision_identity
+from .research_settlement import settlement_id as canonical_settlement_id
 from .schema import CREATED_BY_VERSION, TRIAL_LEDGER_VERSION
 from .search_evidence import structural_fingerprint
 
@@ -415,9 +416,7 @@ class TrialLedger:
         }
         semantic = dict(settlement)
         semantic.pop("settled_at", None)
-        settlement["settlement_id"] = hashlib.sha256(
-            json.dumps(semantic, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
-        ).hexdigest()
+        settlement["settlement_id"] = canonical_settlement_id(semantic)
         return self.record(trial, "research_outcome_settled", outcome="SETTLED",
                            reason_code="FINAL", timestamp=settled_at, reward=reward,
                            settlement=settlement)

@@ -412,6 +412,7 @@ DIRECT_TESTS = {
     "wqb_agent/evidence.py": ("tests/test_evidence.py",),
     "wqb_agent/evidence_status.py": ("tests/test_evidence.py",),
     "wqb_agent/experiment.py": ("tests/test_state.py", "tests/test_architecture_contracts.py"),
+    "wqb_agent/research_settlement.py": ("tests/test_replay_idempotency.py", "tests/test_settled_evidence_durability.py"),
     "wqb_agent/expression.py": ("tests/test_expression.py",),
     "wqb_agent/failures.py": ("tests/test_client_refactor.py",),
     "wqb_agent/heartbeat.py": ("tests/test_heartbeat.py",),

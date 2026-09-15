@@ -52,7 +52,7 @@ class TestValidationReport(unittest.TestCase):
                                              "parent": {"health": self.parent["health"], "correlation": self.parent["self_correlation"]},
                                              "children": [{"health": {"ok": True}, "correlation": {"status": "PASS"}}],
                                          })
-        self.assertEqual(report["status"], "FAIL")
+        self.assertEqual(report["status"], "INCOMPLETE")
         self.assertFalse(report["stable"])
 
     def test_only_aggregate_report_promotes_parent(self):
@@ -79,6 +79,37 @@ class TestValidationReport(unittest.TestCase):
             trial_summary={"generated_trials": 7},
         )
         self.assertEqual(report["selection_adjustment"]["trial_events"], 7)
+
+    def test_missing_required_evidence_is_incomplete_and_nonterminal(self):
+        report = build_validation_report(
+            self.parent, [], self.plan,
+            yearly_evidence=None,
+        )
+
+        self.assertEqual(report["status"], "INCOMPLETE")
+        self.assertFalse(report["complete"])
+        self.assertFalse(report["terminal"])
+        self.assertIn("universe_robustness", report["missing_required_dimensions"])
+        self.assertIn("yearly_aggregates", report["missing_required_dimensions"])
+        self.assertEqual(report["failed_required_dimensions"], [])
+
+    def test_infrastructure_failure_is_unavailable_not_research_fail(self):
+        child = {
+            "status": "FAILED",
+            "changed_variable": "universe_robustness",
+            "error": "HTTP timeout while polling BRAIN",
+        }
+        report = build_validation_report(
+            self.parent, [child], self.plan,
+            yearly_evidence=self.parent["yearly_evidence"],
+        )
+
+        self.assertEqual(
+            report["dimensions"]["universe_robustness"]["status"],
+            "UNAVAILABLE",
+        )
+        self.assertNotIn("universe_robustness", report["failed_required_dimensions"])
+        self.assertEqual(report["status"], "INCOMPLETE")
 
     def test_dsr_uses_complete_selection_denominator(self):
         report = build_validation_report(
@@ -165,6 +196,36 @@ class TestValidationReport(unittest.TestCase):
             Agent._mark_robustness_stability(agent, children)
             self.assertEqual(parent.validation_status, "STABLE")
             self.assertEqual(parent.validation_report["status"], "PASS")
+
+    def test_agent_does_not_settle_incomplete_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Experiment(1, "h", "rank(signal)", {}, ["signal"])
+            parent.status = "DONE"
+            parent.metrics = _metrics()
+            parent.health = {"ok": True}
+            parent.self_correlation = {"status": "PASS"}
+            child = Experiment(2, "h", "rank(universe)", {}, ["signal"])
+            child.status = "PENDING"
+            child.experiment_stage = "ROBUSTNESS"
+            child.parent_expression = parent.expression
+            child.changed_variable = "universe_robustness"
+            child.validation_plan = default_validation_plan(parent, timestamp=1.0)
+            agent = object.__new__(Agent)
+            agent.trajectory = Trajectory()
+            agent.trajectory.experiments = [parent, child]
+            agent.state_dir = tmp
+            agent.trial_ledger = TrialLedger(os.path.join(tmp, "trial_ledger.jsonl"))
+            agent.reflector = type("ReflectorStub", (), {"evidence_cache": {}})()
+            agent._completed_parent = lambda expression: parent
+            settled = []
+            agent._settle_research_outcome = lambda experiment, report: settled.append(experiment)
+
+            Agent._mark_robustness_stability(agent, [child])
+
+            self.assertEqual(parent.validation_report["status"], "INCOMPLETE")
+            self.assertFalse(parent.validation_report["terminal"])
+            self.assertEqual(settled, [])
+            self.assertIsNone(parent.final_outcome)
 
 
 if __name__ == "__main__":

@@ -1331,6 +1331,8 @@ class Agent:
                 child.validation_report = report
                 child.validation_status = "VALIDATED" if report["status"] == "PASS" else "FAILED"
             parent.validation_status = "STABLE" if report["status"] == "PASS" else "UNVALIDATED"
+            if report.get("status") == "INCOMPLETE":
+                continue
             self._settle_research_outcome(parent, report)
             if report["status"] == "PASS":
                 self._validation_candidates.append((parent, report))

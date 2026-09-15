@@ -36,6 +36,8 @@ jobs:
         env:
           TARGET_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
         run: python scripts/run_targeted_tests.py --base-sha "$TARGET_BASE_SHA"
+      - name: Whole-repository final gate
+        run: python -m unittest discover -s tests
       - name: Offline doctor
         run: python main.py --state-dir tests/fixtures state doctor
       - name: Offline state audit
