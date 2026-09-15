@@ -318,8 +318,8 @@ workflow、manager 或 dependency framework。Phase V architecture contracts 报
 
 | 指标 | Phase VI 开始 | 当前 |
 |---|---:|---:|
-| 活跃 production Python boundary | 116 | 117 |
-| 有显式 route 的 production boundary | 75 | 117 |
+| 活跃 production Python boundary | 116 | 118 |
+| 有显式 route 的 production boundary | 75 | 118 |
 | 映射目标缺失 | 0（未审计） | 0 |
 | active test unreachable | 20（未分类） | 0 |
 | `DIRECT_TESTS` entries | 115 | 128 |
@@ -334,7 +334,7 @@ workflow、manager 或 dependency framework。Phase V architecture contracts 报
 
 `scripts/run_targeted_tests.py` 现在对 active production boundary、missing target、duplicate key 和
 显式 test route 做 fail-closed inventory；不会把 unmapped code fallback 到全仓测试。当前 mapping graph
-为 117/117，mapped target 与 active test 均无 stale/unreachable 项。高 fan-out 仍集中在
+为 118/118，mapped target 与 active test 均无 stale/unreachable 项。高 fan-out 仍集中在
 `trial_ledger.py`（8）、`proposal_execution.py`/`alpha_factory.py`（7），均对应跨 owner lifecycle、
 exactly-once 或 proposal safety；普通 owner 维持 median 2、p95 5，不以扩大 common contract set
 伪造安全性。
