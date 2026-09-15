@@ -30,8 +30,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .artifacts import atomic_write_json_if_changed
+from .checkpoints import CheckpointStore
 from .config import normalize_config
 from .expression import analyze_expression
+from .factory_runner import AIFactoryRunner
 from .locking import OwnerBusyError, single_instance_scope
 from .optimization_decision import OptimizationDecision, optimization_decision_identity
 from .proposal_contract import (
@@ -41,7 +43,13 @@ from .proposal_contract import (
     load_packaged_operator_syntax_reference,
     validate_targeted_batch,
 )
+from .research_context import build_research_context, project_cycle
+from .research_cursor import build_research_cursor
+from .research_cursor import research_cycle_id as _research_cycle_id
+from .research_quality import assess_experiment as _assess_experiment
+from .research_quality import assess_records
 from .state import Trajectory
+from .trial_ledger import TrialLedger
 
 
 @dataclass(frozen=True)
@@ -62,6 +70,8 @@ class ExperimentSpec:
     experiment_question: str = ""
     parent_id: str | None = None
     change: Any = None
+    source_research_cursor: str | None = None
+    research_cycle_id: str | None = None
 
     def __post_init__(self):
         if not isinstance(self.hypothesis, str) or not self.hypothesis.strip():
@@ -89,6 +99,8 @@ class ExperimentSpec:
             experiment_question=value.get("experiment_question", "") or "",
             parent_id=value.get("parent_id"),
             change=value.get("change"),
+            source_research_cursor=value.get("source_research_cursor"),
+            research_cycle_id=value.get("research_cycle_id"),
         )
 
     def to_proposal(self, *, round_no: int = 1, context: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -122,6 +134,10 @@ class ExperimentSpec:
             "experiment_stage": context.get("experiment_stage") or ("CHILD" if self.parent_id else "BASELINE"),
             "research_role": context.get("research_role") or ("EXPLOIT" if self.parent_id else "EXPLORE"),
         }
+        if self.source_research_cursor:
+            proposal["source_research_cursor"] = self.source_research_cursor
+        if self.research_cycle_id:
+            proposal["research_cycle_id"] = self.research_cycle_id
         operator_mapping = context.get("operator_mapping") or self.operator_mapping.strip()
         experiment_question = context.get("experiment_question") or self.experiment_question.strip()
         if operator_mapping:
@@ -470,7 +486,9 @@ def _targeted_field_profiles(runtime, proposals):
 
 def materialize_targeted_batch(decisions, *, agent=None, client=None,
                                config=None, state_dir=None, max_candidates=4,
-                               ttl_sec=TARGETED_BATCH_TTL_SEC):
+                               ttl_sec=TARGETED_BATCH_TTL_SEC,
+                               expected_research_cursor=None,
+                               research_cycle_id=None):
     runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
     directory = state_dir or getattr(runtime, "state_dir", None) or ".wqb_state"
     try:
@@ -478,6 +496,8 @@ def materialize_targeted_batch(decisions, *, agent=None, client=None,
             return _materialize_targeted_batch_locked(
                 decisions, agent=runtime, client=client, config=config,
                 state_dir=directory, max_candidates=max_candidates, ttl_sec=ttl_sec,
+                expected_research_cursor=expected_research_cursor,
+                research_cycle_id=research_cycle_id,
             )
     except OwnerBusyError:
         return {
@@ -490,7 +510,9 @@ def materialize_targeted_batch(decisions, *, agent=None, client=None,
 def _materialize_targeted_batch_locked(decisions, *, agent=None, client=None,
                                        config=None, state_dir=None,
                                        max_candidates=4,
-                                       ttl_sec=TARGETED_BATCH_TTL_SEC):
+                                       ttl_sec=TARGETED_BATCH_TTL_SEC,
+                                       expected_research_cursor=None,
+                                       research_cycle_id=None):
     """Write Agent-authored CHILD/VALIDATE decisions into the one inbox.
 
     The optimizer already validated the decisions; this only freezes the
@@ -512,6 +534,17 @@ def _materialize_targeted_batch_locked(decisions, *, agent=None, client=None,
     decision_ids = [optimization_decision_identity(item) for item in authored]
     fingerprint = _targeted_batch_fingerprint(decision_ids)
     existing = _read_targeted_envelope(path)
+    current_runtime = inspect_runtime_context(state_dir=directory)
+    current_cursor = current_runtime["research_cursor"]
+    if (expected_research_cursor is not None
+            and str(expected_research_cursor) != str(current_cursor)):
+        existing_fingerprint = existing.get("decision_fingerprint") if isinstance(existing, Mapping) else None
+        if (not (_active_targeted_batch(existing, time.time())
+                 and existing_fingerprint == fingerprint)):
+            return {
+                "written": False, "status": "RESEARCH_CONTEXT_STALE",
+                "path": path, "research_cursor": current_cursor,
+            }
     barrier = _targeted_recovery_barrier(runtime)
     if barrier is not None:
         return {
@@ -554,6 +587,12 @@ def _materialize_targeted_batch_locked(decisions, *, agent=None, client=None,
             "status": "TARGETED_BATCH_REJECTED", "errors": list(errors),
         }
     now = time.time()
+    cycle = research_cycle_id or _research_cycle_id(
+        current_cursor, decision_ids, kind="optimization"
+    )
+    for proposal in proposals:
+        proposal["source_research_cursor"] = current_cursor
+        proposal["research_cycle_id"] = cycle
     fields = _targeted_field_profiles(runtime, proposals)
     envelope = {
         "batch_type": TARGETED_BATCH_TYPE,
@@ -563,6 +602,8 @@ def _materialize_targeted_batch_locked(decisions, *, agent=None, client=None,
         "expires_at": now + max(0.0, float(ttl_sec)),
         "optimization_decision_ids": decision_ids,
         "decision_fingerprint": fingerprint,
+        "source_research_cursor": current_cursor,
+        "research_cycle_id": cycle,
         "hypothesis": {
             "id": f"h-targeted-r{int(now)}",
             "statement": "Agent authored optimization decisions",
@@ -629,6 +670,201 @@ def _active_targeted_batch(payload, now):
         return False
 
 
+def _projection_inputs(state_dir):
+    directory = os.fspath(state_dir or ".wqb_state")
+    trajectory = Trajectory(path=os.path.join(directory, "trajectory.jsonl"))
+    rows = list(trajectory.iter_canonical_rows() or ())
+    ledger = TrialLedger(
+        os.path.join(directory, "trial_ledger.jsonl"),
+        trajectory_path=os.path.join(directory, "trajectory.jsonl"),
+    )
+    ledger_summary = ledger.summarize()
+    checkpoints = CheckpointStore(directory).scan()
+    proposals = _read_targeted_envelope(os.path.join(directory, "proposals.json"))
+    active = proposals if _active_targeted_batch(proposals, time.time()) else None
+    return directory, rows, ledger_summary, checkpoints, active
+
+
+def inspect_runtime_context(*, state_dir=".wqb_state"):
+    """Return bounded runtime facts and safe next actions for the Outer Agent."""
+    directory, rows, ledger_summary, checkpoints, active = _projection_inputs(state_dir)
+    unfinished = [record for record in checkpoints
+                  if record.get("malformed") or not (
+                      isinstance(record.get("checkpoint"), Mapping)
+                      and record["checkpoint"].get("complete") is True
+                  )]
+    unknown = any(
+        str(item.get("status") or "").upper() in {"SUBMIT_UNKNOWN", "UNKNOWN"}
+        for record in unfinished
+        for item in ((record.get("checkpoint") or {}).get("experiments") or [])
+        if isinstance(item, Mapping)
+    )
+    unknown = unknown or any(
+        str(item.get("status") or "").upper() in {"SUBMIT_UNKNOWN", "UNKNOWN"}
+        for item in rows
+        if isinstance(item, Mapping)
+    )
+    runtime_state = "BLOCKED" if unfinished or unknown else "READY"
+    cursor = build_research_cursor(
+        rows, ledger_summary=ledger_summary, checkpoints=checkpoints,
+        runtime_state=runtime_state, active_batch=active,
+    )
+    factory_status = AIFactoryRunner.status_view(directory)
+    return {
+        **cursor,
+        "capabilities": {
+            "simulation": "BLOCKED" if runtime_state == "BLOCKED" else "AVAILABLE",
+            "self_correlation": "UNKNOWN",
+            "targeted_batch": "BLOCKED" if runtime_state == "BLOCKED" else "AVAILABLE",
+        },
+        "unfinished_checkpoint": [
+            os.path.basename(record.get("path", "")) for record in unfinished
+        ],
+        "submit_unknown_present": unknown,
+        "active_targeted_batch": (
+            {key: active[key] for key in ("round_no", "decision_fingerprint", "expires_at")
+             if key in active} if active else None
+        ),
+        "factory_status": factory_status,
+        "quota_summary": (factory_status or {}).get("quota"),
+        "allowed_actions": ["READ_ONLY"] if runtime_state == "BLOCKED" else [
+            "READ_ONLY", "AUTHOR_DECISION", "MATERIALIZE_TARGETED_BATCH",
+            "EXECUTE_PENDING_ROUND",
+        ],
+    }
+
+
+def assess_experiment_quality(experiment_id, *, state_dir=".wqb_state"):
+    """Assess one canonical experiment without reading raw state into output."""
+    directory, rows, ledger_summary, _checkpoints, _active = _projection_inputs(state_dir)
+    row = next((item for item in rows if str(item.get("id")) == str(experiment_id)
+                or str(item.get("proposal_id")) == str(experiment_id)), None)
+    if row is None:
+        return {"status": "NOT_FOUND", "experiment_id": str(experiment_id)}
+    return _assess_experiment(row, trial_summary=ledger_summary).as_dict()
+
+
+def assess_execution_round(round_no, *, state_dir=".wqb_state"):
+    """Return a bounded quality/accounting projection for one execution round."""
+    _directory, rows, ledger_summary, _checkpoints, _active = _projection_inputs(state_dir)
+    result = assess_records(rows, trial_summary=ledger_summary, round_no=int(round_no))
+    result["validation_completeness"] = dict(result["validation_completeness"])
+    result["classification_counts"] = dict(result["classification_counts"])
+    result["status_counts"] = dict(result["status_counts"])
+    result.pop("assessments", None)
+    return result
+
+
+def assess_research_cycle(cycle_id, *, state_dir=".wqb_state"):
+    """Return cycle mapping and quality counts from existing canonical rows."""
+    _directory, rows, ledger_summary, _checkpoints, _active = _projection_inputs(state_dir)
+    selected = [row for row in rows if str(row.get("research_cycle_id") or "") == str(cycle_id)]
+    result = project_cycle(rows, cycle_id)
+    summary = assess_records(selected, trial_summary=ledger_summary)
+    result["quality_status"] = dict(summary["classification_counts"])
+    result["missing_evidence"] = summary["missing_evidence"]
+    return result
+
+
+def inspect_research_context(*, state_dir=".wqb_state", agent=None, client=None,
+                             config=None, limit=8):
+    """Build the bounded Inner-Agent handoff from current canonical projections."""
+    runtime = inspect_runtime_context(state_dir=state_dir)
+    _directory, rows, ledger_summary, _checkpoints, _active = _projection_inputs(state_dir)
+    summaries = [_assess_experiment(row, trial_summary=ledger_summary)
+                 for row in rows[-max(1, min(int(limit), 8)):]]
+    optimizer = {}
+    if agent is not None or client is not None:
+        optimizer = inspect_optimizer_context(
+            agent=agent, client=client, config=config, state_dir=state_dir,
+            limit=limit,
+        )
+    gaps = sorted({gap for item in summaries for gap in item.missing_evidence})
+    return build_research_context(
+        runtime_context=runtime, cursor=runtime, quality_summaries=summaries,
+        optimizer_context=optimizer, capabilities=runtime["capabilities"],
+        unresolved_gaps=gaps, limit=limit,
+    )
+
+
+def inspect_execution_round(round_no, *, state_dir=".wqb_state"):
+    """Expose execution lifecycle and quality for one round."""
+    result = assess_execution_round(round_no, state_dir=state_dir)
+    runtime = inspect_runtime_context(state_dir=state_dir)
+    result["runtime_state"] = runtime["runtime_state"]
+    result["recovery_status"] = "BLOCKED" if runtime["unfinished_checkpoint"] else "CLEAR"
+    return result
+
+
+def inspect_research_cycle(cycle_id, *, state_dir=".wqb_state"):
+    return assess_research_cycle(cycle_id, state_dir=state_dir)
+
+
+def inspect_pending_work(*, state_dir=".wqb_state"):
+    runtime = inspect_runtime_context(state_dir=state_dir)
+    return {
+        "targeted_inbox_present": bool(runtime.get("active_targeted_batch")),
+        "unfinished_checkpoint": runtime["unfinished_checkpoint"],
+        "submit_unknown": runtime["submit_unknown_present"],
+        "factory_blocker": (runtime.get("factory_status") or {}).get("blocker"),
+        "next_safe_action": "READ_ONLY_RECONCILE" if runtime["runtime_state"] == "BLOCKED" else "INSPECT",
+    }
+
+
+def inspect_trial_accounting(*, state_dir=".wqb_state"):
+    summary = _projection_inputs(state_dir)[2]
+    return {key: summary.get(key) for key in (
+        "trial_count", "submitted_count", "completed_count", "effective_trial_count",
+        "history_completeness", "settled_observation_count",
+    )}
+
+
+def inspect_factory_status(*, state_dir=".wqb_state"):
+    return AIFactoryRunner.status_view(os.fspath(state_dir))
+
+
+def assess_experiment(experiment_id, *, state_dir=".wqb_state"):
+    return assess_experiment_quality(experiment_id, state_dir=state_dir)
+
+
+def execute_pending_round(*, state_dir=".wqb_state", agent=None, client=None, config=None):
+    """Execute the existing canonical proposals through Agent.run_proposals only."""
+    runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
+    path = os.path.join(_state_dir(runtime, state_dir), "proposals.json")
+    if not os.path.exists(path):
+        return {"status": "NO_PENDING_PROPOSALS", "path": path}
+    return runtime.run_proposals(path)
+
+
+def resume_pending_round(**kwargs):
+    """Resume the same canonical pending batch via the existing recovery path."""
+    return execute_pending_round(**kwargs)
+
+
+def request_factory_stop(*, state_dir=".wqb_state"):
+    return AIFactoryRunner.request_stop(os.fspath(state_dir))
+
+
+def research_tool_manifest():
+    return [
+        {"name": "inspect_runtime_context", "mode": "READ_ONLY", "owner": "preflight/checkpoint"},
+        {"name": "inspect_research_context", "mode": "READ_ONLY", "owner": "research_context"},
+        {"name": "inspect_execution_round", "mode": "READ_ONLY", "owner": "Trajectory/TrialLedger"},
+        {"name": "inspect_research_cycle", "mode": "READ_ONLY", "owner": "research_cursor"},
+        {"name": "inspect_pending_work", "mode": "READ_ONLY", "owner": "preflight"},
+        {"name": "inspect_trial_accounting", "mode": "READ_ONLY", "owner": "TrialLedger"},
+        {"name": "inspect_factory_status", "mode": "READ_ONLY", "owner": "factory_session"},
+        {"name": "assess_experiment", "mode": "READ_ONLY", "owner": "research_quality"},
+        {"name": "assess_execution_round", "mode": "READ_ONLY", "owner": "research_quality"},
+        {"name": "assess_research_cycle", "mode": "READ_ONLY", "owner": "research_quality"},
+        {"name": "materialize_targeted_batch", "mode": "LOCAL_MUTATION", "requires_research_cursor": True, "owner": "OptimizerWorkflow"},
+        {"name": "execute_pending_round", "mode": "SIMULATION_WRITE", "requires_ready_state": True, "remote_write": True, "owner": "Agent.run_proposals"},
+        {"name": "resume_pending_round", "mode": "SIMULATION_WRITE", "requires_ready_state": False, "remote_write": True, "owner": "Agent.run_proposals"},
+        {"name": "reconcile", "mode": "READ_ONLY", "owner": "WQBClient"},
+        {"name": "alpha_submission", "mode": "MANUAL_ONLY", "owner": "user"},
+    ]
+
+
 __all__ = [
     "ExperimentSpec", "inspect_state", "discover_fields",
     "get_operator_reference", "get_operator_syntax_reference",
@@ -636,4 +872,9 @@ __all__ = [
     "compare_experiments", "search_history", "reconcile",
     "inspect_optimizer_parents", "inspect_optimizer_context",
     "propose_optimization", "materialize_targeted_batch",
+    "inspect_runtime_context", "inspect_research_context",
+    "inspect_execution_round", "inspect_research_cycle", "inspect_pending_work",
+    "inspect_trial_accounting", "inspect_factory_status", "assess_experiment",
+    "assess_execution_round", "assess_research_cycle", "execute_pending_round",
+    "resume_pending_round", "request_factory_stop", "research_tool_manifest",
 ]

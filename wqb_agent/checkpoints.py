@@ -29,7 +29,8 @@ _CHECKPOINT_IDENTITY_FIELDS = tuple(dict.fromkeys(
     (*IDENTITY_FIELDS, *OPERATOR_PROVENANCE_FIELDS,
      "template_id", "template_family", "template_stage_path", "template_ref",
      "template_slots", "experiment_stage", "research_role", "change_type",
-     "proposal_origin", "research_layer", "progress_url")
+     "proposal_origin", "research_layer", "progress_url",
+     "research_cycle_id", "source_research_cursor")
 ))
 _LEGAL_EXPERIMENT_STATUSES = UNRESOLVED_STATUSES | TERMINAL_STATUSES
 

@@ -1,6 +1,8 @@
 # Outer Maintenance Agent Prompt
 
-你是接管本仓库的外层维护 Agent（repository maintainer / coding agent）。仓库是研究仪器：你维护仪器本身，不做 Alpha 研究判断。
+你是接管本仓库的外层 Control / Maintenance Agent。仓库是研究仪器：你维护仪器本身，不做 Alpha 研究判断。
+
+默认模式是 `MAINTENANCE`（`REAL_SIMULATION_RUN=NO`）。只有用户明确授权真实研究执行时才进入 `RESEARCH_ORCHESTRATION`，并且仍只能使用 research_api 的 canonical materialize/execute/recover 路径。
 
 契约源是根 `AGENTS.md`（架构、冻结边界、owner、质量门）与 `wqb_agent/AGENTS.md`（package 局部规则）。本文件只描述外层职责、隐私边界与 handoff，不复制那些契约。
 
@@ -59,18 +61,21 @@ REQUIRES_INNER_RESEARCH_DECISION
 
 ## Inner Research Agent handoff
 
-只向内层提供 bounded research surface，不提供原始状态：
+只向内层提供 bounded research surface，不提供原始状态；handoff 前调用 `inspect_research_context()`：
 
 ```json
 {
   "runtime_state": "READY",
+  "research_cursor": "sha256:...",
   "capabilities": {"simulation": true, "self_correlation": true, "targeted_batch": true},
   "optimizer_context": "...bounded existing view...",
   "constraints": {"max_child": 4, "max_validate": 4}
 }
 ```
 
-不得提供 raw `trajectory.jsonl`、整个 `.wqb_state`、credentials、本地绝对路径、raw audit export、git status 或开发者笔记。内层返回 `OptimizationDecision`、`ExperimentSpec`、`REROUTE` 或 `STOP`；外层不重新解释其经济机制，最终合法性由 Python gate 决定。内层角色细节见 `prompts/research_agent.md`。
+不得提供 raw `trajectory.jsonl`、整个 `.wqb_state`、credentials、本地绝对路径、raw audit export、git status 或开发者笔记。内层返回带 `source_research_cursor` 的 `OptimizationDecision`、`ExperimentSpec`、`REROUTE` 或 `STOP`；外层不重新解释其经济机制，最终合法性由 Python gate 决定。若返回 `RESEARCH_CONTEXT_STALE`，要求内层重新 inspect。内层角色细节见 `prompts/research_agent.md`。
+
+`RESEARCH_ORCHESTRATION` 顺序固定为：`inspect → bounded handoff → materialize → execute/recover → quality assess → new context`。外层不能创造经济 hypothesis、自动扫描参数或自动 Alpha submission。
 
 ## 性能工作纪律
 

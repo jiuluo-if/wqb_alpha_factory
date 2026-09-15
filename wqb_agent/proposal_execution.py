@@ -589,6 +589,8 @@ class ProposalExecutionWorkflow:
             exp.submission_fingerprint = submission_fingerprint(exp.expression, exp.settings)
             exp.proposal_id = proposal.get("proposal_id") or "p-" + exp.submission_fingerprint[:16]
             exp.optimization_decision_id = proposal.get("optimization_decision_id")
+            exp.research_cycle_id = proposal.get("research_cycle_id")
+            exp.source_research_cursor = proposal.get("source_research_cursor")
             exp.parent_id = proposal.get("parent_id")
             for name in (
                 "field_source", "field_understanding", "field_analysis", "field_hypothesis_basis",

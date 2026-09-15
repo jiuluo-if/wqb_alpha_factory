@@ -16,7 +16,7 @@
 
 ## 稳定架构边界
 
-当前 package 边界按 `domain → state → mechanisms → workflows → runtime composition → facade/CLI` 收敛：`runtime_components.py` 只拥有基础对象，`runtime_composition.py` 只负责 wiring，四个 Agent workflow 不反向导入 Agent；`AlphaColorWorkflow` 是独立的显式远端颜色写 owner。生产 Simulation 只能沿 `Agent.run_proposals()` → `ProposalExecutionWorkflow` → `Simulator` → `WQBClient`，旧 `WQBClient.run_simulation()` 无生产调用。Optimizer 只消费 local `Trajectory` evidence，cloud cache 只能提供 metadata priority；审计 JSONL 无 owner lock 时明确为 best-effort。模块化允许新增单职责纯组件，但不得新增第二套 workflow/state/config abstraction 或继续制造 Agent 私有 forwarding。
+当前 package 边界按 `domain → state → pure projections → workflows → runtime composition → research_api facade/CLI` 组织：`research_cursor.py`、`research_quality.py`、`research_context.py` 只做无状态 projection，不拥有 state。`runtime_components.py` 只拥有基础对象，`runtime_composition.py` 只负责 wiring，四个 Agent workflow 不反向导入 Agent；`AlphaColorWorkflow` 是独立的显式远端颜色写 owner。生产 Simulation 只能沿 `Agent.run_proposals()` → `ProposalExecutionWorkflow` → `Simulator` → `WQBClient`，旧 `WQBClient.run_simulation()` 无生产调用。Optimizer 只消费 local `Trajectory` evidence，cloud cache 只能提供 metadata priority；审计 JSONL 无 owner lock 时明确为 best-effort。模块化允许新增单职责纯组件，但不得新增第二套 workflow/state/config abstraction 或 generic service locator。
 
 ## 职责
 
@@ -79,7 +79,7 @@ python -m ruff check <changed-python-files>
 
 仅当 typed frontier 被改动时，运行对应的 mypy。typed frontier 只包含上述九个边界清晰模块；全局 mypy 保持非 strict，不为类型检查重写 `agent.py`、`client.py`、`simulator.py` 或 `proposal_execution.py`。
 
-CI 先执行由 `scripts/run_targeted_tests.py` 显式映射选择的 targeted Fast Lane，映射缺失时 fail-closed；不把 whole-repository test 或 coverage 作为每次回归门禁。静态检查和 offline doctor/audit/privacy 仍按 workflow 需要执行。
+CI 先执行由 `scripts/run_targeted_tests.py` 显式映射选择的 targeted Fast Lane，映射缺失时 fail-closed；随后执行独立的 whole-repository final gate。静态检查和 offline doctor/audit/privacy 仍按 workflow 需要执行。
 
 ```powershell
 python scripts/run_targeted_tests.py --base-sha <CI base SHA>

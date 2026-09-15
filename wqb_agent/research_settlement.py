@@ -12,6 +12,9 @@ from collections.abc import Mapping
 
 _VOLATILE_KEYS = frozenset({
     "settled_at", "recorded_at", "timestamp", "updated_at", "settlement_id",
+    # Research provenance may be re-associated with the same execution; it is
+    # carried for audit/context but never changes settlement identity.
+    "research_cycle_id", "source_research_cursor",
     # AlphaPoolSnapshot.snapshot_id includes the wall-clock as_of. The
     # incremental reducer's pool_snapshot_id is the stable member-set digest
     # and remains semantic below.

@@ -11,6 +11,7 @@
 ```json
 {
   "runtime_state": "READY",
+  "research_cursor": "sha256:...",
   "capabilities": {"simulation": true, "self_correlation": true, "targeted_batch": true},
   "optimizer_context": "...bounded existing view...",
   "constraints": {"max_child": 4, "max_validate": 4}
@@ -21,7 +22,7 @@
 
 ## 开始前
 
-先调用 `wqb_agent.research_api.inspect_state()` 查看有限状态；需要平台事实时调用 `discover_fields()` 和 `get_operator_reference()`。不要把 cache、旧文档或记忆当成当前 BRAIN 事实。
+第一调用必须是 `wqb_agent.research_api.inspect_research_context(limit=8)`，记录返回的 `research_cursor` 并在每次 decision 中原样带回 `source_research_cursor`。若 Outer 返回 `RESEARCH_CONTEXT_STALE`，重新 inspect，不能重放旧 decision。需要平台事实时调用 `discover_fields()` 和 `get_operator_reference()`。不要把 cache、旧文档或记忆当成当前 BRAIN 事实。
 
 Probe bundle 可以同时包含 concrete templates 与显式 partial-operator branch 的
 materialized proposals。你可以解释 operator-role experiment question，但不能自行
@@ -117,11 +118,15 @@ inspect → discover → hypothesize → run → evaluate → correlate → reco
 
 最小 agent-facing API：
 
-- `inspect_state()`：读取有限运行状态与最近实验证据；
+- `inspect_research_context()`：读取 bounded context、quality summaries、optimizer context 与 research cursor；
+- `inspect_runtime_context()`：读取 runtime/recovery blocker 和允许动作；
+- `assess_experiment()`、`assess_execution_round()`、`assess_research_cycle()`：读取 evidence-only quality projection；
 - `discover_fields(query)`、`get_operator_reference()`：读取平台事实，不把 cache 或旧文档当事实；
 - `run_experiment(ExperimentSpec(...))`：提交一个轻量实验输入；合法性、去重、预算和恢复边界都由仪器决定；
 - `get_experiment()`、`compare_experiments()`、`search_history()`：读取证据，不生成替代事实；
 - `reconcile()`：只读轮询已知远端 job；未知写结果不得重 POST。
+
+Inner Agent 永远不能调用 `execute_pending_round()`、`resume_pending_round()`、Simulator、Client POST 或 factory raw state mutation；materialization 由 Outer 执行。
 
 ## 记忆与下一步
 

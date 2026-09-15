@@ -20,7 +20,7 @@
 - 优化候选编排归 `wqb_agent/optimizer_workflow.py` 的 `OptimizerWorkflow` 所有；`Agent` 的优化方法只作兼容 facade。它只消费已有证据、cloud 轻量优先级提示和 Agent-authored `child_economic_hypothesis`，不生成经济机制、不扫描参数、不写 proposals、不修改 trajectory、不刷新 Alpha Feed 或触发 Simulation。
 - 不可绕过：`SUBMIT_UNKNOWN` 不重发、known progress URL 只读、checkpoint exactly-once、UNKNOWN/UNAVAILABLE 不升 PASS、Alpha submission 手动完成。模拟/已提交 Alpha 的远端轻量元数据只按美国东部本地滚动 7 日窗口缓存，指标、轨迹、checkpoint 和证据不进入该缓存。
 - 任务路由：状态恢复看 `preflight.py/audit.py/state.py` + `test_research_constraints.py/test_runtime_safety.py`；执行看 `agent.py/simulator.py/client.py` + `test_simulator.py/test_recovery.py`；配置看 `config.py/agent.py` + `test_runtime_safety.py/test_agent_flow.py`。
-- 改完必须只运行与变更直接相关的定向测试：`python scripts/run_targeted_tests.py --files <changed-files>`，再对 changed Python files 运行语法检查和 Ruff；禁止使用 `unittest discover`、coverage 驱动全量测试或任何等价的全仓测试命令。无法映射到相关测试时必须先补充显式映射，不能回退全量测试。
+- 本地改完先运行与变更直接相关的定向测试：`python scripts/run_targeted_tests.py --files <changed-files>`，再对 changed Python files 运行语法检查和 Ruff；无法映射到相关测试时必须先补充显式映射。CI 另有受控的 whole-repository final gate。
 
 ## 四个核心概念
 
@@ -35,6 +35,8 @@
 ### Research State
 
 checkpoint 保存未完成实验的恢复边界；trajectory、ledger、压缩上下文和结果视图仍是研究状态来源。远端 Alpha 仅额外生成 `.alpha_feed_cache/weekly.json` 轻量元数据视图：按 `America/New_York` 本地日分桶，只保留当前周，指标/表达式/证据不落入该缓存，BRAIN live response 才是平台事实。
+
+Inner research cycle 与 Outer execution round 分离：`research_cycle_id` 绑定一次 Inner decision，`round_no` 仍由 `Agent.next_round_no()` 和现有 canonical owners 决定，一个 cycle 可映射多个 execution round。`research_cursor`、`ResearchQualityAssessment` 与 bounded `research_context` 都是无状态 projection；cursor 不含 expression、Alpha ID、metrics 或时间戳，不产生 research-cycle sidecar。Outer 默认 `MAINTENANCE`，只有明确授权才进入 `RESEARCH_ORCHESTRATION`；Inner 不能执行 Simulation，Outer 不能创造经济 hypothesis。
 
 ### Evaluation
 
@@ -169,9 +171,9 @@ python main.py run-proposals
 
 优先删除重复概念，合并而不是新增第二套 state、proposal contract、evaluation、facade 或 manager/orchestrator。研究策略不要硬编码成机制。
 
-本地默认采用增量验证：审查 diff，识别直接受影响的行为，运行 1–5 个相关测试方法或测试类、一个最近邻回归、changed Python files 的 `py_compile` 和 Ruff；只有 typed frontier 被改动时才运行对应的 mypy。失败时按 targeted → nearby subsystem → broader contract progressive expansion；普通本地修改和 CI 均禁止 whole-repository test suite。
+本地默认采用增量验证：审查 diff，识别直接受影响的行为，运行 1–5 个相关测试方法或测试类、一个最近邻回归、changed Python files 的 `py_compile` 和 Ruff；只有 typed frontier 被改动时才运行对应的 mypy。失败时按 targeted → nearby subsystem → broader contract progressive expansion。CI 的 whole-repository final gate 只在固定 workflow 中执行。
 
-改动跨多个 owner、shared helper、proposal/schema、state merge semantics 或 safety contract 时，扩大到相关 module/contract suite；改动 safety contract 必须增加对应行为测试。扩大仍必须停留在受影响的 module/contract 范围；本地和 push 后 CI 均不得执行 authoritative whole-repository regression。
+改动跨多个 owner、shared helper、proposal/schema、state merge semantics 或 safety contract 时，扩大到相关 module/contract suite；改动 safety contract 必须增加对应行为测试。扩大仍必须停留在受影响的 module/contract 范围；push 后由 CI 执行 authoritative whole-repository final gate。
 
 CI 强约束：
 
@@ -184,7 +186,7 @@ python main.py --state-dir tests/fixtures state audit
 python scripts/check_repo_privacy.py
 ```
 
-CI 严禁执行全量测试：不得出现 `unittest discover`、`coverage run -m unittest`、`pytest` 无路径/无选择器调用，或其他等价的全仓测试入口。每次只允许由 `scripts/run_targeted_tests.py` 根据 base SHA 与变更文件的显式映射选择相关测试；测试映射缺失必须 fail-closed 并先补映射。CI 不再以 coverage 作为全仓测试门。
+CI 必须先由 `scripts/run_targeted_tests.py` 根据 base SHA 与变更文件的显式映射选择 Targeted Fast Lane，映射缺失必须 fail-closed 并先补映射；随后在独立 final gate 执行 `python -m unittest discover -s tests`。禁止 coverage 驱动全量测试、无选择器 pytest 或绕过 targeted mapping。
 
 质量门采用 Python 3.11 单矩阵。Coverage 只统计 `wqb_agent`，初始 `fail_under=76.0`，阈值只能逐步提高。mypy 仅检查配置、运行时装配、凭据、Suggestion/Alpha Feed/Optimizer/Alpha Color 九个 typed frontier 模块，不对全仓开启 strict。Ruff 在现有规则上增加 import sorting、选定安全 UP 规则和 `B007/B904`，不启用 `ALL`、`SIM` 或 `RUF`。这些质量命令不得触发 live BRAIN、Simulation POST 或 Alpha submission。
 

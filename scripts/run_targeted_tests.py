@@ -50,6 +50,9 @@ DIRECT_TESTS = {
         "tests/test_research_planning.py",
         "tests/test_agent_flow.py",
     ),
+    "wqb_agent/research_cursor.py": ("tests/test_research_instrument.py",),
+    "wqb_agent/research_quality.py": ("tests/test_research_instrument.py",),
+    "wqb_agent/research_context.py": ("tests/test_research_instrument.py",),
     "wqb_agent/evidence_projection.py": (
         "tests/test_evidence_projection.py",
         "tests/test_agent_evaluation.py",
@@ -358,6 +361,7 @@ DIRECT_TESTS = {
         "tests/test_research_api.py",
         "tests/test_proposal_safety.py",
         "tests/test_targeted_batch_contract.py",
+        "tests/test_research_instrument.py",
     ),
     "wqb_agent/credentials.py": (
         "tests/test_credentials.py",

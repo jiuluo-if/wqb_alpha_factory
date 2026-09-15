@@ -2,6 +2,18 @@
 
 本文只描述当前研究方法与安全边界，不代替 BRAIN live response，也不包含真实字段、Alpha、指标、研究结果或 campaign history。
 
+## Research Cycle Discipline
+
+Research cycle 不等于 execution round。Inner Agent 基于一个确定的
+`source_research_cursor` 作出一次 decision，Outer Agent 可以把它物化为一个或多个
+`round_no`；recovery 不创建新的 execution counter。cursor 过期时必须重新 inspect，
+不能重放旧 decision。失败、UNKNOWN、SUBMIT_UNKNOWN 和被剪枝的 trial 仍由既有
+TrialLedger 计入，不能从 cycle accounting 消失。
+
+`ResearchQualityAssessment` 只描述已存在的证据、完整性和 blocker，不生成经济机制、
+窗口、字段或参数方向。`research_cycle_id` 只作 provenance，不能进入 Simulation
+execution fingerprint；同一 fingerprint 被不同 cycle 引用时不得重复 POST。
+
 ## 事实与执行边界
 
 - BRAIN live response 是 datasets、fields、operators、Simulation、metrics、checks、aggregates 和 correlation 的事实源。

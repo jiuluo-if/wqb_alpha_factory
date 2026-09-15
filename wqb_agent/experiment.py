@@ -167,6 +167,8 @@ class Experiment:
     elapsed_sec: object = None
     created_at: float = field(default_factory=time.time)
     optimization_decision_id: object = None
+    research_cycle_id: object = None
+    source_research_cursor: object = None
 
     def __post_init__(self):
         self.settings = dict(self.settings)

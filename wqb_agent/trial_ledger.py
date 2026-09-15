@@ -327,6 +327,8 @@ class TrialLedger:
             "audit_only": bool(audit_only),
             "selection_identity": selection_identity,
             "optimization_decision_id": self._value(trial, "optimization_decision_id"),
+            "research_cycle_id": self._value(trial, "research_cycle_id"),
+            "source_research_cursor": self._value(trial, "source_research_cursor"),
             "optimization_candidate_emitted": self._value(trial, "optimization_candidate_emitted"),
             "optimization_decision": self._value(trial, "optimization_decision"),
             "outcome": outcome or state,
@@ -419,6 +421,8 @@ class TrialLedger:
         settlement = {
             "proposal_id": self._value(trial, "proposal_id"),
             "optimization_decision_id": self._value(trial, "optimization_decision_id"),
+            "research_cycle_id": self._value(trial, "research_cycle_id"),
+            "source_research_cursor": self._value(trial, "source_research_cursor"),
             "reward": reward,
             "reward_version": reward_version,
             "reward_quality": reward_quality,

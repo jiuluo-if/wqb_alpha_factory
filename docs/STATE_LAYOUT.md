@@ -2,6 +2,19 @@
 
 > `.wqb_state` 是程序维护的运行状态目录。文件名是接口的一部分；本文件负责分类和阅读顺序，不授权手工移动、改名或重写状态文件。
 
+## Research cycle projection
+
+`research_cycle_id` 与 `source_research_cursor` 是 Experiment、Trajectory、TrialLedger
+和 settlement 上的 provenance 字段；它们不改变 `round_no`，也不进入
+`submission_fingerprint`。一个 Inner research cycle 可以映射多个 Outer execution
+round，crash/recovery 仍回到同一个 canonical round。
+
+`research_cursor` 是由 settled identities、TrialLedger history-completeness、未完成
+checkpoint、active targeted batch 和 runtime state 派生的 opaque projection，不是新
+state file。禁止创建 `research_cycle.json` 或任何 research-cycle sidecar。legacy
+Experiment 没有 cycle provenance 时保持可读，但 cycle inspection 必须返回
+`LEGACY_RESEARCH_CYCLE_UNVERIFIABLE`，不得按 expression 猜测。
+
 ## 分类总览
 
 | 类别 | 固定路径/模式 | 内容与权威性 | 处理规则 |
