@@ -20,8 +20,13 @@ from wqb_agent.agent import (
     Agent,
 )
 from wqb_agent.artifacts import atomic_write_json_if_changed
-from wqb_agent.discovery import FieldDiscovery
-from wqb_agent.discovery_selection import score_components, score_field
+from wqb_agent.discovery import CATEGORY_KEYWORDS, CATEGORY_VALUE, FieldDiscovery
+from wqb_agent.discovery_selection import (
+    categorize_hypothesis,
+    keywords_from_hypothesis,
+    score_components,
+    score_field,
+)
 from wqb_agent.field_metadata import (
     dataset_description_frequency,
     frequency_evidence,
@@ -59,6 +64,20 @@ class TestDiscoveryFieldSemantics(TmpStateMixin, unittest.TestCase):
         self.assertEqual(field, before)
         self.assertEqual(components["keyword_contribution"], 1.0)
         self.assertGreater(score_field(field, ["price"], alpha_count=9), 0.0)
+
+    def test_canonical_keyword_projection_preserves_field_discovery_order(self):
+        hypothesis = {"statement": "成交量 momentum", "tags": ["price", "volume"]}
+        self.assertEqual(
+            FieldDiscovery._keywords_from_hypothesis(hypothesis),
+            keywords_from_hypothesis(hypothesis),
+        )
+
+    def test_canonical_category_projection_preserves_order(self):
+        hypothesis = {"statement": "analyst forecast and price volume"}
+        self.assertEqual(
+            self.discovery.categorize_hypothesis(hypothesis),
+            categorize_hypothesis(hypothesis, CATEGORY_KEYWORDS, CATEGORY_VALUE),
+        )
 
     def test_selection_kernel_reuses_request_local_coverage(self):
         field = {"id": "daily_close", "description": "daily price", "coverage": 50}

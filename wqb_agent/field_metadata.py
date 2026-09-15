@@ -9,6 +9,54 @@ import re
 from copy import deepcopy
 
 
+def profile_field(field, dataset_id, score, category, ranking_provenance=None,
+                  *, alpha_count=None, dataset_description=None,
+                  dataset_snapshot=None, source_provenance=None):
+    """Build one Agent-facing field profile from prepared immutable facts."""
+    field_id = str(field.get("id"))
+    alpha_count = field.get("alphaCount") if alpha_count is None else alpha_count
+    freq_ev = frequency_evidence(field)
+    frequency = freq_ev["frequency"] if freq_ev["status"] in {"KNOWN", "INFERRED"} else None
+    if frequency is None and freq_ev.get("source") == "UNKNOWN":
+        dataset_evidence = dataset_description_frequency(dataset_description)
+        if dataset_evidence is not None:
+            snapshot = dataset_snapshot or {}
+            dataset_evidence.update({
+                "scope": "DATASET",
+                "observed_at": snapshot.get("observed_at"),
+                "fingerprint": snapshot.get("fingerprint"),
+            })
+            frequency = dataset_evidence["frequency"]
+            freq_ev = dataset_evidence
+    source = dict(source_provenance or {})
+    return {
+        "id": field_id,
+        "name": field.get("name") or field.get("description") or field_id,
+        "description": field.get("description") or "",
+        "coverage": normalize_coverage(field),
+        "alpha_count": alpha_count,
+        "frequency": frequency,
+        "frequency_evidence": freq_ev,
+        "semantic_status": "KNOWN" if field.get("description") else "UNKNOWN",
+        "category": category or "preferred",
+        "dataset": str(dataset_id),
+        "type": field.get("type"),
+        "match_score": score,
+        "ranking_provenance": dict(ranking_provenance or {
+            "keyword_contribution": 0.0,
+            "coverage_contribution": 0.0,
+            "alpha_count_penalty": 0.0,
+            "random_exploration_contribution": 0.0,
+        }),
+        "field_source": source,
+        "platform_dedupe": {
+            "source": source.get("kind"),
+            "status": "KNOWN" if alpha_count is not None else "UNKNOWN",
+            "alpha_count": alpha_count,
+        },
+    }
+
+
 def _frequency_bucket(value):
     text = str(value or "").lower()
     markers = (

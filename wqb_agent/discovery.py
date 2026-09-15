@@ -9,14 +9,18 @@ import hashlib
 import json
 import math
 import os
-import re
 import time
 from copy import deepcopy
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 from .artifacts import atomic_write_json_if_changed
-from .discovery_selection import keyword_contribution, score_components
+from .discovery_selection import (
+    categorize_hypothesis,
+    keywords_from_hypothesis,
+    rank_fields,
+    select_active_dataset_ids,
+)
 from .field_catalog import (
     catalog_scope,
     manifest_is_complete,
@@ -28,6 +32,7 @@ from .field_metadata import (
     frequency_evidence,
     normalize_coverage,
     normalize_frequency,
+    profile_field,
     profile_frequency_evidence,
 )
 from .schema import CREATED_BY_VERSION, FIELDS_CACHE_VERSION
@@ -475,21 +480,7 @@ class FieldDiscovery:
         return directory
 
     def categorize_hypothesis(self, hypothesis):
-        hypothesis = hypothesis if isinstance(hypothesis, dict) else {}
-        text = str(hypothesis.get("statement") or "")
-        tags = hypothesis.get("tags")
-        tags = tags if isinstance(tags, list) else []
-        combined = " ".join([text] + [str(tag or "") for tag in tags]).lower()
-        scores = {}
-        for category, keywords in CATEGORY_KEYWORDS.items():
-            hits = sum(1 for kw in keywords if kw in combined)
-            if hits:
-                scores[category] = hits
-        if not scores:
-            return []
-        return sorted(
-            scores.keys(), key=lambda c: (scores[c], CATEGORY_VALUE[c]), reverse=True
-        )
+        return categorize_hypothesis(hypothesis, CATEGORY_KEYWORDS, CATEGORY_VALUE)
 
     def _set_field_completeness(self, dataset_id, field_type, contract):
         dataset_contract = self._field_completeness.setdefault(dataset_id, {})
@@ -654,40 +645,7 @@ class FieldDiscovery:
 
     @staticmethod
     def _keywords_from_hypothesis(hypothesis, limit=12):
-        hypothesis = hypothesis if isinstance(hypothesis, dict) else {}
-        ordered = []
-        seen = set()
-
-        def push(word):
-            w = str(word or "").lower()
-            if len(w) > 1 and w not in seen and w not in _STOPWORDS:
-                seen.add(w)
-                ordered.append(w)
-
-        def push_text(text):
-            for piece in re.findall(r"[a-z0-9]+|[\u3400-\u9fff]+", text.lower()):
-                if re.fullmatch(r"[\u3400-\u9fff]+", piece):
-                    if len(piece) > 1:
-                        push(piece)
-                    # 3- and 2-character chunks tend to match domain terms
-                    # such as 成交量/价格, while 4-character chunks remain a
-                    # useful fallback for compound labels.
-                    for size in (3, 2, 4):
-                        for start in range(0, len(piece) - size + 1):
-                            push(piece[start:start + size])
-                else:
-                    push(piece)
-
-        tags = hypothesis.get("tags")
-        tags = tags if isinstance(tags, list) else []
-        for tag in tags:
-            push_text(str(tag or ""))
-        push_text(str(hypothesis.get("statement") or ""))
-        try:
-            limit = max(0, int(limit))
-        except (TypeError, ValueError):
-            limit = 12
-        return ordered[:limit]
+        return keywords_from_hypothesis(hypothesis, limit)
 
     def _live_dataset_snapshot(self):
         """Return one current-round dataset listing snapshot."""
@@ -775,39 +733,13 @@ class FieldDiscovery:
         return self._dataset_description_map().get(str(dataset_id))
 
     def _select_active_dataset_ids(self, dataset_ids, categories, keywords, round_no):
-        """Bound dynamic dataset work before any field pagination starts."""
-        dataset_ids = normalize_dataset_ids(dataset_ids)
-        if len(dataset_ids) <= self.MAX_ACTIVE_DATASETS:
-            self._dataset_universe_provenance = {
-                **self._dataset_universe_provenance,
-                "active_count": len(dataset_ids),
-                "active_pool": list(dataset_ids),
-                "selection_strategy": "bounded_all",
-            }
-            return dataset_ids
-        category_ids = {
-            dataset_id
-            for category in categories
-            for dataset_id in DATASET_CATEGORIES.get(category, [])
-        }
-        scored = []
-        for dataset_id in dataset_ids:
-            text = dataset_id.lower().replace("_", " ")
-            keyword_score = sum(1 for keyword in keywords if keyword in text)
-            category_score = 4 if dataset_id in category_ids else 0
-            tie = hashlib.sha256(
-                f"{self.random_seed}|{round_no}|{dataset_id}".encode()
-            ).hexdigest()
-            scored.append((-(keyword_score + category_score), tie, dataset_id))
-        scored.sort()
-        active = [item[2] for item in scored[: self.MAX_ACTIVE_DATASETS]]
-        self._dataset_universe_provenance = {
-            **self._dataset_universe_provenance,
-            "active_count": len(active),
-            "active_pool": list(active),
-            "selection_strategy": "bounded_semantic_dataset_pool",
-        }
-        return active
+        selected, provenance = select_active_dataset_ids(
+            normalize_dataset_ids(dataset_ids), categories, keywords, round_no,
+            self.random_seed, self.MAX_ACTIVE_DATASETS, DATASET_CATEGORIES,
+            self._dataset_universe_provenance,
+        )
+        self._dataset_universe_provenance = provenance
+        return selected
 
     def discover(self, hypothesis, target_count=6):
         hypothesis = hypothesis if isinstance(hypothesis, dict) else {}
@@ -981,157 +913,31 @@ class FieldDiscovery:
             fields = self._fields_for(dataset_id, persist=False)
         except Exception:
             return []
-        cheap_candidates = []
-        for field in fields:
-            if not isinstance(field, dict) or not isinstance(field.get("id"), (str, int)):
-                continue
-            field_id = str(field["id"])
-            actual_dataset = self._dataset_id(field) or str(dataset_id)
-            alpha_count = self._alpha_count(field)
-            if self.max_alpha_count is not None and alpha_count is None and self.require_platform_alpha_count:
-                self.last_excluded_unknown_usage.append({
-                    "id": field_id,
-                    "dataset": actual_dataset,
-                    "reason": "platform alphaCount unavailable",
-                })
-                continue
-            if self.max_alpha_count is not None and alpha_count is not None:
-                try:
-                    if float(alpha_count) > float(self.max_alpha_count):
-                        self.last_excluded_high_usage.append({
-                            "id": field_id, "alpha_count": alpha_count,
-                            "dataset": actual_dataset,
-                        })
-                        continue
-                except (TypeError, ValueError):
-                    pass
-            haystack_id = str(field.get("id") or "").lower()
-            haystack_name = str(field.get("name") or "").lower()
-            haystack_desc = str(field.get("description") or "").lower()
-            keyword_score = keyword_contribution(
-                haystack_id, haystack_name, haystack_desc, keywords
-            )
-            if self.selection_mode == "semantic" and keyword_score <= 0:
-                continue
-            coverage = normalize_coverage(field)
-            coverage_score = (
-                0.0 if coverage is None else min(2.0, max(0.0, coverage * 2.0))
-            )
-            cheap_score = keyword_score + coverage_score
-            if cheap_score <= 0 and self.selection_mode not in {
-                "random", "semantic_random", "broad"
-            }:
-                continue
-            token = "|".join((self.random_seed, str(hypothesis or {}),
-                              str(actual_dataset), field_id))
-            digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
-            noise = int(digest[:12], 16) / float(16 ** 12)
-            if self.selection_mode == "random":
-                cheap_rank = noise
-            elif self.selection_mode in {"semantic_random", "broad"}:
-                cheap_rank = ((1.0 - self.random_fraction) * cheap_score
-                              + self.random_fraction * noise)
-            else:
-                cheap_rank = cheap_score
-            cheap_candidates.append((
-                cheap_rank, noise, field, actual_dataset, field_id, coverage
-            ))
-
-        cheap_candidates.sort(
-            key=lambda item: (-item[0], str(item[2].get("id")))
+        ranked, diagnostics = rank_fields(
+            fields, dataset_id, keywords,
+            selection_mode=self.selection_mode,
+            random_seed=self.random_seed,
+            random_fraction=self.random_fraction,
+            candidate_pool_size=self.candidate_pool_size,
+            max_alpha_count=self.max_alpha_count,
+            require_platform_alpha_count=self.require_platform_alpha_count,
+            hypothesis=hypothesis,
         )
-        cheap_candidates = cheap_candidates[:self.candidate_pool_size]
-        self._candidate_counts[dataset_id] = len(cheap_candidates)
-
-        ranked = []
-        for _cheap_rank, noise, field, actual_dataset, _field_id, coverage in cheap_candidates:
-            components = score_components(
-                field, keywords, self._alpha_count(field), coverage
-            )
-            score = (
-                components["keyword_contribution"]
-                + components["coverage_contribution"]
-                - components["alpha_count_penalty"]
-            )
-            random_contribution = 0.0
-            if self.selection_mode == "random":
-                rank = noise
-                random_contribution = noise
-            elif self.selection_mode in {"semantic_random", "broad"}:
-                random_contribution = self.random_fraction * noise
-                rank = ((1.0 - self.random_fraction) * score
-                        + self.random_fraction * noise)
-            else:
-                rank = score
-            if score <= 0 and self.selection_mode not in {
-                "random", "semantic_random", "broad"
-            }:
-                continue
-            ranked.append((
-                rank,
-                score,
-                field,
-                actual_dataset,
-                {
-                    **components,
-                    "random_exploration_contribution": random_contribution,
-                },
-            ))
-        ranked.sort(key=lambda item: (-item[0], -item[1], str(item[2].get("id"))))
+        self.last_excluded_high_usage.extend(diagnostics["excluded_high_usage"])
+        self.last_excluded_unknown_usage.extend(diagnostics["excluded_unknown_usage"])
+        self._candidate_counts[dataset_id] = diagnostics["candidate_count"]
         return ranked
-
     def _profile_from_field(
         self, dataset_id, field, score, category, ranking_provenance=None
     ):
-        field_id = str(field.get("id"))
-        alpha_count = self._alpha_count(field)
-        freq_ev = frequency_evidence(field)
-        frequency = (
-            freq_ev["frequency"]
-            if freq_ev["status"] in {"KNOWN", "INFERRED"} else None
+        snapshot = self._live_dataset_snapshot()
+        return profile_field(
+            field, dataset_id, score, category, ranking_provenance,
+            alpha_count=self._alpha_count(field),
+            dataset_description=self._dataset_description(dataset_id),
+            dataset_snapshot=snapshot,
+            source_provenance=self.source_provenance(),
         )
-        if frequency is None and freq_ev.get("source") == "UNKNOWN":
-            # No field-level evidence at all: fall back to the platform's
-            # dataset-level cadence statement.  A field-level CONFLICT or
-            # ambiguous inference is never overridden (fail-closed).
-            dataset_evidence = dataset_description_frequency(
-                self._dataset_description(dataset_id)
-            )
-            if dataset_evidence is not None:
-                snapshot = self._live_dataset_snapshot()
-                dataset_evidence.update({
-                    "scope": "DATASET",
-                    "observed_at": snapshot.get("observed_at"),
-                    "fingerprint": snapshot.get("fingerprint"),
-                })
-                frequency = dataset_evidence["frequency"]
-                freq_ev = dataset_evidence
-        return {
-            "id": field_id,
-            "name": field.get("name") or field.get("description") or field_id,
-            "description": field.get("description") or "",
-            "coverage": normalize_coverage(field),
-            "alpha_count": alpha_count,
-            "frequency": frequency,
-            "frequency_evidence": freq_ev,
-            "semantic_status": "KNOWN" if field.get("description") else "UNKNOWN",
-            "category": category or "preferred",
-            "dataset": str(dataset_id),
-            "type": field.get("type"),
-            "match_score": score,
-            "ranking_provenance": dict(ranking_provenance or {
-                "keyword_contribution": 0.0,
-                "coverage_contribution": 0.0,
-                "alpha_count_penalty": 0.0,
-                "random_exploration_contribution": 0.0,
-            }),
-            "field_source": self.source_provenance(),
-            "platform_dedupe": {
-                "source": self.source_provenance().get("kind"),
-                "status": "KNOWN" if alpha_count is not None else "UNKNOWN",
-                "alpha_count": alpha_count,
-            },
-        }
 
     def _collect_from_dataset(
         self, dataset_id, keywords, chosen, seen, target_count, category,
@@ -1149,11 +955,3 @@ class FieldDiscovery:
             ))
             seen.add(key)
 
-
-_STOPWORDS = {
-    "with", "from", "that", "this", "will", "have", "been", "being",
-    "into", "over", "under", "across", "about", "their", "there", "which",
-    "while", "using", "should", "would", "where", "when", "after", "before",
-    "and", "or", "a", "an", "the", "of", "to", "in", "on", "for",
-    "的", "了", "和", "与", "及", "在", "对", "将", "从", "是",
-}
