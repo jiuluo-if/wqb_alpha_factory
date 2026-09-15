@@ -423,7 +423,7 @@ class OptimizerWorkflow:
         if view is not None:
             return list(view.records)
         iterate = getattr(self.trajectory, "iter_canonical_rows", None)
-        if callable(iterate):
+        if callable(iterate) and getattr(self.trajectory, "persist", True):
             return [row for row in iterate() if isinstance(row, Mapping)]
         recent = getattr(self.trajectory, "recent", None)
         if not callable(recent):
@@ -584,14 +584,14 @@ class OptimizerWorkflow:
 
         for parent in parents or []:
             report["parent_count"] += 1
-            if not isinstance(parent, (dict, Experiment)):
+            if not isinstance(parent, (Mapping, Experiment)):
                 block("INVALID_PARENT")
                 continue
             if str(self._optimizer_value(parent, "status", "")).upper() != "DONE":
                 block("PARENT_NOT_DONE")
                 continue
             report["done_parent_count"] += 1
-            record = parent if isinstance(parent, dict) else parent.to_dict()
+            record = dict(parent) if isinstance(parent, Mapping) else parent.to_dict()
             evidence = list(parent_rejections(record))
             missing = list(evidence)
             decision = decision_for_parent(record)
@@ -624,7 +624,7 @@ class OptimizerWorkflow:
             report["ready_parent_count"] += 1
         for child in children or ():
             record = (
-                child if isinstance(child, dict)
+                dict(child) if isinstance(child, Mapping)
                 else getattr(child, "to_dict", lambda: {})()
             )
             if not isinstance(record, Mapping):
