@@ -365,6 +365,38 @@ durable index、SQLite memory store、第二套 state 或 framework fixture。
 Phase VI 未改变经济机制、研究阈值、PSR/DSR/PBO、quota、Simulation/recovery、Trajectory strict read、
 TrialLedger durable truth 或 ExperienceMemory persistence contract。
 
+## Architecture Modernization Phase VII（2026-09-15）
+
+本阶段以 `d99f7cd3a6fca07896ad8317e1dbc9ef841de608` 为基线，按方法级责任图收缩
+Discovery、Reflection 和 Optimizer 的纯 projection；不按行数机械拆分，也不新增 state、
+durable cache、manager 或 workflow。冻结的 Simulation、checkpoint、Trajectory、Alpha Feed
+和手工 Alpha submission contract 均保持不变。
+
+| surface | pure projection owner | retained owner boundary |
+|---|---|---|
+| Discovery category/keyword/dataset/field selection | `discovery_selection.py` | `FieldDiscovery` 保留 client I/O、cache、catalog、live snapshot 与 provenance |
+| Discovery field profile | `field_metadata.py` | `FieldDiscovery` 保留远端字段读取及 profile 所需 owner facts 的采集 |
+| Reflection effective evidence/verdict | `reflection_evaluation.py` | `Reflector` 保留 round effects、Memory mutation、lineage 与单次 save |
+| Reflection learning policy | `reflection_learning.py` | `Reflector` 保留学习结果落库及 replay/idempotency owner |
+| Optimizer action/decision/local evidence view | `optimizer_selection.py` | `OptimizerWorkflow` 保留 trajectory/cloud metadata acquisition、Agent decision routing 与 factory proposal 编排 |
+
+Discovery 的 canonical selection/profile 投影保持旧 category keyword、dataset provenance、
+random seed ordering、alpha-count eligibility、candidate cap 和 field evidence 语义。Reflection
+在每个实验上先构造一个 effective metrics/check projection，再把同一 projection 传入 verdict
+和 learning；因此主 `reflect()` 路径每个实验只做一次 normalization。Optimizer 使用请求级
+不可变 `OptimizerLocalEvidenceView`，不跨请求缓存；`optimizer_context()` 复用一个 trajectory
+快照，`generate_from_decisions()` 对所有 parent identity 使用一次 `Trajectory.find_rows()`
+批量 canonical merge，cloud weekly cache 仍只提供 ID/status/time priority，不能恢复 local
+metrics 或 evidence。
+
+本阶段加入 deterministic read-pass 断言：Discovery 的 dataset/datafield acquisition、Reflection
+的 evidence normalization、Optimizer 的 trajectory `recent()`、parent `find_rows()` 与 weekly
+cache load 均按 owner/request 边界计数；失败时不得退化成隐式第二次扫描。对应纯模块保持
+显式 targeted routes，未引入全仓测试 fallback。验证包括 Discovery/Reflection/Optimizer
+定向行为与 architecture contracts、changed Python 的 `py_compile`/Ruff、targeted runner
+mapping integrity、fixture doctor/audit 和 privacy gate；所有有效提交均使用指定 Git 邮箱并推送
+到 `origin/main`。
+
 ## 变更规则
 
 触碰 owner、proposal/schema、state merge 或安全边界时，必须增加行为/回归测试并更新本文件。公共文档只保留当前 contract；历史由 Git 承担，隐私规则见 [`PRIVACY.md`](PRIVACY.md)，研究方法见 [`RESEARCH_POLICY.md`](RESEARCH_POLICY.md)。

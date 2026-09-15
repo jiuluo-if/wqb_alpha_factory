@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from wqb_agent.agent import Agent
+from wqb_agent.optimization_decision import OptimizationDecision
 from wqb_agent.optimizer_workflow import OptimizerHooks, OptimizerWorkflow
 from wqb_agent.research_guard import overfit_expression_reason
 
@@ -87,6 +88,41 @@ class TestOptimizerWorkflow(unittest.TestCase):
         self.workflow(trajectory).optimizable_signal_records()
         self.assertEqual(trajectory.recent_calls, 1)
 
+    def test_optimizer_context_uses_one_request_local_snapshot(self):
+        class CountingTrajectory(FakeTrajectory):
+            def __init__(self, rows):
+                super().__init__(rows)
+                self.recent_calls = 0
+
+            def recent(self, limit):
+                self.recent_calls += 1
+                return super().recent(limit)
+
+        trajectory = CountingTrajectory([])
+        self.workflow(trajectory).optimizer_context()
+        self.assertEqual(trajectory.recent_calls, 1)
+
+    def test_decision_batch_resolves_parent_rows_once(self):
+        class BatchTrajectory(FakeTrajectory):
+            def __init__(self, rows):
+                super().__init__(rows)
+                self.find_rows_calls = []
+
+            def find_rows(self, ids):
+                ids = list(ids)
+                self.find_rows_calls.append(ids)
+                return {row["id"]: row for row in self.rows if row["id"] in ids}
+
+        rows = [dict(_parent("rank(a)"), id="p1"), dict(_parent("rank(b)"), id="p2")]
+        trajectory = BatchTrajectory(rows)
+        result = self.workflow(trajectory).generate_from_decisions([
+            OptimizationDecision(parent_id="p1", decision="STOP"),
+            OptimizationDecision(parent_id="p2", decision="STOP"),
+        ])
+        self.assertEqual(len(trajectory.find_rows_calls), 1)
+        self.assertEqual(set(trajectory.find_rows_calls[0]), {"p1", "p2"})
+        self.assertEqual([item["outcome"] for item in result["decision_results"]], ["STOP", "STOP"])
+
     def test_done_parent_requires_complete_local_evidence_contract(self):
         incomplete = _parent()
         incomplete.pop("economic_mechanism")
@@ -149,6 +185,7 @@ class TestOptimizerWorkflow(unittest.TestCase):
         )
         self.assertEqual(records[0]["optimization_source"], "cloud")
         self.assertEqual(records[1]["optimization_source"], "current_run")
+        self.assertEqual(cache.load_calls, 1)
         self.assertEqual(records[0]["optimization_recency"], 2)
         self.assertEqual(records[1]["optimization_recency"], 1)
 

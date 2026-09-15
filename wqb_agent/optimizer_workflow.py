@@ -25,7 +25,14 @@ from .optimization_decision import (
     validation_candidate_values,
     validation_rejections,
 )
-from .optimizer_selection import optimization_priority, parent_rejections
+from .optimizer_selection import (
+    OptimizerLocalEvidenceView,
+    decision_for_parent,
+    next_action,
+    optimization_priority,
+    parent_rejections,
+    same_value,
+)
 from .pre_correlation import READINESS_BANDS, failing_check_names
 from .research_guard import overfit_expression_reason, parameter_only_change_reason
 from .research_yield import ResearchYieldFunnel, child_generation_bound
@@ -78,15 +85,6 @@ _READINESS_PRIORITY = {band: index for index, band in enumerate(READINESS_BANDS)
 # 已结算的相关性结果会改变下一步：FAIL 需要新的经济结构，PASS 可以推进。
 _CORRELATION_FAIL_STATES = frozenset({"FAIL", "FAILED", "BLOCK", "HIGHER"})
 
-_NEXT_ACTION_BY_READINESS = {
-    "PRE_CORRELATION_READY": "CHECK_SELF_CORRELATION",
-    "STRUCTURAL_REPAIR_REQUIRED": "CONSIDER_CHILD",
-    "NUMERIC_VALIDATION_CANDIDATE": "CONSIDER_VALIDATE",
-    "ONE_REPAIR_AWAY": "CONSIDER_VALIDATE",
-    "LOW_INFORMATION": "REROUTE_OR_STOP",
-    "STOP": "STOP",
-}
-
 # 公开的取值集合：Agent 只需消费 hint，最终仍由 Agent author 决策。
 NEXT_ACTIONS = (
     "CHECK_SELF_CORRELATION",
@@ -97,56 +95,6 @@ NEXT_ACTIONS = (
     "REROUTE_OR_STOP",
     "STOP",
 )
-
-
-def _next_action(readiness, *, self_correlation_status="UNKNOWN",
-                 generation_allowed=True):
-    """纯 derived 下一步 hint（不是 Python 自动研究决策）。"""
-    status = str(self_correlation_status or "UNKNOWN").upper()
-    band = str(readiness or "")
-    if status in _CORRELATION_FAIL_STATES:
-        return "CONSIDER_CORRELATION_REPAIR"
-    if band == "STRUCTURAL_REPAIR_REQUIRED":
-        # 结构 blocker 未修复的 parent 不能推进；历史 SELF_CORRELATION PASS
-        # 只说明旧表达式的相关性边界已解决，不解除当前结构 blocker。
-        if not generation_allowed:
-            return "STOP"
-        return "CONSIDER_CHILD"
-    if status == "PASS":
-        # 已结算 PASS 后不得再要求重复查询；相关性边界已解决，可以推进。
-        return "READY_TO_ADVANCE"
-    if band == "PRE_CORRELATION_READY":
-        return "CHECK_SELF_CORRELATION"
-    return _NEXT_ACTION_BY_READINESS.get(band, "REROUTE_OR_STOP")
-
-
-def _same_value(left, right):
-    """数值比较（含 int/float 混用）；非数值退化为字符串比较。"""
-    if isinstance(left, bool) or isinstance(right, bool):
-        return str(left) == str(right)
-    try:
-        return float(left) == float(right)
-    except (TypeError, ValueError):
-        return str(left) == str(right)
-
-
-def _decision_for_parent(parent):
-    """Build the formal decision for one parent record, if the Agent supplied one."""
-    payload = parent.get("optimization_decision")
-    if isinstance(payload, Mapping):
-        try:
-            return OptimizationDecision.from_mapping(payload)
-        except (TypeError, ValueError):
-            return None
-    child = parent.get("child_economic_hypothesis")
-    if isinstance(child, Mapping):
-        try:
-            return OptimizationDecision.from_child_hypothesis(
-                str(parent.get("id") or ""), child
-            )
-        except (TypeError, ValueError):
-            return None
-    return None
 
 
 def optimizer_conversions(report):
@@ -203,7 +151,7 @@ def optimization_eligibility_map(parents):
             continue
         plain = dict(record)
         reasons = list(parent_rejections(plain))
-        decision = _decision_for_parent(plain)
+        decision = decision_for_parent(plain)
         result[str(key)] = {
             "eligible": not reasons,
             "reasons": reasons,
@@ -240,14 +188,25 @@ class OptimizerWorkflow:
         self.hooks = hooks
         self.last_handoff_report: dict[str, int] = {}
 
+    def _local_evidence_view(self, limit=256):
+        """Build one immutable trajectory projection for the current request."""
+        iterate = getattr(self.trajectory, "iter_canonical_rows", None)
+        if callable(iterate):
+            rows = list(iterate())
+            return OptimizerLocalEvidenceView.from_rows(rows[-max(1, int(limit or 256)):])
+        return OptimizerLocalEvidenceView.from_rows(
+            self.trajectory.recent(max(1, int(limit or 256)))
+        )
+
     def optimizable_signal_records(self, limit=128):
         """返回 trajectory 中已有 DONE 证据，并按 cloud metadata 排序。"""
         records = []
         rejected = 0
         cloud_ids = self._cloud_alpha_ids()
-        experiments = list(self.trajectory.recent(limit))
+        view = self._local_evidence_view(limit)
+        experiments = list(view.records)
         for position, exp in enumerate(reversed(experiments)):
-            record = exp.to_dict()
+            record = dict(exp)
             reasons = parent_rejections(record)
             if reasons:
                 rejected += 1
@@ -257,11 +216,11 @@ class OptimizerWorkflow:
             record["evidence_source"] = "local_trajectory"
             record["priority_source"] = (
                 "cloud_metadata"
-                if str(exp.alpha_id or "") in cloud_ids
+                if str(record.get("alpha_id") or "") in cloud_ids
                 else "trajectory_recency"
             )
             record["optimization_source"] = (
-                "cloud" if str(exp.alpha_id or "") in cloud_ids else "current_run"
+                "cloud" if str(record.get("alpha_id") or "") in cloud_ids else "current_run"
             )
             record["optimization_recency"] = position
             records.append(record)
@@ -314,7 +273,7 @@ class OptimizerWorkflow:
             if isinstance(parent.get("optimization_decision"), Mapping):
                 # 正式 OptimizationDecision 契约：完整字段 + 单一变化 +
                 # self-correlation 准入；不再依赖隐式 dict mutation。
-                decision = _decision_for_parent(parent)
+                decision = decision_for_parent(parent)
                 if decision is None or not decision.is_child:
                     continue
                 if decision_rejections(decision, parent):
@@ -347,16 +306,14 @@ class OptimizerWorkflow:
         delay = hook() if callable(hook) else None
         return delay, self.quality_policy
 
-    def _bounded_parent_summaries(self, limit):
+    def _bounded_parent_summaries(self, limit, *, view=None):
         """有限、只读的 (record, summary) 对；不泄漏无限历史。"""
         self.hooks.ensure_loaded()
         limit = max(1, int(limit or 8))
         delay, quality_policy = self._metric_policy()
         rows = []
-        for experiment in reversed(self.trajectory.recent(max(limit * 8, 64))):
-            record = (
-                experiment.to_dict() if hasattr(experiment, "to_dict") else experiment
-            )
+        view = view or self._local_evidence_view(max(limit * 8, 64))
+        for record in reversed(view.records):
             if not isinstance(record, Mapping):
                 continue
             record = dict(record)
@@ -425,14 +382,14 @@ class OptimizerWorkflow:
             "settings_pools": settings_pools,
         }
 
-    def _generation_bound(self):
+    def _generation_bound(self, *, view=None):
         """复用唯一 ResearchYield 有界多代策略，不新建第二套规则。
 
         父本 gate 不携带 children，所以多代边界必须从 canonical trajectory 的
         真实 CHILD 证据派生（``experiment_stage == "CHILD"``）；ROBUSTNESS /
         VALIDATE 不是新一代 CHILD，不能用来解锁 C2。
         """
-        children = self._trajectory_child_records()
+        children = self._trajectory_child_records(view=view)
         report = self.gate_report([], children=children)
         funnel = ResearchYieldFunnel(
             mechanism_key="optimizer",
@@ -461,8 +418,10 @@ class OptimizerWorkflow:
             return False
         return str(record.get("experiment_stage") or "").upper() == "CHILD"
 
-    def _canonical_trajectory_rows(self):
+    def _canonical_trajectory_rows(self, *, view=None):
         """canonical trajectory 视图：同一 Experiment 只取最新合法 revision。"""
+        if view is not None:
+            return list(view.records)
         iterate = getattr(self.trajectory, "iter_canonical_rows", None)
         if callable(iterate):
             return [row for row in iterate() if isinstance(row, Mapping)]
@@ -477,10 +436,10 @@ class OptimizerWorkflow:
                 merged[record["id"]] = record
         return list(merged.values())
 
-    def _trajectory_child_records(self):
+    def _trajectory_child_records(self, *, view=None):
         """canonical trajectory 中真实的 CHILD 记录（fail-closed 识别）。"""
         return [
-            row for row in self._canonical_trajectory_rows()
+            row for row in self._canonical_trajectory_rows(view=view)
             if self._is_child_generation_record(row)
         ]
 
@@ -492,14 +451,15 @@ class OptimizerWorkflow:
         """
         self.hooks.ensure_loaded()
         limit = max(1, min(int(limit or 8), 8))
-        rows = self._bounded_parent_summaries(limit)
+        view = self._local_evidence_view(max(256, limit * 8))
+        rows = self._bounded_parent_summaries(limit, view=view)
         parents = []
         blocker_counts: dict[str, int] = {}
         readiness_counts = {band: 0 for band in READINESS_BANDS}
         self_correlation_counts: dict[str, int] = {}
         eligibility = []
         variants = []
-        generation_bound = self._generation_bound()
+        generation_bound = self._generation_bound(view=view)
         for record, summary in rows:
             correlation = str(
                 summary.get("self_correlation_status") or "UNKNOWN"
@@ -517,7 +477,7 @@ class OptimizerWorkflow:
             summary = dict(
                 summary,
                 metric_optimization_context=context,
-                next_action=_next_action(
+                next_action=next_action(
                     context.get("readiness"),
                     self_correlation_status=correlation,
                     generation_allowed=bool(generation_bound.get("allowed", True)),
@@ -545,7 +505,7 @@ class OptimizerWorkflow:
             ):
                 variants.append(candidate)
             parents.append(summary)
-        gate = self.gate_report()
+        gate = self.gate_report(list(view.records))
         return {
             "parent_limit": limit,
             "parent_count": len(parents),
@@ -558,7 +518,7 @@ class OptimizerWorkflow:
             "generation_bound": generation_bound,
             "next_action": (
                 parents[0]["next_action"] if parents
-                else _next_action(
+                else next_action(
                     None,
                     generation_allowed=bool(generation_bound.get("allowed", True)),
                 )
@@ -634,7 +594,7 @@ class OptimizerWorkflow:
             record = parent if isinstance(parent, dict) else parent.to_dict()
             evidence = list(parent_rejections(record))
             missing = list(evidence)
-            decision = _decision_for_parent(record)
+            decision = decision_for_parent(record)
             # Readiness needs an Agent-authored *CHILD* decision: either the
             # legacy ``child_economic_hypothesis`` dict or the formal
             # ``OptimizationDecision`` contract.  VALIDATE / REROUTE / STOP are
@@ -769,7 +729,7 @@ class OptimizerWorkflow:
             return None
         for slot in getattr(template, "numeric_slots", ()) or ():
             for value in slot.allowed_values or ():
-                if value == slot.default or not _same_value(value, decision.new_value):
+                if value == slot.default or not same_value(value, decision.new_value):
                     continue
                 try:
                     rendered = slot.render(expression, value)
@@ -861,22 +821,29 @@ class OptimizerWorkflow:
             ),
         }, []
 
-    def _canonical_parent(self, parent_id):
-        """Resolve one parent from canonical evidence; never fabricate a record."""
-        target = str(parent_id or "")
-        if not target:
-            return None
+    def _canonical_parents(self, parent_ids):
+        """Resolve a decision batch with one canonical trajectory pass."""
+        targets = {str(value) for value in parent_ids or () if value}
+        if not targets:
+            return {}
         finder = getattr(self.trajectory, "find_rows", None)
         if callable(finder):
-            rows = finder([target])
-            row = rows.get(target) if isinstance(rows, Mapping) else None
-            if isinstance(row, Mapping):
-                return row
-        for experiment in reversed(self.trajectory.recent(256)):
-            record = experiment.to_dict() if hasattr(experiment, "to_dict") else experiment
-            if isinstance(record, Mapping) and str(record.get("id")) == target:
-                return record
-        return None
+            rows = finder(sorted(targets))
+            if isinstance(rows, Mapping):
+                return {
+                    target: row for target, row in rows.items()
+                    if isinstance(row, Mapping)
+                }
+            return {}
+        view = self._local_evidence_view(256)
+        return {
+            target: row for target, row in view.by_identity().items()
+            if target in targets
+        }
+
+    def _canonical_parent(self, parent_id):
+        """Compatibility helper for callers resolving one parent."""
+        return self._canonical_parents([parent_id]).get(str(parent_id or ""))
 
     def generate_from_decisions(self, decisions, *, max_candidates=4):
         """Validate Agent OptimizationDecisions, then reuse the one CHILD path.
@@ -894,13 +861,18 @@ class OptimizerWorkflow:
         rejected: list[dict] = []
         decision_results: list[dict] = []
         pending_results: list[tuple[int, str]] = []
+        parent_ids = [
+            decision.parent_id for decision in decisions
+            if isinstance(decision, OptimizationDecision)
+        ]
+        parents_by_id = self._canonical_parents(parent_ids)
         for decision_index, decision in enumerate(decisions):
             if not isinstance(decision, OptimizationDecision):
                 rejected.append({"parent_id": None, "reasons": ["DECISION_INVALID"]})
                 decision_results.append({"parent_id": None, "outcome": "REJECTED", "decision": None,
                                          "decision_id": None, "_optimization_decision_index": decision_index})
                 continue
-            parent = self._canonical_parent(decision.parent_id)
+            parent = parents_by_id.get(str(decision.parent_id or ""))
             if parent is None:
                 rejected.append(
                     {"parent_id": decision.parent_id, "reasons": ["PARENT_NOT_FOUND"]}
