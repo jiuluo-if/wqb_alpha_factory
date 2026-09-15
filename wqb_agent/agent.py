@@ -54,6 +54,10 @@ from .research_planning import (
     form_research_space,
     iterate_best_hypothesis,
 )
+from .research_settlement import (
+    SettlementReplayConflict,
+    experiment_settlement_semantic,
+)
 from .runtime_components import build_runtime_components
 from .runtime_composition import AgentWorkflowHooks, build_agent_workflows
 from .runtime_policy import build_agent_runtime_policy
@@ -1353,6 +1357,7 @@ class Agent:
         provisional = getattr(experiment, "provisional_outcome", None) or getattr(experiment, "search_outcome", None)
         if not isinstance(provisional, dict) or not isinstance(report, dict):
             return None
+        experiment.validation_report = report
         incremental = self._settle_incremental_evidence(experiment)
         incremental_decision = incremental.get("decision", "UNAVAILABLE") if isinstance(incremental, dict) else "UNAVAILABLE"
         platform = (report.get("dimensions") or {}).get("platform_quality") or {}
@@ -1393,10 +1398,28 @@ class Agent:
             research_classification=experiment.research_classification,
             incremental_evidence=incremental,
             research_evidence_bundle=experiment.research_evidence_bundle,
+            validation_report=report,
             timestamp=final.get("settled_at") or time.time(),
         )
+        existing_final = getattr(experiment, "final_outcome", None)
+        existing_id = existing_final.get("settlement_id") if isinstance(existing_final, dict) else None
+        if existing_id and existing_id != settlement_payload["settlement_id"]:
+            raise SettlementReplayConflict(
+                f"SETTLEMENT_REPLAY_CONFLICT: experiment={experiment.id}"
+            )
         final["settlement_id"] = settlement_payload["settlement_id"]
         experiment.final_outcome = final
+        existing_rows = self.trajectory.find_rows([experiment.id])
+        existing_row = existing_rows.get(experiment.id) if isinstance(existing_rows, dict) else None
+        if (
+            isinstance(existing_row, dict)
+            and existing_row.get("trajectory_revision") == "RESEARCH_SETTLED"
+            and experiment_settlement_semantic(existing_row)
+            != experiment_settlement_semantic(experiment)
+        ):
+            raise SettlementReplayConflict(
+                f"SETTLEMENT_REPLAY_CONFLICT: experiment={experiment.id}"
+            )
         self.trial_ledger.record_outcome_settled(
             experiment, reward=final.get("reward"),
             reward_version=final.get("reward_version", "reward_v1"),
@@ -1407,6 +1430,7 @@ class Agent:
             research_classification=experiment.research_classification,
             incremental_evidence=incremental,
             research_evidence_bundle=experiment.research_evidence_bundle,
+            validation_report=report,
             timestamp=final.get("settled_at") or time.time(),
         )
         try:

@@ -257,6 +257,34 @@ class TestProductionSettlementPersistence(unittest.TestCase):
             final_rows[0]["settlement"].get("settlement_id"),
         )
 
+    def test_conflicting_final_semantic_is_rejected_before_second_ledger_write(self):
+        agent = self._agent()
+        experiment = done_experiment()
+        agent.trajectory.add(experiment)
+        agent._settle_research_outcome(experiment, self._report())
+        ledger_before = len([
+            row for row in _rows(os.path.join(self.tmp, "trial_ledger.jsonl"))
+            if row.get("phase") == "research_outcome_settled"
+        ])
+        conflicting = self._report()
+        conflicting["status"] = "FAIL"
+        conflicting["dimensions"]["robustness"] = {"status": "FAIL"}
+
+        with self.assertRaisesRegex(ValueError, "SETTLEMENT_REPLAY_CONFLICT"):
+            agent._settle_research_outcome(experiment, conflicting)
+
+        ledger_after = len([
+            row for row in _rows(os.path.join(self.tmp, "trial_ledger.jsonl"))
+            if row.get("phase") == "research_outcome_settled"
+        ])
+        settled = [
+            row for row in _rows(os.path.join(self.tmp, "trajectory.jsonl"))
+            if row.get("id") == experiment.id
+            and row.get("trajectory_revision") == RESEARCH_SETTLED_REVISION
+        ]
+        self.assertEqual(ledger_after, ledger_before)
+        self.assertEqual(len(settled), 1)
+
     def test_restart_after_ledger_append_failure_repairs_one_revision(self):
         agent = self._agent()
         experiment = done_experiment()

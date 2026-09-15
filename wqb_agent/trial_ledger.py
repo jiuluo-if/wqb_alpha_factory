@@ -412,7 +412,7 @@ class TrialLedger:
                                  statistical_decision=None, incremental_decision=None,
                                  research_classification=None, incremental_evidence=None,
                                  reward_quality="FINAL_EVIDENCE",
-                                 research_evidence_bundle=None,
+                                 research_evidence_bundle=None, validation_report=None,
                                  timestamp=None):
         """Build the pure canonical payload used by final settlement writes."""
         settled_at = timestamp if timestamp is not None else time.time()
@@ -429,6 +429,7 @@ class TrialLedger:
             "research_classification": research_classification,
             "incremental_evidence": incremental_evidence,
             "research_evidence_bundle": research_evidence_bundle,
+            "validation_report": validation_report,
             "settled_at": settled_at,
         }
         semantic = dict(settlement)
@@ -441,7 +442,7 @@ class TrialLedger:
                                statistical_decision=None, incremental_decision=None,
                                research_classification=None, incremental_evidence=None,
                                reward_quality="FINAL_EVIDENCE",
-                               research_evidence_bundle=None,
+                               research_evidence_bundle=None, validation_report=None,
                                timestamp=None):
         settlement = self.build_outcome_settlement(
             trial, reward=reward, reward_version=reward_version,
@@ -452,6 +453,7 @@ class TrialLedger:
             incremental_evidence=incremental_evidence,
             reward_quality=reward_quality,
             research_evidence_bundle=research_evidence_bundle,
+            validation_report=validation_report,
             timestamp=timestamp,
         )
         settled_at = settlement["settled_at"]
