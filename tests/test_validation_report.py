@@ -1,3 +1,4 @@
+import json
 import os
 import random
 import statistics
@@ -226,6 +227,78 @@ class TestValidationReport(unittest.TestCase):
             self.assertFalse(parent.validation_report["terminal"])
             self.assertEqual(settled, [])
             self.assertIsNone(parent.final_outcome)
+
+    def test_partial_validation_restart_then_completion_settles_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            trajectory_path = os.path.join(tmp, "trajectory.jsonl")
+            parent = Experiment(1, "h", "rank(signal)", {}, ["signal"])
+            parent.status = "DONE"
+            parent.metrics = _metrics()
+            parent.health = {"ok": True}
+            parent.self_correlation = {"status": "PASS"}
+            parent.yearly_evidence = {"status": "VERIFIED", "stable": True}
+            parent.provisional_outcome = {"status": "PROVISIONAL", "reward": 0.4}
+            plan = default_validation_plan(parent, timestamp=1.0)
+            children = []
+            for index, variable in enumerate(REQUIRED_VARIABLES[:-1], start=2):
+                child = Experiment(index, "h", f"rank({variable})", {}, ["signal"])
+                child.status = "DONE"
+                child.metrics = _metrics()
+                child.health = {"ok": True}
+                child.self_correlation = {"status": "PASS"}
+                child.experiment_stage = "ROBUSTNESS"
+                child.parent_expression = parent.expression
+                child.changed_variable = variable
+                child.validation_plan = plan
+                children.append(child)
+
+            def make_agent(trajectory):
+                agent = object.__new__(Agent)
+                agent.trajectory = trajectory
+                agent.state_dir = tmp
+                agent.trial_ledger = TrialLedger(os.path.join(tmp, "trial_ledger.jsonl"))
+                agent.reflector = type("ReflectorStub", (), {"evidence_cache": {}})()
+                agent._settle_incremental_evidence = lambda experiment: {
+                    "decision": "UNKNOWN"
+                }
+                agent.search_policy = type(
+                    "SearchPolicyStub", (), {"replace_reward": lambda *args: None}
+                )()
+                agent._completed_parent = lambda expression: next(
+                    (item for item in trajectory.experiments
+                     if item.expression == expression and item.status == "DONE"),
+                    None,
+                )
+                return agent
+
+            first = Trajectory(path=trajectory_path)
+            first.add_many([parent, children[0]])
+            make_agent(first)._mark_robustness_stability([children[0]])
+            self.assertIsNone(parent.final_outcome)
+
+            restarted = Trajectory(path=trajectory_path).load()
+            restored_parent = next(item for item in restarted.experiments if item.id == parent.id)
+            restored_children = [
+                item for item in restarted.experiments if item.experiment_stage == "ROBUSTNESS"
+            ]
+            restarted_agent = make_agent(restarted)
+            restarted_agent._mark_robustness_stability(restored_children + children[1:])
+
+            with open(os.path.join(tmp, "trial_ledger.jsonl"), encoding="utf-8") as handle:
+                ledger_rows = [json.loads(line) for line in handle if line.strip()]
+            final_rows = [
+                row for row in ledger_rows
+                if row.get("phase") == "research_outcome_settled"
+            ]
+            settled_rows = [
+                row for row in restarted.iter_rows()
+                if row.get("id") == parent.id
+                and row.get("trajectory_revision") == "RESEARCH_SETTLED"
+            ]
+            self.assertEqual(len(final_rows), 1)
+            self.assertEqual(len(settled_rows), 1)
+            self.assertEqual(restored_parent.final_outcome.get("settlement_id"),
+                             final_rows[0]["settlement"]["settlement_id"])
 
 
 if __name__ == "__main__":
