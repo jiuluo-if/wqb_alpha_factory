@@ -331,8 +331,15 @@ class TestValidationReport(unittest.TestCase):
             restored_children = [
                 item for item in restarted.experiments if item.experiment_stage == "ROBUSTNESS"
             ]
+            # The remaining batch is durably recovered before the validation
+            # reducer runs; it is not smuggled in as an ephemeral call input.
+            restarted.add_many(children[1:])
+            restored_children = [
+                item for item in restarted.experiments
+                if item.experiment_stage == "ROBUSTNESS"
+            ]
             restarted_agent = make_agent(restarted)
-            restarted_agent._mark_robustness_stability(restored_children + children[1:])
+            restarted_agent._mark_robustness_stability(restored_children)
 
             with open(os.path.join(tmp, "trial_ledger.jsonl"), encoding="utf-8") as handle:
                 ledger_rows = [json.loads(line) for line in handle if line.strip()]
