@@ -1,7 +1,9 @@
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from wqb_agent.trial_ledger import TrialLedger
 
@@ -17,6 +19,91 @@ def _event_ids(path):
 
 
 class TrialLedgerIOTests(unittest.TestCase):
+    def test_membership_open_failure_writes_no_duplicate_on_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "trial_ledger.jsonl")
+            with patch(
+                "wqb_agent.trial_ledger.sqlite3.connect",
+                side_effect=sqlite3.OperationalError("open failed"),
+            ):
+                with self.assertRaises(sqlite3.OperationalError):
+                    TrialLedger(path).record(_trial("open"), "candidate_generated")
+            ledger = TrialLedger(path)
+            self.assertTrue(ledger.record(_trial("open"), "candidate_generated"))
+            self.assertEqual(len(_event_ids(path)), 1)
+
+    def test_membership_insert_failure_keeps_one_canonical_append(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "trial_ledger.jsonl")
+            ledger = TrialLedger(path)
+            self.assertTrue(ledger.record(_trial("before"), "candidate_generated"))
+            database = ledger._membership_db
+
+            class InsertFailingDatabase:
+                def execute(self, sql, parameters=()):
+                    if sql.startswith("INSERT INTO event_ids"):
+                        raise sqlite3.OperationalError("insert failed")
+                    return database.execute(sql, parameters)
+
+                def commit(self):
+                    return database.commit()
+
+                def rollback(self):
+                    return database.rollback()
+
+                def close(self):
+                    return database.close()
+
+            ledger._membership_db = InsertFailingDatabase()
+            self.assertTrue(ledger.record(_trial("insert"), "candidate_generated"))
+            self.assertEqual(len(_event_ids(path)), 2)
+
+    def test_membership_commit_failure_keeps_one_canonical_append(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "trial_ledger.jsonl")
+            ledger = TrialLedger(path)
+            self.assertTrue(ledger.record(_trial("before"), "candidate_generated"))
+            database = ledger._membership_db
+
+            class CommitFailingDatabase:
+                def execute(self, sql, parameters=()):
+                    return database.execute(sql, parameters)
+
+                def commit(self):
+                    raise sqlite3.OperationalError("commit failed")
+
+                def rollback(self):
+                    return database.rollback()
+
+                def close(self):
+                    return database.close()
+
+            ledger._membership_db = CommitFailingDatabase()
+            self.assertTrue(ledger.record(_trial("commit"), "candidate_generated"))
+            self.assertEqual(len(_event_ids(path)), 2)
+
+    def test_membership_remove_failure_is_disposable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "trial_ledger.jsonl")
+            ledger = TrialLedger(path)
+            self.assertTrue(ledger.record(_trial("remove"), "candidate_generated"))
+            membership_path = ledger._membership_db_path
+            database = ledger._membership_db
+
+            class CloseFailingDatabase:
+                def close(self):
+                    raise sqlite3.OperationalError("close failed")
+
+            ledger._membership_db = CloseFailingDatabase()
+            with patch(
+                "wqb_agent.trial_ledger.os.remove",
+                side_effect=OSError("remove failed"),
+            ):
+                ledger._close_membership_db_unlocked()
+            self.assertIsNone(ledger._membership_db)
+            self.assertIsNone(ledger._membership_db_path)
+            self.assertTrue(os.path.exists(membership_path))
+
     def test_one_owner_reconciles_once_for_many_appends(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "trial_ledger.jsonl")
