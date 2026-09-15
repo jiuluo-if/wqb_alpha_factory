@@ -59,8 +59,9 @@ def same_execution_identity(left, right):
 def research_settlement_identity(experiment):
     """Return the stable identity shared by derived settlement projections."""
     final = getattr(experiment, "final_outcome", None)
-    if not isinstance(final, dict):
-        final = {}
+    if not isinstance(final, dict) or not final:
+        experiment_id = getattr(experiment, "id", None) or "unknown-experiment"
+        return f"experiment:{experiment_id}:outcome:unsettled"
     settlement_id = final.get("settlement_id")
     if not settlement_id and isinstance(final.get("settlement"), dict):
         settlement_id = final["settlement"].get("settlement_id")
