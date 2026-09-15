@@ -12,7 +12,7 @@ from unittest.mock import Mock
 from wqb_agent.agent import Agent
 from wqb_agent.locking import single_instance_scope
 from wqb_agent.proposal_admission import AdmissionFacts
-from wqb_agent.proposal_execution import ProposalExecutionWorkflow
+from wqb_agent.proposal_execution import PreparedExecution, ProposalExecutionWorkflow
 from wqb_agent.state import Experiment
 
 
@@ -49,6 +49,11 @@ def _agent(tmpdir, client=None):
 
 
 class TestProposalExecutionCharacterization(unittest.TestCase):
+    def test_prepared_execution_is_a_frozen_request_value(self):
+        prepared = PreparedExecution(3, {"id": "h-3"}, ())
+        with self.assertRaises(AttributeError):
+            prepared.round_no = 4
+
     def test_admission_facts_are_frozen_request_scoped_values(self):
         facts = AdmissionFacts(
             research_seen=frozenset({"rank(x)"}),

@@ -115,6 +115,15 @@ class ProposalExecutionContext:
     simulation_delegation: Any = None
 
 
+@dataclass(frozen=True)
+class PreparedExecution:
+    """Immutable request-scoped handoff from materialization to execution."""
+
+    round_no: int
+    hypothesis: dict[str, Any]
+    experiments: tuple[Experiment, ...]
+
+
 class ProposalExecutionWorkflow:
     """Own proposal-file execution, recovery, and terminal settlement."""
 
@@ -615,10 +624,13 @@ class ProposalExecutionWorkflow:
         ctx.memory.register_hypothesis(hypothesis)
         return experiments
 
-    def _execute_prepared_round(self, round_no, hypothesis, experiments):
+    def _execute_prepared_round(self, prepared):
         """Execute materialized experiments and preserve recovery ordering."""
         ctx = self._ctx
         hooks = ctx.hooks
+        round_no = prepared.round_no
+        hypothesis = prepared.hypothesis
+        experiments = prepared.experiments
         checkpoint_path = ctx.checkpoints.path(round_no)
         ctx.checkpoints.write(round_no, hypothesis, experiments, False)
         round_start = time.time()
@@ -1161,7 +1173,9 @@ class ProposalExecutionWorkflow:
             fresh, round_no, hypothesis, factory_batch, list(discovered_profiles),
             effective_settings_by_candidate,
         )
-        return self._execute_prepared_round(round_no, hypothesis, experiments)
+        return self._execute_prepared_round(
+            PreparedExecution(round_no, hypothesis, tuple(experiments))
+        )
 
     @staticmethod
     def _field_dataset_id(field, fallback=None):
