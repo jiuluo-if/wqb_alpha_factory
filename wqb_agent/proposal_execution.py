@@ -74,6 +74,7 @@ class ProposalExecutionHooks:
     known_field_types: Callable[[dict, dict | None], dict]
     proposal_settings: Callable[[dict | None], dict]
     completed_parent: Callable[[str | None, dict | None], Any]
+    parent_research_verdict: Callable[[Experiment], dict]
     on_simulation_update: Callable[..., None]
     record_live_result: Callable[[Experiment], None]
     refresh_self_correlation_evidence: Callable[[list[Experiment]], None]
@@ -862,7 +863,7 @@ class ProposalExecutionWorkflow:
                     rejected.append((expression, [reason]))
                     continue
                 if role == "VALIDATION":
-                    parent_verdict = ctx.reflector._classify(
+                    parent_verdict = ctx.hooks.parent_research_verdict(
                         Experiment.from_dict(parent)
                     ).get("label")
                     if parent_verdict not in {"SUCCESS", "SUSPICIOUS_HIGH_SIGNAL"}:

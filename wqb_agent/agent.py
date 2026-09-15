@@ -203,6 +203,7 @@ class Agent:
                 known_field_types=self._known_field_types,
                 proposal_settings=self._proposal_settings,
                 completed_parent=self._completed_parent,
+                parent_research_verdict=self.reflector._classify,
                 on_simulation_update=self._on_simulation_update,
                 record_live_result=self._record_live_result,
                 refresh_self_correlation_evidence=self._refresh_self_correlation_evidence,
