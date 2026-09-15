@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from .experiment import TERMINAL_STATUSES
 from .schema import ARTIFACT_SCHEMAS
-from .state import TERMINAL_STATUSES
 from .workspace_snapshot import read_workspace_snapshot
 
 

@@ -10,6 +10,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, TypedDict
 
+from .experiment import Experiment
 from .expression import canonical_expression
 from .optimization_decision import (
     OPPORTUNITY_CATEGORIES,
@@ -28,7 +29,6 @@ from .optimizer_selection import optimization_priority, parent_rejections
 from .pre_correlation import READINESS_BANDS, failing_check_names
 from .research_guard import overfit_expression_reason, parameter_only_change_reason
 from .research_yield import ResearchYieldFunnel, child_generation_bound
-from .state import Experiment
 
 
 @dataclass(frozen=True)

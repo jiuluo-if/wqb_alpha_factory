@@ -25,6 +25,12 @@ from wqb_agent.submission import SubmissionPool, self_correlation_evidence
 
 
 class TestTrajectoryIntegrity(unittest.TestCase):
+    def test_state_reexports_canonical_experiment_model(self):
+        from wqb_agent.experiment import Experiment as CanonicalExperiment
+        from wqb_agent.state import Experiment as CompatibilityExperiment
+
+        self.assertIs(CompatibilityExperiment, CanonicalExperiment)
+
     def test_new_and_legacy_ids_and_identity_replay_contract(self):
         experiment = Experiment(1, "h", "rank(x)", {}, ["x"])
         self.assertRegex(experiment.id, r"^[0-9a-f]{32}$")

@@ -5,49 +5,28 @@ READ WHEN: changing experiment serialization, trajectory, or checkpoints.
 DO NOT USE FOR: treating derived memory as immutable platform truth.
 """
 
-import hashlib
 import json
 import os
 import re
 import time
-import uuid
-from dataclasses import dataclass, field
-from dataclasses import fields as dataclass_fields
 
 from .artifacts import _fsync_parent_directory
+from .experiment import (
+    ACTIVE_EXECUTION_STATUSES,  # noqa: F401
+    IDENTITY_FIELDS,  # noqa: F401
+    OPERATOR_PROVENANCE_FIELDS,
+    RECOVERABLE_STATUSES,  # noqa: F401
+    RESEARCH_SETTLED_REVISION,
+    TERMINAL_STATUSES,  # noqa: F401
+    TRAJECTORY_REVISION_KEY,
+    UNKNOWN_STATUSES,  # noqa: F401
+    UNRESOLVED_STATUSES,  # noqa: F401
+    Experiment,
+    dataset_ref,  # noqa: F401
+    research_settlement_identity,  # noqa: F401
+    same_execution_identity,
+)
 from .expression import canonical_expression, submission_fingerprint
-from .schema import CREATED_BY_VERSION, TRAJECTORY_VERSION
-
-ACTIVE_EXECUTION_STATUSES = frozenset({"PENDING", "RUNNING", "SUBMITTING"})
-UNKNOWN_STATUSES = frozenset({"SUBMIT_UNKNOWN", "UNKNOWN"})
-UNRESOLVED_STATUSES = ACTIVE_EXECUTION_STATUSES | UNKNOWN_STATUSES
-# ``SUBMIT_UNKNOWN`` is intentionally excluded: it requires read-only
-# reconciliation, while ordinary UNKNOWN jobs may still be polled/recovered.
-RECOVERABLE_STATUSES = ACTIVE_EXECUTION_STATUSES | frozenset({"UNKNOWN"})
-TERMINAL_STATUSES = frozenset({"DONE", "FAILED", "SKIPPED", "SKIPPED_STALE", "SKIPPED_UNKNOWN"})
-
-# Append-only trajectory revision marker.  The canonical first append keeps
-# execution identity; a later ``RESEARCH_SETTLED`` row re-persists the settled
-# research evidence for the same Experiment.  It is not a second execution.
-TRAJECTORY_REVISION_KEY = "trajectory_revision"
-RESEARCH_SETTLED_REVISION = "RESEARCH_SETTLED"
-
-# Execution identity is immutable: a settlement revision may change the later
-# research evidence but never what was actually executed.
-IDENTITY_FIELDS = (
-    "id", "round", "hypothesis_id", "expression", "settings", "fields_used",
-    "datasets", "candidate_id", "proposal_id", "submission_fingerprint",
-    "submission_started_at", "parent_expression", "lineage_id", "created_at",
-    "optimization_decision_id", "parent_id",
-)
-
-OPERATOR_PROVENANCE_FIELDS = (
-    "template_version", "template_mode", "template_branch_of",
-    "template_fingerprint", "template_structural_fingerprint",
-    "template_mechanism_fingerprint", "operator_role",
-    "operator_role_mapping", "operator_realization_fingerprint",
-    "operator_capability_fingerprint",
-)
 
 # One Experiment occupies a bounded number of rows in the append-only file
 # (canonical first append plus settlement revisions), so a restart only needs
@@ -57,52 +36,6 @@ _LOAD_LINES_PER_EXPERIMENT = 4
 
 class TrajectoryIntegrityError(RuntimeError):
     """Canonical trajectory corruption that blocks safety-sensitive reads."""
-
-
-def same_execution_identity(left, right):
-    """True when two trajectory rows describe the same executed Experiment."""
-    def identity_value(row, key):
-        value = row.get(key)
-        if key == "submission_fingerprint" and not value:
-            expression = row.get("expression")
-            settings = row.get("settings")
-            if isinstance(expression, str) and isinstance(settings, dict):
-                return submission_fingerprint(expression, settings)
-        return value
-
-    return {
-        key: identity_value(left, key) for key in IDENTITY_FIELDS
-    } == {
-        key: identity_value(right, key) for key in IDENTITY_FIELDS
-    }
-
-
-def research_settlement_identity(experiment):
-    """Return the stable identity shared by all derived settlement projections.
-
-    The TrialLedger settlement id wins when present.  Older/partial rows fall
-    back to the Experiment id plus a canonical final-outcome version; neither
-    timestamps nor expressions are identities.
-    """
-    final = getattr(experiment, "final_outcome", None)
-    if not isinstance(final, dict):
-        final = {}
-    settlement_id = final.get("settlement_id")
-    if not settlement_id and isinstance(final.get("settlement"), dict):
-        settlement_id = final["settlement"].get("settlement_id")
-    if settlement_id:
-        return f"settlement:{settlement_id}"
-    version = final.get("outcome_version") or final.get("version") or "v1"
-    semantic = {
-        key: value for key, value in final.items()
-        if key not in {"settled_at", "timestamp", "updated_at"}
-    }
-    digest = hashlib.sha256(
-        json.dumps(semantic, sort_keys=True, ensure_ascii=False, default=str,
-                   separators=(",", ":")).encode("utf-8")
-    ).hexdigest()[:16]
-    experiment_id = getattr(experiment, "id", None) or "unknown-experiment"
-    return f"experiment:{experiment_id}:outcome:{version}:{digest}"
 
 
 def json_literal_prefilter(value):
@@ -152,137 +85,6 @@ def merge_canonical_candidate(references, latest, key, row):
         return
     references.setdefault(key, row)
     latest[key] = row
-
-
-def dataset_ref(value):
-    """数据集条目归一化为字符串 id。
-
-    proposal 的 datasets 允许 ``{"id": "pv1", "name": ...}`` 字典形态，
-    但 trajectory 去重、ResearchState 聚合等消费方要求数据集是可哈希
-    字符串；在 Experiment 入口单点归一化（dict 取 id，缺 id 退化 name）。
-    """
-    if isinstance(value, dict):
-        value = value.get("id") or value.get("name")
-    return str(value) if value is not None else None
-
-
-@dataclass
-class Experiment:
-    round: int
-    hypothesis_id: str
-    expression: str
-    settings: dict
-    fields_used: list
-    datasets: list | None = None
-    id: str = field(default_factory=lambda: uuid.uuid4().hex)
-    candidate_id: object = None
-    proposal_id: object = None
-    submission_fingerprint: object = None
-    submission_started_at: object = None
-    field_source: object = None
-    field_understanding: object = None
-    field_analysis: object = None
-    field_hypothesis_basis: object = None
-    operator_evidence: object = None
-    template_id: object = None
-    template_family: object = None
-    template_version: object = None
-    template_mode: object = None
-    template_branch_of: object = None
-    template_fingerprint: object = None
-    template_structural_fingerprint: object = None
-    template_mechanism_fingerprint: object = None
-    operator_role: object = None
-    operator_role_mapping: object = None
-    operator_realization_fingerprint: object = None
-    operator_capability_fingerprint: object = None
-    template_stage_path: object = None
-    template_ref: object = None
-    template_slots: object = None
-    search_evidence: object = None
-    search_outcome: object = None
-    provisional_outcome: object = None
-    final_outcome: object = None
-    robustness_evidence: object = None
-    incremental_evidence: object = None
-    pnl_evidence: object = None
-    research_classification: object = None
-    research_evidence_bundle: object = None
-    submission_eligibility: object = None
-    novelty_score: object = None
-    allocation_arm: object = None
-    allocation_key: object = None
-    factory_session_id: object = None
-    proposal_origin: object = None
-    research_layer: object = None
-    self_correlation: object = None
-    status: str = "PENDING"
-    metrics: object = None
-    error: object = None
-    alpha_id: object = None
-    progress_url: object = None
-    skip_record: object = None
-    mutation: object = None
-    lineage_id: object = None
-    experiment_stage: object = None
-    research_role: object = None
-    change_type: object = None
-    parent_expression: object = None
-    parent_id: object = None
-    child_economic_hypothesis: object = None
-    changed_variable: object = None
-    expected_failure_modes: list = field(default_factory=list)
-    tuning_risk: object = None
-    rationale: object = None
-    direction: object = None
-    economic_mechanism: object = None
-    direction_transform: object = None
-    self_correlation_impact: object = None
-    expected_horizon: object = None
-    falsification: object = None
-    health: object = None
-    yearly_evidence: object = None
-    validation_plan: object = None
-    validation_report: object = None
-    validation_status: object = None
-    elapsed_sec: object = None
-    created_at: float = field(default_factory=time.time)
-    optimization_decision_id: object = None
-
-    def __post_init__(self):
-        self.settings = dict(self.settings)
-        self.fields_used = list(self.fields_used)
-        self.datasets = [
-            ref for ref in (dataset_ref(item) for item in (self.datasets or []))
-            if ref
-        ]
-        self.expected_failure_modes = list(self.expected_failure_modes or [])
-
-    def to_dict(self):
-        data = {
-            "schema_version": TRAJECTORY_VERSION,
-            "created_by_version": CREATED_BY_VERSION,
-        }
-        data.update({item.name: getattr(self, item.name) for item in dataclass_fields(self)})
-        return data
-
-    @classmethod
-    def from_dict(cls, data):
-        exp = cls(
-            data["round"], data["hypothesis_id"], data["expression"],
-            data["settings"], data["fields_used"], data.get("datasets"),
-        )
-        field_names = {item.name for item in dataclass_fields(cls)}
-        for name in field_names:
-            if name in {"round", "hypothesis_id", "expression", "settings", "fields_used", "datasets"}:
-                continue
-            if name in data:
-                setattr(exp, name, data[name])
-        exp.id = data["id"]
-        exp.status = data["status"]
-        exp.expected_failure_modes = data.get("expected_failure_modes") or []
-        exp.created_at = data.get("created_at", 0)
-        return exp
 
 
 class Trajectory:

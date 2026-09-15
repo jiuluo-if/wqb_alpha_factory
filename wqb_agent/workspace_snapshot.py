@@ -10,9 +10,10 @@ from dataclasses import dataclass
 
 from .artifacts import iter_jsonl_objects
 from .checkpoints import CheckpointStore
+from .experiment import same_execution_identity
 from .expression import canonical_expression
 from .schema import TRAJECTORY_VERSION, TRIAL_LEDGER_VERSION, VALIDATION_VERSION
-from .state import Trajectory, same_execution_identity
+from .state import Trajectory
 from .trial_ledger import LIFECYCLE_PHASE_INDEX, PHASES, TrialLedger
 
 _CHECKPOINT_NAME = re.compile(r"round_\d+\.checkpoint\.json")

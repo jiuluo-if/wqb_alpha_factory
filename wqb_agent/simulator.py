@@ -38,9 +38,9 @@ from .client import (
     WQBSubmitUnknownError,
     WQBTimeoutError,
 )
+from .experiment import UNKNOWN_STATUSES
 from .metrics import check_health as _check_health
 from .metrics import extract_metrics as _extract_metrics
-from .state import UNKNOWN_STATUSES
 from .yearly import build_yearly_evidence
 
 

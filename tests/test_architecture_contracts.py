@@ -201,6 +201,15 @@ class ArchitectureDependencyContracts(unittest.TestCase):
         self.assertNotIn("def pbo_proxy(", validation)
         self.assertIn("from .validation_statistics", validation)
 
+    def test_experiment_model_is_persistence_free_and_state_is_compatibility_owner(self):
+        experiment_imports = _imports(ROOT / "wqb_agent/experiment.py")
+        forbidden = {
+            "wqb_agent.state", "wqb_agent.artifacts", "pathlib", "os", "sqlite3",
+            "wqb_agent.client", "wqb_agent.simulator", "wqb_agent.workflow",
+        }
+        self.assertTrue(forbidden.isdisjoint(experiment_imports))
+        self.assertIn("wqb_agent.experiment", _imports(ROOT / "wqb_agent/state.py"))
+
     def test_installed_facade_delegates_operator_resource(self):
         source = (ROOT / "wqb_agent/research_api.py").read_text(encoding="utf-8")
         self.assertIn("load_packaged_operator_syntax_reference", source)

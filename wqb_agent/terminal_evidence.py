@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from .state import Experiment, same_execution_identity
+from .experiment import Experiment, same_execution_identity
 
 
 def has_full_terminal_evidence(experiment) -> bool:

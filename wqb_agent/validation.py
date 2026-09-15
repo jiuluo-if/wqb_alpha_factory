@@ -21,9 +21,9 @@ Simulation，只有「多数扰动存活 + 中位分数达标 + 相对原始 Alp
 import math
 
 from .diversity import extract_fields
+from .experiment import Experiment
 from .metrics import checks_passed, num, score_of
 from .mutations import _relative_window_changes, _swap_field
-from .state import Experiment
 
 
 def _pick_nearby_field(primary, alt_fields):

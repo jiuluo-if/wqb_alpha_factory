@@ -20,6 +20,7 @@ sign mismatch) do not block SUCCESS on their own.
 import re
 
 from .evidence import overlay_cached_checks
+from .experiment import research_settlement_identity
 from .failures import (
     classify_experiment,
     is_research_relevant,
@@ -41,7 +42,6 @@ from .research_guard import (
     overfit_expression_reason,
     parameter_only_change_reason,
 )
-from .state import research_settlement_identity
 
 HYPOTHESIS_OUTCOMES = frozenset({"SUPPORTED", "CONTRADICTED", "INCONCLUSIVE"})
 _LEARNING_METADATA_KEYS = (

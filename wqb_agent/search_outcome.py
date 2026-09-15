@@ -14,7 +14,7 @@ ValidationReport schema.
 import math
 from dataclasses import dataclass
 
-from .state import UNKNOWN_STATUSES, UNRESOLVED_STATUSES
+from .experiment import UNKNOWN_STATUSES, UNRESOLVED_STATUSES
 
 REWARD_VERSION = "reward_v1"
 
