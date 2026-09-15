@@ -24,6 +24,7 @@ from wqb_agent.diversity import (
     select_budget_candidates,
     semantic_mechanism_key,
 )
+from wqb_agent.factory_quota import carry_forward_quota
 from wqb_agent.factory_runner import AIFactoryRunner
 from wqb_agent.proposal_contract import factory_batch_stats, validate_factory_batch
 from wqb_agent.research_guard import parameter_only_change_reason
@@ -375,7 +376,7 @@ class TestFactoryRunnerAccounting(unittest.TestCase):
     def test_legacy_aggregate_is_migrated_before_new_session(self):
         now = utc_timestamp(dt.datetime(2026, 9, 9, 12, 0))
         quota = WeeklySimulationQuota(weekly_cap=11200, daily_cap=1600, clock=lambda: now)
-        carried = AIFactoryRunner._carry_forward_quota(
+        carried = carry_forward_quota(
             {"simulations_reserved": 700}, quota
         )
         self.assertEqual(carried["daily_reserved"], 700)
@@ -391,7 +392,7 @@ class TestFactoryRunnerAccounting(unittest.TestCase):
         new_quota = WeeklySimulationQuota(
             weekly_cap=11200, daily_cap=1600, clock=lambda: new_day
         )
-        carried = AIFactoryRunner._carry_forward_quota({"quota": old_state}, new_quota)
+        carried = carry_forward_quota({"quota": old_state}, new_quota)
         self.assertEqual(carried["daily_reserved"], 0)
         self.assertEqual(carried["weekly_reserved"], 700)
 
@@ -399,7 +400,7 @@ class TestFactoryRunnerAccounting(unittest.TestCase):
         rollover_quota = WeeklySimulationQuota(
             weekly_cap=11200, daily_cap=1600, clock=lambda: new_week
         )
-        carried = AIFactoryRunner._carry_forward_quota({"quota": old_state}, rollover_quota)
+        carried = carry_forward_quota({"quota": old_state}, rollover_quota)
         self.assertEqual(carried["daily_reserved"], 0)
         self.assertEqual(carried["weekly_reserved"], 0)
 
@@ -407,11 +408,11 @@ class TestFactoryRunnerAccounting(unittest.TestCase):
         now = utc_timestamp(dt.datetime(2026, 9, 9, 12, 0))
         quota = WeeklySimulationQuota(weekly_cap=1000, daily_cap=100, clock=lambda: now)
         with self.assertRaises(ValueError):
-            AIFactoryRunner._carry_forward_quota(
+            carry_forward_quota(
                 {"quota": {"daily_reserved": "bad"}}, quota
             )
         with self.assertRaises(ValueError):
-            AIFactoryRunner._carry_forward_quota(
+            carry_forward_quota(
                 {"simulations_reserved": 1001}, quota
             )
 
@@ -421,12 +422,12 @@ class TestFactoryRunnerAccounting(unittest.TestCase):
         old_state = old_quota.reserve(old_quota.initial_state(), 100)
         increased = WeeklySimulationQuota(weekly_cap=2000, daily_cap=200, clock=lambda: now)
         self.assertEqual(
-            AIFactoryRunner._carry_forward_quota({"quota": old_state}, increased)["weekly_reserved"],
+            carry_forward_quota({"quota": old_state}, increased)["weekly_reserved"],
             100,
         )
         decreased = WeeklySimulationQuota(weekly_cap=50, daily_cap=50, clock=lambda: now)
         with self.assertRaises(ValueError):
-            AIFactoryRunner._carry_forward_quota({"quota": old_state}, decreased)
+            carry_forward_quota({"quota": old_state}, decreased)
 
     def test_budget_cap_restart_remains_blocked_without_new_agent_work(self):
         with tempfile.TemporaryDirectory() as tmp:

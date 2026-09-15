@@ -191,7 +191,7 @@ class OptimizerWorkflow:
     def _local_evidence_view(self, limit=256):
         """Build one immutable trajectory projection for the current request."""
         iterate = getattr(self.trajectory, "iter_canonical_rows", None)
-        if callable(iterate):
+        if callable(iterate) and getattr(self.trajectory, "persist", True):
             rows = list(iterate())
             return OptimizerLocalEvidenceView.from_rows(rows[-max(1, int(limit or 256)):])
         return OptimizerLocalEvidenceView.from_rows(
@@ -233,7 +233,7 @@ class OptimizerWorkflow:
         self.last_handoff_report = {
             "simulation_done": sum(
                 1 for exp in experiments
-                if str(getattr(exp, "status", "")).upper() == "DONE"
+                if str(exp.get("status") or "").upper() == "DONE"
             ),
             "trajectory_recorded": len(records),
             "optimizer_candidates": len(records),

@@ -9,6 +9,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from wqb_agent.alpha_factory import AlphaFactory
+from wqb_agent.factory_blocker import blocker_projection, blocker_signature
+from wqb_agent.factory_control import CONTROL_TOKENS
 from wqb_agent.factory_runner import AIFactoryRunner
 
 
@@ -21,20 +23,20 @@ class TestFactoryBlockerControl(unittest.TestCase):
         }
         changed = dict(base, probe_offset=99, round_no=22, seed="new")
         self.assertEqual(
-            AIFactoryRunner._blocker_signature("FEASIBILITY", base),
-            AIFactoryRunner._blocker_signature("FEASIBILITY", changed),
+            blocker_signature("FEASIBILITY", base, control_tokens=CONTROL_TOKENS),
+            blocker_signature("FEASIBILITY", changed, control_tokens=CONTROL_TOKENS),
         )
         private = dict(base, expression="rank(fake_private_field)", alpha_id="fake-alpha")
         self.assertEqual(
-            AIFactoryRunner._blocker_signature("FEASIBILITY", base),
-            AIFactoryRunner._blocker_signature("FEASIBILITY", private),
+            blocker_signature("FEASIBILITY", base, control_tokens=CONTROL_TOKENS),
+            blocker_signature("FEASIBILITY", private, control_tokens=CONTROL_TOKENS),
         )
 
     def test_active_stopped_blocker_cross_session_skips_remote_work(self):
         with tempfile.TemporaryDirectory() as directory:
-            blocker = AIFactoryRunner._blocker_projection(
+            blocker = blocker_projection(
                 "PREFLIGHT", {"failure_taxonomy": "PREFLIGHT_BLOCKED"},
-                now=10.0, recheck_sec=100.0,
+                now=10.0, recheck_sec=100.0, control_tokens=CONTROL_TOKENS,
             )
             with open(os.path.join(directory, "factory_session.json"), "w", encoding="utf-8") as handle:
                 json.dump({
@@ -73,9 +75,9 @@ class TestFactoryBlockerControl(unittest.TestCase):
 
     def test_due_blocker_performs_one_unchanged_recheck(self):
         with tempfile.TemporaryDirectory() as directory:
-            blocker = AIFactoryRunner._blocker_projection(
+            blocker = blocker_projection(
                 "FEASIBILITY", {"failure_taxonomy": "READY"},
-                now=10.0, recheck_sec=0,
+                now=10.0, recheck_sec=0, control_tokens=CONTROL_TOKENS,
             )
             with open(os.path.join(directory, "factory_session.json"), "w", encoding="utf-8") as handle:
                 json.dump({
@@ -155,9 +157,9 @@ class TestFactoryBlockerControl(unittest.TestCase):
 
     def test_budget_shortage_episode_advance_does_not_post_or_release_quota(self):
         with tempfile.TemporaryDirectory() as directory:
-            blocker = AIFactoryRunner._blocker_projection(
+            blocker = blocker_projection(
                 "BUDGET_SHORTAGE", {"budget_shortage_count": 2},
-                now=10.0, recheck_sec=0,
+                now=10.0, recheck_sec=0, control_tokens=CONTROL_TOKENS,
             )
             with open(os.path.join(directory, "factory_session.json"), "w", encoding="utf-8") as handle:
                 json.dump({

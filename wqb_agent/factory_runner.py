@@ -25,7 +25,6 @@ from .artifacts import atomic_write_json_if_changed
 from .expression import canonical_expression
 from .factory_blocker import (
     blocker_projection,
-    blocker_signature,
     control_probe,
     safe_control_token,
     safe_nonnegative_count,
@@ -131,24 +130,12 @@ class AIFactoryRunner:
         except (TypeError, ValueError, OverflowError):
             return None
 
-    @classmethod
-    def _blocker_signature(cls, kind, probe):
-        return blocker_signature(kind, probe, control_tokens=cls._CONTROL_TOKENS)
-
-    @classmethod
-    def _blocker_projection(cls, kind, probe, *, now, previous=None, recheck_sec=None):
-        interval = cls.BLOCKER_RECHECK_SEC if recheck_sec is None else float(recheck_sec)
-        return blocker_projection(kind, probe, now=now, previous=previous, recheck_sec=interval, control_tokens=cls._CONTROL_TOKENS)
-
-    @classmethod
-    def _control_probe(cls, probe, stats=None):
-        return control_probe(probe, allowed=cls._CONTROL_TOKENS, stats=stats)
-
     def _remember_blocker(self, session, kind, probe, now):
         config = getattr(self.agent, "factory_config", {}) or {}
-        session["blocker"] = self._blocker_projection(
+        session["blocker"] = blocker_projection(
             kind, probe, now=now, previous=session.get("blocker"),
             recheck_sec=config.get("blocker_recheck_sec", self.BLOCKER_RECHECK_SEC),
+            control_tokens=self._CONTROL_TOKENS,
         )
 
     @staticmethod
@@ -204,23 +191,6 @@ class AIFactoryRunner:
             weekly_cap=weekly_cap, daily_cap=daily_cap, clock=self._clock
         )
         return prepare_quota(session, quota)
-
-    @staticmethod
-    def _carry_forward_quota(previous_session, quota):
-        """Carry the canonical quota across a renewed session envelope."""
-        return carry_forward_quota(previous_session, quota)
-
-    @staticmethod
-    def _quota_remaining(session, quota):
-        return quota_remaining(session, quota)
-
-    @staticmethod
-    def _quota_reserve(session, quota, count):
-        quota_reserve(session, quota, count)
-
-    @staticmethod
-    def _quota_release(session, quota, count):
-        quota_release(session, quota, count)
 
     def run(self, duration_sec=86400, max_rounds=0, idle_sleep_sec=30,
             max_simulations=240, daily_simulation_cap=None,
@@ -406,7 +376,7 @@ class AIFactoryRunner:
         previous_session = session
         if duration <= 0 or not session or session.get("status") != "RUNNING" or session.get("deadline", 0) <= now:
             try:
-                carried_quota = self._carry_forward_quota(previous_session, quota)
+                carried_quota = carry_forward_quota(previous_session, quota)
             except ValueError:
                 if previous_session is not None:
                     previous_session["status"] = "RECONCILE_REQUIRED"
@@ -514,7 +484,7 @@ class AIFactoryRunner:
                 proposal_count = len(orphaned_proposals)
                 reserved = int(session.get("simulations_reserved", 0))
                 gap = max(0, proposal_count - reserved)
-                if gap > self._quota_remaining(session, quota):
+                if gap > quota_remaining(session, quota):
                     session["status"] = "SIMULATION_BUDGET_CAP"
                     session["last_action"] = "ORPHANED_PROPOSALS_BUDGET_BLOCKED"
                     session["last_result"] = {
@@ -525,7 +495,7 @@ class AIFactoryRunner:
                     self._save_session(session)
                     break
                 try:
-                    self._quota_reserve(session, quota, gap)
+                    quota_reserve(session, quota, gap)
                 except QuotaExceeded:
                     session["status"] = "SIMULATION_BUDGET_CAP"
                     session["last_action"] = "ORPHANED_PROPOSALS_BUDGET_BLOCKED"
@@ -552,7 +522,7 @@ class AIFactoryRunner:
                     self._save_session(session)
                     continue
                 accepted = self._accepted_count(proposal_count)
-                self._quota_release(session, quota, proposal_count - accepted)
+                quota_release(session, quota, proposal_count - accepted)
                 session["rounds_completed"] += 1
                 session["last_action"] = "RECOVERED_PROPOSALS"
                 session["last_result"] = self._compact_result(
@@ -583,7 +553,7 @@ class AIFactoryRunner:
                 if self._proposal_round() == checkpoint_round:
                     if not self._recovery_already_reserved(session, checkpoint_round):
                         recovery_count = self._checkpoint_experiment_count(foreign)
-                        remaining = self._quota_remaining(session, quota)
+                        remaining = quota_remaining(session, quota)
                         if recovery_count > remaining:
                             session["status"] = "SIMULATION_BUDGET_CAP"
                             session["last_action"] = "RECOVERY_BUDGET_BLOCKED"
@@ -595,7 +565,7 @@ class AIFactoryRunner:
                             self._save_session(session)
                             break
                         try:
-                            self._quota_reserve(session, quota, recovery_count)
+                            quota_reserve(session, quota, recovery_count)
                         except QuotaExceeded:
                             session["status"] = "SIMULATION_BUDGET_CAP"
                             session["last_action"] = "RECOVERY_BUDGET_BLOCKED"
@@ -642,7 +612,7 @@ class AIFactoryRunner:
                 session["last_action"] = "ROUND_CAP"
                 self._save_session(session)
                 break
-            remaining_budget = self._quota_remaining(session, quota)
+            remaining_budget = quota_remaining(session, quota)
             if remaining_budget <= 0:
                 session["status"] = "SIMULATION_BUDGET_CAP"
                 session["last_action"] = "BUDGET_BLOCKED"
@@ -944,7 +914,7 @@ class AIFactoryRunner:
             session["last_action"] = "RUN_PROPOSALS"
             session["probe_offset"] = 0
             try:
-                self._quota_reserve(session, quota, len(proposals))
+                            quota_reserve(session, quota, len(proposals))
             except QuotaExceeded:
                 session["status"] = "SIMULATION_BUDGET_CAP"
                 session["last_action"] = "DAILY_OR_WEEKLY_BUDGET_BLOCKED"
@@ -992,7 +962,9 @@ class AIFactoryRunner:
                 stats = getattr(self.agent, "last_run_stats", {}) or {}
                 agent_status = stats.get("status") if isinstance(stats, dict) else None
                 if agent_status in {"PREFLIGHT_BLOCKED", "FACTORY_BATCH_BLOCKED"}:
-                    preflight_probe = self._control_probe({}, stats)
+                    preflight_probe = control_probe(
+                        {}, allowed=self._CONTROL_TOKENS, stats=stats
+                    )
                     preflight_probe = route_probe_projection(
                         preflight_probe, session_id=session["session_id"]
                     )
@@ -1008,7 +980,7 @@ class AIFactoryRunner:
                     session["route_attempt"] = decision["route_attempt"] + 1
                     session["no_gain_attempts"] = decision["no_gain_attempts"]
                     if decision["action"] == "STOP":
-                        self._quota_release(session, quota, len(proposals))
+                        quota_release(session, quota, len(proposals))
                         self._remember_blocker(session, "PREFLIGHT", preflight_probe, self._clock())
                         session["status"] = "STOPPED"
                         session["last_action"] = "STOP_PREFLIGHT_BLOCKER"
@@ -1022,7 +994,7 @@ class AIFactoryRunner:
                         }
                         self._save_session(session)
                         break
-                self._quota_release(session, quota, len(proposals))
+                quota_release(session, quota, len(proposals))
                 session["probe_offset"] = probe_offset + 1
                 session["last_action"] = "WAIT_RUN_PROPOSALS"
                 session["last_result"] = {
@@ -1043,7 +1015,7 @@ class AIFactoryRunner:
             # Preflight reservation is conservative.  Release only candidates
             # the canonical Agent explicitly rejected/skipped; accepted jobs
             # remain charged even when remote state is unresolved.
-            self._quota_release(session, quota, len(proposals) - accepted)
+            quota_release(session, quota, len(proposals) - accepted)
             session["rounds_completed"] += 1
             session["last_action"] = "ROUND_COMPLETE"
             session["last_result"] = self._compact_result(round_no, result, len(proposals))
@@ -1073,7 +1045,9 @@ class AIFactoryRunner:
             return {"changed": False, "probe": {}}
         return {
             "changed": bool(result.get("changed")),
-            "probe": self._control_probe(result.get("probe")),
+            "probe": control_probe(
+                result.get("probe"), allowed=self._CONTROL_TOKENS
+            ),
         }
 
     @staticmethod
