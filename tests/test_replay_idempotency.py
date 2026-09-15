@@ -92,6 +92,50 @@ class ReplayIdempotencyTests(unittest.TestCase):
                 source_key="settlement:s1:observation",
             )
 
+    def test_memory_replay_survives_promotion_garbage_restore_and_compression(self):
+        state_dir = tempfile.mkdtemp()
+        memory = ExperienceMemory(
+            state_dir=state_dir, short_term_window=3, promote_hits=2,
+        )
+        memory.add_short_term(
+            "observation", "shared promoted observation", 95,
+            detail={"lineage": "lineage-a"}, source_key="settlement:A",
+        )
+        memory.add_short_term(
+            "observation", "shared promoted observation", 96,
+            detail={"lineage": "lineage-b"}, source_key="settlement:B",
+        )
+        promoted, trashed = memory.expire_short_term(now_round=100)
+        self.assertEqual(len(promoted), 1)
+        self.assertEqual(trashed, [])
+        memory.save()
+        restored = ExperienceMemory(state_dir=state_dir).load()
+        tomb = restored.move_to_garbage(
+            "lesson", restored.lessons[0], reason="superseded", round_no=100,
+        )
+        restored.lessons = []
+        restored.save()
+        restored = ExperienceMemory(state_dir=state_dir).load()
+        self.assertIsNotNone(restored.restore_from_garbage(tomb["id"]))
+        restored.compress()
+        before = json.dumps(restored.__dict__, sort_keys=True, default=str)
+
+        self.assertIs(
+            restored.add_short_term(
+                "observation", "shared promoted observation", 95,
+                detail={"lineage": "lineage-a"}, source_key="settlement:A",
+            ),
+            restored.lessons[0],
+        )
+        self.assertIs(
+            restored.add_short_term(
+                "observation", "shared promoted observation", 96,
+                detail={"lineage": "lineage-b"}, source_key="settlement:B",
+            ),
+            restored.lessons[0],
+        )
+        self.assertEqual(before, json.dumps(restored.__dict__, sort_keys=True, default=str))
+
     def test_lineage_replay_does_not_double_count_and_replacement_is_exactly_once(self):
         memory = ExperienceMemory(state_dir=tempfile.mkdtemp())
         memory.record_lineage_result("l1", 1.0, "SUCCESS", 1, source_key="s1", experiment_id="e1")

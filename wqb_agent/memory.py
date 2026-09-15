@@ -344,7 +344,13 @@ class ExperienceMemory:
              and receipt.get("source_key") == str(source_key)),
             old.get("_source_semantic"),
         )
-        if old_kind != kind or old_semantic != expected:
+        cross_tier_replay = (
+            {old_kind, kind} == {"lesson", "short_term"}
+            and old_semantic == expected
+        )
+        if (old_kind != kind and not cross_tier_replay) or (
+            old_kind == kind and old_semantic != expected
+        ):
             raise MemorySourceReplayConflict(
                 f"MEMORY_SOURCE_REPLAY_CONFLICT: source_key={source_key}"
             )
@@ -471,7 +477,7 @@ class ExperienceMemory:
             return None
         evidence = entry.get("evidence", 1) * min(entry.get("hits", 1), 3)
         confidence = min(0.6, 0.2 + 0.1 * entry.get("hits", 0))
-        return self.add_lesson(
+        lesson = self.add_lesson(
             entry["text"], now_round, evidence=evidence, confidence=confidence,
             source_key=(f"promotion:{entry['source_key']}"
                         if entry.get("source_key") else None),
@@ -488,6 +494,30 @@ class ExperienceMemory:
                 if key in entry
             },
         )
+        receipts = [
+            receipt for receipt in entry.get("_source_receipts", [])
+            if isinstance(receipt, dict) and receipt.get("source_key")
+        ]
+        if entry.get("source_key") and not any(
+            receipt.get("source_key") == entry["source_key"]
+            for receipt in receipts
+        ):
+            receipts.append({
+                "source_key": entry["source_key"],
+                "_source_semantic": entry.get("_source_semantic"),
+            })
+        if receipts:
+            existing = [
+                receipt for receipt in lesson.get("_source_receipts", [])
+                if isinstance(receipt, dict)
+            ]
+            by_key = {
+                receipt.get("source_key"): receipt
+                for receipt in existing + receipts
+                if receipt.get("source_key")
+            }
+            lesson["_source_receipts"] = list(by_key.values())[-_SOURCE_RECEIPT_LIMIT:]
+        return lesson
 
     def _expire_note(self, entry):
         return (
