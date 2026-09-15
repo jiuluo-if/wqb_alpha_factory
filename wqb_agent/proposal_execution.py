@@ -23,6 +23,7 @@ from .execution_recovery import merge_checkpoint_with_trajectory
 from .expression import canonical_expression, submission_fingerprint
 from .identity import candidate_identity
 from .proposal_admission import (
+    AdmissionFacts,
     admit_execution_identity,
     admit_proposal,
     rejection_reason_counts,
@@ -522,24 +523,24 @@ class ProposalExecutionWorkflow:
             [item.get("parent_expression") for item in proposal_list
              if isinstance(item, dict)]
         )
-        return {
-            "research_seen": set(terminal_expressions),
-            "batch_execution_fingerprints": {
+        return AdmissionFacts(
+            research_seen=frozenset(terminal_expressions),
+            batch_execution_fingerprints=frozenset({
                 str(fingerprint).removeprefix("settings::")
                 for fingerprint in terminal_fingerprints
-            },
-            "durable_proposal_bindings": self._durable_proposal_bindings(
+            }),
+            durable_proposal_bindings=self._durable_proposal_bindings(
                 checkpoint_records
             ),
-            "unresolved_identities": ctx.checkpoints.unresolved_submission_identities(
+            unresolved_identities=frozenset(ctx.checkpoints.unresolved_submission_identities(
                 exclude_round=round_no, records=checkpoint_records
-            ),
-            "discovered_profiles": discovered_profiles,
-            "proposal_field_profiles": list(discovered_profiles.values()),
-            "field_types": field_types,
-            "parent_rows": parent_rows,
-            "legacy_parent_candidates": legacy_parent_candidates,
-        }
+            )),
+            discovered_profiles=discovered_profiles,
+            proposal_field_profiles=tuple(discovered_profiles.values()),
+            field_types=field_types,
+            parent_rows=parent_rows,
+            legacy_parent_candidates=legacy_parent_candidates,
+        )
 
     def _materialize_experiments(
         self, proposals, round_no, hypothesis, factory_batch, known_ids,
@@ -699,20 +700,20 @@ class ProposalExecutionWorkflow:
         facts = self._build_admission_facts(
             payload, proposal_list, round_no, checkpoint_records
         )
-        research_seen = facts["research_seen"]
-        batch_execution_fingerprints = facts["batch_execution_fingerprints"]
-        durable_proposal_bindings = facts["durable_proposal_bindings"]
+        research_seen = set(facts.research_seen)
+        batch_execution_fingerprints = set(facts.batch_execution_fingerprints)
+        durable_proposal_bindings = facts.durable_proposal_bindings
         batch_proposal_bindings = {}
         conflicting_proposal_ids = set()
-        unresolved_identities = facts["unresolved_identities"]
+        unresolved_identities = facts.unresolved_identities
         fresh, skipped, rejected = [], [], []
         diversity_rejected, settings_rejected = [], []
         loop_guard = ResearchLoopGuard(ctx.trajectory.experiments)
-        discovered_profiles = facts["discovered_profiles"]
-        proposal_field_profiles = facts["proposal_field_profiles"]
-        field_types = facts["field_types"]
-        parent_rows = facts["parent_rows"]
-        legacy_parent_candidates = facts["legacy_parent_candidates"]
+        discovered_profiles = facts.discovered_profiles
+        proposal_field_profiles = facts.proposal_field_profiles
+        field_types = facts.field_types
+        parent_rows = facts.parent_rows
+        legacy_parent_candidates = facts.legacy_parent_candidates
         effective_settings_by_candidate = {}
 
         for raw_proposal in proposal_list:

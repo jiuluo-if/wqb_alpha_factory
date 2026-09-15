@@ -3,6 +3,7 @@
 import hashlib
 import os
 import re
+from collections.abc import Mapping
 from importlib import resources
 
 from .diversity import extract_fields
@@ -332,7 +333,7 @@ def validate_vector_inputs(p, field_types):
     """Require vec_avg/vec_sum inputs to be verified VECTOR fields."""
     if not isinstance(p, dict):
         return False, ["proposal 必须是对象"]
-    if not isinstance(field_types, dict):
+    if not isinstance(field_types, Mapping):
         return False, ["field_types 必须是对象"]
     problems = []
     for operator, field_id in _VEC_INPUT_RE.findall(p.get("expression") or ""):

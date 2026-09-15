@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Any
 
 from .expression import canonical_expression, submission_fingerprint
 
@@ -18,6 +20,40 @@ class ProposalAdmission:
     effective_settings: object = None
     execution_fingerprint: str | None = None
     research_key: str | None = None
+
+
+@dataclass(frozen=True)
+class AdmissionFacts:
+    """Immutable request-scoped facts collected before candidate admission."""
+
+    research_seen: frozenset[str]
+    batch_execution_fingerprints: frozenset[str]
+    durable_proposal_bindings: dict[str, set[str]]
+    unresolved_identities: frozenset[str]
+    discovered_profiles: dict[str, dict[str, Any]]
+    proposal_field_profiles: tuple[dict[str, Any], ...]
+    field_types: dict[str, Any]
+    parent_rows: dict[str, dict[str, Any]]
+    legacy_parent_candidates: dict[str, tuple[Any, ...]]
+
+    def __post_init__(self):
+        for name in (
+            "durable_proposal_bindings", "discovered_profiles", "field_types",
+            "parent_rows", "legacy_parent_candidates",
+        ):
+            value = getattr(self, name)
+            object.__setattr__(self, name, MappingProxyType(dict(value)))
+        object.__setattr__(self, "research_seen", frozenset(self.research_seen))
+        object.__setattr__(
+            self, "batch_execution_fingerprints",
+            frozenset(self.batch_execution_fingerprints),
+        )
+        object.__setattr__(
+            self, "unresolved_identities", frozenset(self.unresolved_identities)
+        )
+        object.__setattr__(
+            self, "proposal_field_profiles", tuple(self.proposal_field_profiles)
+        )
 
 
 def admit_proposal(

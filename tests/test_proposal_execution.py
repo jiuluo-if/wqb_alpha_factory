@@ -11,6 +11,7 @@ from unittest.mock import Mock
 
 from wqb_agent.agent import Agent
 from wqb_agent.locking import single_instance_scope
+from wqb_agent.proposal_admission import AdmissionFacts
 from wqb_agent.proposal_execution import ProposalExecutionWorkflow
 from wqb_agent.state import Experiment
 
@@ -48,6 +49,21 @@ def _agent(tmpdir, client=None):
 
 
 class TestProposalExecutionCharacterization(unittest.TestCase):
+    def test_admission_facts_are_frozen_request_scoped_values(self):
+        facts = AdmissionFacts(
+            research_seen=frozenset({"rank(x)"}),
+            batch_execution_fingerprints=frozenset({"fp"}),
+            durable_proposal_bindings={},
+            unresolved_identities=frozenset(),
+            discovered_profiles={},
+            proposal_field_profiles=(),
+            field_types={},
+            parent_rows={},
+            legacy_parent_candidates={},
+        )
+        with self.assertRaises(AttributeError):
+            facts.research_seen = frozenset()
+
     def test_missing_proposals_file_returns_none_without_simulation_or_checkpoint(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = CountingClient()
