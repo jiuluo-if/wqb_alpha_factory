@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import ast
+import dataclasses
+import re
 import unittest
 from pathlib import Path
+
+from wqb_agent.config import AppConfig
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ROOT = ROOT / "wqb_agent"
@@ -42,6 +46,73 @@ def _package_imports(relative_paths: tuple[str, ...]) -> dict[str, set[str]]:
 
 
 class ArchitectureDependencyContracts(unittest.TestCase):
+    def test_legacy_architecture_config_boundary_parity(self):
+        field_names = {field.name for field in dataclasses.fields(AppConfig)}
+        self.assertNotIn("agent", field_names)
+        self.assertNotIn("simulation", field_names)
+
+        forbidden = (
+            r"\b(?:config|app_config|typed_config)\.(?:agent|simulation)(?:\b|[.(])",
+        )
+        for path in PACKAGE_ROOT.glob("*.py"):
+            if path.name == "config.py":
+                continue
+            source = path.read_text(encoding="utf-8")
+            for expression in forbidden:
+                self.assertIsNone(
+                    re.search(expression, source),
+                    f"{path.name} 重新解释了 raw AppConfig section",
+                )
+
+    def test_legacy_architecture_simulation_write_path_parity(self):
+        allowed = {"client.py", "simulator.py"}
+        for path in PACKAGE_ROOT.glob("*.py"):
+            if path.name in allowed:
+                continue
+            self.assertNotIn("submit_simulation(", path.read_text(encoding="utf-8"), str(path))
+
+        simulator = (PACKAGE_ROOT / "simulator.py").read_text(encoding="utf-8")
+        self.assertIn("self.client.submit_simulation(", simulator)
+        for path in (ROOT / "main.py", *((ROOT / "scripts").glob("*.py"))):
+            self.assertNotIn(".run_simulation(", path.read_text(encoding="utf-8"), str(path))
+
+    def test_legacy_architecture_non_execution_surfaces_remain_write_free(self):
+        for name in (
+            "suggestion_workflow.py", "alpha_feed_workflow.py",
+            "optimizer_workflow.py", "alpha_color_workflow.py",
+            "research_api.py", "doctor.py", "audit.py", "preflight.py",
+        ):
+            source = (PACKAGE_ROOT / name).read_text(encoding="utf-8")
+            self.assertNotIn("submit_simulation(", source, name)
+            self.assertNotIn("submit_alpha(", source, name)
+
+        optimizer = (PACKAGE_ROOT / "optimizer_workflow.py").read_text(encoding="utf-8")
+        for forbidden in (
+            "trajectory.add(", "trajectory.write(", "weekly_cache.refresh(",
+            "get_all_user_alphas(", "set_alpha_color(",
+        ):
+            self.assertNotIn(forbidden, optimizer, forbidden)
+
+    def test_legacy_architecture_research_yield_is_pure(self):
+        imports = _imports(PACKAGE_ROOT / "research_yield.py")
+        forbidden = {
+            "wqb_agent.client", "wqb_agent.state", "wqb_agent.simulator",
+            "wqb_agent.agent", "wqb_agent.alpha_feed_workflow",
+            "wqb_agent.proposal_execution",
+        }
+        self.assertTrue(forbidden.isdisjoint(imports))
+        source = (PACKAGE_ROOT / "research_yield.py").read_text(encoding="utf-8")
+        self.assertNotIn("submit_simulation(", source)
+        self.assertNotIn("run_proposals", source)
+
+    def test_legacy_architecture_color_view_cannot_feed_optimizer(self):
+        for name in ("optimizer_workflow.py", "research_yield.py"):
+            self.assertNotIn(
+                "wqb_agent.alpha_colors",
+                _imports(PACKAGE_ROOT / name),
+                name,
+            )
+
     def test_package_root_exports_only_agent_facing_api(self):
         package = ast.parse(
             (ROOT / "wqb_agent/__init__.py").read_text(encoding="utf-8")
