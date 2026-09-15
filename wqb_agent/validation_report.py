@@ -225,6 +225,34 @@ def _child_status(child):
     return child.get("status") if isinstance(child, dict) else getattr(child, "status", None)
 
 
+def _child_failure_text(child):
+    if isinstance(child, dict):
+        values = (child.get(key) for key in ("error", "reason", "reason_code", "failure_class"))
+    else:
+        values = (getattr(child, key, None) for key in ("error", "reason", "reason_code", "failure_class"))
+    return " ".join(str(value or "") for value in values).upper()
+
+
+def _matches_state(matches, passed):
+    """Reduce one required child dimension without laundering infra failures."""
+    if not matches:
+        return "INCOMPLETE"
+    statuses = {str(_child_status(child) or "").upper() for child in matches}
+    if statuses & {"PENDING", "RUNNING", "SUBMITTING", "UNKNOWN", "SUBMIT_UNKNOWN"}:
+        return "INCOMPLETE"
+    if statuses & {"FAILED", "SKIPPED_STALE", "SKIPPED_UNKNOWN"}:
+        infra = any(
+            any(token in _child_failure_text(child)
+                for token in ("AUTH", "RATE_LIMIT", "TIMEOUT", "INFRA", "NETWORK",
+                              "HTTP", "TRANSPORT", "PLATFORM_UNAVAILABLE", "STALE"))
+            for child in matches
+            if str(_child_status(child) or "").upper() in {"FAILED", "SKIPPED_STALE", "SKIPPED_UNKNOWN"}
+        )
+        if infra:
+            return "UNAVAILABLE"
+    return "PASS" if passed else "FAIL"
+
+
 def build_validation_report(parent, robustness_children, plan, *, yearly_evidence=None,
                             trial_summary=None, pnl_evidence=None, return_series=None,
                             aligned_return_series=None, platform_evidence=None):
@@ -247,9 +275,15 @@ def build_validation_report(parent, robustness_children, plan, *, yearly_evidenc
         matches = [child for child in children if _child_dimension(child) == variable]
         if variable == "yearly_aggregates":
             evidence = yearly_evidence or {}
-            passed = evidence.get("status") == "VERIFIED" and evidence.get("stable") is True
-            dimensions[variable] = {"status": "PASS" if passed else "FAIL",
-                                    "evidence_status": "PASS" if passed else "FAIL",
+            evidence_status = str(evidence.get("status") or "").upper()
+            passed = evidence_status == "VERIFIED" and evidence.get("stable") is True
+            resolved_unavailable = evidence_status in {"UNAVAILABLE", "MISSING", "ERROR"}
+            state = "PASS" if passed else (
+                "UNAVAILABLE" if resolved_unavailable else
+                "FAIL" if evidence_status == "VERIFIED" else "INCOMPLETE"
+            )
+            dimensions[variable] = {"status": state,
+                                    "evidence_status": state,
                                     "requirement": requirement, "evidence": evidence}
             continue
         valid = []
@@ -267,9 +301,10 @@ def build_validation_report(parent, robustness_children, plan, *, yearly_evidenc
             if evidence.get("decision") == "PASS":
                 valid.append(child)
                 valid_evidence.append(evidence)
+        state = _matches_state(matches, bool(valid))
         dimensions[variable] = {
-            "status": "PASS" if valid else "FAIL",
-            "evidence_status": "PASS" if valid else "FAIL",
+            "status": state,
+            "evidence_status": state,
             "requirement": requirement,
             "count": len(matches),
             "passed": len(valid),
@@ -299,8 +334,9 @@ def build_validation_report(parent, robustness_children, plan, *, yearly_evidenc
             if evidence.get("decision") == "PASS":
                 valid.append(child)
                 valid_evidence.append(evidence)
-        dimensions[variable] = {"status": "PASS" if valid else "FAIL",
-                                "evidence_status": "PASS" if valid else "FAIL",
+        state = _matches_state(matches, bool(valid))
+        dimensions[variable] = {"status": state,
+                                "evidence_status": state,
                                 "requirement": requirement, "count": len(matches), "passed": len(valid),
                                 "evidence": valid_evidence}
     pnl_status = (plan.get("pnl_capability") or "UNKNOWN").upper() if isinstance(plan, dict) else "UNKNOWN"
@@ -328,9 +364,10 @@ def build_validation_report(parent, robustness_children, plan, *, yearly_evidenc
             for item in child_platform
         )
     )
+    platform_state = "PASS" if platform_ok else "INCOMPLETE" if not platform_evidence else "FAIL"
     dimensions["platform_quality"] = {
-        "status": "PASS" if platform_ok else "FAIL",
-        "evidence_status": "PASS" if platform_ok else "FAIL",
+        "status": platform_state,
+        "evidence_status": platform_state,
         "evidence": platform_evidence,
     }
     selection = (trial_summary or {}).get("selection_trial_count")
@@ -405,17 +442,36 @@ def build_validation_report(parent, robustness_children, plan, *, yearly_evidenc
             "requirement": "OPTIONAL" if statistical_mode == "required_when_available" else "REQUIRED",
         }
     parent_done = _child_status(parent) == "DONE"
-    parent_checks = checks_passed(_child_metrics(parent)) is True
-    required_pass = all(
-        item.get("status") == "PASS"
-        for item in dimensions.values()
+    parent_check_result = checks_passed(_child_metrics(parent))
+    parent_checks = parent_check_result is True
+    required_dimensions = {
+        name: item for name, item in dimensions.items()
         if item.get("requirement", "REQUIRED") == "REQUIRED"
-    )
-    status = "PASS" if plan_ok and parent_done and parent_checks and required_pass else "FAIL"
+    }
+    missing_required_dimensions = [
+        name for name, item in required_dimensions.items()
+        if item.get("status") in {"INCOMPLETE", "UNAVAILABLE"}
+    ]
+    failed_required_dimensions = [
+        name for name, item in required_dimensions.items()
+        if item.get("status") == "FAIL"
+    ]
+    complete = bool(plan_ok and parent_done and parent_check_result is not None
+                    and not missing_required_dimensions)
+    if not complete:
+        status = "INCOMPLETE"
+    elif failed_required_dimensions or not parent_checks:
+        status = "FAIL"
+    else:
+        status = "PASS"
     return ValidationReport({
         "schema_version": VALIDATION_VERSION,
         "created_by_version": CREATED_BY_VERSION,
         "status": status,
+        "complete": complete,
+        "terminal": bool(complete and status in {"PASS", "FAIL"}),
+        "missing_required_dimensions": missing_required_dimensions,
+        "failed_required_dimensions": failed_required_dimensions,
         "stable": status == "PASS",
         "candidate": "parent",
         "parent_expression": parent.get("expression") if isinstance(parent, dict) else getattr(parent, "expression", None),
