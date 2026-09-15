@@ -140,6 +140,28 @@ class TestValidationReport(unittest.TestCase):
         self.assertEqual(report["status"], "INCOMPLETE")
         self.assertFalse(report["terminal"])
 
+    def test_preregistered_not_applicable_dimensions_do_not_block_terminal(self):
+        child = {
+            "status": "DONE", "changed_variable": "universe_robustness",
+            "metrics": _metrics(), "health": {"ok": True},
+            "self_correlation": {"status": "PASS"},
+        }
+        report = build_validation_report(
+            self.parent, [child], self.plan,
+            yearly_evidence=self.parent["yearly_evidence"],
+            platform_evidence={
+                "parent": {"health": self.parent["health"], "correlation": {"status": "PASS"}},
+                "children": [{"health": child["health"], "correlation": child["self_correlation"]}],
+            },
+        )
+        self.assertEqual(report["status"], "PASS")
+        self.assertTrue(report["complete"])
+        self.assertTrue(report["terminal"])
+        self.assertEqual(report["dimensions"]["window_locality"]["status"], "NOT_APPLICABLE")
+        self.assertEqual(report["dimensions"]["semantic_field_swap"]["status"], "NOT_APPLICABLE")
+        self.assertEqual(report["dimensions"]["decay"]["status"], "NOT_APPLICABLE")
+        self.assertEqual(report["dimensions"]["truncation"]["status"], "NOT_APPLICABLE")
+
     def test_dsr_uses_complete_selection_denominator(self):
         report = build_validation_report(
             self.parent, [], self.plan,
