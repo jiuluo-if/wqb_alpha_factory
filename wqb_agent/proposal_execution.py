@@ -280,6 +280,8 @@ class ProposalExecutionWorkflow:
             terminal_evidence = self._require_durable_terminal_evidence(
                 experiments, round_no
             )
+        if isinstance(terminal_evidence, DurableTerminalEvidenceView):
+            terminal_evidence.assert_execution_set(experiments)
         self._ctx.hooks.refresh_self_correlation_evidence(experiments)
         self._ctx.hooks.mark_robustness_stability(experiments)
         if isinstance(terminal_evidence, DurableTerminalEvidenceView):

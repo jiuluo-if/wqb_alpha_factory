@@ -108,6 +108,28 @@ class ExecutionProjectionTests(unittest.TestCase):
             )
         context.reflector.reflect.assert_not_called()
 
+    def test_finalization_rejects_initial_execution_identity_drift_before_hooks(self):
+        workflow = object.__new__(ProposalExecutionWorkflow)
+        context = Mock()
+        context.hooks = Mock()
+        context.hooks.refresh_self_correlation_evidence = Mock()
+        context.hooks.mark_robustness_stability = Mock()
+        workflow.context = context
+        experiment = Experiment(1, "h", "rank(returns)", {}, ["returns"], ["ds"])
+        experiment.status = "DONE"
+        experiment.metrics = {"fitness": 1}
+        terminal_view = build_terminal_evidence_view(
+            [experiment], {experiment.id: experiment.to_dict()}, {experiment.id}, 1
+        )
+        experiment.id = "changed-before-finalize"
+
+        with self.assertRaisesRegex(ValueError, "TERMINAL_EVIDENCE_CHANGED"):
+            workflow._finalize_round_projection(
+                1, {"id": "h"}, [experiment], terminal_evidence=terminal_view
+            )
+        context.hooks.refresh_self_correlation_evidence.assert_not_called()
+        context.hooks.mark_robustness_stability.assert_not_called()
+
     def test_incomplete_validation_skips_settlement_side_effects(self):
         workflow = object.__new__(ProposalExecutionWorkflow)
         context = Mock()
