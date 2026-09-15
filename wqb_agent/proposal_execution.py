@@ -337,13 +337,8 @@ class ProposalExecutionWorkflow:
             self._ctx.hooks.write_sims_results(round_no, experiments)
         return summary
 
-    def run(self, path=None, allow_unresolved_checkpoint=False):
-        """Execute one proposals file through the existing guarded path."""
-        ctx = self._ctx
-        hooks = ctx.hooks
-        self.last_run_stats = {"accepted": 0, "rejected": 0, "skipped": 0}
-        hooks.ensure_loaded()
-        path = path or os.path.join(ctx.state_dir, "proposals.json")
+    def _load_proposal_request(self, path):
+        """Load the bounded inbox envelope through the canonical parser."""
         if not os.path.exists(path):
             print(f"No proposals file at {path}.")
             return None
@@ -356,59 +351,54 @@ class ProposalExecutionWorkflow:
         if not isinstance(payload, dict):
             print(f"[PROPOSALS ERROR] {path} 顶层必须是对象（含 round_no/proposals）。")
             return None
-
         request, parse_errors = parse_proposal_payload(
-            payload, default_round_no=hooks.next_round_no()
+            payload, default_round_no=self._ctx.hooks.next_round_no()
         )
         if parse_errors:
             for error in parse_errors:
                 print(f"[PROPOSALS ERROR] {error}；未执行任何提案。")
             return None
-        round_no = request.round_no
-        checkpoint_records = self._ctx.checkpoints.scan()
-        checkpoint_plan = plan_checkpoint_disposition(
-            checkpoint_records,
-            round_no,
-            allow_force=allow_unresolved_checkpoint,
+        return payload, request
+
+    def _resolve_checkpoint(self, round_no, allow_unresolved_checkpoint):
+        """Read checkpoint records and apply the single disposition policy."""
+        records = self._ctx.checkpoints.scan()
+        plan = plan_checkpoint_disposition(
+            records, round_no, allow_force=allow_unresolved_checkpoint
         )
-        foreign_record = checkpoint_plan.foreign
-        current_record = checkpoint_plan.current
+        foreign = plan.foreign
+        current = plan.current
         checkpoint_path = self._ctx.checkpoints.path(round_no)
-        if foreign_record and foreign_record.get("validation_code") not in (None,):
+        if foreign and foreign.get("validation_code") not in (None,):
             print(
-                f"[CHECKPOINT BLOCKED] {os.path.basename(foreign_record['path'])} "
-                f"身份不可验证：{foreign_record.get('validation_code') or 'UNVERIFIABLE_CHECKPOINT_IDENTITY'}；"
+                f"[CHECKPOINT BLOCKED] {os.path.basename(foreign['path'])} "
+                f"身份不可验证：{foreign.get('validation_code') or 'UNVERIFIABLE_CHECKPOINT_IDENTITY'}；"
                 "force-new-round 不能绕过。"
             )
             return None
-        if checkpoint_plan.reason == "CURRENT_MALFORMED":
+        if plan.reason == "CURRENT_MALFORMED":
             print(
                 f"[CHECKPOINT ERROR] {checkpoint_path} 无法解析或轮次不匹配；"
                 "保留原文件，需先人工对账。"
             )
             return None
-        if checkpoint_plan.disposition == "BLOCK":
+        if plan.disposition == "BLOCK":
             print(
-                f"[CHECKPOINT BLOCKED] 存在未完成 {os.path.basename(foreign_record['path'])}；"
+                f"[CHECKPOINT BLOCKED] 存在未完成 {os.path.basename(foreign['path'])}；"
                 "必须先以原 proposals.json 恢复，禁止开启新轮。"
             )
             return None
-        if checkpoint_plan.disposition == "FORCE_NEW_AUTHORIZED":
+        if plan.disposition == "FORCE_NEW_AUTHORIZED":
             print(
-                f"[FORCE NEW ROUND] 保留未完成 {os.path.basename(foreign_record['path'])} "
+                f"[FORCE NEW ROUND] 保留未完成 {os.path.basename(foreign['path'])} "
                 "及其原 progress_url；按用户明确授权开启新轮。"
             )
-        checkpoint = current_record.get("checkpoint") if current_record else None
-        if checkpoint_plan.disposition == "RESUME":
-            return self.resume_checkpoint(checkpoint)
-        if checkpoint_plan.disposition == "COMPLETE":
-            print(f"[CHECKPOINT COMPLETE] round {round_no} 已完成；不重新派发其中的 proposals。")
-            return None
+        checkpoint = current.get("checkpoint") if current else None
+        return records, plan, checkpoint
 
-        proposal_list = list(request.proposals)
-        if not proposal_list:
-            print("No proposals in file; nothing to run.")
-            return None
+    def _validate_batch_input(self, payload, proposal_list):
+        """Validate batch-level contracts before any candidate mutation."""
+        ctx = self._ctx
         factory_batch = payload.get("batch_type") == "factory_100"
         if factory_batch:
             batch_ok, batch_errors = validate_factory_batch(
@@ -428,9 +418,8 @@ class ProposalExecutionWorkflow:
                     "status": "FACTORY_BATCH_BLOCKED",
                     "rejection_reason_counts": {"FACTORY_BATCH_REJECTED": len(batch_errors)},
                 }
-                return None
-        targeted_batch = payload.get("batch_type") == TARGETED_BATCH_TYPE
-        if targeted_batch:
+                return False
+        if payload.get("batch_type") == TARGETED_BATCH_TYPE:
             batch_ok, batch_errors = validate_targeted_batch(proposal_list)
             if not batch_ok:
                 print("[TARGETED BATCH BLOCKED] 不满足 targeted optimization 契约：")
@@ -442,7 +431,41 @@ class ProposalExecutionWorkflow:
                     "skipped": 0,
                     "status": "TARGETED_BATCH_BLOCKED",
                 }
-                return None
+                return False
+        return True
+
+    def run(self, path=None, allow_unresolved_checkpoint=False):
+        """Execute one proposals file through the existing guarded path."""
+        ctx = self._ctx
+        hooks = ctx.hooks
+        self.last_run_stats = {"accepted": 0, "rejected": 0, "skipped": 0}
+        hooks.ensure_loaded()
+        path = path or os.path.join(ctx.state_dir, "proposals.json")
+        loaded = self._load_proposal_request(path)
+        if loaded is None:
+            return None
+        payload, request = loaded
+        round_no = request.round_no
+        checkpoint_result = self._resolve_checkpoint(
+            round_no, allow_unresolved_checkpoint
+        )
+        if checkpoint_result is None:
+            return None
+        checkpoint_records, checkpoint_plan, checkpoint = checkpoint_result
+        if checkpoint_plan.disposition == "RESUME":
+            return self.resume_checkpoint(checkpoint)
+        if checkpoint_plan.disposition == "COMPLETE":
+            print(f"[CHECKPOINT COMPLETE] round {round_no} 已完成；不重新派发其中的 proposals。")
+            return None
+
+        proposal_list = list(request.proposals)
+        if not proposal_list:
+            print("No proposals in file; nothing to run.")
+            return None
+        if not self._validate_batch_input(payload, proposal_list):
+            return None
+        targeted_batch = payload.get("batch_type") == TARGETED_BATCH_TYPE
+        factory_batch = payload.get("batch_type") == "factory_100"
 
         hypothesis = request.hypothesis
         if hypothesis is None:
