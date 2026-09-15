@@ -56,6 +56,8 @@ SIMULATION_PHASES = {
     "submitted", "completed",
 }
 
+AUDIT_EVENT_TYPES = frozenset({"settlement_revision_rejected"})
+
 
 def _text(value, default="unknown"):
     return str(value) if isinstance(value, (str, int, float, bool)) else default
@@ -278,7 +280,7 @@ class TrialLedger:
 
     def record(self, trial, phase, *, outcome=None, reason=None, reason_code=None,
                stage=None, timestamp=None, reward=None, settlement=None,
-               delegation=None):
+               delegation=None, event_type=None, audit_only=False):
         if phase not in PHASES:
             raise ValueError(f"未知 trial phase: {phase}")
         candidate_id = self._value(trial, "candidate_id")
@@ -304,9 +306,10 @@ class TrialLedger:
         state = _text(self._value(trial, "status"), "UNKNOWN")
         stable_settlement = (settlement or {}).get("settlement_id") if phase == "research_outcome_settled" else None
         selection_identity = self._value(trial, "selection_identity") if phase == "optimization_selection" else None
+        event_type = event_type or phase
         identity = (f"settlement|{stable_settlement}" if stable_settlement else
                     selection_identity or
-                    f"{candidate_id}|{self._value(trial, 'proposal_id') or ''}|{phase}|{state}|{outcome or ''}|{reason_code or ''}|{reason or ''}|{reward}")
+                    f"{candidate_id}|{self._value(trial, 'proposal_id') or ''}|{phase}|{event_type}|{audit_only}|{state}|{outcome or ''}|{reason_code or ''}|{reason or ''}|{reward}")
         event_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
         fields = self._value(trial, "fields_used", [])
         if not isinstance(fields, (list, tuple)):
@@ -320,7 +323,8 @@ class TrialLedger:
             "candidate_id": candidate_id,
             "proposal_id": self._value(trial, "proposal_id"),
             "phase": phase,
-            "event_type": phase,
+            "event_type": event_type,
+            "audit_only": bool(audit_only),
             "selection_identity": selection_identity,
             "optimization_decision_id": self._value(trial, "optimization_decision_id"),
             "optimization_candidate_emitted": self._value(trial, "optimization_candidate_emitted"),
@@ -383,6 +387,18 @@ class TrialLedger:
                 if self.trajectory_path and not exists:
                     self._write_history_completeness_unlocked(outcome)
                 return written
+
+    def record_audit_event(self, trial, event_type, *, outcome="REJECTED",
+                           reason=None, reason_code=None, timestamp=None,
+                           delegation=None):
+        """Record a bounded audit event without creating a lifecycle phase."""
+        if event_type not in AUDIT_EVENT_TYPES:
+            raise ValueError(f"未知 trial audit event: {event_type}")
+        return self.record(
+            trial, "completed", outcome=outcome, reason=reason,
+            reason_code=reason_code or event_type.upper(), timestamp=timestamp,
+            event_type=event_type, audit_only=True, delegation=delegation,
+        )
 
     @classmethod
     def _operator_realization(cls, trial):
@@ -504,6 +520,9 @@ class TrialLedger:
         for row in rows:
             if row.get("phase") == "history_completeness":
                 history_completeness = row.get("outcome") or row.get("status")
+                continue
+            if row.get("audit_only") is True:
+                event_type_counts[row.get("event_type") or "audit"] += 1
                 continue
             events += 1
             is_selection = row.get("phase") == "optimization_selection"

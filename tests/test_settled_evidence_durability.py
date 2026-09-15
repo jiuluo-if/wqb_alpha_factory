@@ -292,6 +292,32 @@ class TestProductionSettlementPersistence(unittest.TestCase):
         self.assertEqual(len(settled), 1)
         self.assertEqual(len(final_rows), 1)
 
+    def test_revision_rejection_is_a_trial_ledger_audit_event(self):
+        agent = self._agent()
+        experiment = done_experiment()
+        experiment.proposal_id = "proposal-revision-audit"
+        agent.trajectory.add(experiment)
+        original_settle = agent.trajectory.settle
+        agent.trajectory.settle = Mock(
+            side_effect=ValueError("provenance conflict")
+        )
+
+        agent._settle_research_outcome(experiment, self._report())
+
+        rows = _rows(os.path.join(self.tmp, "trial_ledger.jsonl"))
+        audit_rows = [
+            row for row in rows
+            if row.get("event_type") == "settlement_revision_rejected"
+        ]
+        self.assertEqual(len(audit_rows), 1)
+        self.assertIn(audit_rows[0]["phase"], {"completed", "history_completeness"})
+        self.assertNotIn("settlement_revision_rejected", {
+            row.get("phase") for row in rows
+        })
+        summary = agent.trial_ledger.summarize()
+        self.assertEqual(summary["settled_observation_count"], 1)
+        agent.trajectory.settle = original_settle
+
     def test_finalize_round_closes_existing_checkpoint_from_durable_trajectory(self):
         agent = self._agent()
         experiment = done_experiment(round_no=333)

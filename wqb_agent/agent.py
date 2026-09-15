@@ -887,6 +887,17 @@ class Agent:
         except Exception as exc:
             print(f"[TRIAL_LEDGER_WARN] {type(exc).__name__}: {exc}")
 
+    def _record_trial_audit_event(self, experiment, event_type, *, reason=None,
+                                  reason_code=None, delegation=None):
+        """Record an owner-local audit event without inventing a lifecycle phase."""
+        try:
+            self.trial_ledger.record_audit_event(
+                experiment, event_type, reason=reason,
+                reason_code=reason_code, delegation=delegation,
+            )
+        except Exception as exc:
+            print(f"[TRIAL_LEDGER_WARN] {type(exc).__name__}: {exc}")
+
     def _update_search_lifecycle(self, experiment, outcome=None):
         """Mirror transport state into the in-memory allocator idempotently."""
         if not hasattr(self, "search_policy"):
@@ -1394,9 +1405,8 @@ class Agent:
         try:
             self.trajectory.settle(experiment)
         except ValueError as exc:
-            self._record_trial_phase(
-                experiment, "settlement_revision_rejected",
-                outcome="REJECTED", reason=str(exc),
+            self._record_trial_audit_event(
+                experiment, "settlement_revision_rejected", reason=str(exc),
                 reason_code="SETTLEMENT_REVISION_REJECTED",
             )
             print(f"[SETTLEMENT] revision rejected id={experiment.id}: {exc}")
