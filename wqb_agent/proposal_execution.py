@@ -434,6 +434,83 @@ class ProposalExecutionWorkflow:
                 return False
         return True
 
+    def _build_admission_facts(
+        self, payload, proposal_list, round_no, checkpoint_records
+    ):
+        """Collect one bounded read-only fact set for candidate admission."""
+        ctx = self._ctx
+        hooks = ctx.hooks
+        terminal_expressions, terminal_fingerprints = hooks.terminal_identities(
+            [item.get("expression") for item in proposal_list if isinstance(item, dict)]
+        )
+        discovered_profiles = {}
+        platform_usage = hooks.refresh_platform_field_usage(payload, proposal_list)
+        cached_field_types, cached_profiles = hooks.read_field_cache()
+        field_types = hooks.known_field_types(
+            payload, cached_field_types=cached_field_types
+        )
+        for field in payload.get("suggestion_fields") or payload.get("fields") or []:
+            if isinstance(field, dict) and field.get("id"):
+                normalized_field = dict(field)
+                dataset = self._field_dataset_id(field)
+                if dataset is not None:
+                    normalized_field["dataset"] = dataset
+                key = (
+                    f"{dataset}::{field['id']}"
+                    if dataset is not None else str(field["id"])
+                )
+                discovered_profiles[key] = normalized_field
+        for field_id, field in cached_profiles.items():
+            dataset = self._field_dataset_id(field) if isinstance(field, dict) else None
+            key = (
+                f"{dataset}::{field.get('id')}"
+                if dataset is not None and field.get("id") else field_id
+            )
+            discovered_profiles.setdefault(key, field)
+        for profile_key, profile in list(discovered_profiles.items()):
+            if not isinstance(profile, dict):
+                continue
+            field_id = profile.get("id")
+            dataset_id = profile.get("dataset")
+            usage = platform_usage.get(str(dataset_id), {}).get(str(field_id))
+            if usage is not None:
+                profile = dict(profile)
+                profile["alpha_count"] = usage.get("alpha_count")
+                profile["platform_dedupe"] = usage
+                discovered_profiles[profile_key] = profile
+
+        parent_ids = {
+            str(item.get("parent_id"))
+            for item in proposal_list
+            if isinstance(item, dict) and item.get("parent_id") not in (None, "")
+        }
+        parent_rows = (
+            ctx.trajectory.find_rows(parent_ids, strict=True)
+            if parent_ids else {}
+        )
+        legacy_parent_candidates = ctx.trajectory.find_completed_parent_candidates(
+            [item.get("parent_expression") for item in proposal_list
+             if isinstance(item, dict)]
+        )
+        return {
+            "research_seen": set(terminal_expressions),
+            "batch_execution_fingerprints": {
+                str(fingerprint).removeprefix("settings::")
+                for fingerprint in terminal_fingerprints
+            },
+            "durable_proposal_bindings": self._durable_proposal_bindings(
+                checkpoint_records
+            ),
+            "unresolved_identities": ctx.checkpoints.unresolved_submission_identities(
+                exclude_round=round_no, records=checkpoint_records
+            ),
+            "discovered_profiles": discovered_profiles,
+            "proposal_field_profiles": list(discovered_profiles.values()),
+            "field_types": field_types,
+            "parent_rows": parent_rows,
+            "legacy_parent_candidates": legacy_parent_candidates,
+        }
+
     def run(self, path=None, allow_unresolved_checkpoint=False):
         """Execute one proposals file through the existing guarded path."""
         ctx = self._ctx
@@ -483,68 +560,23 @@ class ProposalExecutionWorkflow:
             hypothesis = dict(hypothesis)
         hypothesis["_round"] = round_no
 
-        terminal_expressions, terminal_fingerprints = hooks.terminal_identities(
-            [item.get("expression") for item in proposal_list if isinstance(item, dict)]
+        facts = self._build_admission_facts(
+            payload, proposal_list, round_no, checkpoint_records
         )
-        research_seen = set(terminal_expressions)
-        batch_execution_fingerprints = {
-            str(fingerprint).removeprefix("settings::")
-            for fingerprint in terminal_fingerprints
-        }
-        durable_proposal_bindings = self._durable_proposal_bindings(checkpoint_records)
+        research_seen = facts["research_seen"]
+        batch_execution_fingerprints = facts["batch_execution_fingerprints"]
+        durable_proposal_bindings = facts["durable_proposal_bindings"]
         batch_proposal_bindings = {}
         conflicting_proposal_ids = set()
-        unresolved_identities = ctx.checkpoints.unresolved_submission_identities(
-            exclude_round=round_no, records=checkpoint_records
-        )
+        unresolved_identities = facts["unresolved_identities"]
         fresh, skipped, rejected = [], [], []
         diversity_rejected, settings_rejected = [], []
         loop_guard = ResearchLoopGuard(ctx.trajectory.experiments)
-        platform_usage = hooks.refresh_platform_field_usage(payload, proposal_list)
-        cached_field_types, cached_profiles = hooks.read_field_cache()
-        field_types = hooks.known_field_types(
-            payload, cached_field_types=cached_field_types
-        )
-        discovered_profiles = {}
-        for field in payload.get("suggestion_fields") or payload.get("fields") or []:
-            if isinstance(field, dict) and field.get("id"):
-                normalized_field = dict(field)
-                dataset = self._field_dataset_id(field)
-                if dataset is not None:
-                    normalized_field["dataset"] = dataset
-                key = f"{dataset}::{field['id']}" if dataset is not None else str(field["id"])
-                discovered_profiles[key] = normalized_field
-        for field_id, field in cached_profiles.items():
-            dataset = self._field_dataset_id(field) if isinstance(field, dict) else None
-            key = (
-                f"{dataset}::{field.get('id')}"
-                if dataset is not None and field.get("id") else field_id
-            )
-            discovered_profiles.setdefault(key, field)
-        for profile_key, profile in list(discovered_profiles.items()):
-            if not isinstance(profile, dict):
-                continue
-            field_id = profile.get("id")
-            dataset_id = profile.get("dataset")
-            usage = platform_usage.get(str(dataset_id), {}).get(str(field_id))
-            if usage is not None:
-                profile = dict(profile)
-                profile["alpha_count"] = usage.get("alpha_count")
-                profile["platform_dedupe"] = usage
-                discovered_profiles[profile_key] = profile
-        proposal_field_profiles = list(discovered_profiles.values())
-        parent_ids = {
-            str(item.get("parent_id"))
-            for item in proposal_list
-            if isinstance(item, dict) and item.get("parent_id") not in (None, "")
-        }
-        parent_rows = (
-            ctx.trajectory.find_rows(parent_ids, strict=True)
-            if parent_ids else {}
-        )
-        legacy_parent_candidates = ctx.trajectory.find_completed_parent_candidates(
-            [item.get("parent_expression") for item in proposal_list if isinstance(item, dict)]
-        )
+        discovered_profiles = facts["discovered_profiles"]
+        proposal_field_profiles = facts["proposal_field_profiles"]
+        field_types = facts["field_types"]
+        parent_rows = facts["parent_rows"]
+        legacy_parent_candidates = facts["legacy_parent_candidates"]
         effective_settings_by_candidate = {}
 
         for raw_proposal in proposal_list:
