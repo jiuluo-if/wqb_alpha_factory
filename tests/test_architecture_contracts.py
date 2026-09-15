@@ -288,6 +288,12 @@ class ArchitectureDependencyContracts(unittest.TestCase):
         self.assertIn("atomic_write_json_if_changed", source)
         self.assertIn("def save(", source)
 
+    def test_memory_replay_reducer_is_pure_and_io_free(self):
+        imports = _imports(ROOT / "wqb_agent/memory_replay.py")
+        self.assertTrue({"os", "sqlite3", "pathlib", "wqb_agent.artifacts"}.isdisjoint(imports))
+        source = (ROOT / "wqb_agent/memory.py").read_text(encoding="utf-8")
+        self.assertIn("from .memory_replay import", source)
+
     def test_installed_facade_delegates_operator_resource(self):
         source = (ROOT / "wqb_agent/research_api.py").read_text(encoding="utf-8")
         self.assertIn("load_packaged_operator_syntax_reference", source)

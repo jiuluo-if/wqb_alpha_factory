@@ -37,7 +37,6 @@ from .expression import canonical_expression
 from .memory_codec import (
     dict_list,
     pack_expressions,
-    stable_payload,
     unpack_expressions,
 )
 from .memory_policy import expiration_partition, promotion_allowed, similar
@@ -56,7 +55,11 @@ from .memory_projection import (
 from .memory_projection import (
     top_next as project_top_next,
 )
+from .memory_replay import MemorySourceReplayConflict as _MemorySourceReplayConflict
+from .memory_replay import find_source_entry, replay_source, source_receipt
 from .schema import MEMORY_VERSION
+
+MemorySourceReplayConflict = _MemorySourceReplayConflict
 
 _CJK_RUN = re.compile(r"[\u4e00-\u9fff]+")
 # Hypothesis ids generated solely from a round are reconstructable from the
@@ -73,10 +76,6 @@ SHORT_KINDS = ("recap", "pending", "observation")
 _SOURCE_RECEIPT_LIMIT = 64
 
 
-class MemorySourceReplayConflict(ValueError):
-    """A durable memory source key was reused for different semantics."""
-
-    code = "MEMORY_SOURCE_REPLAY_CONFLICT"
 # Reasons recorded when an entry is soft-deleted into the garbage tier.
 GARBAGE_REASONS = ("stale", "superseded", "deduped", "expired", "low_value",
                    "not_promoted", "user_removed")
@@ -302,71 +301,37 @@ class ExperienceMemory:
     # ---------------------------------------------------------- short term
 
     def _source_entry(self, source_key):
-        if not source_key:
-            return None
-        key = str(source_key)
-        for kind, entries in (
-            ("short_term", self.short_term), ("lesson", self.lessons),
-            ("avoid", self.avoid), ("next", self.next),
-            ("hypothesis", self.active_hypotheses),
-        ):
-            for entry in entries:
-                if isinstance(entry, dict):
-                    if entry.get("source_key") == key:
-                        return kind, entry
-                    if any(isinstance(receipt, dict)
-                           and receipt.get("source_key") == key
-                           for receipt in entry.get("_source_receipts", [])):
-                        return kind, entry
-        for tomb in self.garbage:
-            entry = tomb.get("entry") if isinstance(tomb, dict) else None
-            if isinstance(entry, dict) and (
-                entry.get("source_key") == key
-                or any(isinstance(receipt, dict)
-                       and receipt.get("source_key") == key
-                       for receipt in entry.get("_source_receipts", []))
-            ):
-                return tomb.get("kind", "garbage"), entry
-        return None
+        return find_source_entry(
+            source_key,
+            (
+                ("short_term", self.short_term),
+                ("lesson", self.lessons),
+                ("avoid", self.avoid),
+                ("next", self.next),
+                ("hypothesis", self.active_hypotheses),
+            ),
+            self.garbage,
+        )
 
     def _source_replay(self, source_key, kind, semantic):
-        if not source_key:
-            return None
-        found = self._source_entry(source_key)
-        if found is None:
-            return None
-        old_kind, old = found
-        expected = stable_payload(semantic)
-        receipts = old.get("_source_receipts") or []
-        old_semantic = next(
-            (receipt.get("_source_semantic") for receipt in receipts
-             if isinstance(receipt, dict)
-             and receipt.get("source_key") == str(source_key)),
-            old.get("_source_semantic"),
+        return replay_source(
+            source_key,
+            kind,
+            semantic,
+            (
+                ("short_term", self.short_term),
+                ("lesson", self.lessons),
+                ("avoid", self.avoid),
+                ("next", self.next),
+                ("hypothesis", self.active_hypotheses),
+            ),
+            self.garbage,
         )
-        cross_tier_replay = (
-            {old_kind, kind} == {"lesson", "short_term"}
-            and old_semantic == expected
-        )
-        if (old_kind != kind and not cross_tier_replay) or (
-            old_kind == kind and old_semantic != expected
-        ):
-            raise MemorySourceReplayConflict(
-                f"MEMORY_SOURCE_REPLAY_CONFLICT: source_key={source_key}"
-            )
-        return old
 
     def _stamp_source(self, entry, source_key, semantic):
-        if source_key:
-            key = str(source_key)
-            payload = stable_payload(semantic)
-            entry.setdefault("source_key", key)
-            entry.setdefault("_source_semantic", payload)
-            receipts = [receipt for receipt in entry.get("_source_receipts", [])
-                        if isinstance(receipt, dict)
-                        and receipt.get("source_key") != key]
-            receipts.append({"source_key": key, "_source_semantic": payload})
-            entry["_source_receipts"] = receipts[-_SOURCE_RECEIPT_LIMIT:]
+        entry.update(
+            source_receipt(entry, source_key, semantic, _SOURCE_RECEIPT_LIMIT)
+        )
         return entry
 
     def add_short_term(self, kind, text, round_no, evidence=1, detail=None,
