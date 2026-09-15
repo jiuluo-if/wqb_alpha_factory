@@ -44,6 +44,27 @@ class TestRuntimeSafety(unittest.TestCase):
         self.assertNotIn("private_signal", rendered)
         self.assertIn("opaque-exp-901", rendered)
 
+    def test_memory_replay_audit_exposes_only_opaque_source_digest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            private_source = "settlement:PRIVATE_RESEARCH_EXPRESSION"
+            with open(os.path.join(tmp, "experience.json"), "w", encoding="utf-8") as handle:
+                json.dump({
+                    "lessons": [
+                        {"kind": "observation", "source_key": private_source,
+                         "_source_semantic": {"expression": "private alpha"}},
+                        {"kind": "observation", "source_key": private_source,
+                         "_source_semantic": {"expression": "different alpha"}},
+                    ]
+                }, handle)
+            result = audit_state(tmp)
+
+        rendered = json.dumps(result, ensure_ascii=False)
+        self.assertIn("MEMORY_SETTLEMENT_CONFLICT", rendered)
+        self.assertNotIn(private_source, rendered)
+        self.assertNotIn("private alpha", rendered)
+        self.assertNotIn("different alpha", rendered)
+        self.assertTrue(result["findings"][0]["source_hashes"])
+
     def test_audit_treats_running_checkpoint_behind_canonical_done_as_recoverable(self):
         with tempfile.TemporaryDirectory() as tmp:
             experiment = Experiment(

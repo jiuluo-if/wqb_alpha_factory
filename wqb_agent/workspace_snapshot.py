@@ -607,6 +607,14 @@ def _opaque_replay_id(value):
     return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:16]
 
 
+def _replay_semantic_key(value):
+    """Make nested legacy semantic receipts comparable without exposing them."""
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        default=str,
+    )
+
+
 def _replay_summary(experience):
     if not isinstance(experience, dict):
         return ReplayAuditSummary()
@@ -630,7 +638,7 @@ def _replay_summary(experience):
         if len(rows) > 1:
             opaque = _opaque_replay_id(source)
             duplicate.append(opaque)
-            if len({(kind, semantic) for kind, semantic in rows}) > 1:
+            if len({(kind, _replay_semantic_key(semantic)) for kind, semantic in rows}) > 1:
                 conflicts.append(opaque)
     lineage_double = []
     for lineage_id, lineage in (experience.get("lineages") or {}).items():
