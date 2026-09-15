@@ -3,8 +3,32 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
 
 from .experiment import Experiment, same_execution_identity
+
+
+@dataclass(frozen=True)
+class DurableTerminalEvidenceView:
+    """Validated request-local terminal evidence; it performs no I/O."""
+
+    rows: Mapping[str, Mapping]
+    canonical_round_ids: frozenset[str] | None
+    round_no: int
+
+    @classmethod
+    def from_validated(
+        cls, rows: Mapping, canonical_round_ids, round_no: int
+    ):
+        return cls(
+            MappingProxyType({str(key): MappingProxyType(dict(value))
+                              for key, value in rows.items()
+                              if isinstance(value, Mapping)}),
+            (None if canonical_round_ids is None
+             else frozenset(str(item) for item in canonical_round_ids)),
+            int(round_no),
+        )
 
 
 def has_full_terminal_evidence(experiment) -> bool:
@@ -61,3 +85,13 @@ def validate_terminal_snapshot(experiments, rows: Mapping, canonical_round_ids, 
             raise ValueError(
                 f"TERMINAL_EVIDENCE_UNRECOVERABLE: round {round_no} experiment {experiment.id}"
             )
+
+
+def build_terminal_evidence_view(
+    experiments, rows: Mapping, canonical_round_ids, round_no: int
+):
+    """Validate and freeze one durable terminal evidence read for reuse."""
+    validate_terminal_snapshot(experiments, rows, canonical_round_ids, round_no)
+    return DurableTerminalEvidenceView.from_validated(
+        rows, canonical_round_ids, round_no
+    )

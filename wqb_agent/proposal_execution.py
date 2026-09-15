@@ -51,8 +51,8 @@ from .state import (
     ResearchState,
 )
 from .terminal_evidence import (
+    build_terminal_evidence_view,
     failure_category,
-    validate_terminal_snapshot,
 )
 
 
@@ -256,7 +256,9 @@ class ProposalExecutionWorkflow:
                 for row in (round_reader(int(round_no)) or ())
                 if isinstance(row, dict) and row.get("id")
             }
-        validate_terminal_snapshot(experiments, rows, canonical_round_ids, round_no)
+        return build_terminal_evidence_view(
+            experiments, rows, canonical_round_ids, round_no
+        )
 
     def _merge_checkpoint_with_trajectory(self, experiments, round_no):
         """Monotonically merge checkpoint execution rows with canonical rows."""
@@ -270,9 +272,13 @@ class ProposalExecutionWorkflow:
 
     def _finalize_round_projection(self, round_no, hypothesis, experiments,
                                    *, total_elapsed_sec=None,
-                                   close_checkpoint=False):
+                                   close_checkpoint=False,
+                                   terminal_evidence=None):
         """Apply the one canonical terminal projection for any round source."""
-        self._require_durable_terminal_evidence(experiments, round_no)
+        if terminal_evidence is None:
+            terminal_evidence = self._require_durable_terminal_evidence(
+                experiments, round_no
+            )
         self._ctx.hooks.refresh_self_correlation_evidence(experiments)
         self._ctx.hooks.mark_robustness_stability(experiments)
         summary = self._ctx.reflector.reflect(
@@ -302,7 +308,9 @@ class ProposalExecutionWorkflow:
                                total_elapsed_sec=None):
         """Perform the existing terminal projection in its original order."""
         self._ctx.trajectory.add_many(experiments)
-        self._require_durable_terminal_evidence(experiments, round_no)
+        terminal_evidence = self._require_durable_terminal_evidence(
+            experiments, round_no
+        )
         for exp in experiments:
             reward = None
             if exp.status == "DONE" and isinstance(exp.metrics, dict):
@@ -322,6 +330,7 @@ class ProposalExecutionWorkflow:
             round_no, hypothesis, experiments,
             total_elapsed_sec=total_elapsed_sec,
             close_checkpoint=True,
+            terminal_evidence=terminal_evidence,
         )
         self._ctx.hooks.print_summary(summary)
         if total_elapsed_sec is None:
@@ -1304,6 +1313,12 @@ class ProposalExecutionWorkflow:
         checkpoint = self._ctx.checkpoints.load(int(round_no))
         if os.path.exists(checkpoint_path) and checkpoint is None:
             raise ValueError(f"FINALIZE_EXECUTION_SET_MISMATCH: round {round_no}")
+        terminal_evidence = build_terminal_evidence_view(
+            experiments,
+            {row.id: row.to_dict() for row in experiments},
+            {row.id for row in experiments},
+            int(round_no),
+        )
         checkpoint = self._validate_finalize_checkpoint(
             checkpoint, experiments, int(round_no)
         )
@@ -1313,6 +1328,7 @@ class ProposalExecutionWorkflow:
         summary = self._finalize_round_projection(
             int(round_no), hypothesis, experiments,
             close_checkpoint=checkpoint is not None and checkpoint.get("complete") is not True,
+            terminal_evidence=terminal_evidence,
         )
         audit_path = os.path.join(self._ctx.state_dir, "round_finalization_log.jsonl")
         append_jsonl_best_effort(

@@ -1,9 +1,13 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 from wqb_agent.execution_recovery import merge_checkpoint_with_trajectory
+from wqb_agent.proposal_execution import ProposalExecutionWorkflow
 from wqb_agent.state import Experiment
 from wqb_agent.terminal_evidence import (
+    DurableTerminalEvidenceView,
+    build_terminal_evidence_view,
     failure_category,
     has_full_terminal_evidence,
     validate_terminal_snapshot,
@@ -11,6 +15,43 @@ from wqb_agent.terminal_evidence import (
 
 
 class ExecutionProjectionTests(unittest.TestCase):
+    def test_terminal_evidence_view_is_immutable_and_reuses_validated_rows(self):
+        experiment = Experiment(1, "h", "rank(returns)", {}, ["returns"], ["ds"])
+        experiment.id = "exp-1"
+        experiment.status = "DONE"
+        experiment.metrics = {"fitness": 1}
+        view = build_terminal_evidence_view(
+            [experiment], {"exp-1": experiment.to_dict()}, {"exp-1"}, 1
+        )
+        self.assertIsInstance(view, DurableTerminalEvidenceView)
+        self.assertEqual(view.canonical_round_ids, frozenset({"exp-1"}))
+        with self.assertRaises(TypeError):
+            view.rows["exp-2"] = {}
+
+    def test_normal_settlement_passes_one_terminal_view_to_finalize(self):
+        workflow = object.__new__(ProposalExecutionWorkflow)
+        terminal_view = object()
+        context = Mock()
+        context.hooks = Mock()
+        context.hooks.print_summary = Mock()
+        context.hooks.write_sims_results = Mock()
+        context.trajectory.add_many = Mock()
+        context.search_policy.release = Mock()
+        workflow.context = context
+        workflow._require_durable_terminal_evidence = Mock(return_value=terminal_view)
+        workflow._finalize_round_projection = Mock(return_value={})
+        experiment = Experiment(1, "h", "rank(returns)", {}, ["returns"], ["ds"])
+        experiment.status = "FAILED"
+        experiment.error = "syntax error"
+        workflow._settle_complete_round(1, {"id": "h"}, [experiment])
+        workflow._require_durable_terminal_evidence.assert_called_once_with(
+            [experiment], 1
+        )
+        self.assertIs(
+            workflow._finalize_round_projection.call_args.kwargs["terminal_evidence"],
+            terminal_view,
+        )
+
     def test_sparse_terminal_without_progress_url_is_unrecoverable(self):
         class SparseExperiment(SimpleNamespace):
             def to_dict(self):

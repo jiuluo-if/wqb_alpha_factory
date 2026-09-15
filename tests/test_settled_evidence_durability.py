@@ -14,6 +14,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 from wqb_agent.agent import Agent
 from wqb_agent.state import RESEARCH_SETTLED_REVISION, Experiment, Trajectory
@@ -236,6 +237,8 @@ class TestProductionSettlementPersistence(unittest.TestCase):
         agent._write_proposal_checkpoint(
             333, {"id": "h-1"}, [experiment], complete=False
         )
+        original_iter = agent.trajectory.iter_canonical_round
+        agent.trajectory.iter_canonical_round = Mock(wraps=original_iter)
 
         agent.finalize_recorded_round(333)
 
@@ -245,6 +248,7 @@ class TestProductionSettlementPersistence(unittest.TestCase):
             {row["id"] for row in checkpoint["experiments"]},
             {"finalize-e1"},
         )
+        self.assertEqual(agent.trajectory.iter_canonical_round.call_count, 1)
         before = Path(agent.trajectory.path).read_text(encoding="utf-8")
         agent.finalize_recorded_round(333)
         self.assertEqual(Path(agent.trajectory.path).read_text(encoding="utf-8"), before)
