@@ -229,6 +229,69 @@ class TestProductionSettlementPersistence(unittest.TestCase):
             settled[0]["research_classification"], experiment.research_classification
         )
 
+    def test_restart_after_ledger_append_failure_repairs_one_revision(self):
+        agent = self._agent()
+        experiment = done_experiment()
+        agent.trajectory.add(experiment)
+        settle_evidence(experiment)
+        original = agent.trial_ledger.record_outcome_settled
+        calls = {"count": 0}
+
+        def append_then_crash(*args, **kwargs):
+            result = original(*args, **kwargs)
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise RuntimeError("crash after ledger append")
+            return result
+
+        agent.trial_ledger.record_outcome_settled = append_then_crash
+        with self.assertRaisesRegex(RuntimeError, "after ledger append"):
+            agent._settle_research_outcome(experiment, self._report())
+
+        agent.trial_ledger.record_outcome_settled = original
+        agent._settle_research_outcome(experiment, self._report())
+        rows = _rows(os.path.join(self.tmp, "trajectory.jsonl"))
+        settled = [
+            row for row in rows
+            if row.get("id") == experiment.id
+            and row.get("trajectory_revision") == RESEARCH_SETTLED_REVISION
+        ]
+        ledger_rows = _rows(os.path.join(self.tmp, "trial_ledger.jsonl"))
+        final_rows = [
+            row for row in ledger_rows
+            if row.get("phase") == "research_outcome_settled"
+        ]
+        self.assertEqual(len(settled), 1)
+        self.assertEqual(len(final_rows), 1)
+
+    def test_restart_after_pre_ledger_crash_completes_once(self):
+        agent = self._agent()
+        experiment = done_experiment()
+        agent.trajectory.add(experiment)
+        settle_evidence(experiment)
+        original = agent.trial_ledger.record_outcome_settled
+        agent.trial_ledger.record_outcome_settled = Mock(
+            side_effect=RuntimeError("crash before ledger append")
+        )
+        with self.assertRaisesRegex(RuntimeError, "before ledger append"):
+            agent._settle_research_outcome(experiment, self._report())
+
+        agent.trial_ledger.record_outcome_settled = original
+        agent._settle_research_outcome(experiment, self._report())
+        rows = _rows(os.path.join(self.tmp, "trajectory.jsonl"))
+        settled = [
+            row for row in rows
+            if row.get("id") == experiment.id
+            and row.get("trajectory_revision") == RESEARCH_SETTLED_REVISION
+        ]
+        ledger_rows = _rows(os.path.join(self.tmp, "trial_ledger.jsonl"))
+        final_rows = [
+            row for row in ledger_rows
+            if row.get("phase") == "research_outcome_settled"
+        ]
+        self.assertEqual(len(settled), 1)
+        self.assertEqual(len(final_rows), 1)
+
     def test_finalize_round_closes_existing_checkpoint_from_durable_trajectory(self):
         agent = self._agent()
         experiment = done_experiment(round_no=333)

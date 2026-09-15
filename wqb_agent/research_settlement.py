@@ -12,6 +12,7 @@ from collections.abc import Mapping
 
 _VOLATILE_KEYS = frozenset({
     "settled_at", "recorded_at", "timestamp", "updated_at", "settlement_id",
+    "effective_trial_count", "snapshot_id", "pool_snapshot_id",
 })
 
 
