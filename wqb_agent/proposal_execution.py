@@ -511,6 +511,112 @@ class ProposalExecutionWorkflow:
             "legacy_parent_candidates": legacy_parent_candidates,
         }
 
+    def _materialize_experiments(
+        self, proposals, round_no, hypothesis, factory_batch, known_ids,
+        effective_settings_by_candidate,
+    ):
+        """Materialize the committed proposal set without executing it."""
+        ctx = self._ctx
+        hooks = ctx.hooks
+        experiments = []
+        for proposal in proposals:
+            if proposal.get("template_mode") == "PARTIAL_OPERATOR":
+                missing = [
+                    name for name in OPERATOR_PROVENANCE_FIELDS
+                    if proposal.get(name) in (None, "", {}, [])
+                ]
+                if missing:
+                    raise ValueError(
+                        "PARTIAL_OPERATOR provenance incomplete: "
+                        + ", ".join(missing)
+                    )
+            fields = proposal.get("fields") or known_ids
+            if fields:
+                fields = extract_fields(proposal["expression"], fields)
+            settings = effective_settings_by_candidate.get(proposal.get("candidate_id"))
+            if settings is None:
+                settings = hooks.proposal_settings(proposal.get("settings"))
+            exp = Experiment(
+                round_no, hypothesis["id"], proposal["expression"], settings,
+                fields, datasets=proposal.get("datasets") or [],
+            )
+            exp.candidate_id = proposal.get("candidate_id") or candidate_identity(
+                proposal, round_no=round_no
+            )
+            exp.submission_fingerprint = submission_fingerprint(exp.expression, exp.settings)
+            exp.proposal_id = proposal.get("proposal_id") or "p-" + exp.submission_fingerprint[:16]
+            exp.optimization_decision_id = proposal.get("optimization_decision_id")
+            exp.parent_id = proposal.get("parent_id")
+            for name in (
+                "field_source", "field_understanding", "field_analysis", "field_hypothesis_basis",
+                "operator_evidence", "template_id", "template_family", "template_stage_path",
+                "template_ref", "template_slots", "search_evidence", "novelty_score",
+                *OPERATOR_PROVENANCE_FIELDS,
+            ):
+                setattr(exp, name, proposal.get(name))
+            exp.allocation_arm = ctx.search_policy.allocator.arm_key(proposal)
+            exp.allocation_key = ctx.search_policy.allocator.proposal_key(proposal)
+            exp.factory_session_id = proposal.get("factory_session_id")
+            exp.proposal_origin = proposal.get("proposal_origin") or (
+                "factory" if factory_batch else "agent"
+            )
+            exp.research_layer = proposal.get("research_layer") or {
+                "EXPLOIT": "optimization", "EXPLORE": "exploration",
+            }.get(proposal.get("research_role"))
+            exp.mutation = proposal.get("mutation") or "agent-proposed"
+            exp.lineage_id = proposal.get("lineage_id") or proposal.get("parent_expression") or hypothesis["id"]
+            for name in (
+                "experiment_stage", "research_role", "change_type", "parent_expression",
+                "child_economic_hypothesis", "changed_variable", "tuning_risk", "direction",
+                "expected_horizon", "falsification", "economic_mechanism", "direction_transform",
+                "self_correlation_impact", "validation_plan",
+            ):
+                setattr(exp, name, proposal.get(name))
+            exp.rationale = proposal.get("rationale") or proposal.get("hypothesis") or ""
+            exp.expected_failure_modes = list(proposal.get("expected_failure_modes") or [])
+            if exp.experiment_stage == "ROBUSTNESS" and exp.validation_plan is None:
+                raise ValueError("ROBUSTNESS 缺少预注册 validation_plan")
+            experiments.append(exp)
+            self._record_trial_phase(exp, "generated", outcome="PENDING")
+            self._record_trial_phase(exp, "preflight", outcome="ACCEPTED")
+            self._record_trial_phase(exp, "preflight_accepted", outcome="ACCEPTED")
+            ctx.memory.remember_expression(exp.expression)
+        ctx.memory.register_hypothesis(hypothesis)
+        return experiments
+
+    def _execute_prepared_round(self, round_no, hypothesis, experiments):
+        """Execute materialized experiments and preserve recovery ordering."""
+        ctx = self._ctx
+        hooks = ctx.hooks
+        checkpoint_path = ctx.checkpoints.path(round_no)
+        ctx.checkpoints.write(round_no, hypothesis, experiments, False)
+        round_start = time.time()
+        self._run_simulator(experiments, round_no, hypothesis, experiments)
+        elapsed = time.time() - round_start
+        unresolved = [exp for exp in experiments if exp.status in UNRESOLVED_STATUSES]
+        if unresolved:
+            for exp in experiments:
+                ctx.search_policy.release(
+                    {"proposal_id": exp.allocation_key, "expression": exp.expression,
+                     "dataset_family": exp.datasets, "template_family": exp.template_family},
+                    status="UNKNOWN" if exp.status in UNKNOWN_STATUSES else "PENDING",
+                )
+            ctx.checkpoints.write(round_no, hypothesis, experiments, False)
+            hooks.write_sims_results(round_no, experiments, total_elapsed_sec=elapsed)
+            print(
+                f"[CHECKPOINT] {len(unresolved)} 个任务未定论，已保留 {checkpoint_path}；"
+                "下次运行同一 proposals.json 只会恢复轮询，绝不重复 POST。"
+            )
+            return None
+        summary = self._settle_complete_round(
+            round_no, hypothesis, experiments, total_elapsed_sec=elapsed
+        )
+        print(
+            f"[ELAPSED] Round {round_no} 模拟总耗时 {elapsed/60:.1f} 分钟"
+            f"（{len(experiments)} 个模拟，3 并发真实计时）"
+        )
+        return summary
+
     def run(self, path=None, allow_unresolved_checkpoint=False):
         """Execute one proposals file through the existing guarded path."""
         ctx = self._ctx
@@ -1020,100 +1126,11 @@ class ProposalExecutionWorkflow:
             "status": "READY_TO_SIMULATE",
         }
 
-        experiments = []
-        known_ids = list(discovered_profiles)
-        for proposal in fresh:
-            if proposal.get("template_mode") == "PARTIAL_OPERATOR":
-                missing = [
-                    name for name in OPERATOR_PROVENANCE_FIELDS
-                    if proposal.get(name) in (None, "", {}, [])
-                ]
-                if missing:
-                    raise ValueError(
-                        "PARTIAL_OPERATOR provenance incomplete: "
-                        + ", ".join(missing)
-                    )
-            fields = proposal.get("fields") or known_ids
-            if fields:
-                fields = extract_fields(proposal["expression"], fields)
-            effective_settings = effective_settings_by_candidate.get(proposal.get("candidate_id"))
-            if effective_settings is None:
-                effective_settings = hooks.proposal_settings(proposal.get("settings"))
-            exp = Experiment(
-                round_no,
-                hypothesis["id"],
-                proposal["expression"],
-                effective_settings,
-                fields,
-                datasets=proposal.get("datasets") or [],
-            )
-            exp.candidate_id = proposal.get("candidate_id") or candidate_identity(proposal, round_no=round_no)
-            exp.submission_fingerprint = submission_fingerprint(exp.expression, exp.settings)
-            exp.proposal_id = proposal.get("proposal_id") or "p-" + exp.submission_fingerprint[:16]
-            exp.optimization_decision_id = proposal.get("optimization_decision_id")
-            exp.parent_id = proposal.get("parent_id")
-            for name in (
-                "field_source", "field_understanding", "field_analysis", "field_hypothesis_basis",
-                "operator_evidence", "template_id", "template_family", "template_stage_path",
-                "template_ref", "template_slots", "search_evidence", "novelty_score",
-                *OPERATOR_PROVENANCE_FIELDS,
-            ):
-                setattr(exp, name, proposal.get(name))
-            exp.allocation_arm = ctx.search_policy.allocator.arm_key(proposal)
-            exp.allocation_key = ctx.search_policy.allocator.proposal_key(proposal)
-            exp.factory_session_id = proposal.get("factory_session_id")
-            exp.proposal_origin = proposal.get("proposal_origin") or ("factory" if factory_batch else "agent")
-            exp.research_layer = proposal.get("research_layer") or {
-                "EXPLOIT": "optimization", "EXPLORE": "exploration",
-            }.get(proposal.get("research_role"))
-            exp.mutation = proposal.get("mutation") or "agent-proposed"
-            exp.lineage_id = proposal.get("lineage_id") or proposal.get("parent_expression") or hypothesis["id"]
-            for name in (
-                "experiment_stage", "research_role", "change_type", "parent_expression",
-                "child_economic_hypothesis", "changed_variable", "tuning_risk", "direction",
-                "expected_horizon", "falsification", "economic_mechanism", "direction_transform",
-                "self_correlation_impact", "validation_plan",
-            ):
-                setattr(exp, name, proposal.get(name))
-            exp.rationale = proposal.get("rationale") or proposal.get("hypothesis") or ""
-            exp.expected_failure_modes = list(proposal.get("expected_failure_modes") or [])
-            if exp.experiment_stage == "ROBUSTNESS" and exp.validation_plan is None:
-                raise ValueError("ROBUSTNESS 缺少预注册 validation_plan")
-            experiments.append(exp)
-            self._record_trial_phase(exp, "generated", outcome="PENDING")
-            self._record_trial_phase(exp, "preflight", outcome="ACCEPTED")
-            self._record_trial_phase(exp, "preflight_accepted", outcome="ACCEPTED")
-            ctx.memory.remember_expression(exp.expression)
-
-        ctx.memory.register_hypothesis(hypothesis)
-        checkpoint_path = self._ctx.checkpoints.path(round_no)
-        self._ctx.checkpoints.write(round_no, hypothesis, experiments, False)
-        round_start = time.time()
-        self._run_simulator(experiments, round_no, hypothesis, experiments)
-        elapsed = time.time() - round_start
-        unresolved = [exp for exp in experiments if exp.status in UNRESOLVED_STATUSES]
-        if unresolved:
-            for exp in experiments:
-                ctx.search_policy.release(
-                    {"proposal_id": exp.allocation_key, "expression": exp.expression,
-                     "dataset_family": exp.datasets, "template_family": exp.template_family},
-                    status="UNKNOWN" if exp.status in UNKNOWN_STATUSES else "PENDING",
-                )
-            self._ctx.checkpoints.write(round_no, hypothesis, experiments, False)
-            hooks.write_sims_results(round_no, experiments, total_elapsed_sec=elapsed)
-            print(
-                f"[CHECKPOINT] {len(unresolved)} 个任务未定论，已保留 {checkpoint_path}；"
-                "下次运行同一 proposals.json 只会恢复轮询，绝不重复 POST。"
-            )
-            return None
-        summary = self._settle_complete_round(
-            round_no, hypothesis, experiments, total_elapsed_sec=elapsed
+        experiments = self._materialize_experiments(
+            fresh, round_no, hypothesis, factory_batch, list(discovered_profiles),
+            effective_settings_by_candidate,
         )
-        print(
-            f"[ELAPSED] Round {round_no} 模拟总耗时 {elapsed/60:.1f} 分钟"
-            f"（{len(experiments)} 个模拟，3 并发真实计时）"
-        )
-        return summary
+        return self._execute_prepared_round(round_no, hypothesis, experiments)
 
     @staticmethod
     def _field_dataset_id(field, fallback=None):
