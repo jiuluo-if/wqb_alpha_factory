@@ -7,6 +7,7 @@ the immutable identity projections shared by readers.
 
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
 
@@ -38,8 +39,8 @@ OPERATOR_PROVENANCE_FIELDS = (
 )
 
 
-def same_execution_identity(left, right):
-    """True when two rows describe the same executed Experiment."""
+def execution_identity_projection(row):
+    """Return only the immutable execution identity fields for a row."""
     def identity_value(row, key):
         value = row.get(key)
         if key == "submission_fingerprint" and not value:
@@ -49,10 +50,17 @@ def same_execution_identity(left, right):
                 return submission_fingerprint(expression, settings)
         return value
 
+    if not isinstance(row, Mapping):
+        row = row.to_dict()
+    return {key: identity_value(row, key) for key in IDENTITY_FIELDS}
+
+
+def same_execution_identity(left, right):
+    """True when two rows describe the same executed Experiment."""
     return {
-        key: identity_value(left, key) for key in IDENTITY_FIELDS
+        **execution_identity_projection(left)
     } == {
-        key: identity_value(right, key) for key in IDENTITY_FIELDS
+        **execution_identity_projection(right)
     }
 
 

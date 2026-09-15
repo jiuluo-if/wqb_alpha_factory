@@ -6,14 +6,18 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
-from .experiment import Experiment, same_execution_identity
+from .experiment import (
+    Experiment,
+    execution_identity_projection,
+    same_execution_identity,
+)
 
 
 @dataclass(frozen=True)
 class DurableTerminalEvidenceView:
     """Validated request-local terminal evidence; it performs no I/O."""
 
-    rows: Mapping[str, Mapping]
+    execution_identities: Mapping[str, Mapping]
     canonical_round_ids: frozenset[str] | None
     round_no: int
 
@@ -22,7 +26,9 @@ class DurableTerminalEvidenceView:
         cls, rows: Mapping, canonical_round_ids, round_no: int
     ):
         return cls(
-            MappingProxyType({str(key): MappingProxyType(dict(value))
+            MappingProxyType({str(key): MappingProxyType(
+                execution_identity_projection(value)
+            )
                               for key, value in rows.items()
                               if isinstance(value, Mapping)}),
             (None if canonical_round_ids is None
@@ -32,13 +38,13 @@ class DurableTerminalEvidenceView:
 
     def assert_execution_set(self, experiments):
         """Reject identity drift after the durable snapshot was validated."""
-        expected_ids = set(self.rows)
+        expected_ids = set(self.execution_identities)
         actual_ids = {str(getattr(experiment, "id", "")) for experiment in experiments}
         if actual_ids != expected_ids:
             raise ValueError(f"TERMINAL_EVIDENCE_CHANGED: round {self.round_no}")
         for experiment in experiments:
-            row = self.rows.get(str(experiment.id))
-            if row is None or not same_execution_identity(experiment.to_dict(), row):
+            expected = self.execution_identities.get(str(experiment.id))
+            if expected is None or execution_identity_projection(experiment) != expected:
                 raise ValueError(
                     f"TERMINAL_EVIDENCE_CHANGED: round {self.round_no} "
                     f"experiment {experiment.id}"

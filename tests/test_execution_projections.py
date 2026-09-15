@@ -15,7 +15,7 @@ from wqb_agent.terminal_evidence import (
 
 
 class ExecutionProjectionTests(unittest.TestCase):
-    def test_terminal_evidence_view_is_immutable_and_reuses_validated_rows(self):
+    def test_terminal_evidence_view_is_immutable_identity_token(self):
         experiment = Experiment(1, "h", "rank(returns)", {}, ["returns"], ["ds"])
         experiment.id = "exp-1"
         experiment.status = "DONE"
@@ -25,8 +25,10 @@ class ExecutionProjectionTests(unittest.TestCase):
         )
         self.assertIsInstance(view, DurableTerminalEvidenceView)
         self.assertEqual(view.canonical_round_ids, frozenset({"exp-1"}))
+        self.assertIn("exp-1", view.execution_identities)
+        self.assertNotIn("metrics", view.execution_identities["exp-1"])
         with self.assertRaises(TypeError):
-            view.rows["exp-2"] = {}
+            view.execution_identities["exp-2"] = {}
 
     def test_normal_settlement_passes_one_terminal_view_to_finalize(self):
         workflow = object.__new__(ProposalExecutionWorkflow)
