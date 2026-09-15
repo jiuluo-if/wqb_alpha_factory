@@ -246,6 +246,16 @@ class TestProductionSettlementPersistence(unittest.TestCase):
         self.assertEqual(
             settled[0]["research_classification"], experiment.research_classification
         )
+        ledger_rows = _rows(os.path.join(self.tmp, "trial_ledger.jsonl"))
+        final_rows = [
+            row for row in ledger_rows
+            if row.get("phase") == "research_outcome_settled"
+        ]
+        self.assertEqual(len(final_rows), 1)
+        self.assertEqual(
+            experiment.final_outcome.get("settlement_id"),
+            final_rows[0]["settlement"].get("settlement_id"),
+        )
 
     def test_restart_after_ledger_append_failure_repairs_one_revision(self):
         agent = self._agent()

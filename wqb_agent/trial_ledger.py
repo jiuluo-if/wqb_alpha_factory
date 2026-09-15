@@ -407,13 +407,14 @@ class TrialLedger:
             return "UNKNOWN"
         return _text(next(iter(mapping.values())), "UNKNOWN")
 
-    def record_outcome_settled(self, trial, *, reward, reward_version="reward_v1",
-                               base_quality=None, robustness=None,
-                               statistical_decision=None, incremental_decision=None,
-                               research_classification=None, incremental_evidence=None,
-                               reward_quality="FINAL_EVIDENCE",
-                               research_evidence_bundle=None,
-                               timestamp=None):
+    def build_outcome_settlement(self, trial, *, reward, reward_version="reward_v1",
+                                 base_quality=None, robustness=None,
+                                 statistical_decision=None, incremental_decision=None,
+                                 research_classification=None, incremental_evidence=None,
+                                 reward_quality="FINAL_EVIDENCE",
+                                 research_evidence_bundle=None,
+                                 timestamp=None):
+        """Build the pure canonical payload used by final settlement writes."""
         settled_at = timestamp if timestamp is not None else time.time()
         settlement = {
             "proposal_id": self._value(trial, "proposal_id"),
@@ -433,6 +434,27 @@ class TrialLedger:
         semantic = dict(settlement)
         semantic.pop("settled_at", None)
         settlement["settlement_id"] = canonical_settlement_id(semantic)
+        return settlement
+
+    def record_outcome_settled(self, trial, *, reward, reward_version="reward_v1",
+                               base_quality=None, robustness=None,
+                               statistical_decision=None, incremental_decision=None,
+                               research_classification=None, incremental_evidence=None,
+                               reward_quality="FINAL_EVIDENCE",
+                               research_evidence_bundle=None,
+                               timestamp=None):
+        settlement = self.build_outcome_settlement(
+            trial, reward=reward, reward_version=reward_version,
+            base_quality=base_quality, robustness=robustness,
+            statistical_decision=statistical_decision,
+            incremental_decision=incremental_decision,
+            research_classification=research_classification,
+            incremental_evidence=incremental_evidence,
+            reward_quality=reward_quality,
+            research_evidence_bundle=research_evidence_bundle,
+            timestamp=timestamp,
+        )
+        settled_at = settlement["settled_at"]
         return self.record(trial, "research_outcome_settled", outcome="SETTLED",
                            reason_code="FINAL", timestamp=settled_at, reward=reward,
                            settlement=settlement)

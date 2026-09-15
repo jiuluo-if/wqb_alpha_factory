@@ -1383,6 +1383,20 @@ class Agent:
             getattr(experiment, "yearly_evidence", None) or {},
             platform,
         ).as_dict()
+        settlement_payload = self.trial_ledger.build_outcome_settlement(
+            experiment, reward=final.get("reward"),
+            reward_version=final.get("reward_version", "reward_v1"),
+            reward_quality=final.get("reward_quality", "FINAL_EVIDENCE"),
+            base_quality=quality, robustness=robustness,
+            statistical_decision=statistical,
+            incremental_decision=incremental_decision,
+            research_classification=experiment.research_classification,
+            incremental_evidence=incremental,
+            research_evidence_bundle=experiment.research_evidence_bundle,
+            timestamp=final.get("settled_at") or time.time(),
+        )
+        final["settlement_id"] = settlement_payload["settlement_id"]
+        experiment.final_outcome = final
         self.trial_ledger.record_outcome_settled(
             experiment, reward=final.get("reward"),
             reward_version=final.get("reward_version", "reward_v1"),
