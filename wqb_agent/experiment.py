@@ -5,14 +5,13 @@ sole durable JSONL owner; this boundary only defines the model it stores and
 the immutable identity projections shared by readers.
 """
 
-import hashlib
-import json
 import time
 import uuid
 from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
 
 from .expression import submission_fingerprint
+from .research_settlement import settlement_id as canonical_settlement_id
 from .schema import CREATED_BY_VERSION, TRAJECTORY_VERSION
 
 ACTIVE_EXECUTION_STATUSES = frozenset({"PENDING", "RUNNING", "SUBMITTING"})
@@ -67,17 +66,7 @@ def research_settlement_identity(experiment):
         settlement_id = final["settlement"].get("settlement_id")
     if settlement_id:
         return f"settlement:{settlement_id}"
-    version = final.get("outcome_version") or final.get("version") or "v1"
-    semantic = {
-        key: value for key, value in final.items()
-        if key not in {"settled_at", "timestamp", "updated_at"}
-    }
-    digest = hashlib.sha256(
-        json.dumps(semantic, sort_keys=True, ensure_ascii=False, default=str,
-                   separators=(",", ":")).encode("utf-8")
-    ).hexdigest()[:16]
-    experiment_id = getattr(experiment, "id", None) or "unknown-experiment"
-    return f"experiment:{experiment_id}:outcome:{version}:{digest}"
+    return f"settlement:{canonical_settlement_id(final)}"
 
 
 def dataset_ref(value):

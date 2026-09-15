@@ -110,6 +110,18 @@ class ReplayIdempotencyTests(unittest.TestCase):
         exp.final_outcome["settled_at"] = 999
         self.assertEqual(first, research_settlement_identity(exp))
 
+    def test_experiment_identity_uses_canonical_settlement_reducer(self):
+        exp = Experiment(1, "h1", "rank(x)", {}, [])
+        exp.final_outcome = {
+            "status": "SETTLED", "reward": 0.8,
+            "research_evidence_bundle": {"status": "PASS"},
+            "settled_at": 1,
+        }
+        self.assertEqual(
+            research_settlement_identity(exp),
+            f"settlement:{settlement_id(exp.final_outcome)}",
+        )
+
     def test_reflector_replay_keeps_derived_memory_bounded(self):
         memory = ExperienceMemory(state_dir=tempfile.mkdtemp())
         reflector = Reflector(memory)
