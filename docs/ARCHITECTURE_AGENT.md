@@ -397,6 +397,45 @@ cache load 均按 owner/request 边界计数；失败时不得退化成隐式第
 mapping integrity、fixture doctor/audit 和 privacy gate；所有有效提交均使用指定 Git 邮箱并推送
 到 `origin/main`。
 
+## Architecture Modernization Phase VIII（2026-09-15）
+
+本阶段以 Phase VII 已推送头部为起点，目标是收缩执行管线与工厂控制面的 legacy
+surface，而不是重建新的 orchestration/state model。当前 ProposalExecution 的责任图为：
+
+```text
+load request → checkpoint disposition → batch validation → admission facts
+→ materialize experiments → execute prepared round → settle durable evidence
+```
+
+`ProposalExecutionWorkflow` 仍是唯一 Simulation 编排 owner；上述阶段只是同一 workflow
+内的显式私有边界。`_build_admission_facts()` 只建立 request-scoped 输入投影，
+`_materialize_experiments()` 只构造带完整 provenance/lineage 的 `Experiment`，
+`_execute_prepared_round()` 保留 checkpoint-before-submit、`SUBMIT_UNKNOWN`、预算释放、
+结果写入和终态 settlement 的原有顺序。终态 settlement 使用一次
+`DurableTerminalEvidenceView`；该 view 是不可变的 request-local 投影，不是新 cache，也不
+替代 `Trajectory`、`TrialLedger` 或 `CheckpointStore` 的 owner。
+
+工厂侧删除了 quota/blocker/probe 的私有转发 wrapper，`AIFactoryRunner` 直接调用既有
+`factory_quota`、`factory_session`、`factory_route` 和 `factory_control` 投影。公开的
+`status`、`stop`、`route_decision`、`read_session` 兼容入口继续保留；它们仍是本地控制面，
+不构造 Agent、不读取远端、不触发 Simulation。`Factory` 的真实执行仍只通过
+`Agent.run_proposals()`，因此没有新增第二条 `Simulator`/`WQBClient` 写路径。
+
+当前头部的可复核静态计量（源文件行数；方法数按顶层类定义计数）如下：
+
+| surface | current | 本阶段可见收缩 |
+|---|---:|---|
+| `ProposalExecutionWorkflow` | 1,418 LOC / 30 methods | load、checkpoint、validation、admission、materialize、execute、settle 已显式分段；删除终态重复 durable read |
+| `AIFactoryRunner` | 1,521 LOC / 41 methods | 删除 7 个 quota/blocker 私有 wrapper；保留 4 个公共兼容控制入口 |
+| `Agent` | 1,577 LOC / 77 methods | 未扩大职责；`run_proposals()` 与 owner bridge 保留为兼容 facade |
+| `factory_runner.py` 的 `self.agent` 访问 | 31 | 作为当前 factory execution/compatibility 依赖保留，未用 generic hook bag 掩盖；下一阶段只有在有行为证据时再拆 |
+
+本阶段新增/强化的验证重点是：materialize 后只注册一次 hypothesis、普通完成路径只构造
+一次终态 evidence view、人工 finalize 只读取一次 canonical round、checkpoint 恢复仍只对
+已知 progress URL 做 GET-only 对账，以及 Factory status/stop 的 local-only 边界。Phase VIII
+所有有效提交均已推送；最终质量门仍须以当前 HEAD 的 targeted runner、changed-file
+`py_compile`/Ruff、typed frontier、fixture doctor/audit、privacy 和 CI 结果为准。
+
 ## 变更规则
 
 触碰 owner、proposal/schema、state merge 或安全边界时，必须增加行为/回归测试并更新本文件。公共文档只保留当前 contract；历史由 Git 承担，隐私规则见 [`PRIVACY.md`](PRIVACY.md)，研究方法见 [`RESEARCH_POLICY.md`](RESEARCH_POLICY.md)。
