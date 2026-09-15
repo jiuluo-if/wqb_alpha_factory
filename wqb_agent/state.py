@@ -270,6 +270,9 @@ class Trajectory:
                 row = experiment.to_dict()
             row[TRAJECTORY_REVISION_KEY] = RESEARCH_SETTLED_REVISION
             if (
+                latest.get(experiment.id, {}).get(TRAJECTORY_REVISION_KEY)
+                == RESEARCH_SETTLED_REVISION
+                and
                 latest.get(experiment.id)
                 and experiment_settlement_semantic(latest[experiment.id])
                 == experiment_settlement_semantic(row)
