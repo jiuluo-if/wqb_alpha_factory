@@ -191,6 +191,7 @@ def main(argv=None):
             ("recovery", "skip-stale"): "skip-stale",
             ("recovery", "skip-submit-unknown"): "skip-submit-unknown",
             ("recovery", "finalize-round"): "finalize-round",
+            ("recovery", "settle-stale-trajectory"): "settle-stale-trajectory",
         }
         lock_path = acquire_single_instance_lock(
             typed_config.runtime.state_dir,
@@ -198,7 +199,16 @@ def main(argv=None):
         )
         if lock_path is None:
             sys.exit(1)
-        if command_key == ("factory", "run"):
+        if command_key == ("recovery", "settle-stale-trajectory"):
+            # Local-only trajectory settlement: no client, no Simulation POST.
+            result = agent.settle_stale_trajectory(
+                int(command.round_value)
+                if command.round_value not in (None, "") else None,
+                dry_run=command.dry_run,
+            )
+            print(json.dumps(result or {"status": "LOCAL_OWNER_BUSY"},
+                             ensure_ascii=False, indent=2))
+        elif command_key == ("factory", "run"):
             from wqb_agent.factory_runner import AIFactoryRunner
 
             factory_cfg = typed_config.runtime.factory

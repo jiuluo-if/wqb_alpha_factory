@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -1466,3 +1466,194 @@ class ProposalExecutionWorkflow:
         print(f"[FINALIZE] r{round_no} diagnosed {len(experiments)} recorded terminal experiments")
         print(f"[FINALIZE] audit -> {audit_path}")
         return summary
+
+    # ------------------------------------------------ checkpoint terminal settlement
+
+    _SETTLE_IDENTITY_FIELDS = (
+        "round", "hypothesis_id", "expression", "settings", "fields_used",
+        "datasets", "candidate_id", "proposal_id", "submission_fingerprint",
+        "submission_started_at", "lineage_id", "parent_expression", "parent_id",
+        "progress_url", "experiment_stage", "research_role", "change_type",
+        "template_id", "template_family",
+    )
+
+    def settle_stale_trajectory(self, round_no=None, dry_run=False, min_attempts=3):
+        """Backfill closed checkpoint terminal states into the trajectory.
+
+        Historical budget-aborted or force-closed rounds can hold a complete
+        checkpoint with terminal experiment states while the trajectory still
+        carries the ``UNKNOWN`` / ``SUBMIT_UNKNOWN`` row that was never
+        reconciled.  This path re-persists only closed checkpoint facts as
+        canonical ``RESEARCH_SETTLED`` revisions through the owner channel
+        ``Trajectory.settle``: no remote call, no re-POST, no invented
+        metrics.  Missing evidence stays ``UNKNOWN`` / ``UNAVAILABLE``.
+
+        Per-row evidence gates (fail-closed):
+        - ``SKIPPED_STALE`` needs a known progress URL and at least
+          ``min_attempts`` read-only STALE/UNKNOWN reconciliations in
+          ``reconcile_history.jsonl`` (the same bar as ``skip-stale``).
+        - ``SKIPPED_UNKNOWN`` needs a progress-URL-less row: an ambiguous
+          write has no remote identity to poll.
+        - ``DONE`` / ``FAILED`` / ``SKIPPED`` come from the closed
+          checkpoint itself.
+
+        Any identity conflict, missing canonical row, incomplete checkpoint
+        or missing evidence rejects that row without writing.
+        """
+        report = {
+            "dry_run": bool(dry_run),
+            "rounds_scanned": 0,
+            "settled": [],
+            "already_settled": [],
+            "rejected": [],
+        }
+        if round_no is None:
+            records = self._ctx.checkpoints.scan()
+        else:
+            checkpoint = self._ctx.checkpoints.load(int(round_no))
+            records = [
+                {"path": self._ctx.checkpoints.path(int(round_no)), "checkpoint": checkpoint}
+            ] if checkpoint is not None else []
+        terminal_set = {str(item).upper() for item in TERMINAL_STATUSES}
+        unknown_set = {str(item).upper() for item in UNKNOWN_STATUSES}
+        for record in records:
+            checkpoint = record.get("checkpoint")
+            if record.get("malformed") or not isinstance(checkpoint, Mapping):
+                continue
+            round_id = int(checkpoint.get("round_no") or 0)
+            report["rounds_scanned"] += 1
+            if checkpoint.get("complete") is not True:
+                report["rejected"].append({
+                    "round_no": round_id, "reason": "INCOMPLETE_CHECKPOINT",
+                })
+                continue
+            for row in checkpoint.get("experiments") or ():
+                if not isinstance(row, Mapping):
+                    continue
+                status = str(row.get("status") or "").upper()
+                if status not in terminal_set:
+                    continue
+                entry = {
+                    "round_no": round_id,
+                    "experiment_id": row.get("id"),
+                    "proposal_id": row.get("proposal_id"),
+                    "checkpoint_status": status,
+                }
+                canon = self._ctx.trajectory.find_row(row.get("id")) if row.get("id") else None
+                if canon is None:
+                    entry["reason"] = "NO_CANONICAL_TRAJECTORY_ROW"
+                    report["rejected"].append(entry)
+                    continue
+                canon_status = str(canon.get("status") or "").upper()
+                if canon_status not in unknown_set:
+                    if canon_status in terminal_set:
+                        report["already_settled"].append(entry)
+                    else:
+                        entry["reason"] = "CANONICAL_ROW_NOT_UNRESOLVED"
+                        entry["canonical_status"] = canon_status
+                        report["rejected"].append(entry)
+                    continue
+                conflicts = self._settle_identity_conflicts(canon, row)
+                if conflicts:
+                    entry["reason"] = "IDENTITY_CONFLICT"
+                    entry["fields"] = conflicts
+                    report["rejected"].append(entry)
+                    continue
+                ok, evidence = self._settle_evidence_gate(row, status, min_attempts)
+                if not ok:
+                    entry["reason"] = evidence
+                    report["rejected"].append(entry)
+                    continue
+                entry["evidence"] = evidence
+                if dry_run:
+                    report["settled"].append(entry)
+                    continue
+                settled_exp = Experiment.from_dict(canon)
+                settled_exp.status = row.get("status") or status
+                if row.get("error") is not None:
+                    settled_exp.error = row.get("error")
+                if status == "SKIPPED_STALE":
+                    settled_exp.error = "SETTLED_AFTER_REPEATED_STALE_RECONCILIATION"
+                elif status == "SKIPPED_UNKNOWN":
+                    settled_exp.error = "SETTLED_AFTER_CHECKPOINT_TERMINAL_EVIDENCE"
+                if row.get("skip_record") is not None:
+                    settled_exp.skip_record = row.get("skip_record")
+                elif status in {"SKIPPED_STALE", "SKIPPED_UNKNOWN"}:
+                    settled_exp.skip_record = {
+                        "reason": "checkpoint_terminal_settlement",
+                        "round_no": round_id,
+                        "evidence": evidence,
+                        "settled_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    }
+                written = self._ctx.trajectory.settle(settled_exp)
+                entry["written"] = bool(written)
+                report["settled"].append(entry)
+                audit_path = os.path.join(self._ctx.state_dir, "trajectory_settlement_log.jsonl")
+                append_jsonl_best_effort(
+                    audit_path,
+                    {
+                        "round_no": round_id,
+                        "experiment_id": row.get("id"),
+                        "proposal_id": row.get("proposal_id"),
+                        "status": settled_exp.status,
+                        "evidence": evidence,
+                        "written": bool(written),
+                        "settled_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    },
+                    ("round_no", "experiment_id"),
+                )
+        return report
+
+    def _settle_identity_conflicts(self, canon, row):
+        """Fields where the closed checkpoint row contradicts the canonical row.
+
+        Only populated checkpoint values constrain the settlement: the
+        checkpoint schema historically drops values (``datasets``,
+        ``candidate_id``, ``created_at``) that the canonical row carries,
+        so ``None`` never blocks, but any mismatch of a populated value
+        fails closed.
+        """
+        conflicts = []
+        for key in self._SETTLE_IDENTITY_FIELDS:
+            value = row.get(key)
+            if value in (None, "", {}, []):
+                continue
+            expected = canon.get(key)
+            if key == "expression":
+                value = canonical_expression(str(value or ""))
+                expected = canonical_expression(str(expected or ""))
+            elif key == "settings" and isinstance(value, Mapping):
+                value = json.dumps(dict(value), ensure_ascii=False, sort_keys=True,
+                                  separators=(",", ":"))
+                expected = json.dumps(
+                    dict(expected) if isinstance(expected, Mapping) else {},
+                    ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                )
+            elif key in {"fields_used", "datasets"}:
+                value = [str(item) for item in (value or ())]
+                expected = [str(item) for item in (expected or ())]
+            if expected != value:
+                conflicts.append(key)
+        return conflicts
+
+    def _settle_evidence_gate(self, row, status, min_attempts):
+        """Evidence bar per terminal status; returns ``(ok, basis-or-reason)``."""
+        if status == "SKIPPED_STALE":
+            progress_url = str(row.get("progress_url") or "").strip()
+            if not progress_url:
+                return False, "SKIPPED_STALE_WITHOUT_PROGRESS_URL"
+            simulation_id = progress_url.rstrip("/").split("/")[-1]
+            history_path = os.path.join(self._ctx.state_dir, "reconcile_history.jsonl")
+            attempts = [
+                item for item in iter_jsonl_objects(history_path)
+                if item.get("simulation_id") == simulation_id
+                and item.get("outcome") in {"STALE", "UNKNOWN"}
+            ]
+            if len(attempts) < int(min_attempts):
+                return False, "INSUFFICIENT_STALE_EVIDENCE"
+            return True, {"simulation_id": simulation_id, "stale_attempts": len(attempts)}
+        if status == "SKIPPED_UNKNOWN":
+            if str(row.get("progress_url") or "").strip():
+                return False, "SKIPPED_UNKNOWN_WITH_PROGRESS_URL"
+            return True, "no_progress_url_no_unique_remote_record"
+        return True, "closed_checkpoint_terminal_state"

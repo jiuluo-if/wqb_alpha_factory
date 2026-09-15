@@ -98,6 +98,7 @@ Agent 负责 hypothesis、研究方向、dataset/field 选择、expression、实
 - 已知 progress URL 只读对账和轮询，不能替换成新提交。
 - checkpoint 是恢复边界；锁、去重、schema 校验、硬预算和 timeout 必须 fail-closed。
 - 缺失证据保持 `UNKNOWN` / `UNAVAILABLE`，不得伪装成 `PASS`。
+- 历史轮次 checkpoint 已关闭（`complete=true`）但 trajectory 仍留 `UNKNOWN` / `SUBMIT_UNKNOWN` 行时，只允许经 `python main.py recovery settle-stale-trajectory [ROUND]`（`ProposalExecutionWorkflow.settle_stale_trajectory`）把已关闭 checkpoint 的终态按 owner 通道 `Trajectory.settle` 补写为 `RESEARCH_SETTLED` revision；该路径只写本地、逐行 fail-closed（身份冲突、未完成 checkpoint、`SKIPPED_STALE` 证据不足、带 URL 的 `SKIPPED_UNKNOWN` 全部拒绝）、不发起任何远端调用、不重发 POST、不发明 metrics。
 - Alpha submission 始终由用户手工完成。
 - 不得手改 `.wqb_state/` 的 trajectory、checkpoint、proposals、experience 或 lock；任何归档先 dry-run、审计锁与未完成 checkpoint，并取得用户确认。
 - 不绕过 `Agent.run_proposals()` 或当前唯一安全 Simulation 路径，除非建立经过测试的等价唯一入口。
@@ -130,6 +131,15 @@ python main.py run-proposals
 ```
 
 旧式 boolean flag 命令在有限兼容窗口内仍可使用，但会输出弃用提示；新文档和 CI 只使用结构化子命令。任何远程 Simulation 操作必须沿现有安全路径，任何状态事实以 BRAIN live response 和 append-only 证据为准。
+
+人工授权的恢复与收尾动作（均为本地状态通道，不产生新远端 POST）：
+
+```powershell
+python main.py recovery skip-stale ROUND SIMULATION_ID      # 只读对账证据 ≥3 次后跳过 STALE 作业
+python main.py recovery skip-submit-unknown ROUND PROPOSAL  # 授权跳过 SUBMIT_UNKNOWN / 无 URL UNKNOWN
+python main.py recovery finalize-round ROUND                # 收尾已记录轮次
+python main.py recovery settle-stale-trajectory [ROUND]    # 把已关闭 checkpoint 终态补写进 trajectory（可加 --dry-run 预览）
+```
 
 ## Alpha feed 定时约束
 

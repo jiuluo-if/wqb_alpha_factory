@@ -189,6 +189,20 @@ def build_parser():
     )
     finalize.add_argument("round_value", type=int, metavar="ROUND")
     _set_command(finalize, "recovery", "finalize-round")
+    settle_stale = recovery_commands.add_parser(
+        "settle-stale-trajectory",
+        help="把已关闭 checkpoint 的终态补写进 trajectory（只写本地，不重发 POST）",
+    )
+    settle_stale.add_argument(
+        "round_value", nargs="?", default=None, metavar="ROUND",
+        help="可选：只处理指定轮次",
+    )
+    settle_stale.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="仅预览，不写 trajectory",
+    )
+    _set_command(settle_stale, "recovery", "settle-stale-trajectory")
 
     return parser
 

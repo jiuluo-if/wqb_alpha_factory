@@ -102,6 +102,20 @@ class TestCanonicalCliGrammar(unittest.TestCase):
             action="finalize-round",
             round_value=11,
         )
+        self.assert_command(
+            ["recovery", "settle-stale-trajectory"],
+            domain="recovery",
+            action="settle-stale-trajectory",
+            round_value=None,
+            dry_run=False,
+        )
+        self.assert_command(
+            ["recovery", "settle-stale-trajectory", "11", "--dry-run"],
+            domain="recovery",
+            action="settle-stale-trajectory",
+            round_value="11",
+            dry_run=True,
+        )
 
     def test_global_options_are_canonical_fields(self):
         command = self.assert_command(
