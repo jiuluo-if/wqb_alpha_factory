@@ -318,10 +318,23 @@ class ProposalExecutionWorkflow:
     def _settle_complete_round(self, round_no, hypothesis, experiments,
                                total_elapsed_sec=None):
         """Perform the existing terminal projection in its original order."""
-        self._ctx.trajectory.add_many(experiments)
         terminal_evidence = self._require_durable_terminal_evidence(
             experiments, round_no
         )
+        self._ctx.hooks.refresh_self_correlation_evidence(experiments)
+        self._ctx.hooks.mark_robustness_stability(experiments)
+        if any(
+            isinstance(getattr(exp, "validation_report", None), dict)
+            and exp.validation_report.get("status") == "INCOMPLETE"
+            for exp in experiments
+        ):
+            return {
+                "round": round_no,
+                "status": "INCOMPLETE",
+                "validation_status": "INCOMPLETE",
+                "settled": False,
+            }
+        self._ctx.trajectory.add_many(experiments)
         for exp in experiments:
             reward = None
             if exp.status == "DONE" and isinstance(exp.metrics, dict):

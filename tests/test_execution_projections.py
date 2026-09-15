@@ -84,6 +84,39 @@ class ExecutionProjectionTests(unittest.TestCase):
         context.hooks.sync_submission_pool.assert_not_called()
         context.checkpoints.write.assert_not_called()
 
+    def test_incomplete_validation_skips_settlement_side_effects(self):
+        workflow = object.__new__(ProposalExecutionWorkflow)
+        context = Mock()
+        context.hooks = Mock()
+        context.hooks.refresh_self_correlation_evidence = Mock()
+        context.hooks.mark_robustness_stability = Mock()
+        context.hooks.mark_robustness_stability.side_effect = (
+            lambda rows: setattr(rows[0], "validation_report", {
+                "status": "INCOMPLETE", "complete": False, "terminal": False,
+            })
+        )
+        context.trajectory.add_many = Mock()
+        context.search_policy.release = Mock()
+        context.hooks.write_sims_results = Mock()
+        context.hooks.print_summary = Mock()
+        workflow.context = context
+        experiment = Experiment(1, "h", "rank(returns)", {}, ["returns"], ["ds"])
+        experiment.status = "DONE"
+        experiment.metrics = {"fitness": 1}
+        context.trajectory.find_rows = Mock(
+            return_value={experiment.id: experiment.to_dict()}
+        )
+        context.trajectory.iter_canonical_round = Mock(
+            return_value=[experiment.to_dict()]
+        )
+
+        result = workflow._settle_complete_round(1, {"id": "h"}, [experiment])
+
+        self.assertEqual(result["status"], "INCOMPLETE")
+        context.trajectory.add_many.assert_not_called()
+        context.search_policy.release.assert_not_called()
+        context.hooks.print_summary.assert_not_called()
+
     def test_sparse_terminal_without_progress_url_is_unrecoverable(self):
         class SparseExperiment(SimpleNamespace):
             def to_dict(self):
