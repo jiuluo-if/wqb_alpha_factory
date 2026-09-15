@@ -27,6 +27,7 @@ from .experiment import (
     same_execution_identity,
 )
 from .expression import canonical_expression, submission_fingerprint
+from .research_settlement import experiment_settlement_semantic
 
 # One Experiment occupies a bounded number of rows in the append-only file
 # (canonical first append plus settlement revisions), so a restart only needs
@@ -268,8 +269,17 @@ class Trajectory:
                     setattr(experiment, name, None)
                 row = experiment.to_dict()
             row[TRAJECTORY_REVISION_KEY] = RESEARCH_SETTLED_REVISION
-            if latest.get(experiment.id) == row:
+            if (
+                latest.get(experiment.id)
+                and experiment_settlement_semantic(latest[experiment.id])
+                == experiment_settlement_semantic(row)
+            ):
                 continue
+            if latest.get(experiment.id, {}).get(TRAJECTORY_REVISION_KEY) == RESEARCH_SETTLED_REVISION:
+                raise ValueError(
+                    "settlement revision conflicts with the persisted semantic: "
+                    f"{experiment.id}"
+                )
             settled.append(experiment)
         self._append_jsonl_many(settled, revision=RESEARCH_SETTLED_REVISION)
         return settled

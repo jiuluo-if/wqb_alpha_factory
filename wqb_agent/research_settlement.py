@@ -22,6 +22,13 @@ class SettlementReplayConflict(ValueError):
     code = "SETTLEMENT_REPLAY_CONFLICT"
 
 
+_EXPERIMENT_SETTLEMENT_KEYS = (
+    "final_outcome", "research_classification", "research_evidence_bundle",
+    "validation_report", "validation_status", "incremental_evidence",
+    "yearly_evidence", "self_correlation",
+)
+
+
 def canonical_settlement_semantic(settlement):
     """Return semantic settlement data with provenance-only fields removed."""
     if not isinstance(settlement, Mapping):
@@ -31,6 +38,16 @@ def canonical_settlement_semantic(settlement):
         for key, value in settlement.items()
         if str(key) not in _VOLATILE_KEYS
     }
+
+
+def experiment_settlement_semantic(experiment):
+    """Project one Experiment's final evidence into replayable semantics."""
+    row = experiment.to_dict() if hasattr(experiment, "to_dict") else experiment
+    if not isinstance(row, Mapping):
+        return row
+    return canonical_settlement_semantic({
+        key: row.get(key) for key in _EXPERIMENT_SETTLEMENT_KEYS
+    })
 
 
 def _serialized(value):

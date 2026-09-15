@@ -129,6 +129,24 @@ class TestSettledEvidenceDurability(unittest.TestCase):
         with self.assertRaises(ValueError):
             writer.settle(tampered)
 
+    def test_case_b4_replayed_experiment_cannot_change_settlement_semantics(self):
+        writer = Trajectory(max_len=25, path=self.path)
+        experiment = done_experiment()
+        writer.add(experiment)
+        settle_evidence(experiment)
+        self.assertTrue(writer.settle(experiment))
+        experiment.final_outcome["reward"] = 9.9
+
+        with self.assertRaisesRegex(ValueError, "conflicts with the persisted semantic"):
+            writer.settle(experiment)
+
+        rows = [
+            row for row in _rows(self.path)
+            if row.get("id") == experiment.id
+            and row.get("trajectory_revision") == RESEARCH_SETTLED_REVISION
+        ]
+        self.assertEqual(len(rows), 1)
+
     def test_case_b2_revision_requires_a_persisted_canonical_row(self):
         writer = Trajectory(max_len=25, path=self.path)
         orphan = done_experiment()
@@ -291,6 +309,57 @@ class TestProductionSettlementPersistence(unittest.TestCase):
         ]
         self.assertEqual(len(settled), 1)
         self.assertEqual(len(final_rows), 1)
+
+    def test_restart_after_trajectory_revision_write_crash_is_exactly_once(self):
+        agent = self._agent()
+        experiment = done_experiment()
+        agent.trajectory.add(experiment)
+        settle_evidence(experiment)
+        original_settle = agent.trajectory.settle
+        calls = {"count": 0}
+
+        def settle_then_crash(row):
+            result = original_settle(row)
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise RuntimeError("crash after trajectory revision")
+            return result
+
+        agent.trajectory.settle = settle_then_crash
+        with self.assertRaisesRegex(RuntimeError, "after trajectory revision"):
+            agent._settle_research_outcome(experiment, self._report())
+
+        agent.trajectory.settle = original_settle
+        agent._settle_research_outcome(experiment, self._report())
+        rows = _rows(os.path.join(self.tmp, "trajectory.jsonl"))
+        settled = [
+            row for row in rows
+            if row.get("id") == experiment.id
+            and row.get("trajectory_revision") == RESEARCH_SETTLED_REVISION
+        ]
+        self.assertEqual(len(settled), 1)
+
+    def test_restart_before_trajectory_revision_writes_missing_revision_once(self):
+        agent = self._agent()
+        experiment = done_experiment()
+        agent.trajectory.add(experiment)
+        settle_evidence(experiment)
+        original_settle = agent.trajectory.settle
+        agent.trajectory.settle = Mock(
+            side_effect=RuntimeError("crash before trajectory revision")
+        )
+        with self.assertRaisesRegex(RuntimeError, "before trajectory revision"):
+            agent._settle_research_outcome(experiment, self._report())
+
+        agent.trajectory.settle = original_settle
+        agent._settle_research_outcome(experiment, self._report())
+        rows = _rows(os.path.join(self.tmp, "trajectory.jsonl"))
+        settled = [
+            row for row in rows
+            if row.get("id") == experiment.id
+            and row.get("trajectory_revision") == RESEARCH_SETTLED_REVISION
+        ]
+        self.assertEqual(len(settled), 1)
 
     def test_revision_rejection_is_a_trial_ledger_audit_event(self):
         agent = self._agent()
