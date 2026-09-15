@@ -47,16 +47,17 @@ def _read_text_lines(path, *, source):
     try:
         if os.name == "posix":
             flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-            descriptor = os.open(path, flags)
+            opened = os.open(path, flags)
+            descriptor: int | None = opened
             try:
-                file_info = os.fstat(descriptor)
+                file_info = os.fstat(opened)
                 if not stat.S_ISREG(file_info.st_mode):
                     raise CredentialError(f"{source} must be a regular file")
                 if file_info.st_mode & 0o077:
                     raise CredentialError(
                         f"{source} permissions are unsafe; credential file permissions must be private"
                     )
-                with os.fdopen(descriptor, encoding="utf-8") as stream:
+                with os.fdopen(opened, encoding="utf-8") as stream:
                     descriptor = None
                     return [line.strip() for line in stream if line.strip()]
             finally:
