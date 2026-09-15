@@ -41,6 +41,21 @@ from .memory_codec import (
     unpack_expressions,
 )
 from .memory_policy import expiration_partition, promotion_allowed, similar
+from .memory_projection import (
+    garbage_stats as project_garbage_stats,
+)
+from .memory_projection import (
+    learning_context,
+)
+from .memory_projection import (
+    next_with_fields as project_next_with_fields,
+)
+from .memory_projection import (
+    recent_short_term as project_recent_short_term,
+)
+from .memory_projection import (
+    top_next as project_top_next,
+)
 from .schema import MEMORY_VERSION
 
 _CJK_RUN = re.compile(r"[\u4e00-\u9fff]+")
@@ -385,11 +400,7 @@ class ExperienceMemory:
                 entry[key] = detail[key]
 
     def recent_short_term(self, n=5):
-        ordered = sorted(
-            self.short_term,
-            key=lambda x: (-x.get("updated", 0), -x.get("round", 0)),
-        )
-        return ordered[:n]
+        return project_recent_short_term(self.short_term, n)
 
     def bump_short_term(self, entry_id):
         for entry in self.short_term:
@@ -549,15 +560,7 @@ class ExperienceMemory:
         return doomed
 
     def garbage_stats(self):
-        by_kind = {}
-        by_reason = {}
-        for t in self.garbage:
-            by_kind[t.get("kind", "?")] = by_kind.get(t.get("kind", "?"), 0) + 1
-            by_reason[t.get("reason", "?")] = (
-                by_reason.get(t.get("reason", "?"), 0) + 1
-            )
-        return {"total": len(self.garbage), "by_kind": by_kind,
-                "by_reason": by_reason}
+        return project_garbage_stats(self.garbage)
 
     # ------------------------------------------------------------- lessons
 
@@ -710,8 +713,7 @@ class ExperienceMemory:
                 entry[key] = metadata[key]
 
     def top_next(self, n=5):
-        ordered = sorted(self.next, key=lambda x: -self._number(x.get("priority")))
-        return ordered[:n]
+        return project_top_next(self.next, n)
 
     def next_with_fields(self, now_round=None):
         """Highest-priority actionable idea, excluding stale work items.
@@ -720,18 +722,9 @@ class ExperienceMemory:
         suggestion from an old round must not revive a closed/redundant field
         family merely because newer research has not rewritten the same text.
         """
-        with_fields = [x for x in self.next if x.get("fields") or x.get("datasets")]
-        if now_round is not None:
-            def last_evidence_round(item):
-                values = [item.get("round", 0), item.get("source", 0)]
-                return max((v for v in values if isinstance(v, int)), default=0)
-            with_fields = [
-                x for x in with_fields
-                if now_round - last_evidence_round(x) <= self.next_max_age_rounds
-            ]
-        if not with_fields:
-            return None
-        return max(with_fields, key=lambda x: self._number(x.get("priority")))
+        return project_next_with_fields(
+            self.next, now_round, self.next_max_age_rounds
+        )
 
     # ------------------------------------------------------------- lineage
 
@@ -971,55 +964,9 @@ class ExperienceMemory:
 
     def _learning_context(self):
         """Project bounded mechanism learning without copying raw evidence."""
-        rows = []
-        for item in self.lessons + self.short_term:
-            metadata = item.get("metadata") if isinstance(item, dict) else None
-            if not isinstance(metadata, dict):
-                metadata = item if isinstance(item, dict) else {}
-            learning = metadata.get("mechanism_learning")
-            outcome = metadata.get("hypothesis_outcome")
-            if not isinstance(learning, str) or not learning.strip():
-                continue
-            rows.append({
-                "learning": learning,
-                "outcome": outcome,
-                "evidence_refs": list(metadata.get("evidence_refs") or []),
-                "confirmation_status": metadata.get("confirmation_status"),
-                "independent_lineages": list(
-                    metadata.get("independent_lineages") or []
-                ),
-                "outcome_reason": metadata.get("outcome_reason"),
-                "round": item.get("source_round", item.get("round")),
-            })
-        supported = [
-            row for row in rows
-            if row.get("outcome") == "SUPPORTED"
-            and row.get("confirmation_status") == "INDEPENDENT_CONFIRMED"
-        ][:3]
-        contradicted = [
-            row for row in rows
-            if row.get("outcome") == "CONTRADICTED"
-            and row.get("confirmation_status") == "INDEPENDENT_CONFIRMED"
-        ][:3]
-        unresolved_mechanisms = [
-            row for row in rows
-            if row not in supported and row not in contradicted
-        ][:5]
-
-        unresolved = []
-        discriminating = []
-        for item in self.lessons + self.short_term + self.next:
-            if not isinstance(item, dict):
-                continue
-            question = item.get("unresolved_question")
-            if isinstance(question, str) and question.strip() and question not in unresolved:
-                unresolved.append(question)
-            question = item.get("next_discriminating_question")
-            if isinstance(question, str) and question.strip() and question not in discriminating:
-                discriminating.append(question)
-        return (
-            supported, contradicted, unresolved[:5], unresolved_mechanisms,
-            discriminating[:5],
+        return learning_context(
+            self.lessons + self.short_term,
+            self.lessons + self.short_term + self.next,
         )
 
     # ----------------------------------------------------------- compress

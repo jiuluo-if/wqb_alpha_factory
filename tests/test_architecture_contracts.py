@@ -210,6 +210,13 @@ class ArchitectureDependencyContracts(unittest.TestCase):
         self.assertTrue(forbidden.isdisjoint(experiment_imports))
         self.assertIn("wqb_agent.experiment", _imports(ROOT / "wqb_agent/state.py"))
 
+    def test_memory_projection_is_pure_and_memory_keeps_persistence_owner(self):
+        projection_imports = _imports(ROOT / "wqb_agent/memory_projection.py")
+        self.assertTrue({"wqb_agent.artifacts", "wqb_agent.state", "os", "sqlite3"}.isdisjoint(projection_imports))
+        source = (ROOT / "wqb_agent/memory.py").read_text(encoding="utf-8")
+        self.assertIn("atomic_write_json_if_changed", source)
+        self.assertIn("def save(", source)
+
     def test_installed_facade_delegates_operator_resource(self):
         source = (ROOT / "wqb_agent/research_api.py").read_text(encoding="utf-8")
         self.assertIn("load_packaged_operator_syntax_reference", source)
