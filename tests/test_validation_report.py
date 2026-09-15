@@ -112,6 +112,34 @@ class TestValidationReport(unittest.TestCase):
         self.assertNotIn("universe_robustness", report["failed_required_dimensions"])
         self.assertEqual(report["status"], "INCOMPLETE")
 
+    def test_pending_platform_evidence_is_incomplete_not_research_fail(self):
+        required = [
+            item["variable"] for item in self.plan["variables"]
+            if item.get("requirement") == "REQUIRED"
+            and item["variable"] != "yearly_aggregates"
+        ]
+        children = [
+            {"status": "DONE", "changed_variable": variable, "metrics": _metrics(),
+             "health": {"ok": True}, "self_correlation": {"status": "PASS"}}
+            for variable in required
+        ]
+        platform_children = [
+            {"health": child["health"], "correlation": child["self_correlation"]}
+            for child in children
+        ]
+        platform_children[0]["correlation"] = {"status": "PENDING"}
+        report = build_validation_report(
+            self.parent, children, self.plan,
+            yearly_evidence=self.parent["yearly_evidence"],
+            platform_evidence={
+                "parent": {"health": self.parent["health"], "correlation": {"status": "PASS"}},
+                "children": platform_children,
+            },
+        )
+        self.assertEqual(report["dimensions"]["platform_quality"]["status"], "INCOMPLETE")
+        self.assertEqual(report["status"], "INCOMPLETE")
+        self.assertFalse(report["terminal"])
+
     def test_dsr_uses_complete_selection_denominator(self):
         report = build_validation_report(
             self.parent, [], self.plan,

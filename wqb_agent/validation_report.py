@@ -364,7 +364,28 @@ def build_validation_report(parent, robustness_children, plan, *, yearly_evidenc
             for item in child_platform
         )
     )
-    platform_state = "PASS" if platform_ok else "INCOMPLETE" if not platform_evidence else "FAIL"
+    platform_correlations = []
+    if isinstance(parent_platform, dict):
+        platform_correlations.append(parent_platform.get("correlation"))
+    if isinstance(child_platform, list):
+        platform_correlations.extend(
+            item.get("correlation") for item in child_platform
+            if isinstance(item, dict)
+        )
+    correlation_statuses = {
+        str(item.get("status") or "").upper()
+        for item in platform_correlations if isinstance(item, dict)
+    }
+    unresolved_platform = correlation_statuses & {
+        "PENDING", "RUNNING", "UNKNOWN", "SUBMIT_UNKNOWN"
+    }
+    unavailable_platform = correlation_statuses & {"UNAVAILABLE", "ERROR"}
+    platform_state = (
+        "PASS" if platform_ok else
+        "INCOMPLETE" if not platform_evidence or unresolved_platform else
+        "UNAVAILABLE" if unavailable_platform else
+        "FAIL"
+    )
     dimensions["platform_quality"] = {
         "status": platform_state,
         "evidence_status": platform_state,
