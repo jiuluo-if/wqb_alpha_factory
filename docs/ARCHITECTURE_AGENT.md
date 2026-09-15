@@ -89,7 +89,7 @@ Agent → SuggestionWorkflow / ProposalExecutionWorkflow / AlphaFeedWorkflow / O
 | `wqb_agent/candidate.py` / `CandidateBuilder` | DEAD | 仓内 production、CLI、文档和动态导入均无 consumer；运行时改为 `RuntimeComponents.alpha_factory` |
 | 11 个测试中的 `CandidateBuilder` import 与旧 `builder` shape assertion | DEAD | 仅旧架构形状测试使用，删除后 runtime composition contract 直接验证 AlphaFactory identity |
 | `HighSignalValidator` 包级动态导出 | DEAD | 仓内无 import/文档/CLI consumer；验证器仍由 `validation.py` 内部使用 |
-| `tests/test_security_hardening_batch.py` | ACTIVE | 原子写、Trajectory integrity、same-origin、PBO 与 packaging 各有独立安全覆盖，当前文件仍保留未重复的行为测试 |
+| `tests/test_security_hardening_batch.py` | DEAD | 原子写迁入 `test_artifacts.py`，Trajectory integrity 迁入 `test_state.py`，same-origin 迁入 `test_client_refactor.py`，PBO 迁入 `test_validation_statistics.py`，packaging 已由 `test_research_api.py` 独立覆盖；旧批次文件已删除 |
 | `scripts/reconcile_pending.py`、`scripts/refresh_self_correlation.py`、`scripts/benchmark_local_io.py` | ACTIVE | 分别是只读恢复、只读 SELF_CORRELATION 回填和离线性能入口，均在 README/CLI/测试中有 consumer |
 
 `RuntimeComponents` 只创建一次 memory、trajectory、ledger、discovery、simulator、checkpoint 和 cache；workflow 不反向导入 Agent，不重新创建这些 owner。

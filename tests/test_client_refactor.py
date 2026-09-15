@@ -28,11 +28,41 @@ from wqb_agent.client import (
     WQBRateLimitError,
     WQBRejectedError,
     WQBSimulationError,
+    WQBSubmitUnknownError,
     WQBTimeoutError,
 )
 from wqb_agent.discovery import FieldDiscovery
 from wqb_agent.failures import FailureKind, classify_error, classify_experiment
 from wqb_agent.state import Experiment, Trajectory
+
+
+class TestProgressUrlSafety(unittest.TestCase):
+    def setUp(self):
+        self.client = WQBClient.__new__(WQBClient)
+        self.client.base_url = "https://api.example.test"
+
+    def test_relative_and_same_origin_urls_normalize(self):
+        self.assertEqual(self.client._normalize_progress_url("/simulations/1"), "https://api.example.test/simulations/1")
+        self.assertEqual(self.client._normalize_progress_url("https://api.example.test/simulations/2"), "https://api.example.test/simulations/2")
+
+    def test_cross_origin_downgrade_port_and_fragment_are_rejected(self):
+        for url in ("https://evil.example/simulations/1", "http://api.example.test/simulations/1", "https://api.example.test:444/simulations/1", "https://api.example.test/simulations/1#fragment"):
+            with self.assertRaises(WQBSimulationError):
+                self.client._normalize_progress_url(url)
+
+    def test_accepted_invalid_location_is_submit_unknown(self):
+        response = mock.Mock(headers={"Location": "https://evil.example/job"})
+        self.client._wait_submission_slot = mock.Mock()
+        self.client._request = mock.Mock(return_value=response)
+        with self.assertRaises(WQBSubmitUnknownError):
+            self.client.submit_simulation("rank(x)", {})
+        self.client._request.assert_called_once()
+
+    def test_invalid_persisted_url_makes_no_get(self):
+        self.client._session = mock.Mock()
+        with self.assertRaises(WQBSimulationError):
+            self.client.get_progress_snapshot("https://evil.example/job")
+        self.client._session.assert_not_called()
 
 
 class FakeResponse:

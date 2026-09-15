@@ -16,7 +16,6 @@ ROOT = Path(__file__).resolve().parents[1]
 COMMON_CONTRACT_TESTS = (
     "tests/test_runtime_safety.py",
     "tests/test_agent_flow.py",
-    "tests/test_security_hardening_batch.py",
 )
 
 DIRECT_TESTS = {
@@ -24,7 +23,7 @@ DIRECT_TESTS = {
     "scripts/run_targeted_tests.py": ("tests/test_targeted_ci.py",),
     "scripts/check_repo_privacy.py": ("tests/test_repo_privacy.py",),
     "scripts/archive_completed_rounds.py": (
-        "tests/test_architecture.py",
+        "tests/test_checkpoint_store.py",
         "tests/test_canonical_ops.py",
     ),
     "scripts/reconcile_pending.py": (
@@ -35,7 +34,6 @@ DIRECT_TESTS = {
     "wqb_agent/client.py": (
         "tests/test_client_refactor.py",
         "tests/test_protocol_truth.py",
-        "tests/test_security_hardening_batch.py",
     ),
     "wqb_agent/client_transport.py": (
         "tests/test_client_refactor.py",
@@ -132,14 +130,13 @@ DIRECT_TESTS = {
         "tests/test_research_api.py",
     ),
     "wqb_agent/reference/__init__.py": (
-        "tests/test_security_hardening_batch.py",
+        "tests/test_research_api.py",
     ),
     "wqb_agent/agent.py": (
         "tests/test_agent_flow.py",
         "tests/test_proposal_execution.py",
         "tests/test_runtime_composition.py",
         "tests/test_runtime_safety.py",
-        "tests/test_security_hardening_batch.py",
     ),
     "wqb_agent/checkpoints.py": (
         "tests/test_checkpoint_store.py",
@@ -165,22 +162,18 @@ DIRECT_TESTS = {
         "tests/test_settled_evidence_durability.py",
         "tests/test_trajectory_batch_reads.py",
         "tests/test_factory_provenance_persistence.py",
-        "tests/test_security_hardening_batch.py",
     ),
     "wqb_agent/artifacts.py": (
         "tests/test_artifacts.py",
-        "tests/test_security_hardening_batch.py",
     ),
     "wqb_agent/validation_report.py": (
         "tests/test_validation_report.py",
         "tests/test_evaluation.py",
-        "tests/test_security_hardening_batch.py",
     ),
     "wqb_agent/validation_statistics.py": (
         "tests/test_validation_statistics.py",
         "tests/test_validation_report.py",
         "tests/test_evaluation.py",
-        "tests/test_security_hardening_batch.py",
     ),
     "wqb_agent/search_evidence.py": (
         "tests/test_search_policy.py",
@@ -280,7 +273,6 @@ DIRECT_TESTS = {
         "tests/test_factory_batch_contract.py",
         "tests/test_factory_provenance_persistence.py",
         "tests/test_targeted_batch_contract.py",
-        "tests/test_security_hardening_batch.py",
     ),
     "wqb_agent/proposal_schema.py": (
         "tests/test_proposal_contract.py",

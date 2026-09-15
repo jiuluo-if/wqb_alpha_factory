@@ -20,8 +20,49 @@ from wqb_agent.memory import ExperienceMemory
 from wqb_agent.proposal_contract import validate_proposal, validate_vector_inputs
 from wqb_agent.reflection import Reflector
 from wqb_agent.simulator import Simulator
-from wqb_agent.state import Experiment, Trajectory
+from wqb_agent.state import Experiment, Trajectory, TrajectoryIntegrityError
 from wqb_agent.submission import SubmissionPool, self_correlation_evidence
+
+
+class TestTrajectoryIntegrity(unittest.TestCase):
+    def test_new_and_legacy_ids_and_identity_replay_contract(self):
+        experiment = Experiment(1, "h", "rank(x)", {}, ["x"])
+        self.assertRegex(experiment.id, r"^[0-9a-f]{32}$")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "trajectory.jsonl")
+            legacy = experiment.to_dict()
+            legacy["id"] = "legacy123456"
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(legacy) + "\n")
+            trajectory = Trajectory(path=path).load()
+            self.assertEqual(trajectory.experiments[0].id, "legacy123456")
+            self.assertEqual(trajectory.add_many([Experiment.from_dict(legacy)]), [])
+            with self.assertRaises(TrajectoryIntegrityError):
+                trajectory.add_many([Experiment.from_dict(dict(legacy, expression="rank(y)"))])
+
+    def test_strict_corruption_blocks_but_torn_final_tail_is_recoverable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "trajectory.jsonl")
+            good = Experiment(1, "h", "rank(x)", {}, ["x"]).to_dict()
+            later = dict(good, id="later", expression="rank(y)")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("\n".join([json.dumps(good), "{broken", json.dumps(later)]) + "\n")
+            with self.assertRaises(TrajectoryIntegrityError):
+                list(Trajectory(path=path).iter_rows(strict=True))
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(good) + "\n{\"partial\":")
+            stats = {}
+            rows = list(Trajectory(path=path).iter_rows(strict=True, stats=stats))
+            self.assertEqual([row["id"] for row in rows], [good["id"]])
+            self.assertEqual(stats["torn_tail"], 1)
+
+    def test_non_object_canonical_row_is_strictly_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "trajectory.jsonl")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("{}\n[]\n")
+            with self.assertRaises(TrajectoryIntegrityError):
+                list(Trajectory(path=path).iter_rows(strict=True))
 
 FAKE_FIELDS = {
     "pv1": [
