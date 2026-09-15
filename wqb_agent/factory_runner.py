@@ -177,6 +177,7 @@ class AIFactoryRunner:
 
     def __init__(self, agent, *, factory=None, clock=None, sleeper=None, quiet=True):
         self.agent = agent
+        self.checkpoints = getattr(agent, "checkpoints", None)
         self.factory = factory or agent.alpha_factory
         self._clock = clock or time.time
         self._sleep = sleeper or time.sleep
@@ -1130,7 +1131,7 @@ class AIFactoryRunner:
         return proposals if isinstance(proposals, list) and proposals else []
 
     def _load_checkpoint_payload(self, round_no):
-        return self.agent.checkpoints.load(round_no)
+        return self.checkpoints.load(round_no)
 
     @staticmethod
     def _operator_capability_ready(reference):
@@ -1165,7 +1166,7 @@ class AIFactoryRunner:
         checkpoint_round = self._checkpoint_round(path)
         if checkpoint_round is None:
             return 0
-        payload = self.agent.checkpoints.load(checkpoint_round)
+        payload = self.checkpoints.load(checkpoint_round)
         experiments = payload.get("experiments") if isinstance(payload, dict) else None
         return len(experiments) if isinstance(experiments, list) else 0
 
@@ -1505,7 +1506,7 @@ class AIFactoryRunner:
         return True
 
     def _unfinished_checkpoint(self):
-        return self.agent.checkpoints.unfinished_except(-1)
+        return self.checkpoints.unfinished_except(-1)
 
     @staticmethod
     def _compact_result(round_no, result, proposal_count):

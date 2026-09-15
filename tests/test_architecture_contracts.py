@@ -305,6 +305,11 @@ class ArchitectureDependencyContracts(unittest.TestCase):
         self.assertNotIn("wqb_agent.agent", imports)
         self.assertNotIn("wqb_agent.state", imports)
 
+    def test_factory_runner_uses_bound_checkpoint_owner(self):
+        runner = (ROOT / "wqb_agent/factory_runner.py").read_text(encoding="utf-8")
+        self.assertNotIn("self.agent.checkpoints", runner)
+        self.assertIn("self.checkpoints", runner)
+
     def test_proposal_execution_writes_lifecycle_audit_through_context_owner(self):
         source = (ROOT / "wqb_agent/proposal_execution.py").read_text(encoding="utf-8")
         self.assertNotIn("record_trial_phase: Callable", source)
