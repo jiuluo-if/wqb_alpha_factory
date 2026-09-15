@@ -52,6 +52,38 @@ class ExecutionProjectionTests(unittest.TestCase):
             terminal_view,
         )
 
+    def test_incomplete_validation_skips_final_research_projections(self):
+        workflow = object.__new__(ProposalExecutionWorkflow)
+        context = Mock()
+        context.hooks = Mock()
+        context.hooks.refresh_self_correlation_evidence = Mock()
+        context.hooks.sync_submission_pool = Mock()
+        context.hooks.save_state = Mock()
+        context.hooks.write_context = Mock()
+        context.hooks.validation_candidates = Mock(return_value=[])
+        context.reflector.reflect = Mock()
+        context.checkpoints.write = Mock()
+        workflow.context = context
+        experiment = Experiment(1, "h", "rank(returns)", {}, ["returns"], ["ds"])
+        experiment.status = "DONE"
+        experiment.metrics = {"fitness": 1}
+
+        def mark_incomplete(rows):
+            rows[0].validation_report = {
+                "status": "INCOMPLETE", "complete": False, "terminal": False,
+            }
+
+        context.hooks.mark_robustness_stability.side_effect = mark_incomplete
+
+        workflow._finalize_round_projection(
+            1, {"id": "h"}, [experiment], close_checkpoint=True,
+            terminal_evidence=object(),
+        )
+
+        context.reflector.reflect.assert_not_called()
+        context.hooks.sync_submission_pool.assert_not_called()
+        context.checkpoints.write.assert_not_called()
+
     def test_sparse_terminal_without_progress_url_is_unrecoverable(self):
         class SparseExperiment(SimpleNamespace):
             def to_dict(self):

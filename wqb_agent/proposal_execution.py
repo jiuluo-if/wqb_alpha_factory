@@ -281,6 +281,17 @@ class ProposalExecutionWorkflow:
             )
         self._ctx.hooks.refresh_self_correlation_evidence(experiments)
         self._ctx.hooks.mark_robustness_stability(experiments)
+        if any(
+            isinstance(getattr(exp, "validation_report", None), dict)
+            and exp.validation_report.get("status") == "INCOMPLETE"
+            for exp in experiments
+        ):
+            return {
+                "round": round_no,
+                "status": "INCOMPLETE",
+                "validation_status": "INCOMPLETE",
+                "settled": False,
+            }
         summary = self._ctx.reflector.reflect(
             round_no,
             hypothesis,
