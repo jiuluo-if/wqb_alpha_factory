@@ -51,6 +51,7 @@ from .state import (
     ResearchState,
 )
 from .terminal_evidence import (
+    DurableTerminalEvidenceView,
     build_terminal_evidence_view,
     failure_category,
 )
@@ -281,6 +282,8 @@ class ProposalExecutionWorkflow:
             )
         self._ctx.hooks.refresh_self_correlation_evidence(experiments)
         self._ctx.hooks.mark_robustness_stability(experiments)
+        if isinstance(terminal_evidence, DurableTerminalEvidenceView):
+            terminal_evidence.assert_execution_set(experiments)
         if any(
             isinstance(getattr(exp, "validation_report", None), dict)
             and exp.validation_report.get("status") == "INCOMPLETE"

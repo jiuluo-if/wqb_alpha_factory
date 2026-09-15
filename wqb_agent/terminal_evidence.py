@@ -30,6 +30,20 @@ class DurableTerminalEvidenceView:
             int(round_no),
         )
 
+    def assert_execution_set(self, experiments):
+        """Reject identity drift after the durable snapshot was validated."""
+        expected_ids = set(self.rows)
+        actual_ids = {str(getattr(experiment, "id", "")) for experiment in experiments}
+        if actual_ids != expected_ids:
+            raise ValueError(f"TERMINAL_EVIDENCE_CHANGED: round {self.round_no}")
+        for experiment in experiments:
+            row = self.rows.get(str(experiment.id))
+            if row is None or not same_execution_identity(experiment.to_dict(), row):
+                raise ValueError(
+                    f"TERMINAL_EVIDENCE_CHANGED: round {self.round_no} "
+                    f"experiment {experiment.id}"
+                )
+
 
 def has_full_terminal_evidence(experiment) -> bool:
     status = str(getattr(experiment, "status", "") or "").upper()

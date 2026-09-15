@@ -84,6 +84,30 @@ class ExecutionProjectionTests(unittest.TestCase):
         context.hooks.sync_submission_pool.assert_not_called()
         context.checkpoints.write.assert_not_called()
 
+    def test_finalization_rejects_execution_identity_changed_after_snapshot(self):
+        workflow = object.__new__(ProposalExecutionWorkflow)
+        context = Mock()
+        context.hooks = Mock()
+        context.hooks.refresh_self_correlation_evidence = Mock()
+        context.hooks.mark_robustness_stability = Mock()
+        context.hooks.mark_robustness_stability.side_effect = (
+            lambda rows: setattr(rows[0], "id", "changed-after-snapshot")
+        )
+        context.reflector.reflect = Mock()
+        workflow.context = context
+        experiment = Experiment(1, "h", "rank(returns)", {}, ["returns"], ["ds"])
+        experiment.status = "DONE"
+        experiment.metrics = {"fitness": 1}
+        terminal_view = build_terminal_evidence_view(
+            [experiment], {experiment.id: experiment.to_dict()}, {experiment.id}, 1
+        )
+
+        with self.assertRaisesRegex(ValueError, "TERMINAL_EVIDENCE_CHANGED"):
+            workflow._finalize_round_projection(
+                1, {"id": "h"}, [experiment], terminal_evidence=terminal_view
+            )
+        context.reflector.reflect.assert_not_called()
+
     def test_incomplete_validation_skips_settlement_side_effects(self):
         workflow = object.__new__(ProposalExecutionWorkflow)
         context = Mock()
