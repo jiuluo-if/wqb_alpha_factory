@@ -21,10 +21,6 @@ DIRECT_TESTS = {
     "main.py": ("tests/test_cli.py",),
     "scripts/run_targeted_tests.py": ("tests/test_targeted_ci.py",),
     "scripts/check_repo_privacy.py": ("tests/test_repo_privacy.py",),
-    "scripts/archive_completed_rounds.py": (
-        "tests/test_checkpoint_store.py",
-    ),
-    "scripts/reconcile_pending.py": (),
     "wqb_agent/client.py": (
         "tests/test_client_refactor.py",
         "tests/test_protocol_truth.py",
@@ -65,13 +61,9 @@ DIRECT_TESTS = {
     "wqb_agent/reference/__init__.py": (
         "tests/test_research_api.py",
     ),
-    "wqb_agent/checkpoints.py": ("tests/test_checkpoint_store.py",),
     "wqb_agent/audit.py": (
         "tests/test_remote_diagnostics.py",
         "tests/test_cli.py",
-    ),
-    "wqb_agent/workspace_snapshot.py": (
-        "tests/test_workspace_snapshot.py",
     ),
     "wqb_agent/state.py": (
         "tests/test_architecture_contracts.py",
@@ -124,12 +116,8 @@ DIRECT_TESTS = {
         "tests/test_memory_tiers.py",
         "tests/test_replay_idempotency.py",
     ),
-    "wqb_agent/proposal_execution.py": ("tests/test_execution_projections.py",),
     "wqb_agent/terminal_evidence.py": (
-        "tests/test_execution_projections.py",
-    ),
-    "wqb_agent/execution_recovery.py": (
-        "tests/test_execution_projections.py",
+        "tests/test_simulation_gateway.py",
     ),
     "wqb_agent/simulator.py": ("tests/test_simulation_gateway.py",),
     "wqb_agent/weekly_quota.py": (
@@ -204,7 +192,6 @@ DIRECT_TESTS = {
     ),
     "wqb_agent/execution_plan.py": ("tests/test_execution_plan.py",),
     "wqb_agent/proposal_inbox.py": ("tests/test_proposal_inbox.py",),
-    "scripts/benchmark_local_io.py": ("tests/test_benchmark_harness.py",),
     "scripts/check_correlation.py": (),
     "scripts/check_health.py": ("tests/test_research_constraints.py",),
     "scripts/refresh_self_correlation.py": ("tests/test_research_constraints.py",),
