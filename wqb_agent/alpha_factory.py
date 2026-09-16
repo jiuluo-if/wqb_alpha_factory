@@ -164,7 +164,7 @@ class AlphaFactory:
             candidates.append(
                 {
                     "expression": expression,
-                    "rationale": template.rationale,
+                    "rationale": template.economic_mechanism,
                     "field_refs": field_refs,
                     "template_id": template.template_id,
                 }

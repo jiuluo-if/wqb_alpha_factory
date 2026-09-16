@@ -23,7 +23,7 @@ _SLOTS = {"p", "s", "t", "g", "data_field"}
 _GROUPS = {"default", "factory_default", "reversal", "relationship", "momentum", "candidate_scratch", "economic", "vector"}
 _REQUIRED = (
     "id", "version", "kind", "family", "expression", "required_slots",
-    "stage_path", "economic_mechanism", "direction", "direction_transform",
+    "economic_mechanism", "direction", "direction_transform",
     "expected_horizon", "falsification", "self_correlation_impact",
     "selection_groups",
 )
@@ -136,8 +136,6 @@ def _parse(document, *, strict_schema=False):
         if template_mode == "CONCRETE" and operator_slots:
             raise ValueError(f"{template_id}: CONCRETE cannot declare operator slots")
         if template_mode == "PARTIAL_OPERATOR":
-            if not raw.get("branch_of"):
-                raise ValueError(f"{template_id}: PARTIAL_OPERATOR requires branch_of")
             if len(operator_slots) != 1:
                 raise ValueError(f"{template_id}: PARTIAL_OPERATOR requires one operator slot")
         if len({slot.name for slot in numeric_slots}) != len(numeric_slots):
@@ -161,7 +159,6 @@ def _parse(document, *, strict_schema=False):
             family=_text(raw["family"], "family"),
             expression=_text(raw["expression"], "expression"),
             required_slots=tuple(required_slots),
-            stage_path=_text(raw["stage_path"], "stage_path"),
             economic_mechanism=_text(raw["economic_mechanism"], "economic_mechanism"),
             direction=direction,
             direction_transform=raw["direction_transform"],
@@ -185,7 +182,6 @@ def _parse(document, *, strict_schema=False):
             mechanism_tags=tuple(raw.get("mechanism_tags", raw.get("tags", []))),
             novelty_family=_text(raw.get("novelty_family", raw["family"]), "novelty_family"),
             template_mode=template_mode,
-            branch_of=raw.get("branch_of"),
             operator_slots=operator_slots,
         ))
     result = tuple(templates)
@@ -217,27 +213,12 @@ def _parse(document, *, strict_schema=False):
             raise ValueError(
                 f"{template.template_id}: numeric slot {missing.name} not present in expression"
             )
-    by_id = {template.template_id: template for template in result}
     for template in result:
         if template.template_mode != "PARTIAL_OPERATOR":
             continue
-        parent = by_id.get(template.branch_of)
-        if parent is None:
-            raise ValueError(f"{template.template_id}: ABSTRACT_BRANCH_PARENT_MISSING")
-        if parent.template_mode != "CONCRETE" or parent.role != "PROBE_ALPHA":
-            raise ValueError(f"{template.template_id}: ABSTRACT_BRANCH_PARENT_INVALID")
         slot = template.operator_slots[0]
         if template.expression.count(slot.placeholder) != 1:
             raise ValueError(f"{template.template_id}: operator placeholder must occur once")
-        try:
-            bindings = {name: "{" + name + "}" for name in
-                        ("p", "s", "t", "g", "data_field")}
-            baseline = template.render(bindings, {slot.name: slot.baseline_operator})
-            parent_expr = parent.render(bindings)
-        except (KeyError, ValueError):
-            baseline = parent_expr = None
-        if baseline != parent_expr:
-            raise ValueError(f"{template.template_id}: ABSTRACT_BRANCH_BASELINE_MISMATCH")
     return result
 
 

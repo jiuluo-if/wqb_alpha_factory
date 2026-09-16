@@ -102,7 +102,7 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
         self.assertEqual(template.template_mode, "CONCRETE")
         self.assertEqual(template.render({"p": "toy_field"}), "rank(toy_field)")
 
-    def test_partial_operator_branch_renders_baseline_and_alternative(self):
+    def test_partial_operator_template_renders_baseline_and_alternative(self):
         document = _partial_document()
         loaded = load_templates(io.StringIO(document))
         branch = next(item for item in loaded if item.template_id == "toy_sync_corr_operator")
@@ -113,18 +113,14 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
             branch.render(bindings, {"relation": "ts_corr"}),
             "rank(ts_corr(ts_zscore(field_a, 5), ts_zscore(field_b, 5), 22))",
         )
-        self.assertEqual(branch.mechanism_fingerprint,
-                         loaded[0].mechanism_fingerprint)
         self.assertNotEqual(
             branch.operator_realization_fingerprint({"relation": "ts_corr"}),
             branch.operator_realization_fingerprint({"relation": "ts_covariance"}),
         )
         self.assertIn("ts_covariance", branch.operator_slots[0].allowed_operators)
 
-    def test_partial_operator_contract_rejects_missing_parent_or_multiple_slots(self):
+    def test_partial_operator_contract_rejects_multiple_slots(self):
         document = _partial_document().replace(
-            'branch_of = "toy_sync_corr"', 'branch_of = "missing"'
-        ).replace(
             'allowed_operators = ["ts_corr", "ts_covariance"]',
             'allowed_operators = ["ts_corr", "ts_covariance", "ts_covariance"]',
         )
@@ -179,7 +175,6 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
             family="broken",
             expression="rank({p}, 999)",
             required_slots=("p",),
-            stage_path="L0:raw -> L1:rank",
             economic_mechanism="test",
             direction="long",
             direction_transform="identity",
@@ -207,7 +202,6 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
         family = "bad"
         expression = "rank({p}, 999)"
         required_slots = ["p"]
-        stage_path = "raw"
         economic_mechanism = "bad"
         direction = "long"
         direction_transform = "identity"
@@ -228,7 +222,6 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
         family = "one"
         expression = "rank({p})"
         required_slots = ["p"]
-        stage_path = "raw"
         economic_mechanism = "one"
         direction = "long"
         direction_transform = "identity"
@@ -244,7 +237,6 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
         family = "two"
         expression = "zscore({p})"
         required_slots = ["p"]
-        stage_path = "raw"
         economic_mechanism = "two"
         direction = "long"
         direction_transform = "identity"
@@ -277,7 +269,6 @@ kind = "economic"
 family = "toy_synchrony"
 expression = "rank(ts_corr(ts_zscore({p}, 5), ts_zscore({s}, 5), 22))"
 required_slots = ["p", "s"]
-stage_path = "toy"
 economic_mechanism = "TOY synchronization probe."
 field_roles = ["signal", "confirmation"]
 allowed_field_families = ["TOY_ONLY"]
@@ -325,10 +316,8 @@ role = "PROBE_ALPHA"
 kind = "economic"
 family = "toy_synchrony"
 template_mode = "PARTIAL_OPERATOR"
-branch_of = "toy_sync_corr"
 expression = "rank({op_relation}(ts_zscore({p}, 5), ts_zscore({s}, 5), 22))"
 required_slots = ["p", "s"]
-stage_path = "toy"
 economic_mechanism = "TOY synchronization probe."
 field_roles = ["signal", "confirmation"]
 allowed_field_families = ["TOY_ONLY"]

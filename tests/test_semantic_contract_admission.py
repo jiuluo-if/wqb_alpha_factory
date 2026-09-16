@@ -125,7 +125,6 @@ class TestSemanticContractAdmission(unittest.TestCase):
         semantic_contract = "SYNTHETIC_FIXTURE"
         expression = "rank({p})"
         required_slots = ["p"]
-        stage_path = "raw"
         economic_mechanism = "private fixture"
         field_relationship = "single field"
         direction = "long"
@@ -143,22 +142,6 @@ class TestSemanticContractAdmission(unittest.TestCase):
             path.write_text(document, encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "SYNTHETIC_SEMANTIC_CONTRACT_PRIVATE"):
                 load_private_templates(path)
-
-    def test_partial_operator_parent_and_sibling_must_share_semantic_contract(self):
-        from tests.test_alpha_template_catalog import _partial_document
-
-        document = _partial_document().replace(
-            'family = "toy_synchrony"',
-            'family = "toy_synchrony"\nsemantic_contract = "SYNTHETIC_FIXTURE"',
-            1,
-        ).replace(
-            'branch_of = "toy_sync_corr"\nexpression',
-            'branch_of = "toy_sync_corr"\nsemantic_contract = "RISK_STATE"\nexpression',
-            1,
-        )
-        with self.assertRaisesRegex(ValueError, "ABSTRACT_BRANCH_METADATA_DRIFT"):
-            AlphaTemplateRegistry(templates=load_templates(__import__("io").StringIO(document)))
-
 
 if __name__ == "__main__":
     unittest.main()

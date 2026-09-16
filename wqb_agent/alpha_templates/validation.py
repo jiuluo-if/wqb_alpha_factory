@@ -140,8 +140,6 @@ def validate_template_contract(template):
     if mode == "CONCRETE" and slots:
         errors.append("CONCRETE_OPERATOR_SLOT")
     if mode == "PARTIAL_OPERATOR":
-        if not getattr(template, "branch_of", None):
-            errors.append("ABSTRACT_BRANCH_PARENT_MISSING")
         if len(slots) != 1:
             errors.append("OPERATOR_SLOT_COUNT")
         elif (

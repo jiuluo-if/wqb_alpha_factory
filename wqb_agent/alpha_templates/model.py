@@ -83,7 +83,6 @@ class AlphaTemplate:
     family: str
     expression: str
     required_slots: tuple
-    stage_path: str
     economic_mechanism: str
     direction: str
     direction_transform: object
@@ -109,12 +108,10 @@ class AlphaTemplate:
     mechanism_tags: tuple
     novelty_family: str
     template_mode: str
-    branch_of: str | None
     operator_slots: tuple
 
     def __init__(self, template_id, family=None, expression=None,
                  required_slots=("p",),
-                 stage_path="L0:raw -> L1:cross_sectional -> L2:none",
                  rationale="", economic=False, numeric_slots=(), *,
                  version="1", kind=None, economic_mechanism=None,
                  direction="long", direction_transform="identity",
@@ -127,13 +124,12 @@ class AlphaTemplate:
                  semantic_contract="UNDECLARED",
                  direction_reason="", allowed_horizon_profiles=(),
                  allowed_settings_arms=("BASE",), mechanism_tags=(),
-                 novelty_family="", template_mode="CONCRETE", branch_of=None,
-                 operator_slots=()):
+                  novelty_family="", template_mode="CONCRETE",
+                  operator_slots=()):
         object.__setattr__(self, "template_id", str(template_id))
         object.__setattr__(self, "family", family or "")
         object.__setattr__(self, "expression", expression or "")
         object.__setattr__(self, "required_slots", tuple(required_slots))
-        object.__setattr__(self, "stage_path", stage_path)
         object.__setattr__(self, "economic_mechanism",
                            economic_mechanism if economic_mechanism is not None else rationale)
         object.__setattr__(self, "direction", direction)
@@ -162,13 +158,7 @@ class AlphaTemplate:
         object.__setattr__(self, "mechanism_tags", tuple(mechanism_tags))
         object.__setattr__(self, "novelty_family", novelty_family or self.family)
         object.__setattr__(self, "template_mode", str(template_mode or "CONCRETE").upper())
-        object.__setattr__(self, "branch_of", str(branch_of) if branch_of else None)
         object.__setattr__(self, "operator_slots", tuple(operator_slots))
-
-    @property
-    def rationale(self):
-        """Compatibility name retained for existing proposal consumers."""
-        return self.economic_mechanism
 
     @property
     def economic(self):
@@ -292,7 +282,6 @@ class AlphaTemplate:
             "economic_field_slots": list(self.field_slots),
             "control_slots": list(self.control_slots),
             "economic_field_count": self.economic_field_count,
-            "stage_path": self.stage_path,
             "fingerprint": self.fingerprint,
             "source": "synthetic_catalog",
             "operator_count": self.operator_count,
@@ -327,7 +316,6 @@ class AlphaTemplate:
             "mechanism_tags": list(self.mechanism_tags),
             "novelty_family": self.novelty_family,
             "template_mode": self.template_mode,
-            "branch_of": self.branch_of,
             "operator_slots": [
                 {"name": slot.name, "role": slot.role,
                  "placeholder": slot.placeholder,
@@ -337,42 +325,3 @@ class AlphaTemplate:
                 for slot in self.operator_slots
             ],
         }
-
-    @property
-    def research_slot_names(self):
-        return tuple(slot.name for slot in self.numeric_slots)
-
-    def numeric_slot(self, name):
-        return next((slot for slot in self.numeric_slots if slot.name == name), None)
-
-    def render_numeric_variant(self, slot_name, value):
-        slot = self.numeric_slot(slot_name)
-        if slot is None:
-            raise KeyError(f"undeclared numeric slot: {slot_name}")
-        if slot.allowed_values and value not in slot.allowed_values:
-            raise ValueError(f"{value} is not an allowed value for {slot_name}")
-        return slot.render(self.expression, value)
-
-    def numeric_variants(self, *, max_variants=3):
-        try:
-            cap = max(0, int(max_variants))
-        except (TypeError, ValueError):
-            cap = 3
-        variants = []
-        for slot in self.numeric_slots:
-            for value in slot.allowed_values or ():
-                if value == slot.default:
-                    continue
-                variants.append({
-                    "source_template": self.template_id,
-                    "slot": slot.name,
-                    "kind": slot.kind,
-                    "parent_default_value": slot.default,
-                    "candidate_value": value,
-                    "expression": slot.render(self.expression, value),
-                    "change_count": 1,
-                    "economic_role": slot.economic_role,
-                    "template_variant_id": f"{self.template_id}@{slot.name}={value}",
-                    "semantic_mechanism_family": self.family,
-                })
-        return variants[:cap]

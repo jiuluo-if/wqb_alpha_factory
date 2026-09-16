@@ -1,6 +1,5 @@
 """Catalog-backed template registry and numeric audit."""
 
-from ..expression import canonical_expression
 from .loader import load_builtin_templates, load_private_templates
 from .model import FIXED_NUMERICS, NUMBER_TOKEN_RE, AlphaTemplate
 from .validation import validate_template_contract
@@ -60,8 +59,6 @@ class AlphaTemplateRegistry:
         )
         for template in source:
             self.register(template)
-        for template in self._templates.values():
-            self._validate_branch(template)
         audit = template_numeric_audit(tuple(self._templates.values()))
         if not audit["ok"]:
             raise ValueError("template numeric audit failed: " + "; ".join(audit["problems"]))
@@ -75,39 +72,6 @@ class AlphaTemplateRegistry:
         if not contract["ok"]:
             raise ValueError(f"template {template.template_id} contract: " + ", ".join(contract["errors"]))
         self._templates[template.template_id] = template
-
-    def _validate_branch(self, template):
-        if template.template_mode != "PARTIAL_OPERATOR":
-            return
-        parent = self._templates.get(template.branch_of)
-        if parent is None:
-            raise ValueError(f"template {template.template_id} contract: ABSTRACT_BRANCH_PARENT_MISSING")
-        if parent.template_mode != "CONCRETE" or parent.role != "PROBE_ALPHA":
-            raise ValueError(f"template {template.template_id} contract: ABSTRACT_BRANCH_PARENT_INVALID")
-        if any(getattr(template, key) != getattr(parent, key) for key in (
-            "role", "family", "required_slots", "field_roles", "allowed_field_families",
-            "field_relationship", "direction", "direction_transform", "economic_mechanism",
-            "relationship_contract",
-            "semantic_contract",
-            "mechanism_fingerprint", "novelty_family", "numeric_slots",
-            "allowed_horizon_profiles", "allowed_settings_arms", "expected_horizon",
-            "falsification", "self_correlation_impact", "direction_reason",
-        )):
-            raise ValueError(f"template {template.template_id} contract: ABSTRACT_BRANCH_METADATA_DRIFT")
-        slot = template.operator_slots[0]
-        bindings = {name: "{" + name + "}" for name in
-                    ("p", "s", "t", "g", "data_field")}
-        try:
-            baseline = canonical_expression(
-                template.render(bindings, {slot.name: slot.baseline_operator})
-            )
-            parent_expression = canonical_expression(parent.render(bindings))
-        except (KeyError, ValueError):
-            baseline = parent_expression = None
-        if baseline != parent_expression:
-            raise ValueError(
-                f"template {template.template_id} contract: ABSTRACT_BRANCH_BASELINE_MISMATCH"
-            )
 
     @classmethod
     def from_private(cls, path=None):
