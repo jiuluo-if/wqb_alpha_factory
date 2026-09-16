@@ -121,6 +121,7 @@ DIRECT_TESTS = {
     "wqb_agent/metrics.py": ("tests/test_evaluation.py",),
     "wqb_agent/mutations.py": ("tests/test_evaluation.py",),
     "wqb_agent/remote_evidence.py": ("tests/test_remote_evidence.py",),
+    "wqb_agent/optimization_interfaces.py": ("tests/test_remote_evidence.py",),
     "wqb_agent/simulation_gateway.py": ("tests/test_simulation_gateway.py",),
     "wqb_agent/remote_alpha_repository.py": ("tests/test_remote_alpha_repository.py",),
     "wqb_agent/alpha_grouping.py": ("tests/test_alpha_grouping.py",),
