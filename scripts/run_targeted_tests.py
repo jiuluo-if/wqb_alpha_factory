@@ -36,10 +36,6 @@ DIRECT_TESTS = {
     "wqb_agent/pre_correlation.py": ("tests/test_evidence_projection.py",),
     "wqb_agent/alpha_semantics.py": ("tests/test_alpha_semantics.py",),
     "wqb_agent/alpha_relationships.py": ("tests/test_alpha_relationships.py",),
-    "wqb_agent/alpha_assembly.py": (
-        "tests/test_alpha_assembly.py",
-        "tests/test_factory_assembly_performance.py",
-    ),
     "tests/test_architecture_contracts.py": (
         "tests/test_architecture_contracts.py",
     ),

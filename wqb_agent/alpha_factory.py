@@ -10,7 +10,6 @@ import itertools
 import os
 import random
 
-from .alpha_assembly import assemble_factory_realizations, field_mechanism
 from .alpha_relationships import (
     frequency_bucket,
     frequency_compatibility,
@@ -57,6 +56,13 @@ VALIDATION_CHANGE_TYPES = {
 }
 
 _derive_field_semantic_traits = derive_field_semantic_traits
+
+
+def assemble_factory_realizations(*_args, **_kwargs):
+    """Removed proposal projection; retained only to fail closed for stale callers."""
+    raise RuntimeError("LEGACY_PROPOSAL_ASSEMBLY_REMOVED")
+
+
 class AlphaFactory:
     """Instantiate templates into non-submitting candidate records."""
 
@@ -641,12 +647,32 @@ class AlphaFactory:
 
     @staticmethod
     def _field_mechanism(profile, traits, template, relation=None):
-        return field_mechanism(
-            profile,
-            traits,
-            {"family": template.family},
-            relation,
+        field_id = str(profile.get("id"))
+        admission = traits.get("semantic_admission", "UNKNOWN")
+        family = template.family
+        if admission != "ALLOW":
+            return (
+                f"字段 {field_id} 的语义准入为 {admission}；"
+                f"当前 profile 只能支持 {family} 的语法审阅，不能证明该字段具备该经济机制。"
+            )
+        fit_reason = {
+            "analyst_revision": "修正值直接承载分析师预期更新",
+            "option_relative": "期权相对字段表达分布位置",
+            "liquidity": "交易活跃度描述参与程度",
+            "volatility": "波动率描述风险状态",
+            "fundamental": "低频基本面水平代表经济规模",
+            "earnings": "盈利字段承载经营预期",
+            "event_count": "事件计数代表注意力强度",
+            "data_quality": "数据质量字段描述可用性风险",
+        }.get(traits.get("concept"), "该字段测量与模板结构相容")
+        mechanism = (
+            f"字段 {field_id} 被识别为 {traits.get('concept')}，测量为 "
+            f"{traits.get('measurement')}，频率为 {traits.get('frequency')}；{fit_reason}。"
+            "该机制仍需用独立样本和平台 checks 证伪。"
         )
+        if relation and relation.get("labels"):
+            mechanism += f" 槽位关系证据为：{', '.join(relation['labels'])}。"
+        return mechanism
 
     def _select_companion_profiles(self, fields, primary, required_count, offset,
                                    template=None, *, prepared_facts=None,
@@ -737,7 +763,7 @@ class AlphaFactory:
         )
         return [item[1] for item in candidates[:required_count]]
 
-    def assemble_proposals(self, hypothesis, fields, operator_reference,
+    def _legacy_assemble_proposals(self, hypothesis, fields, operator_reference,
                            max_candidates=8, excluded_expressions=None,
                            _prepared_facts=None, _relationship_memo=None,
                            _expression_memo=None):
@@ -940,7 +966,7 @@ class AlphaFactory:
                 break
         return assembled
 
-    def generate_factory_batch(self, hypothesis, fields, operator_reference,
+    def _legacy_generate_factory_batch(self, hypothesis, fields, operator_reference,
                                target=100, excluded_expressions=None, seed=None,
                                research_context=None, max_pending_per_arm=1):
         """Generate one large, structurally diverse factory batch.
@@ -1054,7 +1080,7 @@ class AlphaFactory:
                     slots = [profile] + verified[offset + 1:] + verified[:offset]
                 else:
                     slots = [profile]
-                generated = self.assemble_proposals(
+                generated = self._legacy_assemble_proposals(
                     dict(hypothesis, template_mode="economic",
                          template_ids=[template.template_id]),
                     slots, operator_reference, max_candidates=3,

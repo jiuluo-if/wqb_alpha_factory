@@ -131,51 +131,6 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
         with self.assertRaises(ValueError):
             load_templates(io.StringIO(document))
 
-    def test_factory_uses_only_live_intersection_and_keeps_realizations_linear(self):
-        templates = load_templates(io.StringIO(_partial_document()))
-        factory = AlphaFactory(registry=AlphaTemplateRegistry(templates=templates))
-        fields = [
-            {"id": "field_a", "dataset": "d1", "description": "toy signal",
-             "semantic_status": "KNOWN"},
-            {"id": "field_b", "dataset": "d2", "description": "toy signal",
-             "semantic_status": "KNOWN"},
-        ]
-        live = {"status": "LIVE_VERIFIED", "availability": "AVAILABLE",
-                "source": "BRAIN_LIVE_ONLY",
-                "operators": ["rank", "ts_zscore", "ts_corr"],
-                "capability_fingerprint": "live-1"}
-        with patch.object(factory, "_select_companion_profiles", return_value=[fields[1]]), \
-             patch.object(factory, "_template_semantic_compatibility",
-                          return_value={"admission": "ALLOW", "score": 1}), \
-             patch.object(factory, "_relationship_gate",
-                          return_value={"admission": "ALLOW", "relationship_type": "toy",
-                                        "reasons": [], "slot_assignment_reason": "",
-                                        "frequency_compatibility": {}, "symmetric": True}):
-            one = factory.assemble_proposals(
-                {"id": "toy", "template_ids": ["toy_sync_corr_operator"]},
-                fields, live, max_candidates=8,
-            )
-        self.assertEqual(len(one), 1)
-        self.assertEqual(one[0]["operator_role_mapping"],
-                         {"CO_MOVEMENT_ESTIMATOR": "ts_corr"})
-        self.assertEqual(one[0]["operator_capability_fingerprint"], "live-1")
-        live["operators"].append("ts_covariance")
-        with patch.object(factory, "_select_companion_profiles", return_value=[fields[1]]), \
-             patch.object(factory, "_template_semantic_compatibility",
-                          return_value={"admission": "ALLOW", "score": 1}), \
-             patch.object(factory, "_relationship_gate",
-                          return_value={"admission": "ALLOW", "relationship_type": "toy",
-                                        "reasons": [], "slot_assignment_reason": "",
-                                        "frequency_compatibility": {}, "symmetric": True}):
-            two = factory.assemble_proposals(
-                {"id": "toy", "template_ids": ["toy_sync_corr_operator"]},
-                fields, live, max_candidates=8,
-            )
-        self.assertEqual(len(two), 2)
-        self.assertEqual(
-            {item["operator_role_mapping"]["CO_MOVEMENT_ESTIMATOR"] for item in two},
-            {"ts_corr", "ts_covariance"},
-        )
     def test_builtin_catalog_loads_from_package_resource(self):
         registry = AlphaTemplateRegistry()
         self.assertGreaterEqual(len(registry.catalog()), 5)
