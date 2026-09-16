@@ -363,6 +363,7 @@ DIRECT_TESTS = {
         "tests/test_targeted_batch_contract.py",
         "tests/test_research_instrument.py",
     ),
+    "wqb_agent/remote_quota.py": ("tests/test_remote_quota.py",),
     "wqb_agent/credentials.py": (
         "tests/test_credentials.py",
         "tests/test_runtime_safety.py",
