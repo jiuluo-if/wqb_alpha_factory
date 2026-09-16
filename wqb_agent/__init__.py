@@ -17,6 +17,8 @@ __all__ = [
     "get_alpha",
     "get_alpha_evidence",
     "compare_alphas",
+    "get_remote_alpha",
+    "get_remote_alpha_evidence",
     "inspect_state",
     "discover_fields",
     "get_operator_reference",
@@ -53,7 +55,8 @@ def __getattr__(name):
     if name in {
         "ExperimentSpec", "SimulationSpec", "simulate", "simulate_batch",
         "get_pending_executions", "resume_execution", "get_alpha",
-        "get_alpha_evidence", "compare_alphas", "inspect_state", "discover_fields",
+        "get_alpha_evidence", "compare_alphas", "get_remote_alpha",
+        "get_remote_alpha_evidence", "inspect_state", "discover_fields",
         "get_operator_reference", "get_operator_syntax_reference",
         "run_experiment", "get_experiment",
         "compare_experiments", "search_history", "reconcile",

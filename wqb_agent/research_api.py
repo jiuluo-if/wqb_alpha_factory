@@ -531,6 +531,24 @@ def purge_remote_cache(*, agent=None, client=None, config=None, state_dir=None):
     ).purge_remote_cache()}
 
 
+def get_remote_alpha(alpha_id, *, live=False, agent=None, client=None,
+                     config=None, state_dir=None):
+    """Read one Alpha from the rebuildable cache or from BRAIN explicitly."""
+    return _remote_repository(
+        agent=agent, client=client, config=config, state_dir=state_dir,
+        require_client=live,
+    ).get_remote_alpha(alpha_id, live=live)
+
+
+def get_remote_alpha_evidence(alpha_id, *, live=True, agent=None, client=None,
+                              config=None, state_dir=None):
+    """Return remote evidence; live reads are the default and source-labeled."""
+    return _remote_repository(
+        agent=agent, client=client, config=config, state_dir=state_dir,
+        require_client=True,
+    ).get_remote_alpha_evidence(alpha_id, live=live)
+
+
 def group_alphas(alpha_ids=None, *, rows=None, agent=None, client=None,
                  config=None, state_dir=None, days=None):
     if rows is None:
@@ -1103,7 +1121,8 @@ __all__ = [
     "get_alpha", "get_alpha_evidence", "get_alpha_metrics",
     "get_alpha_aggregates", "get_alpha_pnl", "get_alpha_self_correlation",
     "compare_alphas", "refresh_remote_alphas", "list_remote_alphas",
-    "remote_cache_status", "purge_remote_cache", "group_alphas",
+    "get_remote_alpha", "get_remote_alpha_evidence", "remote_cache_status",
+    "purge_remote_cache", "group_alphas",
     "find_alpha_duplicates", "preview_alpha_colors", "sync_alpha_colors",
     "get_experiment",
     "compare_experiments", "search_history", "reconcile",

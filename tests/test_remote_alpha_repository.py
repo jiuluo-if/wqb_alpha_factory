@@ -14,6 +14,20 @@ class FakeAlphaReader:
     get_all_user_alphas = __call__
 
 
+class FakeEvidenceClient(FakeAlphaReader):
+    def get_alpha(self, alpha_id):
+        return {"id": str(alpha_id), "is": {"sharpe": 1.0}}
+
+    def get_aggregates(self, alpha_id):
+        return {"alpha_id": str(alpha_id), "years": []}
+
+    def get_pnl(self, alpha_id):
+        return {"alpha_id": str(alpha_id), "records": []}
+
+    def get_self_correlation(self, alpha_id):
+        return {"alpha_id": str(alpha_id), "status": "AVAILABLE", "value": 0.2}
+
+
 class TestRemoteAlphaRepository(unittest.TestCase):
     def test_refresh_and_list_use_configured_rolling_window(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -44,6 +58,17 @@ class TestRemoteAlphaRepository(unittest.TestCase):
             self.assertEqual(result["retention_days"], 7)
             listed = research_api.list_remote_alphas(state_dir=tmp)
             self.assertEqual(len(listed), 2)
+
+    def test_public_remote_repository_reads_are_explicitly_live_or_cached(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeEvidenceClient()
+            live = research_api.get_remote_alpha_evidence(
+                "alpha-1", client=client, state_dir=tmp
+            )
+            self.assertEqual(live["source"], "LIVE")
+            self.assertEqual(
+                research_api.get_remote_alpha("missing", state_dir=tmp), None
+            )
 
 
 if __name__ == "__main__":
