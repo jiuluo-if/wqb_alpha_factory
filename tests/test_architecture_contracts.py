@@ -137,7 +137,6 @@ class ArchitectureDependencyContracts(unittest.TestCase):
                 "refresh_remote_alphas", "list_remote_alphas", "remote_cache_status",
                 "purge_remote_cache", "group_alphas", "find_alpha_duplicates",
                 "find_duplicate_alphas", "preview_alpha_colors", "sync_alpha_colors",
-                "inspect_state",
                 "discover_fields", "get_operator_reference",
                 "get_operator_syntax_reference", "run_experiment",
             },

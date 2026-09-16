@@ -113,8 +113,8 @@ class TestResearchInstrument(unittest.TestCase):
         self.assertLessEqual(len(context["quality_summaries"]), 8)
         self.assertNotIn("expression", json.dumps(context))
         names = {item["name"] for item in research_tool_manifest()}
-        self.assertIn("inspect_research_context", names)
-        self.assertIn("execute_pending_round", names)
+        self.assertIn("simulate", names)
+        self.assertIn("get_alpha_evidence", names)
 
     def test_stale_cursor_rejects_materialization_before_write(self):
         agent = SimpleNamespace(state_dir=tempfile.mkdtemp(), next_round_no=lambda: 1)
@@ -169,7 +169,7 @@ class TestResearchInstrument(unittest.TestCase):
         self.assertIn("remote evidence", architecture)
         self.assertIn("python -m unittest discover -s tests", testing)
         self.assertNotIn("Phase VIII", architecture)
-        self.assertTrue({"inspect_research_context", "assess_experiment"}.issubset(
+        self.assertTrue({"simulate", "get_alpha_evidence", "find_similar_alphas"}.issubset(
             set(research_api.__all__)
         ))
 
