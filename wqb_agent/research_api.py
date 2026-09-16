@@ -45,8 +45,9 @@ from .proposal_contract import (
     load_packaged_operator_syntax_reference,
     validate_targeted_batch,
 )
-from .remote_alpha_repository import RemoteAlphaRepository
 from .remote_colors import preview_remote_colors, sync_remote_colors
+from .remote_alpha_repository import RemoteAlphaRepository
+from .remote_quota import RemoteSimulationQuota
 from .research_context import build_research_context, project_cycle
 from .research_cursor import build_research_cursor
 from .research_cursor import research_cycle_id as _research_cycle_id
@@ -532,6 +533,25 @@ def purge_remote_cache(*, agent=None, client=None, config=None, state_dir=None):
         agent=agent, client=client, config=config, state_dir=state_dir,
         require_client=False,
     ).purge_remote_cache()}
+
+
+def simulation_quota(*, agent=None, client=None, config=None, state_dir=None):
+    """Return a read-only quota projection from remote usage and active guards."""
+    repository = _remote_repository(
+        agent=agent, client=client, config=config, state_dir=state_dir,
+        require_client=False,
+    )
+    if isinstance(config, AppConfig):
+        factory = config.factory
+    elif config is not None:
+        factory = normalize_config(_load_config(config)).factory
+    else:
+        factory = None
+    return RemoteSimulationQuota(
+        repository, ExecutionGuard(state_dir or ".wqb_state"),
+        daily_cap=factory.daily_simulation_cap if factory else 1600,
+        rolling_cap=factory.weekly_simulation_cap if factory else 11200,
+    ).snapshot()
 
 
 def get_remote_alpha(alpha_id, *, live=False, agent=None, client=None,
@@ -1125,7 +1145,7 @@ __all__ = [
     "get_alpha_aggregates", "get_alpha_pnl", "get_alpha_self_correlation",
     "compare_alphas", "refresh_remote_alphas", "list_remote_alphas",
     "get_remote_alpha", "get_remote_alpha_evidence", "remote_cache_status",
-    "purge_remote_cache", "group_alphas",
+    "purge_remote_cache", "simulation_quota", "group_alphas",
     "find_alpha_duplicates", "preview_alpha_colors", "sync_alpha_colors",
     "get_experiment",
     "compare_experiments", "search_history", "reconcile",
