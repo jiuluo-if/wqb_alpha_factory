@@ -10,8 +10,6 @@ class DiagnosticEvent:
     code: str
     severity: str
     component: str
-    proposal_id: str | None = None
-    round: int | None = None
     message: str = ""
 
     def __post_init__(self):

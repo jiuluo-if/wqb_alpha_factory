@@ -10,14 +10,11 @@ from .diagnostics import DiagnosticEvent
 from .simulation_gateway import ExecutionGuard
 
 
-def run_doctor(raw_config, *, offline=True, snapshot=None):
+def run_doctor(raw_config, *, offline=True):
     """Inspect only rebuildable cache and unresolved remote-write guards.
 
-    ``snapshot`` is accepted for callers migrating from the old diagnostic
-    surface, but is deliberately ignored: local research records are not an
-    input to the Remote-First health result.
+    Local research records are not an input to the Remote-First health result.
     """
-    del snapshot
     parsed = normalize_config(raw_config)
     state_dir = os.path.abspath(parsed.runtime.state_dir)
     guard = ExecutionGuard(state_dir)

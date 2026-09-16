@@ -30,7 +30,7 @@ class RemoteCacheConfig:
 
 
 @dataclass(frozen=True)
-class AgentRuntimeConfig:
+class RuntimeConfig:
     """Typed values for platform access, discovery and local safety paths."""
 
     state_dir: str = ".wqb_state"
@@ -62,7 +62,7 @@ class QuotaConfig:
 @dataclass(frozen=True)
 class AppConfig:
     simulation_config: SimulationConfig = field(default_factory=SimulationConfig)
-    runtime: AgentRuntimeConfig = field(default_factory=AgentRuntimeConfig)
+    runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     remote_cache: RemoteCacheConfig = field(default_factory=RemoteCacheConfig)
     quota: QuotaConfig = field(default_factory=QuotaConfig)
     factory: FactoryConfig = field(default_factory=FactoryConfig)
@@ -215,7 +215,7 @@ def parse_config(raw):
         key="config.factory.default_probe_count", minimum=1,
     ))
     field_selection = _resolve_field_selection(runtime_raw)
-    runtime = AgentRuntimeConfig(
+    runtime = RuntimeConfig(
         state_dir=str(runtime_raw.get("state_dir", ".wqb_state")),
         alpha_template_catalog=(
             str(runtime_raw["alpha_template_catalog"])
