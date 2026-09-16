@@ -430,7 +430,14 @@ class Agent:
         )
 
     def run_proposals(self, path=None, allow_unresolved_checkpoint=False):
-        """Compatibility facade for the guarded proposal workflow."""
+        """Deprecated adapter for the pre-Remote-First proposal inbox."""
+        return self._run_legacy_proposals(
+            path=path,
+            allow_unresolved_checkpoint=allow_unresolved_checkpoint,
+        )
+
+    def _run_legacy_proposals(self, path=None, allow_unresolved_checkpoint=False):
+        """Run the migration-only proposal workflow and its old state owners."""
         try:
             with self._mutation_scope("run-proposals") as owner:
                 # Refresh before new validation; checkpoint recovery remains
