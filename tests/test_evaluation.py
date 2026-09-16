@@ -1,7 +1,7 @@
 import unittest
 
+from wqb_agent.experiment import Experiment
 from wqb_agent.pnl import correlation_evidence
-from wqb_agent.state import Experiment
 from wqb_agent.validation_report import (
     build_validation_report,
     default_validation_plan,

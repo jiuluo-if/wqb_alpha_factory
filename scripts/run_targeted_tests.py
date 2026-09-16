@@ -65,9 +65,6 @@ DIRECT_TESTS = {
         "tests/test_remote_diagnostics.py",
         "tests/test_cli.py",
     ),
-    "wqb_agent/state.py": (
-        "tests/test_architecture_contracts.py",
-    ),
     "wqb_agent/artifacts.py": (
         "tests/test_artifacts.py",
     ),
@@ -151,7 +148,6 @@ DIRECT_TESTS = {
     "wqb_agent/proposal_inbox.py": ("tests/test_proposal_inbox.py",),
     "scripts/check_correlation.py": (),
     "scripts/check_health.py": ("tests/test_research_constraints.py",),
-    "scripts/refresh_self_correlation.py": ("tests/test_research_constraints.py",),
     "scripts/research_quality_audit.py": ("tests/test_research_constraints.py",),
     "scripts/validate_integrity.py": ("tests/test_remote_diagnostics.py",),
     "wqb_agent/alpha_pool.py": (),

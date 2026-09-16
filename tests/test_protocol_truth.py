@@ -2,6 +2,7 @@ import json
 import os
 import unittest
 
+from wqb_agent.experiment import Experiment
 from wqb_agent.protocol import (
     CapabilityStatus,
     endpoint_catalog,
@@ -10,7 +11,6 @@ from wqb_agent.protocol import (
     retry_after_seconds,
 )
 from wqb_agent.simulator import Simulator
-from wqb_agent.state import Experiment
 from wqb_agent.yearly import build_yearly_evidence
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "brain")

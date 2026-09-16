@@ -4,8 +4,6 @@ Covers what the git_selfbqr comparison contributed:
 - classified client exceptions (WQBRejectedError / WQBRateLimitError /
   WQBNotFoundError / WQBTimeoutError) and their failure-kind mapping
 - thread-local sessions (concurrent-safe authentication)
-- Trajectory tail loading (only the last N lines are parsed)
-- Trajectory idempotent add (replays never double-record)
 - FieldDiscovery disk cache (cross-run, TTL-bounded)
 - classify_experiment recognizes the new exception names
 """
@@ -32,8 +30,8 @@ from wqb_agent.client import (
     WQBTimeoutError,
 )
 from wqb_agent.discovery import FieldDiscovery
+from wqb_agent.experiment import Experiment
 from wqb_agent.failures import FailureKind, classify_error, classify_experiment
-from wqb_agent.state import Experiment, Trajectory
 
 
 class TestProgressUrlSafety(unittest.TestCase):
@@ -519,64 +517,6 @@ class TestSharedRateLimitGate(unittest.TestCase):
              mock.patch.object(c, "_ensure_auth"):
             with self.assertRaises(WQBRateLimitError):
                 c._request("POST", "/simulations", context="submit", rate_limit_budget_sec=5)
-
-
-class TestTrajectoryTail(unittest.TestCase):
-    def test_non_positive_window_stays_bounded(self):
-        trajectory = Trajectory(max_len=0, path=self.path)
-        experiment = Experiment(1, "h", "rank(x)", {}, ["x"])
-        trajectory.add(experiment)
-        self.assertEqual(trajectory.max_len, 1)
-        self.assertEqual(len(trajectory.experiments), 1)
-
-    def test_from_dict_uses_normalized_window(self):
-        experiments = [
-            Experiment(index, "h", f"rank(f{index})", {}, [f"f{index}"]).to_dict()
-            for index in range(3)
-        ]
-        trajectory = Trajectory.from_dict({"experiments": experiments}, max_len="0")
-        self.assertEqual(trajectory.max_len, 1)
-        self.assertEqual(len(trajectory.experiments), 1)
-        self.assertEqual(trajectory.experiments[0].expression, "rank(f2)")
-
-    def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="wqb_test_traj_")
-        self.path = os.path.join(self.tmp, "trajectory.jsonl")
-
-    def _write_n(self, n):
-        with open(self.path, "w", encoding="utf-8") as f:
-            for i in range(n):
-                exp = Experiment(i + 1, "h", f"rank(f{i})", {}, [f"f{i}"])
-                f.write(json.dumps(exp.to_dict(), ensure_ascii=False) + "\n")
-
-    def test_tail_lines_returns_last_n(self):
-        self._write_n(1000)
-        t = Trajectory(max_len=50, path=self.path)
-        lines = t._tail_lines(50)
-        self.assertEqual(len(lines), 50)
-        first = json.loads(lines[0])
-        last = json.loads(lines[-1])
-        self.assertEqual(first["round"], 951)
-        self.assertEqual(last["round"], 1000)
-
-    def test_load_parses_only_tail(self):
-        self._write_n(500)
-        t = Trajectory(max_len=20, path=self.path)
-        t.load()
-        self.assertEqual(len(t.experiments), 20)
-        self.assertEqual(t.experiments[0].round, 481)
-        self.assertEqual(t.experiments[-1].round, 500)
-
-    def test_add_is_idempotent(self):
-        t = Trajectory(max_len=10, path=self.path)
-        exp = Experiment(1, "h", "rank(x)", {}, ["x"])
-        t.add(exp)
-        t.add(exp)  # same id -> no-op
-        self.assertEqual(len(t.experiments), 1)
-        # a different experiment with the same expression still gets added
-        exp2 = Experiment(1, "h", "rank(x)", {}, ["x"])
-        t.add(exp2)
-        self.assertEqual(len(t.experiments), 2)
 
 
 class TestDiscoveryDiskCache(unittest.TestCase):
