@@ -233,8 +233,7 @@ class SimulationGateway:
             return {"status": "EXACT_DUPLICATE", "fingerprint": fingerprint, **remote}
         self.guard.register(fingerprint)
         # Simulator only needs a mutable transport record.  Keeping this
-        # record local avoids constructing the legacy research ``Experiment``
-        # model or handing result ownership to Trajectory/TrialLedger.
+        # record local is only a transport record; BRAIN owns the result.
         experiment = SimpleNamespace(
             id=fingerprint[:16], expression=spec.expression,
             settings=dict(spec.settings), fields=list(spec.fields),

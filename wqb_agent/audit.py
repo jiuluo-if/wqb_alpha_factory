@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 
-from .alpha_feed_cache import WeeklyAlphaFeedCache
+from .alpha_feed_cache import RemoteAlphaCache
 from .simulation_gateway import ExecutionGuard
 
 
@@ -38,7 +38,7 @@ def audit_execution_surface(state_dir):
     cache_path = os.path.join(directory, ".alpha_feed_cache", "remote.json")
     # Audit must remain usable without credentials or a config file.  The
     # default seven-day cache contract is the only cache shape checked here.
-    cache = WeeklyAlphaFeedCache(cache_path, retention_days=7)
+    cache = RemoteAlphaCache(cache_path, retention_days=7)
     findings = [
         {"code": code, "source": "execution_guard"} for code in errors
     ]

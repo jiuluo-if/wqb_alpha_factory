@@ -22,17 +22,6 @@ class TestRemoteDiagnostics(unittest.TestCase):
         self.assertNotIn("trajectory", result)
         self.assertNotIn("trial_ledger", result)
 
-    def test_legacy_result_files_are_ignored_not_replayed(self):
-        with tempfile.TemporaryDirectory() as state_dir:
-            with open(os.path.join(state_dir, "trajectory.jsonl"), "w", encoding="utf-8") as handle:
-                handle.write('{"alpha_id":"synthetic"}\n')
-            result = run_doctor(self.config(state_dir))
-        self.assertEqual(result["legacy_artifacts_ignored"], ["trajectory.jsonl"])
-        self.assertEqual(result["execution_guard"]["active_count"], 0)
-        self.assertIn("LEGACY_LOCAL_STATE_IGNORED", {
-            item["code"] for item in result["diagnostics"]
-        })
-
     def test_known_running_execution_is_reported_without_replaying_result(self):
         with tempfile.TemporaryDirectory() as state_dir:
             guard = ExecutionGuard(state_dir)

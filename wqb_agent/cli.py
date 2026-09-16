@@ -1,4 +1,4 @@
-"""Structured command-line grammar and legacy CLI normalization."""
+"""Canonical structured command-line grammar."""
 
 from __future__ import annotations
 

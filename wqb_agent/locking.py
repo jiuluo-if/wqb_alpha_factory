@@ -169,7 +169,7 @@ def _release_owner(token):
 
 
 @contextmanager
-def single_instance_scope(state_dir, operation="run-proposals"):
+def single_instance_scope(state_dir, operation="simulation"):
     """Own one state directory for the duration of a mutation transaction."""
     token = _acquire_owner(state_dir, operation, metadata=True)
     try:
@@ -178,7 +178,7 @@ def single_instance_scope(state_dir, operation="run-proposals"):
         _release_owner(token)
 
 
-def acquire_single_instance_lock(state_dir, operation="run-proposals"):
+def acquire_single_instance_lock(state_dir, operation="simulation"):
     """Acquire the OS owner lock and write human-readable metadata."""
     lock_path = _normalized_lock_path(state_dir)
     returned_path = os.path.join(state_dir, "run.lock")

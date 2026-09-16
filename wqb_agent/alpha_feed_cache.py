@@ -1,4 +1,4 @@
-"""Weekly, bounded cache for lightweight remote Alpha metadata."""
+"""Bounded, rebuildable cache for lightweight remote Alpha metadata."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from .artifacts import atomic_write_json_if_changed
 NEW_YORK = ZoneInfo("America/New_York")
 
 SCHEMA_VERSION = 1
-WEEKLY_SIMULATION_CAP = 7 * 1600
+DEFAULT_ROLLING_SIMULATION_CAP = 7 * 1600
 TEMP_RESOURCE_TTL_SEC = 7 * 24 * 60 * 60
 
 
@@ -46,23 +46,23 @@ def _utc_iso(timestamp):
     )
 
 
-class WeeklyAlphaFeedCache:
+class RemoteAlphaCache:
     """Persist only the rolling seven-day New York window of Alpha metadata.
 
     This is a rebuildable view, not research evidence.  It stores no metrics,
     expressions, trajectory rows, or platform result payloads.
     """
 
-    def __init__(self, path, *, clock=None, weekly_simulation_cap=WEEKLY_SIMULATION_CAP,
+    def __init__(self, path, *, clock=None, rolling_simulation_cap=DEFAULT_ROLLING_SIMULATION_CAP,
                  retention_days=7):
         if not path:
             raise ValueError("Alpha feed cache path 不能为空")
         try:
-            cap = int(weekly_simulation_cap)
+            cap = int(rolling_simulation_cap)
         except (TypeError, ValueError) as exc:
-            raise ValueError("weekly_simulation_cap 必须是正整数") from exc
+            raise ValueError("rolling_simulation_cap 必须是正整数") from exc
         if cap < 1:
-            raise ValueError("weekly_simulation_cap 必须是正整数")
+            raise ValueError("rolling_simulation_cap 必须是正整数")
         try:
             days = int(retention_days)
         except (TypeError, ValueError) as exc:
@@ -71,7 +71,7 @@ class WeeklyAlphaFeedCache:
             raise ValueError("retention_days 必须是 1-90 的整数")
         self.path = os.path.abspath(path)
         self._clock = clock or __import__("time").time
-        self.weekly_simulation_cap = cap
+        self.rolling_simulation_cap = cap
         self.retention_days = days
 
     @property
@@ -158,7 +158,7 @@ class WeeklyAlphaFeedCache:
             for day, bucket in days.items()
             for row in bucket["simulations"]
         ]
-        excess = max(0, len(entries) - self.weekly_simulation_cap)
+        excess = max(0, len(entries) - self.rolling_simulation_cap)
         if not excess:
             return 0
         current_key = local_day.isoformat()

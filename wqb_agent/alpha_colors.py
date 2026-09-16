@@ -1,7 +1,7 @@
 """Compatibility names for the remote Alpha color policy.
 
 Remote Alpha evidence is the only color input.  This module intentionally has
-no Experiment, Trajectory, filesystem, or ownership state; new callers should
+no local experiment, filesystem, or ownership state; new callers should
 use :mod:`wqb_agent.remote_colors` through ``research_api``.
 """
 

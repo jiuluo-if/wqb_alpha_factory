@@ -78,7 +78,7 @@ class AlphaFactory:
         """Fill a bounded template set from verified field slots.
 
         Field descriptions and type checks remain the responsibility of the
-        normal proposal preflight; this function never guesses them.
+        execution gateway; this function only renders candidate specs.
         """
         if not isinstance(hypothesis, dict):
             return []

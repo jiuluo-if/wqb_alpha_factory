@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from .alpha_feed_cache import WEEKLY_SIMULATION_CAP, WeeklyAlphaFeedCache
+from .alpha_feed_cache import DEFAULT_ROLLING_SIMULATION_CAP, RemoteAlphaCache
 from .optimization_interfaces import RemoteAlphaEvidenceProvider
 from .query_errors import QueryTooBroadError
 
@@ -39,9 +39,12 @@ class RemoteAlphaRepository:
         if days < 1 or days > 90:
             raise ValueError("retention_days 必须是 1-90 的整数")
         self.retention_days = days
-        self.cache = WeeklyAlphaFeedCache(
+        self.cache = RemoteAlphaCache(
             cache_path, clock=clock,
-            weekly_simulation_cap=days * 1600 if retention_days != 7 else WEEKLY_SIMULATION_CAP,
+            rolling_simulation_cap=(
+                days * 1600
+                if retention_days != 7 else DEFAULT_ROLLING_SIMULATION_CAP
+            ),
             retention_days=days,
         )
         self.alpha_reader = alpha_reader
@@ -129,7 +132,7 @@ class RemoteAlphaRepository:
         return {"local_date": current_day.isoformat(), "refreshed_at": refreshed_at,
                 "submitted_count": len(submitted),
                 "today_simulated_count": sum(item.get("local_date") == current_day.isoformat() for item in simulated),
-                "weekly_simulated_count": len(simulated), **cache_result,
+                "rolling_simulated_count": len(simulated), **cache_result,
                 "retention_days": self.retention_days, "source": "/users/self/alphas"}
 
     def list_remote_alphas(self, *, days=None, status=None):

@@ -352,11 +352,10 @@ class FieldDiscovery:
 
         Consumers that need manually reviewed profiles should use the same
         catalog/cache selected by discovery, otherwise a complete immutable
-        catalog would still be ignored by the proposal preflight layer.
+            catalog remains an input for discovery only.
         """
         # Only the immutable catalog is safe to reuse as an already parsed
-        # source. The legacy cache may be updated by a compatibility caller
-        # after Agent construction, so keep its file-read semantics intact.
+        # source; the rebuildable cache remains isolated to discovery.
         return self._disk_cache if self._using_catalog else None
 
     def _load_disk_cache(self):

@@ -1,45 +1,16 @@
-# Local State Layout
+# Local Safety Layout
 
-Remote-First 架构中，BRAIN 是 Alpha/Simulation 结果的唯一事实来源。本地只保存远端写入安全边界、可重建的短期 metadata cache、外部 credentials 引用和进程锁。
+本地不是研究结果数据库。BRAIN 是 Alpha 与 Simulation evidence 的唯一事实源。
 
-## 允许的本地对象
+允许的本地对象：
 
-| 对象 | 位置 | 用途 | canonical 事实 |
-|---|---|---|---|
-| ExecutionGuard | `.wqb_state/execution_guard.json` | 防止不确定 POST 被重发 | 仅未解决写入 identity |
-| Remote Alpha cache | `.wqb_state/.alpha_feed_cache/remote.json` | 最近 N 天远端轻量 metadata 视图 | 否，可从 BRAIN 重建 |
-| credentials | 外部文件/环境 | 创建认证 client | 否 |
-| process lock | 临时/配置路径 | 防止本地并发 owner 冲突 | 否 |
+| 对象 | 默认位置 | 用途 |
+|---|---|---|
+| ExecutionGuard | `.wqb_state/execution_guard.json` | 防止不确定 POST 被重发 |
+| Remote cache | `.wqb_state/.alpha_feed_cache/remote.json` | 最近 N 天的可重建远端视图 |
+| credentials | 外部环境/文件 | 创建认证 client |
+| lock | 临时或配置路径 | 防止本地并发 owner 冲突 |
 
-## ExecutionGuard schema
+ExecutionGuard 状态只有 `SUBMITTING`、`RUNNING`、`SUBMIT_UNKNOWN`。`SUBMITTING` 在重启后按不确定提交处理；有 progress URL 只能轮询该 URL；没有证据证明 POST 未发生时禁止重 POST。
 
-每条记录只允许：
-
-```text
-execution_fingerprint
-status = SUBMITTING | RUNNING | SUBMIT_UNKNOWN
-progress_url
-created_at
-updated_at
-remote_alpha_id (optional)
-```
-
-`SUBMITTING` 在进程重启时必须升级为 `SUBMIT_UNKNOWN`。没有 progress URL 的 UNKNOWN 不能自动清除；有 progress URL 只能只读轮询同一 URL。只有 BRAIN 结果已确认时才可删除已解决 guard。
-
-## 明确不属于本地 canonical state
-
-以下结果和研究生命周期不再由新架构维护：
-
-```text
-metrics / checks / PnL / aggregates / correlation
-validation / reward / research classification / settlement
-round / parent / child / lineage / research cycle
-Trajectory / TrialLedger / ExperienceMemory
-proposals inbox / factory session / optimizer state
-```
-
-旧文件仅作为待删除的兼容遗留物存在；新代码不得读取、写入或依赖其恢复 BRAIN evidence。
-
-## 隐私与恢复
-
-cache、guard、日志和 tracked fixtures 不得写入真实 Alpha、私有 field、完整研究表达式或 credentials。真实工作区的未完成旧 checkpoint/`SUBMIT_UNKNOWN` 不得手工编辑、删除或通过新路径绕过；先只读对账，必要时由用户明确授权本地恢复。
+Remote cache 可删除并从 BRAIN 重建。cache 与 live 冲突时 live 优先，过期或缺失 cache 不得制造 PASS。credentials、真实 Alpha、私有 field 和完整研究数据不得写入 tracked 文件、日志或 guard。

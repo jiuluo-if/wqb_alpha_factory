@@ -10,13 +10,10 @@ examples must use placeholders such as `field_a`, `field_b`, `signal_x`, `X`,
 ## Local private research
 
 Real Alpha expressions, field IDs and pairings, metrics, Simulation evidence,
-trajectory, ExperienceMemory, PnL, reports, plans, findings and generated
-exports are local-only. Keep them under ignored `.wqb_state/`, `research_data/`,
-`reports/` or `.planning/` paths owned by the existing runtime.
+reports and generated exports are local-only. Keep them under ignored
+`.wqb_state/`, `research_data/`, `reports/` or `.planning/` paths.
 
-The retired `.wqb_state/factory_session.json`, proposals inbox and research
-history files are not part of the new local model and must not be created by new
-code. Only `execution_guard.json`, rebuildable remote metadata cache, external
+Only `execution_guard.json`, rebuildable remote metadata cache, external
 credentials references and process locks are allowed for the Remote-First path.
 
 ## Documentation and commit hygiene

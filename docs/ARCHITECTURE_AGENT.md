@@ -1,61 +1,41 @@
 # Remote-First Architecture
 
-## 原则
+## 核心原则
 
 ```text
 AI owns research reasoning.
 Python owns platform truth and execution safety.
-BRAIN owns Alpha and Simulation evidence.
+BRAIN owns Alpha simulation evidence.
 ```
 
-Python 不替 AI 选择经济机制、优化参数或解释研究结论，也不把远端结果复制成第二个 canonical research database。
+## 公开工具面
 
-## 组件关系
+`wqb_agent.research_api` 是唯一 Agent-facing facade，提供 discovery、operator capability、template/probe、Simulation、remote Alpha evidence、dedupe、group 和 color 工具。
+
+## 唯一 Simulation 写链
 
 ```text
-research_api
- ├─ platform capability / field discovery
- ├─ SimulationSpec
- ├─ SimulationGateway
- │   ├─ ExecutionGuard
- │   └─ Simulator → WQBClient
- ├─ RemoteAlphaRepository
- │   └─ rebuildable remote metadata cache
- ├─ AlphaFactory → list[SimulationSpec]
- ├─ dedupe / grouping projections
- └─ remote color preview/sync
+research_api.simulate / simulate_batch
+ → SimulationGateway
+ → Simulator
+ → WQBClient
+ → BRAIN
 ```
 
-`research_api` 是唯一稳定的 Agent-facing facade。旧 Agent、proposal envelope、round、parent/child、lineage、optimizer workflow 和 factory runner 不属于新 API；新代码不得依赖它们。
+任何其他模块不得直接提交 Simulation。
 
-## SimulationGateway
+`SimulationGateway` 只负责请求规范化、基本 schema、live field/operator capability、execution fingerprint、exact dedupe、quota/concurrency、ExecutionGuard、提交、轮询和恢复。研究假设、机制判断、参数选择和结果解释属于 AI。
 
-Gateway 接受 `SimulationSpec(expression, settings, fields, note, template_id)`。它只做可执行形状校验、实时 operator capability 校验、fingerprint 计算与远端执行编排。
+## ExecutionGuard
 
-安全顺序固定为：
-
-```text
-fingerprint → reject active duplicate → durable SUBMITTING
-→ exactly one POST → RUNNING + progress_url → poll same URL
-→ get remote Alpha → remove guard only after result is proven
-```
-
-guard 仅允许 execution identity/status、progress URL 和时间戳，可选 remote Alpha ID；不得保存 metrics、checks、PnL、expression、hypothesis、lineage、settlement 或 factory state。
+唯一持久安全记录是 `.wqb_state/execution_guard.json`。每条记录最多包含 fingerprint、`SUBMITTING/RUNNING/SUBMIT_UNKNOWN`、progress URL、时间戳和可选 remote Alpha ID。完成结果被 BRAIN 确认前不得删除；不确定 POST 永不自动重试。
 
 ## RemoteAlphaRepository
 
-Repository 提供 rolling metadata refresh/list/get/cache status/purge。默认 retention 为 7 天，可配置为 1–90 天。cache 删除后必须能够从 BRAIN 重建，cache 与 live 冲突时 live 优先。
+Repository 读取 BRAIN Alpha 与 evidence，并维护可删除、可重建的滚动 metadata cache。默认保留 7 天，可配置 1–90 天；live response 优先于 cache，cache 不能把 UNKNOWN 变成 PASS。
 
-证据读取默认标记来源与时间；研究判断只能使用 live evidence，或明确接受带 freshness 的 cache 视图。
+## Factory、去重与颜色
 
-## Dedupe、分组与颜色
+AlphaFactory 是纯候选生成器，输出 `SimulationSpec`，不提交、不写研究数据库、不运行长时控制循环。精确去重使用 canonical expression 加完整 effective settings；结构相似和相关性仅作为 AI 的 advisory evidence。颜色只消费 remote evidence，`dry_run`、`overwrite` 和 readback verify 明确控制 metadata PATCH。
 
-执行去重只使用 canonical expression + effective settings fingerprint。结构相似、field 相似、correlation 和 quality 只是 advisory projection，不得替代 exact execution identity。
-
-颜色策略只接收 remote evidence；`dry_run` 不得 PATCH，`overwrite=False` 保留已有颜色，`overwrite=True` 才允许覆盖，每次 PATCH 必须 readback verify。不得创建本地 ownership sidecar。
-
-## 退役边界
-
-旧 `proposals.json`、checkpoint、Trajectory、TrialLedger、settlement、ExperienceMemory、
-OptimizerWorkflow 和 factory session 不是 Remote-First 状态模型。它们只能作为待删除的
-兼容遗留物存在；新代码不得读取、写入或用其恢复 BRAIN evidence。
+Alpha submission 永远是人工操作，credentials、真实 Alpha 和私有字段不得进入 tracked 文件。
