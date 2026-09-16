@@ -1129,6 +1129,31 @@ class AlphaFactory:
         )
         return result
 
+    def generate_probe_specs(self, hypothesis, fields, operator_reference,
+                             target=100, excluded_expressions=None, seed=None,
+                             research_context=None, max_pending_per_arm=1):
+        """Project generated probe candidates into the execution contract.
+
+        The legacy proposal records remain available to the compatibility
+        runner, but new callers can review a list of ``SimulationSpec``
+        without inheriting proposal, round, parent, or lineage state.
+        """
+        from .simulation_gateway import SimulationSpec
+
+        candidates = self.generate_factory_batch(
+            hypothesis, fields, operator_reference, target=target,
+            excluded_expressions=excluded_expressions, seed=seed,
+            research_context=research_context,
+            max_pending_per_arm=max_pending_per_arm,
+        )
+        return [SimulationSpec(
+            expression=item["expression"],
+            settings=item.get("settings") or {},
+            fields=tuple(item.get("fields") or ()),
+            note=item.get("note"),
+            template_id=item.get("template_id"),
+        ) for item in candidates if isinstance(item, dict)]
+
     @staticmethod
     def _live_operator_capability(reference):
         """Require current BRAIN evidence before Probe realization."""

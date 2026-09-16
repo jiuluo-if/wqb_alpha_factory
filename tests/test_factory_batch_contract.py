@@ -29,11 +29,33 @@ from wqb_agent.diversity import (
 from wqb_agent.factory_runner import AIFactoryRunner
 from wqb_agent.proposal_contract import factory_batch_stats, validate_factory_batch
 from wqb_agent.research_guard import parameter_only_change_reason
+from wqb_agent.simulation_gateway import SimulationSpec
 from wqb_agent.state import Experiment
 from wqb_agent.weekly_quota import QuotaExceeded, WeeklySimulationQuota
 
 
 class TestFactoryBatchContract(unittest.TestCase):
+    def test_factory_can_project_candidates_to_simulation_specs(self):
+        factory = AlphaFactory()
+        factory.generate_factory_batch = Mock(return_value=[{
+            "expression": "rank(close)",
+            "settings": {"delay": 1},
+            "fields": ["close"],
+            "template_id": "toy_rank",
+        }])
+
+        specs = factory.generate_probe_specs(
+            {"id": "h1"}, [], {}, target=1
+        )
+
+        self.assertEqual(specs, [SimulationSpec(
+            "rank(close)", {"delay": 1}, ("close",), template_id="toy_rank"
+        )])
+        factory.generate_factory_batch.assert_called_once_with(
+            {"id": "h1"}, [], {}, target=1, excluded_expressions=None,
+            seed=None, research_context=None, max_pending_per_arm=1,
+        )
+
     def test_factory_batch_requires_exactly_one_hundred_unique_proposals(self):
         ok, errors = validate_factory_batch(
             [proposal(index) for index in range(100)]
