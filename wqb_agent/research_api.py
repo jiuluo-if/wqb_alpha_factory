@@ -36,7 +36,6 @@ from .checkpoints import CheckpointStore
 from .config import AppConfig, normalize_config
 from .discovery import FieldDiscovery
 from .factory_runner import AIFactoryRunner
-from .optimization_decision import OptimizationDecision
 from .optimization_interfaces import RemoteAlphaEvidenceProvider
 from .proposal_contract import (
     load_operator_syntax_reference,
@@ -580,47 +579,6 @@ def reconcile(progress_url, *, client=None, timeout=60):
     return client.get_progress_snapshot(progress_url, timeout=timeout)
 
 
-def inspect_optimizer_parents(*, agent=None, client=None, config=None,
-                              state_dir=None, limit=8):
-    """Return a bounded, read-only summary of evidence-eligible parents.
-
-    Only the limited summary is exposed so an Agent prompt never receives the
-    whole trajectory or the full cloud feed.  Mechanism-state hints derived
-    elsewhere stay UNKNOWN until the Agent supplies them.
-    """
-    runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
-    return runtime.inspect_optimizer_parents(limit=limit)
-
-
-def inspect_optimizer_context(*, agent=None, client=None, config=None,
-                              state_dir=None, limit=8):
-    """Return the bounded, read-only optimizer context for the Inner Agent.
-
-    Thin facade only: the optimizer gate, ranking, generation bound and
-    pre-correlation policy stay owned by ``OptimizerWorkflow``.  The limit is
-    capped at 8 so an Agent prompt never receives an unbounded view, nothing is
-    written and no Simulation runs here.
-    """
-    runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
-    return runtime.optimizer_context(limit=min(int(limit), 8))
-
-
-def propose_optimization(decision, *, agent=None, client=None, config=None,
-                         state_dir=None, max_candidates=4):
-    """Validate one Agent-authored ``OptimizationDecision`` and emit proposals.
-
-    This facade never bypasses ``OptimizerWorkflow``: the workflow checks the
-    decision against canonical evidence and the deterministic gates, then
-    reuses the single CHILD generation path.  Only proposals are produced; no
-    Simulation, checkpoint write or remote call happens here.  A VALIDATE,
-    STOP or REROUTE decision returns no child proposal.
-    """
-    runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
-    if isinstance(decision, Mapping):
-        decision = OptimizationDecision.from_mapping(decision)
-    return runtime.propose_optimization([decision], max_candidates=max_candidates)
-
-
 def _projection_inputs(state_dir):
     directory = os.fspath(state_dir or ".wqb_state")
     trajectory = Trajectory(path=os.path.join(directory, "trajectory.jsonl"))
@@ -722,16 +680,10 @@ def inspect_research_context(*, state_dir=".wqb_state", agent=None, client=None,
     _directory, rows, ledger_summary, _checkpoints, _active = _projection_inputs(state_dir)
     summaries = [_assess_experiment(row, trial_summary=ledger_summary)
                  for row in rows[-max(1, min(int(limit), 8)):]]
-    optimizer = {}
-    if agent is not None or client is not None:
-        optimizer = inspect_optimizer_context(
-            agent=agent, client=client, config=config, state_dir=state_dir,
-            limit=limit,
-        )
     gaps = sorted({gap for item in summaries for gap in item.missing_evidence})
     return build_research_context(
         runtime_context=runtime, cursor=runtime, quality_summaries=summaries,
-        optimizer_context=optimizer, capabilities=runtime["capabilities"],
+        optimizer_context={}, capabilities=runtime["capabilities"],
         unresolved_gaps=gaps, limit=limit,
     )
 
