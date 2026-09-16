@@ -13,6 +13,6 @@
 架构审计的依赖契约由 `tests/test_architecture_contracts.py` 保护；新增生产模块必须先加入 `scripts/run_targeted_tests.py` 的显式测试映射。该审计只使用 stdlib AST，不读取真实研究 payload，也不触发远端写操作。
 
 ```powershell
-python main.py state doctor
-python main.py state audit
+python main.py diagnostics doctor
+python main.py diagnostics audit
 ```

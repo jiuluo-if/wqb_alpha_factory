@@ -23,9 +23,8 @@ def _raw_guard_entries(path):
     return [row for row in rows if isinstance(row, dict)], []
 
 
-def audit_state(state_dir, *, snapshot=None, lifecycle_persistent=True):
-    """Audit guard/cache only; legacy arguments are accepted but ignored."""
-    del snapshot, lifecycle_persistent
+def audit_execution_surface(state_dir):
+    """Audit only the local ExecutionGuard and rebuildable remote cache."""
     directory = os.path.abspath(str(state_dir))
     guard = ExecutionGuard(directory)
     raw_rows, errors = _raw_guard_entries(guard.path)

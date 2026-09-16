@@ -21,10 +21,8 @@ def main(argv=None):
     command = parse_cli(argv)
     command_key = (command.domain, command.action)
     readonly_local = command_key in {
-        ("state", "doctor"),
-        ("state", "audit"),
-        ("state", "preflight"),
-        ("context", "show"),
+        ("diagnostics", "doctor"),
+        ("diagnostics", "audit"),
     }
 
     config = None
@@ -56,35 +54,16 @@ def main(argv=None):
         print(f"配置无效: {exc}")
         sys.exit(1)
 
-    if command_key == ("state", "doctor"):
+    if command_key == ("diagnostics", "doctor"):
         from wqb_agent.doctor import run_doctor
         print(json.dumps(run_doctor(typed_config, offline=True), ensure_ascii=False, indent=2))
         return
-    if command_key == ("state", "audit"):
-        from wqb_agent.audit import audit_state
-        result = audit_state(
-            typed_config.runtime.state_dir,
-            lifecycle_persistent=True,
-        )
+    if command_key == ("diagnostics", "audit"):
+        from wqb_agent.audit import audit_execution_surface
+        result = audit_execution_surface(typed_config.runtime.state_dir)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if not result.get("ok"):
             sys.exit(2)
-        return
-    if command_key == ("state", "preflight"):
-        from wqb_agent.preflight import run_takeover_preflight
-        result = run_takeover_preflight(typed_config)
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        if result.get("status") != "READY":
-            sys.exit(2)
-        return
-    if command_key == ("context", "show"):
-        from wqb_agent.preflight import build_agent_context, render_agent_context
-        context = build_agent_context(typed_config, task=command.task)
-        print(render_agent_context(
-            context,
-            compact=command.compact,
-            json_mode=command.json_output,
-        ))
         return
     if command_key == ("smoke", "readonly"):
         from wqb_agent import WQBClient

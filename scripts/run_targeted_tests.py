@@ -97,9 +97,6 @@ DIRECT_TESTS = {
     "wqb_agent/locking.py": (
         "tests/test_locking.py",
     ),
-    "wqb_agent/preflight.py": (
-        "tests/test_remote_diagnostics.py",
-    ),
     "wqb_agent/research_api.py": (
         "tests/test_research_api.py",
     ),
