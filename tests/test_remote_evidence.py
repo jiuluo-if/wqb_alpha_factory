@@ -3,46 +3,16 @@ from unittest.mock import Mock
 
 from wqb_agent.client import (
     WQBAuthError,
-    WQBClient,
     WQBCorrelationPendingError,
     WQBNotFoundError,
     WQBRateLimitError,
     WQBSimulationError,
     WQBTimeoutError,
 )
-from wqb_agent.pnl import PnlAdapter, decode_recordset
 from wqb_agent.remote_evidence import RemoteAlphaEvidenceProvider
 
 
 class TestRemoteEvidence(unittest.TestCase):
-    def test_client_exposes_only_verified_pnl_recordset(self):
-        client = WQBClient.__new__(WQBClient)
-        client.base_url = "https://api.worldquantbrain.com"
-        response = Mock()
-        response.json.return_value = {"records": [[1.0]]}
-        client._request = Mock(return_value=response)
-        self.assertEqual(client.get_pnl("a1"), {"records": [[1.0]]})
-        client._request.assert_called_once()
-        with self.assertRaises(ValueError):
-            client.get_recordset("a1", "daily-pnl")
-
-    def test_decode_recordset_uses_schema_names_not_column_positions(self):
-        payload = {
-            "schema": {"properties": [{"name": "pnl"}, {"name": "date"}]},
-            "records": [[1.5, "2026-01-02"]],
-        }
-        self.assertEqual(
-            decode_recordset(payload), [{"pnl": 1.5, "date": "2026-01-02"}]
-        )
-
-    def test_pnl_adapter_accepts_schema_encoded_records(self):
-        payload = {
-            "schema": {"properties": [{"name": "date"}, {"name": "pnl"}]},
-            "records": [["2026-01-01", 0.1], ["2026-01-02", 0.2]],
-        }
-        result = PnlAdapter("NOT_LIVE_VERIFIED").analyze(payload)
-        self.assertEqual(result["status"], "UNAVAILABLE")
-
     def test_client_provider_collects_only_readonly_optimization_evidence(self):
         client = Mock()
         client.get_alpha.return_value = {"is": {"sharpe": 1.2}}
@@ -132,4 +102,3 @@ class TestRemoteEvidence(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

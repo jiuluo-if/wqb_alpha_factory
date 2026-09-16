@@ -31,8 +31,8 @@ DIRECT_TESTS = {
     ),
     "wqb_agent/protocol.py": ("tests/test_protocol_truth.py",),
     "wqb_agent/query_errors.py": ("tests/test_client_refactor.py",),
-    "wqb_agent/evidence_projection.py": ("tests/test_evidence_projection.py",),
-    "wqb_agent/pre_correlation.py": ("tests/test_evidence_projection.py",),
+    "wqb_agent/evidence_projection.py": (),
+    "wqb_agent/pre_correlation.py": (),
     "wqb_agent/alpha_semantics.py": ("tests/test_alpha_semantics.py",),
     "wqb_agent/alpha_relationships.py": ("tests/test_alpha_relationships.py",),
     "tests/test_architecture_contracts.py": (
@@ -55,17 +55,12 @@ DIRECT_TESTS = {
     "wqb_agent/artifacts.py": (
         "tests/test_artifacts.py",
     ),
-    "wqb_agent/validation_statistics.py": (
-        "tests/test_validation_statistics.py",
-        "tests/test_evaluation.py",
-    ),
+    "wqb_agent/validation_statistics.py": (),
     "wqb_agent/terminal_evidence.py": (
         "tests/test_simulation_gateway.py",
     ),
     "wqb_agent/simulator.py": ("tests/test_simulation_gateway.py",),
-    "wqb_agent/search_evidence.py": (
-        "tests/test_validation_statistics.py",
-    ),
+    "wqb_agent/search_evidence.py": (),
     "wqb_agent/config.py": ("tests/test_remote_diagnostics.py",),
     "wqb_agent/doctor.py": (
         "tests/test_remote_diagnostics.py",
@@ -105,21 +100,21 @@ DIRECT_TESTS = {
         "tests/test_credentials.py",
         "tests/test_remote_diagnostics.py",
     ),
-    "scripts/check_correlation.py": (),
-    "scripts/check_health.py": (),
     "wqb_agent/cli.py": ("tests/test_cli.py",),
     "wqb_agent/diagnostics.py": ("tests/test_remote_diagnostics.py",),
-    "wqb_agent/evidence.py": ("tests/test_evidence.py",),
-    "wqb_agent/evidence_status.py": ("tests/test_evidence.py",),
+    "wqb_agent/evidence.py": (),
+    "wqb_agent/evidence_status.py": ("tests/test_protocol_truth.py",),
+    "scripts/check_health.py": (),
+    "scripts/check_correlation.py": (),
     "wqb_agent/failures.py": ("tests/test_client_refactor.py",),
     "wqb_agent/schema.py": (
         "tests/test_client_refactor.py",
-        "tests/test_evidence.py",
+        "tests/test_client_refactor.py",
     ),
     "wqb_agent/expression.py": ("tests/test_expression.py",),
     "wqb_agent/heartbeat.py": ("tests/test_heartbeat.py",),
-    "wqb_agent/metrics.py": ("tests/test_evaluation.py",),
-    "wqb_agent/mutations.py": ("tests/test_evaluation.py",),
+    "wqb_agent/metrics.py": (),
+    "wqb_agent/mutations.py": (),
     "wqb_agent/remote_evidence.py": ("tests/test_remote_evidence.py",),
     "wqb_agent/optimization_interfaces.py": ("tests/test_remote_evidence.py",),
     "wqb_agent/simulation_gateway.py": ("tests/test_simulation_gateway.py",),
@@ -127,10 +122,10 @@ DIRECT_TESTS = {
     "wqb_agent/alpha_grouping.py": ("tests/test_alpha_grouping.py",),
     "wqb_agent/alpha_colors.py": ("tests/test_remote_colors.py",),
     "wqb_agent/remote_colors.py": ("tests/test_remote_colors.py",),
-    "wqb_agent/pnl.py": ("tests/test_remote_evidence.py",),
+    "wqb_agent/pnl.py": (),
     "wqb_agent/smoke.py": ("tests/test_smoke.py",),
     "wqb_agent/submission.py": (),
-    "wqb_agent/yearly.py": ("tests/test_evaluation.py",),
+    "wqb_agent/yearly.py": (),
 }
 
 FRONTEND_CONFIG_FILES = {

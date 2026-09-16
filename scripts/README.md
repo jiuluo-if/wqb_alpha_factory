@@ -4,8 +4,6 @@
 
 | 工具 | 用途 | 边界 |
 |---|---|---|
-| `check_correlation.py` | 读取 BRAIN self-correlation | 只读平台检查 |
-| `check_health.py` | 读取 DONE Alpha 健康指标 | 只读平台检查 |
 | `check_repo_privacy.py` | research-data 隐私回归 | 只扫 `git ls-files`，不扫整块磁盘 |
 
 研究事实从 BRAIN 获取，执行安全只从 ExecutionGuard 恢复。

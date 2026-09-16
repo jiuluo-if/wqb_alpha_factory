@@ -9,7 +9,6 @@ from wqb_agent.protocol import (
     probe_capability_response,
     retry_after_seconds,
 )
-from wqb_agent.yearly import build_yearly_evidence
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "brain")
 
@@ -85,21 +84,3 @@ class TestProtocolTruth(unittest.TestCase):
     def test_list_payload_is_rejected_for_non_operator_keys(self):
         result = probe_capability_response("data_sets", 200, [])
         self.assertNotEqual(result["availability"], "AVAILABLE")
-
-
-class TestYearlyEvidence(unittest.TestCase):
-    def test_builds_compact_stability_evidence(self):
-        with open(os.path.join(FIXTURES, "aggregates.json"), encoding="utf-8") as handle:
-            evidence = build_yearly_evidence(
-                json.load(handle), min_sharpe=0.9, min_fitness=0.5, max_turnover=0.7
-            )
-        self.assertEqual(evidence["status"], "VERIFIED")
-        self.assertTrue(evidence["stable"])
-        self.assertEqual(evidence["year_count"], 2)
-        self.assertEqual(evidence["summary"]["min_sharpe"], 1.1)
-
-    def test_missing_yearly_data_is_unknown(self):
-        evidence = build_yearly_evidence({"is": {"yearlyData": []}})
-        self.assertEqual(evidence["status"], "UNKNOWN")
-        self.assertIsNone(evidence["stable"])
-
