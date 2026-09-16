@@ -30,7 +30,7 @@ TASK_ROUTES = {
     },
     "execution": {
         "files": ["wqb_agent/simulation_gateway.py", "wqb_agent/simulator.py", "wqb_agent/client.py"],
-        "tests": ["tests/test_simulation_gateway.py", "tests/test_simulator.py"],
+        "tests": ["tests/test_simulation_gateway.py"],
         "docs": ["docs/RESEARCH_POLICY.md"],
     },
     "remote-alpha": {
@@ -40,7 +40,7 @@ TASK_ROUTES = {
     },
     "factory": {
         "files": ["wqb_agent/alpha_factory.py", "wqb_agent/alpha_templates/"],
-        "tests": ["tests/test_factory_batch_contract.py", "tests/test_research_api.py"],
+        "tests": ["tests/test_research_api.py"],
         "docs": ["wqb_agent/AGENTS.md"],
     },
 }
