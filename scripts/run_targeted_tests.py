@@ -65,7 +65,7 @@ DIRECT_TESTS = {
     "wqb_agent/doctor.py": (
         "tests/test_remote_diagnostics.py",
     ),
-    "wqb_agent/proposal_contract.py": (),
+    "wqb_agent/proposal_contract.py": ("tests/test_protocol_truth.py",),
     "wqb_agent/operator_reference.py": ("tests/test_protocol_truth.py",),
     "wqb_agent/alpha_factory.py": (
         "tests/test_research_api.py",
@@ -281,10 +281,12 @@ def changed_files(base_sha: str | None) -> list[str]:
     for line in result.stdout.splitlines():
         if not line.strip():
             continue
-        status, _, path = line.partition("\t")
+        fields = line.split("\t")
+        status = fields[0]
         if status.startswith("D"):
             continue
-        changed.append(path)
+        # Rename/copy records contain old and new paths; route the new path.
+        changed.append(fields[-1])
     return changed
 
 
