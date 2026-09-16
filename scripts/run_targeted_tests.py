@@ -48,9 +48,6 @@ DIRECT_TESTS = {
     "tests/test_architecture_contracts.py": (
         "tests/test_architecture_contracts.py",
     ),
-    "wqb_agent/proposal_admission.py": ("tests/test_execution_identity.py",),
-    "wqb_agent/execution_identity.py": ("tests/test_execution_identity.py",),
-    "wqb_agent/validation_proposals.py": (),
     "wqb_agent/discovery.py": ("tests/test_research_api.py",),
     "wqb_agent/field_metadata.py": ("tests/test_research_api.py",),
     "wqb_agent/discovery_selection.py": (),
@@ -88,15 +85,6 @@ DIRECT_TESTS = {
         "tests/test_remote_diagnostics.py",
     ),
     "wqb_agent/proposal_contract.py": (),
-    "wqb_agent/proposal_schema.py": (
-        "tests/test_architecture_contracts.py",
-    ),
-    "wqb_agent/proposal_batch.py": (
-        "tests/test_architecture_contracts.py",
-    ),
-    "wqb_agent/proposal_validation.py": (
-        "tests/test_architecture_contracts.py",
-    ),
     "wqb_agent/alpha_factory.py": (
         "tests/test_research_api.py",
     ),
@@ -130,7 +118,6 @@ DIRECT_TESTS = {
         "tests/test_locking.py",
     ),
     "wqb_agent/preflight.py": (
-        "tests/test_research_constraints.py",
         "tests/test_remote_diagnostics.py",
     ),
     "wqb_agent/research_api.py": (
@@ -144,11 +131,8 @@ DIRECT_TESTS = {
     "wqb_agent/research_catalog.py": (
         "tests/test_research_api.py",
     ),
-    "wqb_agent/execution_plan.py": ("tests/test_execution_plan.py",),
-    "wqb_agent/proposal_inbox.py": ("tests/test_proposal_inbox.py",),
     "scripts/check_correlation.py": (),
-    "scripts/check_health.py": ("tests/test_research_constraints.py",),
-    "scripts/research_quality_audit.py": ("tests/test_research_constraints.py",),
+    "scripts/check_health.py": (),
     "scripts/validate_integrity.py": ("tests/test_remote_diagnostics.py",),
     "wqb_agent/alpha_pool.py": (),
     "wqb_agent/behavior.py": (),
@@ -172,13 +156,11 @@ DIRECT_TESTS = {
     "wqb_agent/alpha_colors.py": ("tests/test_remote_colors.py",),
     "wqb_agent/remote_colors.py": ("tests/test_remote_colors.py",),
     "wqb_agent/pnl.py": ("tests/test_optimization_interfaces.py",),
-    "wqb_agent/research_evidence.py": ("tests/test_research_constraints.py",),
-    "wqb_agent/research_guard.py": ("tests/test_research_constraints.py",),
+    "wqb_agent/research_evidence.py": (),
     "wqb_agent/robustness.py": (),
     "wqb_agent/schema.py": ("tests/test_architecture_contracts.py",),
     "wqb_agent/smoke.py": ("tests/test_smoke.py",),
     "wqb_agent/submission.py": (),
-    "wqb_agent/validation.py": ("tests/test_evaluation.py",),
     "wqb_agent/yearly.py": ("tests/test_evaluation.py",),
 }
 
