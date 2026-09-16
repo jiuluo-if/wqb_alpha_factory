@@ -159,6 +159,8 @@ class Simulator:
         # second POST could duplicate an unknown remote job.
         if exp.status in UNKNOWN_STATUSES:
             return exp.status == "SUBMIT_UNKNOWN" or not exp.progress_url
+        if exp.status == "RATE_LIMITED":
+            return True
         if exp.status == "FAILED" and exp.error and (
             "401" in exp.error or "403" in exp.error
         ):
@@ -216,12 +218,12 @@ class Simulator:
                         persist()
                         break
                     except WQBRateLimitError as exc:
-                        # Do not infer write safety from a transport code.  A
-                        # retry is legal only when the client/API contract has
-                        # explicitly established it; this generic client does
-                        # not make that claim.
+                        # The client has already received a server-side 429,
+                        # which rejects the request before acceptance.  Do not
+                        # retain a false unknown guard; stop this window so a
+                        # later caller can retry after the rate limit clears.
                         experiment.error = f"{type(exc).__name__}: {exc}"
-                        experiment.status = "SUBMIT_UNKNOWN"
+                        experiment.status = "RATE_LIMITED"
                         persist()
                         return experiment
                     except WQBSubmitUnknownError as exc:
@@ -418,6 +420,11 @@ class Simulator:
         except WQBSubmitUnknownError as exc:
             batch.error = f"{type(exc).__name__}: {exc}"
             batch.status = "SUBMIT_UNKNOWN"
+            persist()
+            return batch
+        except WQBRateLimitError as exc:
+            batch.error = f"{type(exc).__name__}: {exc}"
+            batch.status = "RATE_LIMITED"
             persist()
             return batch
         except WQBError as exc:

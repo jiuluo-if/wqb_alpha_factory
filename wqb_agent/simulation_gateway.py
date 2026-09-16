@@ -345,6 +345,9 @@ class SimulationGateway:
 
         def on_update(item):
             status = "SUBMIT_UNKNOWN" if item.status == "UNKNOWN" else item.status
+            if status == "RATE_LIMITED":
+                self.guard.remove(item.submission_fingerprint)
+                return
             if status in ExecutionGuard.STATUSES:
                 self.guard.update(
                     item.submission_fingerprint,
@@ -363,6 +366,14 @@ class SimulationGateway:
         for item in completed:
             fingerprint = item.submission_fingerprint
             completed_fingerprints.add(fingerprint)
+            if item.status == "RATE_LIMITED":
+                self.guard.remove(fingerprint)
+                results[index_by_fingerprint[fingerprint]] = {
+                    "status": "NOT_DISPATCHED",
+                    "fingerprint": fingerprint,
+                    "error": item.error,
+                }
+                continue
             if item.status in {"DONE", "FAILED"}:
                 self.guard.remove(fingerprint)
             results[index_by_fingerprint[fingerprint]] = self._result(
@@ -489,6 +500,9 @@ class SimulationGateway:
 
         def on_update(batch):
             status = "SUBMIT_UNKNOWN" if batch.status == "UNKNOWN" else batch.status
+            if status == "RATE_LIMITED":
+                self.guard.remove(batch.submission_fingerprint)
+                return
             if status in ExecutionGuard.STATUSES:
                 self.guard.update(
                     batch.submission_fingerprint,
@@ -506,6 +520,16 @@ class SimulationGateway:
         }
         for batch in completed:
             batch_fingerprint = batch.submission_fingerprint
+            if batch.status == "RATE_LIMITED":
+                self.guard.remove(batch_fingerprint)
+                for child in batch.children:
+                    results[child.index] = {
+                        "status": "NOT_DISPATCHED",
+                        "fingerprint": child.submission_fingerprint,
+                        "batch_fingerprint": batch_fingerprint,
+                        "error": batch.error,
+                    }
+                continue
             if batch.status in {"DONE", "FAILED"}:
                 self.guard.remove(batch_fingerprint)
             for child in batch.children:

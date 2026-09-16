@@ -206,6 +206,7 @@ class TestOperatorCapabilityClient(unittest.TestCase):
             request.call_args.kwargs["headers"],
             {"X-Idempotency-Key": "multi-fingerprint"},
         )
+        self.assertNotEqual(request.call_args.kwargs.get("retry_rate_limit"), False)
 
     def test_multi_progress_resolves_child_simulations_without_a_new_post(self):
         c = make_client()

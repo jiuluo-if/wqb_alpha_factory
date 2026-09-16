@@ -6,7 +6,7 @@ import time
 import unittest
 
 from wqb_agent import research_api
-from wqb_agent.client import WQBSubmitUnknownError
+from wqb_agent.client import WQBRateLimitError, WQBSubmitUnknownError
 from wqb_agent.remote_evidence import RemoteAlphaEvidenceProvider
 from wqb_agent.simulation_gateway import (
     ExecutionGuard,
@@ -126,6 +126,12 @@ class UnknownMultiGatewayClient(MultiGatewayClient):
         raise WQBSubmitUnknownError("multi response ambiguous")
 
 
+class RateLimitedMultiGatewayClient(MultiGatewayClient):
+    def submit_multi_simulation(self, payloads, **kwargs):
+        self.multi_submissions.append((payloads, kwargs))
+        raise WQBRateLimitError("multi request rate limited before acceptance")
+
+
 class TestSimulationGateway(unittest.TestCase):
     def test_public_batch_uses_bounded_gateway_concurrency(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -214,6 +220,23 @@ class TestSimulationGateway(unittest.TestCase):
                 ["SUBMIT_UNKNOWN", "SUBMIT_UNKNOWN"],
             )
             self.assertEqual(second_client.multi_submissions, [])
+
+    def test_multi_rate_limit_is_not_recorded_as_unknown_submission(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = RateLimitedMultiGatewayClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            specs = [
+                SimulationSpec(f"rank(field_{index})", {"delay": 1})
+                for index in range(2)
+            ]
+
+            results = gateway.simulate_multi_batch(specs)
+
+            self.assertEqual(
+                [item["status"] for item in results],
+                ["NOT_DISPATCHED", "NOT_DISPATCHED"],
+            )
+            self.assertEqual(gateway.guard.entries(), [])
 
     def test_batch_marks_unsubmitted_tail_without_creating_unknown_guard(self):
         with tempfile.TemporaryDirectory() as tmp:

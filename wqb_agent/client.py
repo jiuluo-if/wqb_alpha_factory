@@ -659,7 +659,6 @@ class WQBClient:
             context=f"submit simulation {expression[:60]}",
             ambiguous_write=True,
             headers=headers,
-            retry_rate_limit=False,
         )
         location = resp.headers.get("Location")
         if not location:
@@ -710,7 +709,6 @@ class WQBClient:
             context="submit multi simulation",
             ambiguous_write=True,
             headers=headers,
-            retry_rate_limit=False,
         )
         location = resp.headers.get("Location")
         if not location:
