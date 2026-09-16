@@ -9,8 +9,8 @@ from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .alpha_feed_cache import DEFAULT_ROLLING_SIMULATION_CAP, RemoteAlphaCache
-from .optimization_interfaces import RemoteAlphaEvidenceProvider
 from .query_errors import QueryTooBroadError
+from .remote_evidence import RemoteAlphaEvidenceProvider
 
 NEW_YORK = ZoneInfo("America/New_York")
 

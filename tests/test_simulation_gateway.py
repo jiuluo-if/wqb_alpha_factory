@@ -5,7 +5,7 @@ import unittest
 
 from wqb_agent import research_api
 from wqb_agent.client import WQBSubmitUnknownError
-from wqb_agent.optimization_interfaces import RemoteAlphaEvidenceProvider
+from wqb_agent.remote_evidence import RemoteAlphaEvidenceProvider
 from wqb_agent.simulation_gateway import (
     ExecutionGuard,
     SimulationGateway,

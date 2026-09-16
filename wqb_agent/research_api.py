@@ -34,13 +34,13 @@ from .alpha_grouping import (
 from .alpha_templates import AlphaTemplateRegistry
 from .config import AppConfig, normalize_config
 from .discovery import FieldDiscovery
-from .optimization_interfaces import RemoteAlphaEvidenceProvider
 from .proposal_contract import (
     load_operator_syntax_reference,
     load_packaged_operator_syntax_reference,
 )
 from .remote_alpha_repository import RemoteAlphaRepository
 from .remote_colors import preview_remote_colors, sync_remote_colors
+from .remote_evidence import RemoteAlphaEvidenceProvider
 from .remote_quota import SimulationQuota
 from .simulation_gateway import ExecutionGuard, SimulationGateway, SimulationSpec
 

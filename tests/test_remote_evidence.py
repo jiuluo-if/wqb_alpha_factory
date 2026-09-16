@@ -10,14 +10,11 @@ from wqb_agent.client import (
     WQBSimulationError,
     WQBTimeoutError,
 )
-from wqb_agent.optimization_interfaces import (
-    ClientOptimizationEvidenceProvider,
-    diagnose_optimization,
-)
 from wqb_agent.pnl import PnlAdapter, decode_recordset
+from wqb_agent.remote_evidence import RemoteAlphaEvidenceProvider
 
 
-class TestOptimizationInterfaces(unittest.TestCase):
+class TestRemoteEvidence(unittest.TestCase):
     def test_client_exposes_only_verified_pnl_recordset(self):
         client = WQBClient.__new__(WQBClient)
         client.base_url = "https://api.worldquantbrain.com"
@@ -53,7 +50,7 @@ class TestOptimizationInterfaces(unittest.TestCase):
         client.get_pnl.return_value = {"records": []}
         client.get_self_correlation.return_value = {"status": "PASS"}
 
-        evidence = ClientOptimizationEvidenceProvider(client).collect("a1")
+        evidence = RemoteAlphaEvidenceProvider(client).collect("a1")
 
         self.assertEqual(evidence.alpha_id, "a1")
         self.assertEqual(evidence.alpha_detail["is"]["sharpe"], 1.2)
@@ -69,7 +66,7 @@ class TestOptimizationInterfaces(unittest.TestCase):
         client.get_pnl.return_value = {"records": []}
         client.get_self_correlation.return_value = {"status": "PASS"}
 
-        evidence = ClientOptimizationEvidenceProvider(client).collect("a1")
+        evidence = RemoteAlphaEvidenceProvider(client).collect("a1")
 
         self.assertEqual(evidence.alpha_detail["is"]["sharpe"], 1.2)
         self.assertEqual(evidence.aggregates["status"], "UNAVAILABLE")
@@ -86,7 +83,7 @@ class TestOptimizationInterfaces(unittest.TestCase):
         client.get_alpha.side_effect = error
 
         with self.assertRaises(RuntimeError) as raised:
-            ClientOptimizationEvidenceProvider(client).collect("a1")
+            RemoteAlphaEvidenceProvider(client).collect("a1")
         self.assertIs(raised.exception, error)
 
     def test_alpha_detail_is_required_anchor_and_stops_followup_reads_on_404(self):
@@ -94,7 +91,7 @@ class TestOptimizationInterfaces(unittest.TestCase):
         client.get_alpha.side_effect = WQBNotFoundError("missing")
 
         with self.assertRaises(WQBNotFoundError):
-            ClientOptimizationEvidenceProvider(client).collect("a1")
+            RemoteAlphaEvidenceProvider(client).collect("a1")
         client.get_aggregates.assert_not_called()
         client.get_pnl.assert_not_called()
         client.get_self_correlation.assert_not_called()
@@ -106,7 +103,7 @@ class TestOptimizationInterfaces(unittest.TestCase):
         client.get_pnl.return_value = {"records": []}
         client.get_self_correlation.return_value = {"status": "PASS"}
 
-        evidence = ClientOptimizationEvidenceProvider(client).collect("a1")
+        evidence = RemoteAlphaEvidenceProvider(client).collect("a1")
 
         self.assertEqual(evidence.status["aggregates"], "UNAVAILABLE")
         self.assertEqual(evidence.aggregates["reason_code"], "CAPABILITY_UNAVAILABLE")
@@ -119,7 +116,7 @@ class TestOptimizationInterfaces(unittest.TestCase):
                 client.get_alpha.return_value = {"id": "a1"}
                 client.get_aggregates.side_effect = error_type("failure")
                 with self.assertRaises(error_type):
-                    ClientOptimizationEvidenceProvider(client).collect("a1")
+                    RemoteAlphaEvidenceProvider(client).collect("a1")
 
     def test_explicit_correlation_pending_is_unknown_but_capability_available(self):
         client = Mock()
@@ -128,20 +125,11 @@ class TestOptimizationInterfaces(unittest.TestCase):
         client.get_pnl.return_value = {"records": []}
         client.get_self_correlation.side_effect = WQBCorrelationPendingError("pending")
 
-        evidence = ClientOptimizationEvidenceProvider(client).collect("a1")
+        evidence = RemoteAlphaEvidenceProvider(client).collect("a1")
 
         self.assertEqual(evidence.status["self_correlation"], "UNKNOWN")
         self.assertEqual(evidence.availability["self_correlation"], "AVAILABLE")
 
-    def test_diagnosis_distinguishes_low_sharpe_from_turnover(self):
-        low_signal = diagnose_optimization(
-            {"sharpe": 0.4, "returns": 0.03, "turnover": 0.08}
-        )
-        high_turnover = diagnose_optimization(
-            {"sharpe": 1.4, "returns": 0.08, "turnover": 0.30}
-        )
-        self.assertEqual(low_signal["primary_problem"], "LOW_SHARPE")
-        self.assertEqual(high_turnover["primary_problem"], "HIGH_TURNOVER")
-
 if __name__ == "__main__":
     unittest.main()
+

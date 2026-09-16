@@ -1,4 +1,4 @@
-"""优化 Agent 的窄接口：证据采集、指标诊断和经验记账。"""
+"""Live Alpha evidence access backed by the BRAIN client."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from .client import (
 
 
 @dataclass(frozen=True)
-class OptimizationEvidenceSnapshot:
+class RemoteAlphaEvidence:
     """一个 Alpha 的真实只读证据快照；raw payload 仍由既有 owner 保存。"""
 
     alpha_id: str
@@ -26,17 +26,17 @@ class OptimizationEvidenceSnapshot:
     availability: Mapping[str, str] = field(default_factory=dict)
 
 
-class OptimizationEvidenceProvider(Protocol):
-    def collect(self, alpha_id: str) -> OptimizationEvidenceSnapshot: ...
+class RemoteEvidenceProvider(Protocol):
+    def collect(self, alpha_id: str) -> RemoteAlphaEvidence: ...
 
 
-class ClientOptimizationEvidenceProvider:
-    """将唯一 WQBClient 投影成优化专用的只读接口。"""
+class _RemoteEvidenceCollector:
+    """Project one WQBClient into a live, read-only Alpha evidence API."""
 
     def __init__(self, client):
         self.client = client
 
-    def collect(self, alpha_id: str) -> OptimizationEvidenceSnapshot:
+    def collect(self, alpha_id: str) -> RemoteAlphaEvidence:
         alpha_id = str(alpha_id).strip()
         if not alpha_id:
             raise ValueError("alpha_id must be non-empty")
@@ -53,7 +53,7 @@ class ClientOptimizationEvidenceProvider:
         }
         status = {name: self._slot_value(value, "status", "AVAILABLE") for name, value in slots.items()}
         availability = {name: self._slot_value(value, "availability", "AVAILABLE") for name, value in slots.items()}
-        return OptimizationEvidenceSnapshot(
+        return RemoteAlphaEvidence(
             alpha_id=alpha_id,
             alpha_detail=slots["alpha_detail"], aggregates=slots["aggregates"],
             pnl=slots["pnl"], self_correlation=slots["self_correlation"],
@@ -95,8 +95,8 @@ class ClientOptimizationEvidenceProvider:
             raise
 
 
-class RemoteAlphaEvidenceProvider(ClientOptimizationEvidenceProvider):
-    """Remote-first name for the live Alpha evidence read boundary."""
+class RemoteAlphaEvidenceProvider(_RemoteEvidenceCollector):
+    """Live, read-only Alpha evidence API."""
 
     def get_alpha(self, alpha_id):
         return self.client.get_alpha(str(alpha_id).strip())
@@ -135,28 +135,3 @@ class RemoteAlphaEvidenceProvider(ClientOptimizationEvidenceProvider):
             self.get_alpha_evidence(item) for item in (alpha_ids or ())
         ]}
 
-
-def diagnose_optimization(metrics: Mapping[str, Any]) -> dict[str, Any]:
-    """返回 bounded hint，不替 Agent 做经济决策。"""
-    if not isinstance(metrics, Mapping):
-        return {"primary_problem": "MISSING_EVIDENCE", "recommended_focus": "STOP"}
-    sharpe, turnover, returns = (_number(metrics.get(key))
-                                 for key in ("sharpe", "turnover", "returns"))
-    if sharpe is None or turnover is None or returns is None:
-        return {"primary_problem": "MISSING_EVIDENCE", "recommended_focus": "RECONCILE"}
-    if sharpe < 1.0:
-        return {"primary_problem": "LOW_SHARPE", "recommended_focus": "SIGNAL_OR_MECHANISM"}
-    if turnover > 0.125:
-        return {"primary_problem": "HIGH_TURNOVER", "recommended_focus": "HORIZON_OR_SMOOTHING"}
-    if returns <= 0:
-        return {"primary_problem": "LOW_RETURN", "recommended_focus": "INFORMATION_DENSITY"}
-    return {"primary_problem": "NO_CLEAR_HEADLINE_BLOCKER", "recommended_focus": "ROBUSTNESS"}
-
-
-def _number(value):
-    if isinstance(value, bool):
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
