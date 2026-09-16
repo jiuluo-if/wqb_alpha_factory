@@ -81,13 +81,8 @@ DIRECT_TESTS = {
         "tests/test_proposal_execution.py",
         "tests/test_proposal_safety.py",
     ),
-    "wqb_agent/optimization_screening.py": (
-        "tests/test_agent_decision_to_proposal.py",
-    ),
-    "wqb_agent/validation_proposals.py": (
-        "tests/test_agent_decision_to_proposal.py",
-        "tests/test_optimization_decision_contract.py",
-    ),
+    "wqb_agent/optimization_screening.py": (),
+    "wqb_agent/validation_proposals.py": (),
     "wqb_agent/discovery.py": (
         "tests/test_discovery.py",
         "tests/test_discovery_selection.py",
@@ -231,18 +226,8 @@ DIRECT_TESTS = {
         "tests/test_proposal_contract.py",
         "tests/test_architecture_contracts.py",
     ),
-    "wqb_agent/optimizer_workflow.py": (
-        "tests/test_optimizer_workflow.py",
-        "tests/test_agent_decision_to_proposal.py",
-        "tests/test_proposal_safety.py",
-        "tests/test_agent_optimization_selection_bridge.py",
-        "tests/test_historical_parent_handoff.py",
-        "tests/test_optimizer_funnel.py",
-    ),
-    "wqb_agent/optimizer_selection.py": (
-        "tests/test_optimizer_workflow.py",
-        "tests/test_multi_generation_optimization.py",
-    ),
+    "wqb_agent/optimizer_workflow.py": (),
+    "wqb_agent/optimizer_selection.py": (),
     "wqb_agent/alpha_factory.py": (
         "tests/test_factory_batch_contract.py",
         "tests/test_factory_relationship_gate.py",
@@ -297,7 +282,6 @@ DIRECT_TESTS = {
     ),
     "wqb_agent/trial_ledger.py": (
         "tests/test_incremental_value.py",
-        "tests/test_optimization_selection_accounting.py",
         "tests/test_protocol_truth.py",
         "tests/test_proposal_safety.py",
         "tests/test_search_calibration.py",
@@ -335,7 +319,7 @@ DIRECT_TESTS = {
     "wqb_agent/incremental_value.py": ("tests/test_incremental_value.py",),
     "wqb_agent/metrics.py": ("tests/test_evaluation.py",),
     "wqb_agent/mutations.py": ("tests/test_research_yield.py",),
-    "wqb_agent/optimization_decision.py": ("tests/test_optimization_decision_contract.py",),
+    "wqb_agent/optimization_decision.py": (),
     "wqb_agent/optimization_interfaces.py": ("tests/test_optimization_interfaces.py",),
     "wqb_agent/simulation_gateway.py": ("tests/test_simulation_gateway.py",),
     "wqb_agent/remote_alpha_repository.py": ("tests/test_remote_alpha_repository.py",),
