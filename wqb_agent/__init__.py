@@ -2,7 +2,7 @@
 
 Public agent-facing API lives in :mod:`wqb_agent.research_api`.
 Other modules are implementation details unless a task explicitly requires
-them.  The package root keeps only the agent-facing facade and research API.
+them. The package root exposes only the Remote-First research API.
 """
 
 __all__ = [
@@ -44,17 +44,7 @@ __all__ = [
 
 
 def __getattr__(name):
-    """保持包级 API，同时避免导入纯工具时加载生产编排链。
-
-    ``Agent`` remains an explicit, deprecated compatibility import for old
-    integrations, but is intentionally absent from the package's public
-    ``__all__`` surface. Remote-First callers should use ``research_api``.
-    """
-    if name == "Agent":
-        from .agent import Agent
-
-        globals()[name] = Agent
-        return Agent
+    """Load the Remote-First API lazily without legacy runtime imports."""
     if name == "WQBClient":
         from .client import WQBClient
 

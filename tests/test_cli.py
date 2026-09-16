@@ -158,9 +158,6 @@ class TestCliRuntimeSafety(unittest.TestCase):
         ) as release, patch(
             "wqb_agent.WQBClient"
         ) as client_class, patch(
-            "wqb_agent.Agent",
-            side_effect=AssertionError("sync-colors 不应构造 Agent"),
-        ), patch(
             "wqb_agent.research_api.refresh_remote_alphas",
             return_value={"submitted_count": 1},
         ) as refresh, patch(
