@@ -6,7 +6,6 @@ them.  The package root keeps only the agent-facing facade and research API.
 """
 
 __all__ = [
-    "Agent",
     "WQBClient",
     "SimulationSpec",
     "validate_simulation_spec",
@@ -16,7 +15,6 @@ __all__ = [
     "get_pending_executions",
     "resume_execution",
     "reconcile_execution",
-    "get_capabilities",
     "get_operators",
     "get_alpha",
     "get_alpha_evidence",
@@ -48,9 +46,9 @@ __all__ = [
 def __getattr__(name):
     """保持包级 API，同时避免导入纯工具时加载生产编排链。
 
-    ``main.py`` 仍可使用 ``from wqb_agent import Agent, WQBClient``；只有
-    访问这两个生产入口时才懒加载 Agent/HTTP client，模板工厂和审计工具
-    因此不会因包初始化产生网络依赖。
+    ``Agent`` remains an explicit, deprecated compatibility import for old
+    integrations, but is intentionally absent from the package's public
+    ``__all__`` surface. Remote-First callers should use ``research_api``.
     """
     if name == "Agent":
         from .agent import Agent

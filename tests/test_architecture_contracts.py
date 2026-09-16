@@ -126,7 +126,7 @@ class ArchitectureDependencyContracts(unittest.TestCase):
         self.assertEqual(
             values,
             {
-                "Agent", "WQBClient", "SimulationSpec",
+                "WQBClient", "SimulationSpec",
                 "validate_simulation_spec", "execution_fingerprint",
                 "simulate", "simulate_batch", "get_pending_executions",
                 "resume_execution", "get_alpha", "get_alpha_evidence",
