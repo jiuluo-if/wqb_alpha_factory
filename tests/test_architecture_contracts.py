@@ -131,6 +131,8 @@ class ArchitectureDependencyContracts(unittest.TestCase):
                 "resume_execution", "get_alpha", "get_alpha_evidence",
                 "compare_alphas", "get_remote_alpha",
                 "get_remote_alpha_evidence", "simulation_quota", "generate_probes",
+                "get_capabilities", "list_templates", "inspect_template",
+                "reconcile_execution", "find_similar_alphas",
                 "inspect_state",
                 "discover_fields", "get_operator_reference",
                 "get_operator_syntax_reference", "run_experiment",
