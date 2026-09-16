@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
+from datetime import date, timedelta
 
 from .alpha_feed_cache import WEEKLY_SIMULATION_CAP, WeeklyAlphaFeedCache
 from .alpha_feed_workflow import AlphaFeedWorkflow
@@ -49,8 +50,16 @@ class RemoteAlphaRepository:
         if days < 1 or days > self.retention_days:
             raise ValueError("days must be within the configured retention window")
         payload = self.cache.load() or {}
+        latest = date.fromisoformat(self.cache.local_date)
+        start = latest - timedelta(days=days - 1)
         result = []
-        for _day, bucket in (payload.get("days") or {}).items():
+        for raw_day, bucket in (payload.get("days") or {}).items():
+            try:
+                bucket_day = date.fromisoformat(str(raw_day))
+            except (TypeError, ValueError):
+                continue
+            if bucket_day < start or bucket_day > latest:
+                continue
             for key in ("simulations", "submitted_alphas"):
                 for row in bucket.get(key, ()) if isinstance(bucket, Mapping) else ():
                     if status is None or str(row.get("status") or "").upper() == str(status).upper():

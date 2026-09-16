@@ -44,6 +44,18 @@ class TestRemoteAlphaRepository(unittest.TestCase):
                              {"submitted-1", "simulated-1"})
             self.assertEqual(repository.cache_status()["retention_days"], 3)
 
+    def test_list_can_narrow_the_configured_window_without_remote_io(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repository = RemoteAlphaRepository(
+                FakeAlphaReader(), cache_path=f"{tmp}/remote.json",
+                retention_days=3, clock=lambda: 1789560000,
+            )
+            repository.refresh_remote_alphas()
+
+            listed = repository.list_remote_alphas(days=1)
+
+            self.assertEqual({row["alpha_id"] for row in listed}, {"submitted-1"})
+
     def test_retention_window_is_fail_closed(self):
         with self.assertRaises(ValueError):
             RemoteAlphaRepository(FakeAlphaReader(), cache_path="x", retention_days=0)
