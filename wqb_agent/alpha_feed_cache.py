@@ -51,7 +51,8 @@ class WeeklyAlphaFeedCache:
     expressions, trajectory rows, or platform result payloads.
     """
 
-    def __init__(self, path, *, clock=None, weekly_simulation_cap=WEEKLY_SIMULATION_CAP):
+    def __init__(self, path, *, clock=None, weekly_simulation_cap=WEEKLY_SIMULATION_CAP,
+                 retention_days=7):
         if not path:
             raise ValueError("Alpha feed cache path 不能为空")
         try:
@@ -60,9 +61,16 @@ class WeeklyAlphaFeedCache:
             raise ValueError("weekly_simulation_cap 必须是正整数") from exc
         if cap < 1:
             raise ValueError("weekly_simulation_cap 必须是正整数")
+        try:
+            days = int(retention_days)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("retention_days 必须是 1-90 的整数") from exc
+        if days < 1 or days > 90:
+            raise ValueError("retention_days 必须是 1-90 的整数")
         self.path = os.path.abspath(path)
         self._clock = clock or __import__("time").time
         self.weekly_simulation_cap = cap
+        self.retention_days = days
 
     @property
     def local_date(self):
@@ -70,7 +78,9 @@ class WeeklyAlphaFeedCache:
 
     @property
     def week_start(self):
-        return _week_start(_local_date(self._clock())).isoformat()
+        return (
+            _local_date(self._clock()) - timedelta(days=self.retention_days - 1)
+        ).isoformat()
 
     def _cleanup_expired_resources(self):
         directory = os.path.dirname(self.path)
@@ -113,7 +123,7 @@ class WeeklyAlphaFeedCache:
     def _normalize_days(self, days, local_day):
         if not isinstance(days, dict):
             raise TypeError("Alpha feed days 必须是对象")
-        start = _week_start(local_day)
+        start = local_day - timedelta(days=self.retention_days - 1)
         normalized = {}
         for raw_day, bucket in days.items():
             try:
@@ -183,7 +193,8 @@ class WeeklyAlphaFeedCache:
         payload = {
             "schema_version": SCHEMA_VERSION,
             "timezone": "America/New_York",
-            "week_start": _week_start(local_day).isoformat(),
+            "retention_days": self.retention_days,
+            "week_start": (local_day - timedelta(days=self.retention_days - 1)).isoformat(),
             "local_date": local_day.isoformat(),
             "updated_at": _utc_iso(now),
             "expires_at": _utc_iso(expires_at),
@@ -220,6 +231,7 @@ class WeeklyAlphaFeedCache:
             not isinstance(payload, dict)
             or payload.get("schema_version") != SCHEMA_VERSION
             or payload.get("timezone") != "America/New_York"
+            or payload.get("retention_days", 7) != self.retention_days
             or payload.get("week_start") != self.week_start
         ):
             try:

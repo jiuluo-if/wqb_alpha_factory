@@ -44,6 +44,7 @@ from .proposal_contract import (
     load_packaged_operator_syntax_reference,
     validate_targeted_batch,
 )
+from .remote_alpha_repository import RemoteAlphaRepository
 from .research_context import build_research_context, project_cycle
 from .research_cursor import build_research_cursor
 from .research_cursor import research_cycle_id as _research_cycle_id
@@ -474,6 +475,45 @@ def compare_alphas(alpha_ids, *, agent=None, client=None, config=None):
         get_alpha_evidence(item, agent=agent, client=client, config=config)
         for item in (alpha_ids or ())
     ]}
+
+
+def _remote_repository(*, agent=None, client=None, config=None, state_dir=None):
+    client = _remote_client(agent=agent, client=client)
+    raw = _load_config(config) if config is not None else {}
+    retention = ((raw.get("remote_cache") or {}).get("retention_days", 7)
+                 if isinstance(raw, Mapping) else 7)
+    directory = state_dir or getattr(agent, "state_dir", None) or ".wqb_state"
+    cache_path = os.path.join(directory, ".alpha_feed_cache", "remote.json")
+    return RemoteAlphaRepository(
+        client.get_all_user_alphas, cache_path=cache_path,
+        retention_days=retention, evidence_client=client,
+    )
+
+
+def refresh_remote_alphas(*, agent=None, client=None, config=None, state_dir=None,
+                          limit=100):
+    return _remote_repository(
+        agent=agent, client=client, config=config, state_dir=state_dir
+    ).refresh_remote_alphas(limit=limit)
+
+
+def list_remote_alphas(*, agent=None, client=None, config=None, state_dir=None,
+                       days=None, status=None):
+    return _remote_repository(
+        agent=agent, client=client, config=config, state_dir=state_dir
+    ).list_remote_alphas(days=days, status=status)
+
+
+def remote_cache_status(*, agent=None, client=None, config=None, state_dir=None):
+    return _remote_repository(
+        agent=agent, client=client, config=config, state_dir=state_dir
+    ).cache_status()
+
+
+def purge_remote_cache(*, agent=None, client=None, config=None, state_dir=None):
+    return {"removed": _remote_repository(
+        agent=agent, client=client, config=config, state_dir=state_dir
+    ).purge_remote_cache()}
 
 
 def get_experiment(experiment_id, *, state_dir=".wqb_state"):
@@ -991,7 +1031,8 @@ __all__ = [
     "simulate", "simulate_batch", "get_pending_executions", "resume_execution",
     "get_alpha", "get_alpha_evidence", "get_alpha_metrics",
     "get_alpha_aggregates", "get_alpha_pnl", "get_alpha_self_correlation",
-    "compare_alphas", "get_experiment",
+    "compare_alphas", "refresh_remote_alphas", "list_remote_alphas",
+    "remote_cache_status", "purge_remote_cache", "get_experiment",
     "compare_experiments", "search_history", "reconcile",
     "inspect_optimizer_parents", "inspect_optimizer_context",
     "propose_optimization", "materialize_targeted_batch",

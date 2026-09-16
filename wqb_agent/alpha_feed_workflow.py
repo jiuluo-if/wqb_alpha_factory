@@ -43,6 +43,7 @@ class AlphaFeedWorkflow:
         local_date_provider=None,
         now=None,
         heartbeat=None,
+        retention_days=7,
     ):
         self.alpha_reader = alpha_reader
         self.daily_cache = daily_cache
@@ -52,6 +53,12 @@ class AlphaFeedWorkflow:
         )
         self._now = now or time.time
         self.heartbeat = heartbeat
+        try:
+            self.retention_days = int(retention_days)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("retention_days 必须是 1-90 的整数") from exc
+        if not 1 <= self.retention_days <= 90:
+            raise ValueError("retention_days 必须是 1-90 的整数")
 
     @staticmethod
     def _remote_local_date(value):
@@ -63,7 +70,7 @@ class AlphaFeedWorkflow:
         refreshed_at = self._now()
         local_date = self._local_date_provider()
         current_day = date.fromisoformat(local_date)
-        week_start = current_day - timedelta(days=6)
+        week_start = current_day - timedelta(days=self.retention_days - 1)
         days: dict[str, dict[str, list[dict[str, object]]]] = {}
         windows_completed = {"SUBMITTED": 0, "UNSUBMITTED": 0}
         rows_fetched = {"SUBMITTED": 0, "UNSUBMITTED": 0}
