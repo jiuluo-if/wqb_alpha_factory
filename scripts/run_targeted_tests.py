@@ -144,10 +144,6 @@ DIRECT_TESTS = {
         "tests/test_credentials.py",
         "tests/test_remote_diagnostics.py",
     ),
-    "wqb_agent/trial_ledger.py": (
-        "tests/test_protocol_truth.py",
-        "tests/test_trial_ledger_io.py",
-    ),
     "wqb_agent/research_catalog.py": (
         "tests/test_research_api.py",
     ),
@@ -173,7 +169,6 @@ DIRECT_TESTS = {
     "wqb_agent/incremental_policy.py": ("tests/test_evaluation.py",),
     "wqb_agent/metrics.py": ("tests/test_evaluation.py",),
     "wqb_agent/mutations.py": ("tests/test_evaluation.py",),
-    "wqb_agent/optimization_decision.py": (),
     "wqb_agent/optimization_interfaces.py": ("tests/test_optimization_interfaces.py",),
     "wqb_agent/simulation_gateway.py": ("tests/test_simulation_gateway.py",),
     "wqb_agent/remote_alpha_repository.py": ("tests/test_remote_alpha_repository.py",),

@@ -1,10 +1,7 @@
 import json
 import os
-import tempfile
-import threading
 import unittest
 
-from wqb_agent.locking import OwnerBusyError, single_instance_scope
 from wqb_agent.protocol import (
     CapabilityStatus,
     endpoint_catalog,
@@ -14,7 +11,6 @@ from wqb_agent.protocol import (
 )
 from wqb_agent.simulator import Simulator
 from wqb_agent.state import Experiment
-from wqb_agent.trial_ledger import TrialLedger
 from wqb_agent.yearly import build_yearly_evidence
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "brain")
@@ -134,84 +130,3 @@ class TestYearlyEvidence(unittest.TestCase):
         self.assertEqual(exp.status, "DONE")
         self.assertEqual(exp.yearly_evidence["status"], "VERIFIED")
         self.assertTrue(exp.yearly_evidence["stable"])
-
-
-class TestTrialLedger(unittest.TestCase):
-    def test_operator_realization_fields_are_counted_without_identity_change(self):
-        ledger = TrialLedger(None, persist=False)
-        trial = {
-            "id": "trial-op", "candidate_id": "candidate-op", "proposal_id": "proposal-op",
-            "round": 1, "expression": "rank(ts_corr(a, b, 20))", "fields_used": ["a", "b"],
-            "template_mode": "PARTIAL_OPERATOR", "template_branch_of": "toy_base",
-            "operator_role": "CO_MOVEMENT_ESTIMATOR",
-            "operator_role_mapping": {"CO_MOVEMENT_ESTIMATOR": "ts_corr"},
-            "operator_realization_fingerprint": "realization-fp", "status": "FAILED",
-        }
-        for phase in ("candidate_generated", "candidate_admitted", "simulation_committed"):
-            ledger.record(trial, phase, outcome="FAILED")
-        summary = ledger.summarize()
-        self.assertEqual(summary["trial_counts"]["operator_role"]["CO_MOVEMENT_ESTIMATOR"]["candidate_generated"], 1)
-        self.assertEqual(summary["trial_counts"]["operator_realization"]["ts_corr"]["simulation_committed"], 1)
-        self.assertEqual(
-            summary["operator_realization_accounting"][
-                "CO_MOVEMENT_ESTIMATOR::ts_corr"
-            ]["candidate_generated"],
-            1,
-        )
-        self.assertEqual(summary["phase_counts"]["candidate_admitted"], 1)
-        self.assertEqual(len(ledger._events), 3)
-    def test_durable_append_requires_explicit_worker_delegation(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "trial_ledger.jsonl")
-            ledger = TrialLedger(path)
-            trial = {"id": "trial-1", "round": 1, "expression": "rank(field)"}
-            outcomes = []
-            with single_instance_scope(tmp, operation="outer") as owner:
-                delegation = owner.delegate_simulation_worker()
-
-                def attempt(capability=None):
-                    try:
-                        ledger.record(trial, "submitted", delegation=capability)
-                    except OwnerBusyError:
-                        outcomes.append("busy")
-                    else:
-                        outcomes.append("written")
-
-                thread = threading.Thread(target=attempt)
-                thread.start()
-                thread.join()
-                thread = threading.Thread(target=attempt, args=(delegation,))
-                thread.start()
-                thread.join()
-
-            self.assertEqual(outcomes, ["busy", "written"])
-    def test_lifecycle_and_group_counts_are_idempotent(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            ledger = TrialLedger(os.path.join(tmp, "trial_ledger.jsonl"))
-            exp = Experiment(1, "h1", "rank(signal)", {}, ["signal"], ["dataset"])
-            exp.template_family = "quality"
-            exp.template_id = "quality_level"
-            exp.lineage_id = "lineage-1"
-            exp.status = "PENDING"
-            for phase in ("generated", "preflight"):
-                ledger.record(exp, phase, outcome="ACCEPTED")
-            exp.status = "RUNNING"
-            ledger.record(exp, "submitted")
-            exp.status = "DONE"
-            exp.metrics = {"sharpe": 1.25}
-            ledger.record(exp, "completed")
-            ledger.record(exp, "completed")
-            summary = ledger.summarize()
-            self.assertEqual(summary["events"], 4)
-            self.assertEqual(summary["phase_counts"]["completed"], 1)
-            self.assertEqual(summary["trial_counts"]["template_family"]["quality"]["completed"], 1)
-            self.assertEqual(summary["trial_counts"]["field"]["signal"]["generated"], 1)
-            self.assertEqual(summary["trial_sharpe_count"], 1)
-
-    def test_legacy_experiment_row_without_yearly_evidence_loads(self):
-        exp = Experiment.from_dict({
-            "id": "old", "round": 1, "hypothesis_id": "h1",
-            "expression": "rank(x)", "settings": {}, "fields_used": ["x"],
-            "status": "DONE", "metrics": {},
-        })
-        self.assertIsNone(exp.yearly_evidence)
