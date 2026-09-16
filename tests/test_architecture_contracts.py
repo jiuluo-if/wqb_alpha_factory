@@ -126,20 +126,19 @@ class ArchitectureDependencyContracts(unittest.TestCase):
         self.assertEqual(
             values,
             {
-                "Agent", "WQBClient", "ExperimentSpec", "SimulationSpec",
+                "Agent", "WQBClient", "SimulationSpec",
+                "validate_simulation_spec", "execution_fingerprint",
                 "simulate", "simulate_batch", "get_pending_executions",
                 "resume_execution", "get_alpha", "get_alpha_evidence",
                 "compare_alphas", "get_remote_alpha",
                 "get_remote_alpha_evidence", "simulation_quota", "generate_probes",
                 "get_capabilities", "list_templates", "inspect_template",
                 "reconcile_execution", "find_similar_alphas",
+                "refresh_remote_alphas", "list_remote_alphas", "remote_cache_status",
+                "purge_remote_cache", "group_alphas", "find_alpha_duplicates",
                 "inspect_state",
                 "discover_fields", "get_operator_reference",
                 "get_operator_syntax_reference", "run_experiment",
-                "get_experiment", "compare_experiments", "search_history",
-                "reconcile", "inspect_optimizer_parents",
-                "inspect_optimizer_context", "propose_optimization",
-                "materialize_targeted_batch",
             },
         )
 
