@@ -135,6 +135,10 @@ DIRECT_TESTS = {
     "wqb_agent/evidence.py": ("tests/test_evidence.py",),
     "wqb_agent/evidence_status.py": ("tests/test_evidence.py",),
     "wqb_agent/failures.py": ("tests/test_client_refactor.py",),
+    "wqb_agent/schema.py": (
+        "tests/test_client_refactor.py",
+        "tests/test_evidence.py",
+    ),
     "wqb_agent/expression.py": ("tests/test_expression.py",),
     "wqb_agent/heartbeat.py": ("tests/test_heartbeat.py",),
     "wqb_agent/identity.py": ("tests/test_semantic_contract_admission.py",),
@@ -147,7 +151,6 @@ DIRECT_TESTS = {
     "wqb_agent/alpha_colors.py": ("tests/test_remote_colors.py",),
     "wqb_agent/remote_colors.py": ("tests/test_remote_colors.py",),
     "wqb_agent/pnl.py": ("tests/test_optimization_interfaces.py",),
-    "wqb_agent/schema.py": ("tests/test_architecture_contracts.py",),
     "wqb_agent/smoke.py": ("tests/test_smoke.py",),
     "wqb_agent/submission.py": (),
     "wqb_agent/yearly.py": ("tests/test_evaluation.py",),
