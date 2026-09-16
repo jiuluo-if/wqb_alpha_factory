@@ -24,35 +24,6 @@ class TestCanonicalCliGrammar(unittest.TestCase):
         self.assert_command(
             ["suggest"], domain="research", action="suggest"
         )
-        self.assert_command(
-            ["run-proposals"],
-            domain="research",
-            action="run-proposals",
-            path=".wqb_state/proposals.json",
-            force_new_round=False,
-        )
-        self.assert_command(
-            ["run-proposals", "custom.json", "--force-new-round"],
-            domain="research",
-            action="run-proposals",
-            path="custom.json",
-            force_new_round=True,
-        )
-
-    def test_factory_commands_scope_hours_to_run(self):
-        self.assert_command(
-            ["factory", "run"], domain="factory", action="run", hours=None
-        )
-        self.assert_command(
-            ["factory", "run", "--hours", "0.5"],
-            domain="factory",
-            action="run",
-            hours=0.5,
-        )
-        self.assert_command(["factory", "stop"], domain="factory", action="stop")
-        self.assert_command(
-            ["factory", "status"], domain="factory", action="status"
-        )
 
     def test_state_context_and_smoke_commands(self):
         for action in ("doctor", "audit", "preflight"):
@@ -72,7 +43,7 @@ class TestCanonicalCliGrammar(unittest.TestCase):
         )
         self.assert_command(["smoke"], domain="smoke", action="readonly")
 
-    def test_alpha_and_recovery_commands(self):
+    def test_alpha_commands(self):
         self.assert_command(
             ["alpha", "sync-colors", "--dry-run"],
             domain="alpha",
@@ -81,40 +52,6 @@ class TestCanonicalCliGrammar(unittest.TestCase):
         )
         self.assert_command(
             ["alpha", "sync-feed"], domain="alpha", action="sync-feed"
-        )
-        self.assert_command(
-            ["recovery", "skip-stale", "11", "abc"],
-            domain="recovery",
-            action="skip-stale",
-            round_value="11",
-            identifier="abc",
-        )
-        self.assert_command(
-            ["recovery", "skip-submit-unknown", "11", "proposal"],
-            domain="recovery",
-            action="skip-submit-unknown",
-            round_value="11",
-            identifier="proposal",
-        )
-        self.assert_command(
-            ["recovery", "finalize-round", "11"],
-            domain="recovery",
-            action="finalize-round",
-            round_value=11,
-        )
-        self.assert_command(
-            ["recovery", "settle-stale-trajectory"],
-            domain="recovery",
-            action="settle-stale-trajectory",
-            round_value=None,
-            dry_run=False,
-        )
-        self.assert_command(
-            ["recovery", "settle-stale-trajectory", "11", "--dry-run"],
-            domain="recovery",
-            action="settle-stale-trajectory",
-            round_value="11",
-            dry_run=True,
         )
 
     def test_global_options_are_canonical_fields(self):
@@ -137,23 +74,16 @@ class TestCanonicalCliGrammar(unittest.TestCase):
     def test_command_specific_options_are_rejected_elsewhere(self):
         invalid = (
             ["factory", "stop", "--hours", "1"],
-            ["alpha", "sync-feed", "--dry-run"],
+            ["recovery", "skip-stale", "1", "x"],
             ["suggest", "--force-new-round"],
             ["context", "--hours", "1"],
-            ["recovery", "finalize-round", "1", "--dry-run"],
-            ["run-proposals", "--offline"],
+            ["alpha", "sync-feed", "--dry-run"],
         )
         for argv in invalid:
             with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as raised:
                     parse_cli(argv)
             self.assertEqual(raised.exception.code, 2)
-
-    def test_legacy_inline_values_remain_compatible(self):
-        command = parse_cli(["--run-proposals=inline.json"])
-        self.assertEqual(command.path, "inline.json")
-        command = parse_cli(["--finalize-recorded-round=-1"])
-        self.assertEqual(command.round_value, -1)
 
     def test_offline_is_only_a_readonly_compatibility_option(self):
         for argv in (
@@ -165,7 +95,7 @@ class TestCanonicalCliGrammar(unittest.TestCase):
             self.assertTrue(parse_cli(argv).offline)
         with contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit) as raised:
-                parse_cli(["factory", "run", "--offline"])
+                parse_cli(["--factory-run", "--offline"])
         self.assertEqual(raised.exception.code, 2)
 
 
@@ -173,17 +103,6 @@ class TestLegacyCliCanonicalization(unittest.TestCase):
     def test_representative_legacy_commands_map_to_canonical_commands(self):
         cases = (
             (["--suggest"], ("research", "suggest"), {}),
-            (
-                ["--run-proposals"],
-                ("research", "run-proposals"),
-                {"path": ".wqb_state/proposals.json"},
-            ),
-            (
-                ["--run-proposals", "custom.json"],
-                ("research", "run-proposals"),
-                {"path": "custom.json"},
-            ),
-            (["--factory-status"], ("factory", "status"), {}),
             (
                 ["--doctor", "--offline"],
                 ("state", "doctor"),
@@ -208,29 +127,11 @@ class TestLegacyCliCanonicalization(unittest.TestCase):
             for name, value in expected.items():
                 self.assertEqual(getattr(command, name), value)
 
-    def test_legacy_factory_hours_and_recovery_options_are_scoped(self):
-        command = parse_cli(["--factory-run", "--factory-hours", "0.5"])
-        self.assertEqual((command.domain, command.action), ("factory", "run"))
-        self.assertEqual(command.hours, 0.5)
-        self.assertEqual(
-            parse_cli(["--factory-run", "--factory-hours", "-1"]).hours,
-            -1.0,
-        )
-        self.assertEqual(
-            parse_cli(["--finalize-recorded-round", "-1"]).round_value,
-            -1,
-        )
-        self.assertEqual(
-            (parse_cli(["--skip-stale", "11", "sim"]).domain,
-             parse_cli(["--skip-stale", "11", "sim"]).action),
-            ("recovery", "skip-stale"),
-        )
-
     def test_invalid_legacy_combinations_remain_rejected(self):
         invalid = (
-            ["--offline", "--run-proposals"],
+            ["--offline", "--factory-run"],
             ["--dry-run", "--sync-alpha-feed"],
-            ["--factory-stop", "--factory-status"],
+            ["--factory-run"],
             ["--compact"],
         )
         for argv in invalid:
@@ -424,7 +325,7 @@ class TestCliSubprocessIntegration(unittest.TestCase):
     def test_root_help_exposes_structured_commands(self):
         result = self.run_cli("--help")
         self.assertEqual(result.returncode, 0)
-        self.assertIn("factory", result.stdout)
+        self.assertNotIn("factory", result.stdout)
         self.assertIn("state", result.stdout)
         self.assertNotIn("--factory-run", result.stdout)
 

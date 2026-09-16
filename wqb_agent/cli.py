@@ -8,8 +8,6 @@ import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-DEFAULT_PROPOSALS_PATH = ".wqb_state/proposals.json"
-
 
 @dataclass(frozen=True)
 class CLICommand:
@@ -19,7 +17,7 @@ class CLICommand:
     action: str
     config: str = "config.json"
     state_dir: str | None = None
-    path: str = DEFAULT_PROPOSALS_PATH
+    path: str | None = None
     hours: float | None = None
     force_new_round: bool = False
     compact: bool = False
@@ -65,50 +63,6 @@ def build_parser():
         help="形成假设并发现真实 fields，不运行 Simulation",
     )
     _set_command(suggest, "research", "suggest")
-
-    proposals = commands.add_parser(
-        "run-proposals",
-        help="沿安全路径执行 proposals 中的真实 Simulation",
-    )
-    proposals.add_argument(
-        "path",
-        nargs="?",
-        default=DEFAULT_PROPOSALS_PATH,
-        metavar="PATH",
-        help=f"proposals JSON path (default: {DEFAULT_PROPOSALS_PATH})",
-    )
-    proposals.add_argument(
-        "--force-new-round",
-        action="store_true",
-        help="保留未解决的旧 checkpoint 并开启新研究轮次",
-    )
-    _set_command(proposals, "research", "run-proposals")
-
-    factory = commands.add_parser(
-        "factory",
-        help="兼容的有界研究编排控制面",
-    )
-    factory_commands = factory.add_subparsers(
-        dest="_factory_command", required=True
-    )
-    factory_run = factory_commands.add_parser(
-        "run", help="运行有界研究编排"
-    )
-    factory_run.add_argument(
-        "--hours",
-        type=float,
-        default=None,
-        help="运行时长（小时，默认读取配置）",
-    )
-    _set_command(factory_run, "factory", "run")
-    factory_stop = factory_commands.add_parser(
-        "stop", help="请求工厂在安全边界停止"
-    )
-    _set_command(factory_stop, "factory", "stop")
-    factory_status = factory_commands.add_parser(
-        "status", help="读取工厂会话状态"
-    )
-    _set_command(factory_status, "factory", "status")
 
     state = commands.add_parser(
         "state", help="本地状态诊断与接管检查"
@@ -166,53 +120,11 @@ def build_parser():
     )
     _set_command(sync_feed, "alpha", "sync-feed")
 
-    recovery = commands.add_parser(
-        "recovery", help="人工授权的恢复与收尾动作"
-    )
-    recovery_commands = recovery.add_subparsers(
-        dest="_recovery_command", required=True
-    )
-    skip_stale = recovery_commands.add_parser(
-        "skip-stale", help="跳过已完成只读对账的远端作业"
-    )
-    skip_stale.add_argument("round_value", metavar="ROUND")
-    skip_stale.add_argument("identifier", metavar="SIMULATION_ID")
-    _set_command(skip_stale, "recovery", "skip-stale")
-    skip_unknown = recovery_commands.add_parser(
-        "skip-submit-unknown", help="人工授权跳过 SUBMIT_UNKNOWN 或无 progress URL 的 UNKNOWN"
-    )
-    skip_unknown.add_argument("round_value", metavar="ROUND")
-    skip_unknown.add_argument("identifier", metavar="PROPOSAL_ID")
-    _set_command(skip_unknown, "recovery", "skip-submit-unknown")
-    finalize = recovery_commands.add_parser(
-        "finalize-round", help="收尾已记录轮次，不提交 Simulation"
-    )
-    finalize.add_argument("round_value", type=int, metavar="ROUND")
-    _set_command(finalize, "recovery", "finalize-round")
-    settle_stale = recovery_commands.add_parser(
-        "settle-stale-trajectory",
-        help="把已关闭 checkpoint 的终态补写进 trajectory（只写本地，不重发 POST）",
-    )
-    settle_stale.add_argument(
-        "round_value", nargs="?", default=None, metavar="ROUND",
-        help="可选：只处理指定轮次",
-    )
-    settle_stale.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="仅预览，不写 trajectory",
-    )
-    _set_command(settle_stale, "recovery", "settle-stale-trajectory")
-
     return parser
 
 
 _LEGACY_MODES = {
     "--suggest",
-    "--run-proposals",
-    "--factory-run",
-    "--factory-stop",
-    "--factory-status",
     "--doctor",
     "--audit-state",
     "--takeover-preflight",
@@ -220,9 +132,6 @@ _LEGACY_MODES = {
     "--agent-context",
     "--sync-alpha-colors",
     "--sync-alpha-feed",
-    "--skip-stale",
-    "--skip-submit-unknown",
-    "--finalize-recorded-round",
 }
 
 
@@ -260,49 +169,22 @@ def _legacy_argv(argv, parser):
             value, index = _legacy_value(argv, index, name, parser)
             global_args.extend([name, value])
         elif name in _LEGACY_MODES:
-            if token != name and name not in {
-                "--run-proposals",
-                "--finalize-recorded-round",
-            }:
+            if token != name:
                 parser.error(f"{name} does not take an inline value")
             modes.append(name)
-            if name == "--run-proposals":
-                path = DEFAULT_PROPOSALS_PATH
-                if token.startswith(name + "="):
-                    path = token.split("=", 1)[1]
-                    if not path:
-                        parser.error(f"{name} requires a path")
-                elif index + 1 < len(argv) and not argv[index + 1].startswith("-"):
-                    path = argv[index + 1]
-                    index += 1
-                values["path"] = path
-            elif name in {"--skip-stale", "--skip-submit-unknown"}:
-                if token != name:
-                    parser.error(f"{name} requires ROUND and an identifier")
-                if index + 2 >= len(argv):
-                    parser.error(f"{name} requires ROUND and an identifier")
-                values["round_value"] = argv[index + 1]
-                values["identifier"] = argv[index + 2]
-                index += 2
-            elif name == "--finalize-recorded-round":
-                values["round_value"], index = _legacy_value(
-                    argv, index, name, parser, allow_negative=True
-                )
         elif token in {
             "--offline",
             "--compact",
             "--json",
             "--dry-run",
-            "--force-new-round",
         }:
             flags.add(token)
-        elif name in {"--factory-hours", "--task"}:
+        elif name == "--task":
             values[name] = _legacy_value(
                 argv,
                 index,
                 name,
                 parser,
-                allow_negative=name == "--factory-hours",
             )[0]
             if not token.startswith(name + "="):
                 index += 1
@@ -327,29 +209,12 @@ def _legacy_argv(argv, parser):
         parser.error("--offline 只能与只读诊断动作一起使用")
     if "--dry-run" in flags and mode != "--sync-alpha-colors":
         parser.error("--dry-run 只能与 --sync-alpha-colors 一起使用")
-    if "--force-new-round" in flags and mode != "--run-proposals":
-        parser.error("--force-new-round 只能与 --run-proposals 一起使用")
     if "--compact" in flags or "--json" in flags or "--task" in values:
         if mode != "--agent-context":
             parser.error("context options 只能与 --agent-context 一起使用")
-    if mode in {"--factory-stop", "--factory-status"} and "--factory-hours" in values:
-        parser.error("工厂状态/停止动作不能携带 --factory-hours")
-    if mode != "--factory-run" and "--factory-hours" in values:
-        parser.error("--factory-hours 只能与 --factory-run 一起使用")
-
     command_args = list(global_args)
     if mode == "--suggest":
         command_args.extend(["suggest"])
-    elif mode == "--run-proposals":
-        command_args.extend(
-            ["run-proposals", values.get("path", DEFAULT_PROPOSALS_PATH)]
-        )
-    elif mode == "--factory-run":
-        command_args.extend(["factory", "run"])
-    elif mode == "--factory-stop":
-        command_args.extend(["factory", "stop"])
-    elif mode == "--factory-status":
-        command_args.extend(["factory", "status"])
     elif mode == "--doctor":
         command_args.extend(["state", "doctor"])
     elif mode == "--audit-state":
@@ -364,26 +229,6 @@ def _legacy_argv(argv, parser):
         command_args.extend(["alpha", "sync-colors"])
     elif mode == "--sync-alpha-feed":
         command_args.extend(["alpha", "sync-feed"])
-    elif mode == "--skip-stale":
-        command_args.extend(
-            ["recovery", "skip-stale", values["round_value"], values["identifier"]]
-        )
-    elif mode == "--skip-submit-unknown":
-        command_args.extend(
-            [
-                "recovery",
-                "skip-submit-unknown",
-                values["round_value"],
-                values["identifier"],
-            ]
-        )
-    elif mode == "--finalize-recorded-round":
-        command_args.extend(["recovery", "finalize-round", values["round_value"]])
-
-    if mode == "--factory-run" and "--factory-hours" in values:
-        command_args.extend(["--hours", values["--factory-hours"]])
-    if "--force-new-round" in flags:
-        command_args.append("--force-new-round")
     if mode == "--agent-context":
         if "--compact" in flags:
             command_args.append("--compact")
@@ -420,7 +265,7 @@ def parse_cli(argv: Sequence[str] | None = None) -> CLICommand:
         action=namespace._action,
         config=namespace.config,
         state_dir=namespace.state_dir,
-        path=getattr(namespace, "path", DEFAULT_PROPOSALS_PATH),
+        path=getattr(namespace, "path", None),
         hours=getattr(namespace, "hours", None),
         force_new_round=getattr(namespace, "force_new_round", False),
         compact=getattr(namespace, "compact", False),

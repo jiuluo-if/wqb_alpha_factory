@@ -56,29 +56,6 @@ def main(argv=None):
         print(f"配置无效: {exc}")
         sys.exit(1)
 
-    # Remote-First is the only production execution model.  Keep parsing the
-    # retired commands for a short compatibility window so callers receive a
-    # deterministic migration error, but never construct Agent, a factory
-    # session, or the proposals inbox for them.
-    if command_key in {
-        ("factory", "run"),
-        ("factory", "stop"),
-        ("factory", "status"),
-        ("research", "run-proposals"),
-        ("recovery", "skip-stale"),
-        ("recovery", "skip-submit-unknown"),
-        ("recovery", "finalize-round"),
-        ("recovery", "settle-stale-trajectory"),
-    }:
-        print(json.dumps({
-            "status": "REMOVED",
-            "reason": "REMOTE_FIRST_PUBLIC_API_REQUIRED",
-            "command": " ".join(command_key),
-            "next": "Use wqb_agent.research_api.simulate/remote repository tools",
-            "network_write": False,
-        }, ensure_ascii=False, indent=2))
-        sys.exit(2)
-
     if command_key == ("state", "doctor"):
         from wqb_agent.doctor import run_doctor
         print(json.dumps(run_doctor(typed_config, offline=True), ensure_ascii=False, indent=2))
@@ -169,70 +146,27 @@ def main(argv=None):
         sys.exit(1)
 
     agent = Agent(client, typed_config)
-    lock_path = None
-    try:
-        if command_key == ("research", "suggest"):
-            # suggest 只做字段检索、不模拟，不占模拟实例锁
-            agent.run_suggestion_round()
-            return
-        if command_key == ("alpha", "sync-feed"):
-            feed_lock = acquire_single_instance_lock(
-                typed_config.runtime.state_dir, operation="sync-alpha-feed"
-            )
-            if feed_lock is None:
-                sys.exit(1)
-            try:
-                snapshot = agent.refresh_remote_alpha_feed(limit=100)
-                print(json.dumps({
-                    **snapshot,
-                    "network_write": False,
-                }, ensure_ascii=False, indent=2))
-            finally:
-                release_single_instance_lock(feed_lock)
-            return
-        operation_by_command = {
-            ("factory", "run"): "factory-run",
-            ("research", "run-proposals"): "run-proposals",
-            ("recovery", "skip-stale"): "skip-stale",
-            ("recovery", "skip-submit-unknown"): "skip-submit-unknown",
-            ("recovery", "finalize-round"): "finalize-round",
-            ("recovery", "settle-stale-trajectory"): "settle-stale-trajectory",
-        }
-        lock_path = acquire_single_instance_lock(
-            typed_config.runtime.state_dir,
-            operation=operation_by_command[command_key],
+    if command_key == ("research", "suggest"):
+        # suggest 只做字段检索、不模拟，不占模拟实例锁
+        agent.run_suggestion_round()
+        return
+    if command_key == ("alpha", "sync-feed"):
+        feed_lock = acquire_single_instance_lock(
+            typed_config.runtime.state_dir, operation="sync-alpha-feed"
         )
-        if lock_path is None:
+        if feed_lock is None:
             sys.exit(1)
-        if command_key == ("recovery", "settle-stale-trajectory"):
-            # Local-only trajectory settlement: no client, no Simulation POST.
-            result = agent.settle_stale_trajectory(
-                int(command.round_value)
-                if command.round_value not in (None, "") else None,
-                dry_run=command.dry_run,
-            )
-            print(json.dumps(result or {"status": "LOCAL_OWNER_BUSY"},
-                             ensure_ascii=False, indent=2))
-        elif command_key == ("research", "run-proposals"):
-            raise RuntimeError("unreachable retired Remote-First command")
-        elif command_key == ("recovery", "skip-stale"):
-            agent.skip_stale_reconciled(int(command.round_value), command.identifier)
-        elif command_key == ("recovery", "skip-submit-unknown"):
-            agent.skip_submit_unknown_authorized(
-                int(command.round_value), command.identifier
-            )
-        elif command_key == ("recovery", "finalize-round"):
-            agent.finalize_recorded_round(command.round_value)
-        else:
-            print(
-                "未指定研究动作。请使用：\n"
-                "  python main.py suggest\n"
-                "  python main.py run-proposals\n"
-                "  python main.py factory run"
-            )
-            sys.exit(1)
-    finally:
-        release_single_instance_lock(lock_path)
+        try:
+            snapshot = agent.refresh_remote_alpha_feed(limit=100)
+            print(json.dumps({
+                **snapshot,
+                "network_write": False,
+            }, ensure_ascii=False, indent=2))
+        finally:
+            release_single_instance_lock(feed_lock)
+        return
+    print("未指定研究动作。请使用：\n  python main.py suggest")
+    sys.exit(1)
 
 
 if __name__ == "__main__":
