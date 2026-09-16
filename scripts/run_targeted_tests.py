@@ -433,6 +433,7 @@ DIRECT_TESTS = {
     "wqb_agent/optimization_interfaces.py": ("tests/test_optimization_interfaces.py",),
     "wqb_agent/simulation_gateway.py": ("tests/test_simulation_gateway.py",),
     "wqb_agent/remote_alpha_repository.py": ("tests/test_remote_alpha_repository.py",),
+    "wqb_agent/alpha_grouping.py": ("tests/test_alpha_grouping.py",),
     "wqb_agent/pnl.py": ("tests/test_optimization_interfaces.py",),
     "wqb_agent/pre_correlation.py": ("tests/test_pre_correlation.py",),
     "wqb_agent/research_evidence.py": ("tests/test_research_constraints.py",),
