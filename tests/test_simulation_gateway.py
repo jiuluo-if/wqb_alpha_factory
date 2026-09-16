@@ -41,6 +41,11 @@ class FakeGatewayClient:
         return {"alpha_id": alpha_id, "status": "AVAILABLE", "value": 0.1}
 
 
+class CapabilityGatewayClient(FakeGatewayClient):
+    def get_operator_capability(self):
+        return {"valid": True, "availability": "AVAILABLE", "operators": ["rank"]}
+
+
 class TestSimulationGateway(unittest.TestCase):
     def test_public_research_api_simulate_uses_gateway_without_agent_state(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -52,6 +57,15 @@ class TestSimulationGateway(unittest.TestCase):
             self.assertEqual(result["status"], "DONE")
             self.assertEqual(len(client.submissions), 1)
             self.assertEqual(research_api.get_pending_executions(state_dir=tmp), {"entries": []})
+
+    def test_unverified_live_operator_is_rejected_before_post(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = CapabilityGatewayClient()
+            with self.assertRaisesRegex(ValueError, "OPERATOR_CAPABILITY_UNAVAILABLE"):
+                SimulationGateway(client, state_dir=tmp).simulate(
+                    SimulationSpec("ts_mean(close, 5)", {"delay": 1})
+                )
+            self.assertEqual(client.submissions, [])
 
     def test_simulation_uses_spec_and_removes_guard_after_live_result(self):
         with tempfile.TemporaryDirectory() as tmp:

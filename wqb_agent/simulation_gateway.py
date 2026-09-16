@@ -155,6 +155,19 @@ class SimulationGateway:
         return {"valid": True, "expression": spec.expression,
                 "settings": dict(spec.settings), "operators": list(analysis.operators)}
 
+    def _validate_live_capability(self, spec):
+        reader = getattr(self.client, "get_operator_capability", None)
+        if not callable(reader):
+            return
+        capability = reader()
+        if not isinstance(capability, Mapping) or capability.get("valid") is not True:
+            raise ValueError("OPERATOR_CAPABILITY_UNAVAILABLE")
+        operators = {str(item).casefold() for item in capability.get("operators", ())}
+        requested = set(analyze_expression(spec.expression).operators)
+        missing = sorted(requested - operators)
+        if missing:
+            raise ValueError("OPERATOR_CAPABILITY_UNAVAILABLE: " + ", ".join(missing))
+
     def execution_fingerprint(self, spec):
         spec = spec if isinstance(spec, SimulationSpec) else SimulationSpec(**dict(spec))
         self.validate_simulation_spec(spec)
@@ -163,6 +176,7 @@ class SimulationGateway:
     def simulate(self, spec):
         spec = spec if isinstance(spec, SimulationSpec) else SimulationSpec(**dict(spec))
         fingerprint = self.execution_fingerprint(spec)
+        self._validate_live_capability(spec)
         existing = self.guard.find(fingerprint)
         if existing is not None:
             if existing.get("status") == "SUBMIT_UNKNOWN":
