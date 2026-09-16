@@ -12,7 +12,6 @@ from wqb_agent.research_api import (
     inspect_pending_work,
     inspect_research_context,
     inspect_runtime_context,
-    materialize_targeted_batch,
     research_tool_manifest,
 )
 from wqb_agent.research_cursor import (
@@ -115,13 +114,6 @@ class TestResearchInstrument(unittest.TestCase):
         names = {item["name"] for item in research_tool_manifest()}
         self.assertIn("simulate", names)
         self.assertIn("get_alpha_evidence", names)
-
-    def test_stale_cursor_rejects_materialization_before_write(self):
-        agent = SimpleNamespace(state_dir=tempfile.mkdtemp(), next_round_no=lambda: 1)
-        result = materialize_targeted_batch([], agent=agent,
-                                            expected_research_cursor="sha256:stale")
-        self.assertEqual(result["status"], "RESEARCH_CONTEXT_STALE")
-        self.assertFalse(os.path.exists(os.path.join(agent.state_dir, "proposals.json")))
 
     def test_execute_pending_round_routes_only_through_agent_facade(self):
         with tempfile.TemporaryDirectory() as directory:

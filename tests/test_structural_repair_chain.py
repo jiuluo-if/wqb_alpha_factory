@@ -1,7 +1,6 @@
 """Phase VI 控制链修复的 offline 验收测试（无真实 Simulation、无状态写入、correlation/decision 反馈闭环）。"""
 
 import dataclasses
-import json
 import os
 import tempfile
 import unittest
@@ -28,7 +27,6 @@ from tests.optimizer_helpers import (
 )
 from tests.test_agent_flow import make_agent
 from tests.test_pre_correlation import synthetic_metrics
-from wqb_agent import research_api
 from wqb_agent.alpha_factory import AlphaFactory
 from wqb_agent.checkpoints import CheckpointStore
 from wqb_agent.factory_runner import AIFactoryRunner
@@ -38,8 +36,6 @@ from wqb_agent.pre_correlation import (
     pre_self_correlation_eligibility,
 )
 from wqb_agent.proposal_contract import (
-    TARGETED_BATCH_TYPE,
-    targeted_batch_state,
     validate_proposal,
 )
 from wqb_agent.state import Experiment, Trajectory
@@ -185,43 +181,6 @@ class TestTargetedBatchRunsOnTheSingleExecutionPath(unittest.TestCase):
         self.assertIn(PARENT_EXPRESSION, terminal)
         self.assertEqual(len(report["proposals"]), 1)
         self.assertEqual(report["decision_report"]["child_generated"], 1)
-
-    def test_targeted_batch_executes_through_the_single_simulation_path(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            agent, client = make_agent(tmp, rounds=1)
-            _write_field_cache(tmp)
-            parent = _completed_parent()
-            agent.trajectory.add(parent)
-            written = research_api.materialize_targeted_batch(
-                [child_decision(parent.id)], agent=agent, state_dir=tmp,
-            )
-            with open(os.path.join(tmp, "proposals.json"), encoding="utf-8") as handle:
-                envelope = json.load(handle)
-            agent.run_proposals()
-            proposals_files = [
-                name for name in os.listdir(tmp) if name.endswith("proposals.json")
-            ]
-
-        self.assertEqual(written["status"], "TARGETED_BATCH_WRITTEN")
-        self.assertEqual(envelope["batch_type"], TARGETED_BATCH_TYPE)
-        self.assertEqual([field["id"] for field in envelope["fields"]], ["field_a"])
-        self.assertEqual(agent.last_run_stats["accepted"], 1)
-        self.assertEqual(client.sim_calls, [CHILD_EXPRESSION])
-        self.assertEqual(proposals_files, ["proposals.json"])
-
-    def test_targeted_batch_without_field_evidence_stays_fail_closed(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            agent, client = make_agent(tmp, rounds=1)
-            parent = _completed_parent()
-            agent.trajectory.add(parent)
-            written = research_api.materialize_targeted_batch(
-                [child_decision(parent.id)], agent=agent, state_dir=tmp,
-            )
-            agent.run_proposals()
-
-        self.assertEqual(written["status"], "TARGETED_BATCH_WRITTEN")
-        self.assertEqual(client.sim_calls, [])
-        self.assertEqual(agent.last_run_stats["status"], "PREFLIGHT_BLOCKED")
 
     def test_completed_parent_validate_decision_still_emits_robustness(self):
         with tempfile.TemporaryDirectory() as tmp:

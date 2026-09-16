@@ -283,7 +283,6 @@ DIRECT_TESTS = {
     "wqb_agent/proposal_contract.py": (
         "tests/test_factory_batch_contract.py",
         "tests/test_factory_provenance_persistence.py",
-        "tests/test_targeted_batch_contract.py",
     ),
     "wqb_agent/proposal_schema.py": (
         "tests/test_proposal_contract.py",
@@ -291,7 +290,6 @@ DIRECT_TESTS = {
     ),
     "wqb_agent/proposal_batch.py": (
         "tests/test_factory_batch_contract.py",
-        "tests/test_targeted_batch_contract.py",
         "tests/test_architecture_contracts.py",
     ),
     "wqb_agent/proposal_validation.py": (
@@ -359,7 +357,6 @@ DIRECT_TESTS = {
     "wqb_agent/research_api.py": (
         "tests/test_research_api.py",
         "tests/test_proposal_safety.py",
-        "tests/test_targeted_batch_contract.py",
         "tests/test_research_instrument.py",
     ),
     "wqb_agent/remote_quota.py": ("tests/test_remote_quota.py",),

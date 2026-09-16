@@ -20,10 +20,8 @@ DO NOT USE FOR:
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
-import time
 from collections.abc import Mapping
 from typing import Any
 
@@ -34,27 +32,21 @@ from .alpha_grouping import (
     group_remote_evidence,
 )
 from .alpha_templates import AlphaTemplateRegistry
-from .artifacts import atomic_write_json_if_changed
 from .checkpoints import CheckpointStore
 from .config import AppConfig, normalize_config
 from .discovery import FieldDiscovery
 from .factory_runner import AIFactoryRunner
-from .locking import OwnerBusyError, single_instance_scope
-from .optimization_decision import OptimizationDecision, optimization_decision_identity
+from .optimization_decision import OptimizationDecision
 from .optimization_interfaces import RemoteAlphaEvidenceProvider
 from .proposal_contract import (
-    TARGETED_BATCH_TTL_SEC,
-    TARGETED_BATCH_TYPE,
     load_operator_syntax_reference,
     load_packaged_operator_syntax_reference,
-    validate_targeted_batch,
 )
 from .remote_alpha_repository import RemoteAlphaRepository
 from .remote_colors import preview_remote_colors, sync_remote_colors
 from .remote_quota import RemoteSimulationQuota
 from .research_context import build_research_context, project_cycle
 from .research_cursor import build_research_cursor
-from .research_cursor import research_cycle_id as _research_cycle_id
 from .research_quality import assess_experiment as _assess_experiment
 from .research_quality import assess_records
 from .simulation_gateway import ExecutionGuard, SimulationGateway, SimulationSpec
@@ -629,230 +621,6 @@ def propose_optimization(decision, *, agent=None, client=None, config=None,
     return runtime.propose_optimization([decision], max_candidates=max_candidates)
 
 
-def _targeted_field_profiles(runtime, proposals):
-    """用 Agent 已验证的 discovery cache 为 targeted batch 附上真实字段画像。
-
-    优化提案的字段证据来自已完成的 parent，而执行路径的 preflight 需要平台语义
-    画像（``description`` / ``semantic_status``）。这里只复用 Agent 已有的只读
-    field cache；找不到就保持缺画像由 preflight fail-closed，不伪造字段元数据。
-    """
-    used = set()
-    for proposal in proposals or ():
-        if not isinstance(proposal, Mapping):
-            continue
-        for field_id in proposal.get("fields") or ():
-            if str(field_id).strip():
-                used.add(str(field_id))
-    if not used:
-        return []
-    reader = getattr(runtime, "_read_field_cache", None)
-    if not callable(reader):
-        return []
-    try:
-        _types, profiles = reader()
-    except Exception:
-        return []
-    if not isinstance(profiles, Mapping):
-        return []
-    out = []
-    for key, profile in profiles.items():
-        if not isinstance(profile, Mapping):
-            continue
-        field_id = str(profile.get("id") or str(key).split("::")[-1])
-        if field_id not in used:
-            continue
-        enriched = dict(profile)
-        enriched.setdefault("id", field_id)
-        out.append(enriched)
-    return out
-
-
-def materialize_targeted_batch(decisions, *, agent=None, client=None,
-                               config=None, state_dir=None, max_candidates=4,
-                               ttl_sec=TARGETED_BATCH_TTL_SEC,
-                               expected_research_cursor=None,
-                               research_cycle_id=None):
-    runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
-    directory = state_dir or getattr(runtime, "state_dir", None) or ".wqb_state"
-    try:
-        with single_instance_scope(directory, operation="materialize-targeted-batch"):
-            return _materialize_targeted_batch_locked(
-                decisions, agent=runtime, client=client, config=config,
-                state_dir=directory, max_candidates=max_candidates, ttl_sec=ttl_sec,
-                expected_research_cursor=expected_research_cursor,
-                research_cycle_id=research_cycle_id,
-            )
-    except OwnerBusyError:
-        return {
-            "written": False,
-            "status": "LOCAL_OWNER_BUSY",
-            "path": os.path.join(directory, "proposals.json"),
-        }
-
-
-def _materialize_targeted_batch_locked(decisions, *, agent=None, client=None,
-                                       config=None, state_dir=None,
-                                       max_candidates=4,
-                                       ttl_sec=TARGETED_BATCH_TTL_SEC,
-                                       expected_research_cursor=None,
-                                       research_cycle_id=None):
-    """Write Agent-authored CHILD/VALIDATE decisions into the one inbox.
-
-    The optimizer already validated the decisions; this only freezes the
-    resulting bounded batch into the canonical ``proposals.json`` so it is not
-    silently replaced by a factory exploration batch.  The Agent also records
-    local canonical accounting and a lossy memory projection; this is distinct
-    from remote Simulation writes.  It reuses
-    ``OptimizerWorkflow`` (the single CHILD path), the canonical round counter
-    and the existing atomic writer: no second inbox, no second Simulation path,
-    and no Simulation/checkpoint write happens here.
-    """
-    authored = [
-        OptimizationDecision.from_mapping(item) if isinstance(item, Mapping) else item
-        for item in (decisions or ())
-    ]
-    runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
-    directory = state_dir or getattr(runtime, "state_dir", None) or ".wqb_state"
-    path = os.path.join(directory, "proposals.json")
-    decision_ids = [optimization_decision_identity(item) for item in authored]
-    fingerprint = _targeted_batch_fingerprint(decision_ids)
-    existing = _read_targeted_envelope(path)
-    current_runtime = inspect_runtime_context(state_dir=directory)
-    current_cursor = current_runtime["research_cursor"]
-    if (expected_research_cursor is not None
-            and str(expected_research_cursor) != str(current_cursor)):
-        existing_fingerprint = existing.get("decision_fingerprint") if isinstance(existing, Mapping) else None
-        if (not (_active_targeted_batch(existing, time.time())
-                 and existing_fingerprint == fingerprint)):
-            return {
-                "written": False, "status": "RESEARCH_CONTEXT_STALE",
-                "path": path, "research_cursor": current_cursor,
-            }
-    barrier = _targeted_recovery_barrier(runtime)
-    if barrier is not None:
-        return {
-            "written": False,
-            "status": "TARGETED_BATCH_RECOVERY_BLOCKED",
-            "path": path,
-            "reason": barrier,
-        }
-    if _active_targeted_batch(existing, time.time()):
-        existing_fingerprint = existing.get("decision_fingerprint")
-        if not existing_fingerprint:
-            existing_ids = existing.get("optimization_decision_ids")
-            existing_fingerprint = (
-                _targeted_batch_fingerprint(existing_ids)
-                if isinstance(existing_ids, list) else None
-            )
-        if existing_fingerprint == fingerprint:
-            return {
-                "written": False,
-                "status": "TARGETED_BATCH_UNCHANGED",
-                "path": path,
-                "round_no": existing.get("round_no"),
-                "expires_at": existing.get("expires_at"),
-                "proposal_count": len(existing.get("proposals") or []),
-            }
-        return {
-            "written": False,
-            "status": "TARGETED_BATCH_CONFLICT",
-            "path": path,
-            "round_no": existing.get("round_no"),
-        }
-    report = runtime.propose_optimization(authored, max_candidates=max_candidates)
-    proposals = list(report.get("proposals") or [])
-    if not proposals:
-        return {**report, "written": False, "status": "NO_TARGETED_PROPOSAL"}
-    ok, errors = validate_targeted_batch(proposals)
-    if not ok:
-        return {
-            **report, "written": False,
-            "status": "TARGETED_BATCH_REJECTED", "errors": list(errors),
-        }
-    now = time.time()
-    cycle = research_cycle_id or _research_cycle_id(
-        current_cursor, decision_ids, kind="optimization"
-    )
-    for proposal in proposals:
-        proposal["source_research_cursor"] = current_cursor
-        proposal["research_cycle_id"] = cycle
-    fields = _targeted_field_profiles(runtime, proposals)
-    envelope = {
-        "batch_type": TARGETED_BATCH_TYPE,
-        "source": "agent_optimizer",
-        "round_no": runtime.next_round_no(),
-        "created_at": now,
-        "expires_at": now + max(0.0, float(ttl_sec)),
-        "optimization_decision_ids": decision_ids,
-        "decision_fingerprint": fingerprint,
-        "source_research_cursor": current_cursor,
-        "research_cycle_id": cycle,
-        "hypothesis": {
-            "id": f"h-targeted-r{int(now)}",
-            "statement": "Agent authored optimization decisions",
-            "tags": ["agent_optimizer", "targeted_optimization"],
-            "datasets": [],
-        },
-        "fields": fields,
-        "proposals": proposals,
-    }
-    os.makedirs(directory, exist_ok=True)
-    atomic_write_json_if_changed(path, envelope)
-    return {
-        **report,
-        "written": True,
-        "status": "TARGETED_BATCH_WRITTEN",
-        "path": path,
-        "round_no": envelope["round_no"],
-        "expires_at": envelope["expires_at"],
-        "proposal_count": len(proposals),
-    }
-
-
-def _targeted_recovery_barrier(runtime):
-    checkpoints = getattr(runtime, "checkpoints", None)
-    scan = getattr(checkpoints, "scan", None)
-    if not callable(scan):
-        return None
-    for record in scan() or ():
-        if record.get("malformed"):
-            return "MALFORMED_CHECKPOINT"
-        checkpoint = record.get("checkpoint")
-        if not isinstance(checkpoint, Mapping) or checkpoint.get("complete") is not True:
-            return "UNFINISHED_CHECKPOINT"
-        for experiment in checkpoint.get("experiments") or ():
-            if not isinstance(experiment, Mapping):
-                return "MALFORMED_CHECKPOINT"
-            if str(experiment.get("status") or "").upper() in {"SUBMIT_UNKNOWN", "UNKNOWN"}:
-                return "UNKNOWN_REQUIRES_RECONCILIATION"
-    return None
-
-
-def _targeted_batch_fingerprint(decision_ids):
-    return hashlib.sha256(json.dumps(sorted(str(item) for item in decision_ids),
-                                         separators=(",", ":")).encode("utf-8")).hexdigest()
-
-
-def _read_targeted_envelope(path):
-    try:
-        with open(path, encoding="utf-8") as handle:
-            payload = json.load(handle)
-        return payload if isinstance(payload, dict) else None
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        return None
-
-
-def _active_targeted_batch(payload, now):
-    if not isinstance(payload, Mapping):
-        return False
-    if payload.get("batch_type") != TARGETED_BATCH_TYPE or payload.get("source") != "agent_optimizer":
-        return False
-    try:
-        return float(payload.get("expires_at")) > float(now)
-    except (TypeError, ValueError):
-        return False
-
-
 def _projection_inputs(state_dir):
     directory = os.fspath(state_dir or ".wqb_state")
     trajectory = Trajectory(path=os.path.join(directory, "trajectory.jsonl"))
@@ -863,8 +631,10 @@ def _projection_inputs(state_dir):
     )
     ledger_summary = ledger.summarize()
     checkpoints = CheckpointStore(directory).scan()
-    proposals = _read_targeted_envelope(os.path.join(directory, "proposals.json"))
-    active = proposals if _active_targeted_batch(proposals, time.time()) else None
+    # The Remote-First API has no proposals inbox.  Keep this legacy
+    # projection's return shape only while its remaining compatibility callers
+    # are migrated; it must not inspect or expose proposals.json.
+    active = None
     return directory, rows, ledger_summary, checkpoints, active
 
 
@@ -898,21 +668,17 @@ def inspect_runtime_context(*, state_dir=".wqb_state"):
         "capabilities": {
             "simulation": "BLOCKED" if runtime_state == "BLOCKED" else "AVAILABLE",
             "self_correlation": "UNKNOWN",
-            "targeted_batch": "BLOCKED" if runtime_state == "BLOCKED" else "AVAILABLE",
+            "targeted_batch": "REMOVED",
         },
         "unfinished_checkpoint": [
             os.path.basename(record.get("path", "")) for record in unfinished
         ],
         "submit_unknown_present": unknown,
-        "active_targeted_batch": (
-            {key: active[key] for key in ("round_no", "decision_fingerprint", "expires_at")
-             if key in active} if active else None
-        ),
+        "active_targeted_batch": None,
         "factory_status": factory_status,
         "quota_summary": (factory_status or {}).get("quota"),
         "allowed_actions": ["READ_ONLY"] if runtime_state == "BLOCKED" else [
-            "READ_ONLY", "AUTHOR_DECISION", "MATERIALIZE_TARGETED_BATCH",
-            "EXECUTE_PENDING_ROUND",
+            "READ_ONLY", "EXECUTE_PENDING_ROUND",
         ],
     }
 
