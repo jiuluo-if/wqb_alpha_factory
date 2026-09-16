@@ -33,7 +33,6 @@ DIRECT_TESTS = {
     "wqb_agent/query_errors.py": ("tests/test_client_refactor.py",),
     "wqb_agent/alpha_feed_workflow.py": (),
     "wqb_agent/research_planning.py": ("tests/test_research_planning.py",),
-    "wqb_agent/research_quality.py": ("tests/test_research_api.py",),
     "wqb_agent/evidence_projection.py": ("tests/test_evidence_projection.py",),
     "wqb_agent/pre_correlation.py": ("tests/test_evidence_projection.py",),
     "wqb_agent/alpha_semantics.py": ("tests/test_alpha_semantics.py",),
@@ -65,12 +64,8 @@ DIRECT_TESTS = {
     "wqb_agent/artifacts.py": (
         "tests/test_artifacts.py",
     ),
-    "wqb_agent/validation_report.py": ("tests/test_evaluation.py",),
     "wqb_agent/validation_statistics.py": (
         "tests/test_validation_statistics.py",
-        "tests/test_evaluation.py",
-    ),
-    "wqb_agent/search_evidence.py": (
         "tests/test_evaluation.py",
     ),
     "wqb_agent/terminal_evidence.py": (
@@ -78,6 +73,9 @@ DIRECT_TESTS = {
     ),
     "wqb_agent/simulator.py": ("tests/test_simulation_gateway.py",),
     "wqb_agent/weekly_quota.py": (
+    ),
+    "wqb_agent/search_evidence.py": (
+        "tests/test_validation_statistics.py",
     ),
     "wqb_agent/config.py": ("tests/test_remote_diagnostics.py",),
     "wqb_agent/doctor.py": (
@@ -152,8 +150,6 @@ DIRECT_TESTS = {
     "wqb_agent/alpha_colors.py": ("tests/test_remote_colors.py",),
     "wqb_agent/remote_colors.py": ("tests/test_remote_colors.py",),
     "wqb_agent/pnl.py": ("tests/test_optimization_interfaces.py",),
-    "wqb_agent/research_evidence.py": (),
-    "wqb_agent/robustness.py": (),
     "wqb_agent/schema.py": ("tests/test_architecture_contracts.py",),
     "wqb_agent/smoke.py": ("tests/test_smoke.py",),
     "wqb_agent/submission.py": (),

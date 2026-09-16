@@ -31,11 +31,6 @@ class ValidationStatisticsKernelTests(unittest.TestCase):
         valid = pbo_cscv([[1, 2, 3, 4, 5, 6, 7, 8], [0, 1, 2, 3, 4, 5, 6, 7]])
         self.assertEqual(valid["status"], "AVAILABLE")
 
-    def test_compatibility_report_does_not_own_pbo_implementation(self):
-        from wqb_agent import validation_report
-
-        self.assertIs(validation_report.pbo_proxy, pbo_proxy)
-
 
 if __name__ == "__main__":
     unittest.main()
