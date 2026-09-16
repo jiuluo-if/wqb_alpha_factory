@@ -115,10 +115,9 @@ class TestResearchApi(unittest.TestCase):
         result = find_similar_alphas("rank(close)", rows=rows)
         self.assertEqual(result["kind"], "STRUCTURALLY_SIMILAR")
         self.assertEqual([item["alpha_id"] for item in result["matches"]], ["a2"])
-    def test_discovery_facade_uses_existing_discovery_component(self):
-        result = discover_fields("price reversal", agent=_FakeAgent(tempfile.gettempdir()))
-        self.assertEqual(result["fields"][0]["id"], "close")
-        self.assertEqual(result["field_source"]["kind"], "brain_api")
+    def test_discovery_rejects_legacy_agent_facade(self):
+        with self.assertRaises(TypeError):
+            discover_fields("price reversal", agent=_FakeAgent(tempfile.gettempdir()))
 
     def test_discovery_without_agent_does_not_construct_legacy_runtime(self):
         client = SimpleNamespace()
@@ -132,14 +131,13 @@ class TestResearchApi(unittest.TestCase):
         self.assertEqual(result["fields"][0]["id"], "close")
         discovery_type.assert_called_once()
 
-    def test_generate_probes_returns_simulation_specs_without_inbox_envelope(self):
+    def test_generate_probes_rejects_legacy_agent_facade(self):
         with tempfile.TemporaryDirectory() as directory:
             agent = _ProbeAgent(directory)
-            result = generate_probes(
-                query="short-term reversal", agent=agent, count=1,
-            )
-            self.assertEqual(result, [SimulationSpec("rank(close)", {"delay": 1}, ("close",))])
-            self.assertEqual(agent.alpha_factory.received[0]["template_ids"], [])
+            with self.assertRaises(TypeError):
+                generate_probes(
+                    query="short-term reversal", agent=agent, count=1,
+                )
 
     def test_generate_probes_without_agent_does_not_construct_legacy_runtime(self):
         client = SimpleNamespace(get_operator_capability=lambda: {

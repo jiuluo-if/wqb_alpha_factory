@@ -58,9 +58,16 @@ def _load_config(config: Mapping[str, Any] | str | None) -> dict[str, Any]:
     return dict(config)
 
 
+def _reject_legacy_agent(agent):
+    if agent is not None:
+        raise TypeError(
+            "agent facade is retired; pass client, config, and state_dir explicitly"
+        )
+
+
 def _agent(*, agent=None, client=None, config=None, state_dir=None):
     if agent is not None:
-        return agent
+        _reject_legacy_agent(agent)
     if client is None:
         from .client import WQBClient
 
@@ -71,10 +78,6 @@ def _agent(*, agent=None, client=None, config=None, state_dir=None):
     from .agent import Agent
 
     return Agent(client, normalize_config(raw))
-
-
-def _state_dir(agent=None, state_dir=None) -> str:
-    return state_dir or getattr(agent, "state_dir", ".wqb_state")
 
 
 def _remote_research_components(*, client, config=None, state_dir=None,
@@ -338,7 +341,7 @@ def _remote_client(*, agent=None, client=None):
     if client is not None:
         return client
     if agent is not None:
-        return agent.client
+        _reject_legacy_agent(agent)
     from .client import WQBClient
     return WQBClient()
 
