@@ -157,14 +157,16 @@ class TestResearchInstrument(unittest.TestCase):
         self.assertNotIn("research_cycle_id", research_api.ExperimentSpec.__dataclass_fields__
                          ["settings"].default_factory())
 
-    def test_current_docs_and_public_exports_match_two_loop_surface(self):
+    def test_current_docs_and_public_exports_match_remote_first_surface(self):
         root = os.path.dirname(os.path.dirname(__file__))
         from pathlib import Path
 
         readme = Path(root, "README.md").read_text(encoding="utf-8")
         testing = Path(root, "docs", "TESTING.md").read_text(encoding="utf-8")
         architecture = Path(root, "docs", "ARCHITECTURE_AGENT.md").read_text(encoding="utf-8")
-        self.assertIn("research_cursor", readme)
+        self.assertIn("SimulationGateway", readme)
+        self.assertIn("get_alpha_evidence", readme)
+        self.assertIn("remote evidence", architecture)
         self.assertIn("python -m unittest discover -s tests", testing)
         self.assertNotIn("Phase VIII", architecture)
         self.assertTrue({"inspect_research_context", "assess_experiment"}.issubset(
