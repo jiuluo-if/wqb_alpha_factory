@@ -236,11 +236,10 @@ class SimulationGateway:
         # record local is only a transport record; BRAIN owns the result.
         experiment = SimpleNamespace(
             id=fingerprint[:16], expression=spec.expression,
-            settings=dict(spec.settings), fields=list(spec.fields),
+            settings=dict(spec.settings),
             status="PENDING", alpha_id=None, progress_url=None,
-            error=None, metrics=None, yearly_evidence=None, health=None,
-            elapsed_sec=0.0, submission_fingerprint=fingerprint,
-            submission_started_at=None,
+            error=None, evidence=None, elapsed_sec=0.0,
+            submission_fingerprint=fingerprint,
         )
 
         def on_update(item):

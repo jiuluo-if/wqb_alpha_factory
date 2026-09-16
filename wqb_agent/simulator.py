@@ -4,7 +4,7 @@ PURPOSE: Execute validated experiments through the client and collect evidence.
 READ WHEN: changing Simulation dispatch, polling, or result parsing.
 DO NOT USE FOR: selecting research hypotheses or creating a second POST path.
 
-Three-window rolling simulation dispatcher.
+Bounded concurrent Simulation dispatcher.
 
 Keeps up to `max_concurrent` simulations in flight and refills the window as
 soon as one completes (FIRST_COMPLETED), so the 3 windows never idle.
@@ -44,31 +44,20 @@ UNKNOWN_STATUSES = frozenset({"SUBMIT_UNKNOWN", "UNKNOWN"})
 
 class Simulator:
     def __init__(self, client, max_concurrent=3, poll_timeout_sec=1500,
-                 replace_attempts=3, replace_backoff_sec=60, yearly_policy=None):
+                 replace_attempts=3, replace_backoff_sec=60):
         self.client = client
         self.max_concurrent = max_concurrent
         self.poll_timeout_sec = poll_timeout_sec
         self.replace_attempts = max(1, replace_attempts)
         self.replace_backoff_sec = max(0, replace_backoff_sec)
-        self.yearly_policy = dict(yearly_policy or {})
         self.stop_dispatch = False
         self.paused_reason = None
 
-    def run(self, experiments, on_complete=None, on_update=None):
-        """Run experiments and optionally notify as each one settles.
-
-        ``on_complete`` is deliberately invoked from the dispatcher thread
-        after a worker has produced a terminal result.  This makes the real
-        platform result visible immediately (rather than after the whole
-        batch), while keeping state mutation and reflection in the caller.
-        Terminal callbacks are the acknowledgement boundary for durable local
-        evidence.  A terminal checkpoint notification is therefore emitted
-        only after ``on_complete`` returns successfully; callback failures are
-        propagated instead of being downgraded to a transport result.
-        """
+    def run(self, executions, on_update=None):
+        """Run transient execution records and return live remote outcomes."""
         self.stop_dispatch = False
         self.paused_reason = None
-        pending = deque(experiments)
+        pending = deque(executions)
         completed = []
         in_flight = {}
 
@@ -98,12 +87,6 @@ class Simulator:
                     if self._pauses_dispatch(exp):
                         self.stop_dispatch = True
                         self.paused_reason = f"{exp.status}:{exp.id}"
-                    if on_complete is not None:
-                        acknowledged = on_complete(exp)
-                        if acknowledged is False:
-                            raise RuntimeError(
-                                f"terminal evidence acknowledgement rejected: {exp.id}"
-                            )
                     if exp.status in {"DONE", "FAILED"} and on_update is not None:
                         on_update(exp)
                     completed.append(exp)
@@ -141,9 +124,6 @@ class Simulator:
         recoverable = (WQBRateLimitError, WQBTimeoutError, WQBSimulationError)
 
         def persist():
-            # DONE/FAILED updates are checkpoint notifications.  They must be
-            # deferred until the dispatcher has received the successful
-            # canonical evidence acknowledgement from ``on_complete``.
             if on_update is not None and experiment.status not in {"DONE", "FAILED"}:
                 on_update(experiment)
 
@@ -307,7 +287,5 @@ class Simulator:
                     return experiment
             return experiment
         finally:
-            # 真实计时：提交开始 → 定论（含替换重试退避等待），程序自身记录，
-            # 不依赖外部检测进程。写入 experiment 供 trajectory / sims_results
-            # 输出。
+            # 计时只用于当前调用的 transient result，不写入本地研究状态。
             experiment.elapsed_sec = time.time() - _t0

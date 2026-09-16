@@ -29,7 +29,7 @@ class TestSingleInstanceScope(unittest.TestCase):
             with single_instance_scope(state_dir, operation="factory-run"):
                 with open(f"{state_dir}/run.lock", encoding="utf-8") as handle:
                     self.assertEqual(json.load(handle)["operation"], "factory-run")
-                with single_instance_scope(state_dir, operation="run-proposals"):
+                with single_instance_scope(state_dir, operation="simulation"):
                     with open(f"{state_dir}/run.lock", encoding="utf-8") as handle:
                         self.assertEqual(json.load(handle)["operation"], "factory-run")
                 self.assertTrue((__import__("pathlib").Path(state_dir) / "run.lock").exists())

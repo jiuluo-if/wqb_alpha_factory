@@ -926,10 +926,9 @@ class WQBClient:
     def run_simulation(self, expression, settings, timeout_sec=1500):
         """Compatibility-only single simulation helper.
 
-        Production code must use ``Agent.run_proposals()`` so checkpoint,
-        exactly-once, budget, reflection, and submission-pool boundaries stay
-        intact.  This method remains for older library callers and tests; it
-        is not a second production entry point.
+        Production code must use ``research_api.simulate()`` so Gateway,
+        ExecutionGuard and transport safety remain centralized.  This method
+        remains only for older library callers and is not a production path.
         """
         # Run one simulation end-to-end and return the alpha payload with the
         # real platform alpha id attached as payload["alpha_id"]: the raw
