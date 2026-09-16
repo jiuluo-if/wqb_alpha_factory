@@ -7,9 +7,9 @@ DO NOT USE FOR: selecting research hypotheses or creating a second POST path.
 Bounded concurrent Simulation dispatcher.
 
 Keeps up to `max_concurrent` simulations in flight and refills the window as
-soon as one completes (FIRST_COMPLETED), so the 3 windows never idle.
+soon as one completes (FIRST_COMPLETED), so the bounded window stays full.
 
-Safety semantics (rolling executor, three windows):
+Safety semantics (rolling bounded executor window):
 
 - A definite rejection (syntax/settings, 400/422) marks the experiment FAILED
   and does NOT pause dispatch — it is a property of the expression.

@@ -15,8 +15,8 @@ Retry policy (shared by every HTTP call through _request):
 
 Thread safety: each thread owns its own requests.Session and auth flag
 (thread-local) so concurrent simulations never share a mutable Session; the
-first authenticating thread wins through a lock, so the 3 simulation workers
-never hammer /authentication in parallel.
+first authenticating thread wins through a lock, so simulation workers never
+hammer /authentication in parallel.
 
 Credentials (in order): explicit constructor credentials, environment
 variables WQB_USERNAME / WQB_PASSWORD, an explicitly configured
