@@ -7,7 +7,6 @@ import math
 from dataclasses import dataclass, field, replace
 
 from .incremental_policy import IncrementalValuePolicy
-from .search_policy import validate_budget_hierarchy
 
 _MEMORY_DEFAULTS = {
     "max_lessons": 20,
@@ -37,10 +36,6 @@ _FIELD_SELECTION_DEFAULTS = {
     "min_datasets": 1,
     "min_cross_dataset_pairs": 0,
     "persist_catalog": False,
-}
-_SEARCH_POLICY_DEFAULTS = {
-    "max_pending_per_arm": 1,
-    "ucb_exploration": 1.0,
 }
 _QUALITY_DEFAULTS = {
     "max_self_correlation": 0.5,
@@ -119,7 +114,6 @@ class AgentRuntimeConfig:
     max_field_alpha_count: int | None = None
     factory: dict = field(default_factory=dict)
     research_allocation: dict = field(default_factory=dict)
-    search_policy: dict = field(default_factory=lambda: dict(_SEARCH_POLICY_DEFAULTS))
     field_selection: dict = field(default_factory=lambda: dict(_FIELD_SELECTION_DEFAULTS))
     submission_pool_filename: str = "submission_pool.json"
     memory: dict = field(default_factory=lambda: dict(_MEMORY_DEFAULTS))
@@ -290,18 +284,6 @@ def _resolve_runtime_policies(agent):
             continue
         raise ValueError(f"config.agent.field_selection.{key} 必须是布尔值")
 
-    search_policy = {**_SEARCH_POLICY_DEFAULTS, **dict(agent.get("search_policy") or {})}
-    search_policy["max_pending_per_arm"] = _int_in_range(
-        search_policy["max_pending_per_arm"],
-        key="config.agent.search_policy.max_pending_per_arm",
-        minimum=1,
-    )
-    search_policy["ucb_exploration"] = _finite_float(
-        search_policy["ucb_exploration"],
-        key="config.agent.search_policy.ucb_exploration",
-        minimum=0.0,
-    )
-
     quality = {**_QUALITY_DEFAULTS, **dict(agent.get("quality") or {})}
     for key in _QUALITY_DEFAULTS:
         quality[key] = _finite_float(
@@ -328,7 +310,7 @@ def _resolve_runtime_policies(agent):
                     group[key],
                     key=f"config.agent.quality.{group_name}.{key}",
                 )
-    return memory, field_selection, search_policy, quality
+    return memory, field_selection, quality
 
 def parse_config(raw):
     if not isinstance(raw, dict) or not isinstance(raw.get("simulation", {}), dict):
@@ -392,11 +374,6 @@ def parse_config(raw):
     )
     if daily_factory_max > factory_max:
         raise ValueError("daily_simulation_cap 不得超过 weekly_simulation_cap")
-    validate_budget_hierarchy(
-        factory_max_simulations=factory_max,
-        search_max_simulations=search_max,
-        research_max_simulations=research_max,
-    )
     search = SearchConfig(
         enabled=_as_bool(
             search_raw.get("enabled"), bool(research_raw),
@@ -440,7 +417,7 @@ def parse_config(raw):
     )
     if search.max_simulations + search.validation_max_simulations > factory.max_simulations:
         raise ValueError("discovery + validation 预算不得超过 factory.max_simulations")
-    memory, field_selection, search_policy, quality = _resolve_runtime_policies(agent)
+    memory, field_selection, quality = _resolve_runtime_policies(agent)
     # Keep the validated typed factory model; the raw mapping remains
     # available only through ``runtime.factory`` for extensible legacy keys.
     factory_settings = dict(agent.get("factory") or {})
@@ -618,7 +595,6 @@ def parse_config(raw):
         ),
         factory=copy.deepcopy(factory_settings),
         research_allocation=copy.deepcopy(research_allocation_raw),
-        search_policy=copy.deepcopy(search_policy),
         field_selection=copy.deepcopy(field_selection),
         submission_pool_filename=str(
             (agent.get("submission_pool") or {}).get("filename", "submission_pool.json")

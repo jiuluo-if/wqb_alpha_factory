@@ -71,7 +71,6 @@ DIRECT_TESTS = {
         "tests/test_evaluation.py",
     ),
     "wqb_agent/search_evidence.py": (
-        "tests/test_search_policy.py",
         "tests/test_evaluation.py",
     ),
     "wqb_agent/terminal_evidence.py": (
@@ -91,9 +90,6 @@ DIRECT_TESTS = {
     "wqb_agent/alpha_feed_cache.py": (),
     "wqb_agent/daily_cache.py": (),
     "wqb_agent/diversity.py": (
-    ),
-    "wqb_agent/search_policy.py": (
-        "tests/test_search_policy.py",
     ),
     "wqb_agent/alpha_templates/model.py": ("tests/test_alpha_template_catalog.py",),
     "wqb_agent/alpha_templates/loader.py": (
