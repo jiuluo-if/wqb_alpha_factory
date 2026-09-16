@@ -7,6 +7,7 @@ from unittest import mock
 
 from wqb_agent.research_api import (
     ExperimentSpec,
+    SimulationSpec,
     compare_experiments,
     discover_fields,
     get_experiment,
@@ -62,6 +63,22 @@ class _FakeClient:
         return {"url": url, "status": "RUNNING"}
 
 
+class _RemoteFirstClient:
+    def __init__(self):
+        self.submissions = []
+
+    def submit_simulation(self, expression, settings, **kwargs):
+        self.submissions.append((expression, settings, kwargs))
+        return "progress-remote-first"
+
+    def poll_progress(self, progress_url, **kwargs):
+        self.polled = progress_url
+        return "alpha-remote-first"
+
+    def get_alpha(self, alpha_id):
+        return {"id": alpha_id, "is": {"sharpe": 1.2}}
+
+
 class TestResearchApi(unittest.TestCase):
     def test_experiment_spec_is_lightweight_and_adapts_to_existing_contract(self):
         spec = ExperimentSpec(
@@ -105,6 +122,20 @@ class TestResearchApi(unittest.TestCase):
             self.assertEqual(agent.received["round_no"], 7)
             self.assertEqual(agent.received["proposals"][0]["expression"], "rank(close)")
             self.assertEqual(os.listdir(directory), [])
+
+    def test_run_experiment_simulation_spec_uses_remote_first_gateway(self):
+        with tempfile.TemporaryDirectory() as directory:
+            client = _RemoteFirstClient()
+            result = run_experiment(
+                SimulationSpec("rank(close)", {"delay": 1}),
+                client=client,
+                state_dir=directory,
+            )
+            self.assertEqual(result["status"], "DONE")
+            self.assertEqual(result["alpha_id"], "alpha-remote-first")
+            self.assertEqual(len(client.submissions), 1)
+            self.assertFalse(os.path.exists(os.path.join(directory, "trajectory.jsonl")))
+            self.assertFalse(os.path.exists(os.path.join(directory, "trial_ledger.jsonl")))
 
     def test_reconcile_only_polls_the_known_url(self):
         client = _FakeClient()

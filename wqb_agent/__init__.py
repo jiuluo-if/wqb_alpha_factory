@@ -9,6 +9,14 @@ __all__ = [
     "Agent",
     "WQBClient",
     "ExperimentSpec",
+    "SimulationSpec",
+    "simulate",
+    "simulate_batch",
+    "get_pending_executions",
+    "resume_execution",
+    "get_alpha",
+    "get_alpha_evidence",
+    "compare_alphas",
     "inspect_state",
     "discover_fields",
     "get_operator_reference",
@@ -43,7 +51,9 @@ def __getattr__(name):
         globals()[name] = WQBClient
         return WQBClient
     if name in {
-        "ExperimentSpec", "inspect_state", "discover_fields",
+        "ExperimentSpec", "SimulationSpec", "simulate", "simulate_batch",
+        "get_pending_executions", "resume_execution", "get_alpha",
+        "get_alpha_evidence", "compare_alphas", "inspect_state", "discover_fields",
         "get_operator_reference", "get_operator_syntax_reference",
         "run_experiment", "get_experiment",
         "compare_experiments", "search_history", "reconcile",

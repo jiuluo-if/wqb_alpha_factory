@@ -278,12 +278,19 @@ def _suggestion_context(state_dir: str) -> dict[str, Any]:
 
 
 def run_experiment(spec, *, agent=None, client=None, config=None, state_dir=None, context=None):
-    """Run one agent-authored experiment through the existing safe proposal path.
+    """Run an experiment, preferring the Remote-First path for ``SimulationSpec``.
 
-    The facade creates a temporary input envelope only; ``Agent.run_proposals``
-    remains the sole owner of deduplication, checkpoints, retries, and remote
-    Simulation writes.  The temporary file is removed after the call.
+    ``SimulationSpec`` is the current execution contract and never constructs
+    an Agent or writes local research results.  ``ExperimentSpec`` and its
+    mapping adapter remain a bounded compatibility path until their callers
+    have migrated.
+
+    The legacy adapter creates a temporary input envelope only; its existing
+    checkpoint owner remains unchanged while migration is in progress.
     """
+    if isinstance(spec, SimulationSpec):
+        return simulate(spec, agent=agent, client=client, config=config,
+                        state_dir=state_dir)
     runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
     spec = spec if isinstance(spec, ExperimentSpec) else ExperimentSpec.from_mapping(spec)
     directory = _state_dir(runtime, state_dir)
