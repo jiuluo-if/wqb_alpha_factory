@@ -1,4 +1,3 @@
-import json
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -14,55 +13,6 @@ from wqb_agent.research_api import (
     inspect_template,
     list_templates,
 )
-
-
-class _Discovery:
-    fields_per_discovery = 3
-
-    def discover(self, query, target_count):
-        return [{"id": "close", "type": "MATRIX"}][:target_count]
-
-    def source_provenance(self):
-        return {"kind": "brain_api", "snapshot_date": None}
-
-
-class _FakeAgent:
-    state_dir = None
-    fields_per_discovery = 3
-    discovery = _Discovery()
-
-    def __init__(self, state_dir):
-        self.state_dir = state_dir
-        self.received = None
-        self.optimizer_limit = None
-
-    def next_round_no(self):
-        return 7
-
-    def run_proposals(self, path):
-        with open(path, encoding="utf-8") as handle:
-            self.received = json.load(handle)
-        return {"accepted": 1, "status": "DONE"}
-
-    def optimizer_context(self, *, limit=8):
-        self.optimizer_limit = limit
-        return {"limit": limit, "parents": []}
-
-
-class _ProbeFactory:
-    def generate_probe_specs(self, hypothesis, fields, operator_reference, **kwargs):
-        self.received = (hypothesis, fields, operator_reference, kwargs)
-        return [SimulationSpec("rank(close)", {"delay": 1}, ("close",))]
-
-
-class _ProbeAgent(_FakeAgent):
-    def __init__(self, state_dir):
-        super().__init__(state_dir)
-        self.alpha_factory = _ProbeFactory()
-        self.operator_reference = {
-            "status": "LIVE_VERIFIED", "availability": "AVAILABLE",
-            "source": "BRAIN_LIVE_ONLY", "operators": ["rank"],
-        }
 
 
 class TestResearchApi(unittest.TestCase):
@@ -87,10 +37,6 @@ class TestResearchApi(unittest.TestCase):
         result = find_similar_alphas("rank(close)", rows=rows)
         self.assertEqual(result["kind"], "STRUCTURALLY_SIMILAR")
         self.assertEqual([item["alpha_id"] for item in result["matches"]], ["a2"])
-    def test_discovery_rejects_legacy_agent_facade(self):
-        with self.assertRaises(TypeError):
-            discover_fields("price reversal", agent=_FakeAgent(tempfile.gettempdir()))
-
     def test_discovery_without_agent_does_not_construct_legacy_runtime(self):
         client = SimpleNamespace()
         with mock.patch("wqb_agent.research_api.FieldDiscovery") as discovery_type:
@@ -100,14 +46,6 @@ class TestResearchApi(unittest.TestCase):
             result = discover_fields("price reversal", client=client)
         self.assertEqual(result["fields"][0]["id"], "close")
         discovery_type.assert_called_once()
-
-    def test_generate_probes_rejects_legacy_agent_facade(self):
-        with tempfile.TemporaryDirectory() as directory:
-            agent = _ProbeAgent(directory)
-            with self.assertRaises(TypeError):
-                generate_probes(
-                    query="short-term reversal", agent=agent, count=1,
-                )
 
     def test_generate_probes_without_agent_does_not_construct_legacy_runtime(self):
         client = SimpleNamespace(get_operator_capability=lambda: {

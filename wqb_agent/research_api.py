@@ -58,13 +58,6 @@ def _load_config(config: Mapping[str, Any] | str | None) -> dict[str, Any]:
     return dict(config)
 
 
-def _reject_legacy_agent(agent):
-    if agent is not None:
-        raise TypeError(
-            "agent facade is retired; pass client, config, and state_dir explicitly"
-        )
-
-
 def _remote_research_components(*, client, config=None, state_dir=None,
                                 include_factory=False):
     """Build only rebuildable components for public discovery/probe tools."""
@@ -100,9 +93,8 @@ def _remote_research_components(*, client, config=None, state_dir=None,
     return typed, discovery, factory
 
 
-def discover_fields(query, *, agent=None, client=None, config=None, state_dir=None, limit=None):
+def discover_fields(query, *, client=None, config=None, state_dir=None, limit=None):
     """Discover fields through the existing BRAIN-backed discovery component."""
-    _reject_legacy_agent(agent)
     if client is None:
         from .client import WQBClient
         client = WQBClient()
@@ -128,9 +120,8 @@ def discover_fields(query, *, agent=None, client=None, config=None, state_dir=No
 
 
 def generate_probes(query=None, *, template_ids=None, count=100, seed=None,
-                    agent=None, client=None, config=None, state_dir=None):
+                    fields=None, client=None, config=None, state_dir=None):
     """Generate reviewable ``SimulationSpec`` probes without an inbox write."""
-    _reject_legacy_agent(agent)
     if client is None:
         from .client import WQBClient
         client = WQBClient()
@@ -158,7 +149,9 @@ def generate_probes(query=None, *, template_ids=None, count=100, seed=None,
         raise TypeError("query must be a string, object, or None")
     requested_templates = list(template_ids or [])
     hypothesis["template_ids"] = requested_templates
-    fields = discovery.discover(hypothesis, target_count=target)
+    fields = fields if fields is not None else discovery.discover(
+        hypothesis, target_count=target
+    )
     if callable(reference):
         reference = reference()
     return factory.generate_probe_specs(
@@ -173,10 +166,9 @@ def get_operator_syntax_reference(path=None) -> dict[str, Any]:
     return load_operator_syntax_reference(path)
 
 
-def get_operator_reference(*, agent=None, client=None, config=None) -> dict[str, Any]:
+def get_operator_reference(*, client=None, config=None) -> dict[str, Any]:
     """Return a bounded current operator view from the existing BRAIN client."""
-    _reject_legacy_agent(agent)
-    if agent is None and client is None:
+    if client is None:
         raise RuntimeError("LIVE_OPERATOR_CAPABILITY_REQUIRED")
     capability = None
     if capability is None:
@@ -194,9 +186,9 @@ def get_operator_reference(*, agent=None, client=None, config=None) -> dict[str,
     }
 
 
-def get_capabilities(*, agent=None, client=None, config=None) -> dict[str, Any]:
+def get_capabilities(*, client=None, config=None) -> dict[str, Any]:
     """Return a bounded live platform capability view for the AI tools."""
-    reference = get_operator_reference(agent=agent, client=client, config=config)
+    reference = get_operator_reference(client=client, config=config)
     return {
         "source": "BRAIN_LIVE_ONLY",
         "operators": list(reference.get("operators") or []),
@@ -204,10 +196,10 @@ def get_capabilities(*, agent=None, client=None, config=None) -> dict[str, Any]:
     }
 
 
-def get_operators(*, agent=None, client=None, config=None) -> list[str]:
+def get_operators(*, client=None, config=None) -> list[str]:
     """Return only the live verified operator names."""
     return list(get_operator_reference(
-        agent=agent, client=client, config=config
+        client=client, config=config
     ).get("operators") or [])
 
 
@@ -231,50 +223,48 @@ def inspect_template(template_id, *, catalog_path=None, require_private=False):
     return template.catalog_entry()
 
 
-def _simulation_gateway(*, agent=None, client=None, config=None, state_dir=None):
+def _simulation_gateway(*, client=None, config=None, state_dir=None):
     """Build the Remote-First gateway without constructing the research Agent."""
-    if client is None and agent is not None:
-        client = agent.client
     if client is None:
         from .client import WQBClient
         client = WQBClient()
-    directory = state_dir or getattr(agent, "state_dir", None) or ".wqb_state"
-    runtime = getattr(agent, "runtime_policy", None)
-    max_concurrent = getattr(runtime, "max_concurrent_sims", 3)
-    poll_timeout = getattr(runtime, "poll_timeout_sec", 1500)
+    directory = state_dir or ".wqb_state"
+    runtime = normalize_config(_load_config(config)).runtime
+    max_concurrent = runtime.max_concurrent_sims
+    poll_timeout = runtime.poll_timeout_sec
     return SimulationGateway(
         client, state_dir=directory, max_concurrent=max_concurrent,
         poll_timeout_sec=poll_timeout,
     )
 
 
-def validate_simulation_spec(spec, *, agent=None, client=None, config=None,
+def validate_simulation_spec(spec, *, client=None, config=None,
                              state_dir=None):
     """Validate only executable request shape and return bounded facts."""
     gateway = _simulation_gateway(
-        agent=agent, client=client, config=config, state_dir=state_dir
+        client=client, config=config, state_dir=state_dir
     )
     return gateway.validate_simulation_spec(spec)
 
 
-def execution_fingerprint(spec, *, agent=None, client=None, config=None,
+def execution_fingerprint(spec, *, client=None, config=None,
                           state_dir=None):
     return _simulation_gateway(
-        agent=agent, client=client, config=config, state_dir=state_dir
+        client=client, config=config, state_dir=state_dir
     ).execution_fingerprint(spec)
 
 
-def simulate(spec, *, agent=None, client=None, config=None, state_dir=None):
+def simulate(spec, *, client=None, config=None, state_dir=None):
     """Start one real Simulation through the only public write gateway."""
     return _simulation_gateway(
-        agent=agent, client=client, config=config, state_dir=state_dir
+        client=client, config=config, state_dir=state_dir
     ).simulate(spec)
 
 
-def simulate_batch(specs, *, agent=None, client=None, config=None, state_dir=None):
+def simulate_batch(specs, *, client=None, config=None, state_dir=None):
     """Execute a bounded batch while applying exact dedupe per item."""
     gateway = _simulation_gateway(
-        agent=agent, client=client, config=config, state_dir=state_dir
+        client=client, config=config, state_dir=state_dir
     )
     return [gateway.simulate(item) for item in (specs or ())]
 
@@ -283,42 +273,40 @@ def get_pending_executions(*, state_dir=".wqb_state"):
     return {"entries": ExecutionGuard(state_dir).entries()}
 
 
-def resume_execution(fingerprint, *, agent=None, client=None, config=None,
+def resume_execution(fingerprint, *, client=None, config=None,
                      state_dir=None):
     return _simulation_gateway(
-        agent=agent, client=client, config=config, state_dir=state_dir
+        client=client, config=config, state_dir=state_dir
     ).resume_execution(fingerprint)
 
 
-def reconcile_execution(fingerprint, *, agent=None, client=None, config=None,
+def reconcile_execution(fingerprint, *, client=None, config=None,
                         state_dir=None):
     """Read-only recovery of one guarded execution; never submits again."""
     return resume_execution(
-        fingerprint, agent=agent, client=client, config=config,
+        fingerprint, client=client, config=config,
         state_dir=state_dir,
     )
 
 
-def _remote_client(*, agent=None, client=None):
+def _remote_client(*, client=None):
     if client is not None:
         return client
-    if agent is not None:
-        _reject_legacy_agent(agent)
     from .client import WQBClient
     return WQBClient()
 
 
-def get_alpha(alpha_id, *, agent=None, client=None, config=None):
-    return _remote_client(agent=agent, client=client).get_alpha(str(alpha_id).strip())
+def get_alpha(alpha_id, *, client=None, config=None):
+    return _remote_client(client=client).get_alpha(str(alpha_id).strip())
 
 
-def get_alpha_evidence(alpha_id, *, agent=None, client=None, config=None,
+def get_alpha_evidence(alpha_id, *, client=None, config=None,
                        live=True):
     if not live:
         raise ValueError("LIVE_EVIDENCE_REQUIRED")
     import time as _time
     snapshot = RemoteAlphaEvidenceProvider(
-        _remote_client(agent=agent, client=client)
+        _remote_client(client=client)
     ).collect(str(alpha_id).strip())
     return {
         "alpha_id": snapshot.alpha_id, "source": "LIVE",
@@ -330,44 +318,44 @@ def get_alpha_evidence(alpha_id, *, agent=None, client=None, config=None,
     }
 
 
-def get_alpha_metrics(alpha_id, *, agent=None, client=None, config=None):
-    return get_alpha_evidence(alpha_id, agent=agent, client=client,
+def get_alpha_metrics(alpha_id, *, client=None, config=None):
+    return get_alpha_evidence(alpha_id, client=client,
                               config=config)["alpha"].get("is", {})
 
 
-def get_alpha_aggregates(alpha_id, *, agent=None, client=None, config=None):
-    return get_alpha_evidence(alpha_id, agent=agent, client=client,
+def get_alpha_aggregates(alpha_id, *, client=None, config=None):
+    return get_alpha_evidence(alpha_id, client=client,
                               config=config)["aggregates"]
 
 
-def get_alpha_pnl(alpha_id, *, agent=None, client=None, config=None):
-    return get_alpha_evidence(alpha_id, agent=agent, client=client,
+def get_alpha_pnl(alpha_id, *, client=None, config=None):
+    return get_alpha_evidence(alpha_id, client=client,
                               config=config)["pnl"]
 
 
-def get_alpha_self_correlation(alpha_id, *, agent=None, client=None, config=None):
-    return get_alpha_evidence(alpha_id, agent=agent, client=client,
+def get_alpha_self_correlation(alpha_id, *, client=None, config=None):
+    return get_alpha_evidence(alpha_id, client=client,
                               config=config)["self_correlation"]
 
 
-def compare_alphas(alpha_ids, *, agent=None, client=None, config=None):
+def compare_alphas(alpha_ids, *, client=None, config=None):
     return {"source": "LIVE", "alphas": [
-        get_alpha_evidence(item, agent=agent, client=client, config=config)
+        get_alpha_evidence(item, client=client, config=config)
         for item in (alpha_ids or ())
     ]}
 
 
-def _remote_repository(*, agent=None, client=None, config=None, state_dir=None,
+def _remote_repository(*, client=None, config=None, state_dir=None,
                        require_client=True):
-    if require_client or client is not None or agent is not None:
-        client = _remote_client(agent=agent, client=client)
+    if require_client or client is not None:
+        client = _remote_client(client=client)
     if isinstance(config, AppConfig):
         retention = config.remote_cache.retention_days
     elif config is not None:
         retention = normalize_config(_load_config(config)).remote_cache.retention_days
     else:
         retention = 7
-    directory = state_dir or getattr(agent, "state_dir", None) or ".wqb_state"
+    directory = state_dir or ".wqb_state"
     cache_path = os.path.join(directory, ".alpha_feed_cache", "remote.json")
     return RemoteAlphaRepository(
         client.get_all_user_alphas if client is not None else None,
@@ -375,7 +363,7 @@ def _remote_repository(*, agent=None, client=None, config=None, state_dir=None,
     )
 
 
-def refresh_remote_alphas(*, agent=None, client=None, config=None, state_dir=None,
+def refresh_remote_alphas(*, client=None, config=None, state_dir=None,
     limit=100, days=None):
     if days is not None:
         if isinstance(config, AppConfig):
@@ -384,37 +372,37 @@ def refresh_remote_alphas(*, agent=None, client=None, config=None, state_dir=Non
         elif int(days) < 1 or int(days) > 90:
             raise ValueError("days must be within 1-90")
     return _remote_repository(
-        agent=agent, client=client, config=config, state_dir=state_dir,
+        client=client, config=config, state_dir=state_dir,
         require_client=True,
     ).refresh_remote_alphas(limit=limit)
 
 
-def list_remote_alphas(*, agent=None, client=None, config=None, state_dir=None,
+def list_remote_alphas(*, client=None, config=None, state_dir=None,
                        days=None, status=None):
     return _remote_repository(
-        agent=agent, client=client, config=config, state_dir=state_dir,
+        client=client, config=config, state_dir=state_dir,
         require_client=False,
     ).list_remote_alphas(days=days, status=status)
 
 
-def remote_cache_status(*, agent=None, client=None, config=None, state_dir=None):
+def remote_cache_status(*, client=None, config=None, state_dir=None):
     return _remote_repository(
-        agent=agent, client=client, config=config, state_dir=state_dir,
+        client=client, config=config, state_dir=state_dir,
         require_client=False,
     ).cache_status()
 
 
-def purge_remote_cache(*, agent=None, client=None, config=None, state_dir=None):
+def purge_remote_cache(*, client=None, config=None, state_dir=None):
     return {"removed": _remote_repository(
-        agent=agent, client=client, config=config, state_dir=state_dir,
+        client=client, config=config, state_dir=state_dir,
         require_client=False,
     ).purge_remote_cache()}
 
 
-def simulation_quota(*, agent=None, client=None, config=None, state_dir=None):
+def simulation_quota(*, client=None, config=None, state_dir=None):
     """Return a read-only quota projection from remote usage and active guards."""
     repository = _remote_repository(
-        agent=agent, client=client, config=config, state_dir=state_dir,
+        client=client, config=config, state_dir=state_dir,
         require_client=False,
     )
     if isinstance(config, AppConfig):
@@ -430,29 +418,29 @@ def simulation_quota(*, agent=None, client=None, config=None, state_dir=None):
     ).snapshot()
 
 
-def get_remote_alpha(alpha_id, *, live=False, agent=None, client=None,
+def get_remote_alpha(alpha_id, *, live=False, client=None,
                      config=None, state_dir=None):
     """Read one Alpha from the rebuildable cache or from BRAIN explicitly."""
     return _remote_repository(
-        agent=agent, client=client, config=config, state_dir=state_dir,
+        client=client, config=config, state_dir=state_dir,
         require_client=live,
     ).get_remote_alpha(alpha_id, live=live)
 
 
-def get_remote_alpha_evidence(alpha_id, *, live=True, agent=None, client=None,
+def get_remote_alpha_evidence(alpha_id, *, live=True, client=None,
                               config=None, state_dir=None):
     """Return remote evidence; live reads are the default and source-labeled."""
     return _remote_repository(
-        agent=agent, client=client, config=config, state_dir=state_dir,
+        client=client, config=config, state_dir=state_dir,
         require_client=True,
     ).get_remote_alpha_evidence(alpha_id, live=live)
 
 
-def group_alphas(alpha_ids=None, *, rows=None, agent=None, client=None,
+def group_alphas(alpha_ids=None, *, rows=None, client=None,
                  config=None, state_dir=None, days=None):
     if rows is None:
         repository = _remote_repository(
-            agent=agent, client=client, config=config, state_dir=state_dir
+            client=client, config=config, state_dir=state_dir
         )
         ids = alpha_ids or [
             item["alpha_id"] for item in repository.list_remote_alphas(days=days)
@@ -461,44 +449,44 @@ def group_alphas(alpha_ids=None, *, rows=None, agent=None, client=None,
     return group_remote_evidence(rows)
 
 
-def find_alpha_duplicates(alpha_id, *, rows=None, agent=None, client=None,
+def find_alpha_duplicates(alpha_id, *, rows=None, client=None,
                           config=None, state_dir=None):
     if rows is None:
         rows = []
         repository = _remote_repository(
-            agent=agent, client=client, config=config, state_dir=state_dir
+            client=client, config=config, state_dir=state_dir
         )
         for item in repository.list_remote_alphas():
             rows.append(repository.get_remote_alpha_evidence(item["alpha_id"]))
     return find_remote_duplicates(rows, alpha_id)
 
 
-def find_duplicate_alphas(alpha_id, *, rows=None, agent=None, client=None,
+def find_duplicate_alphas(alpha_id, *, rows=None, client=None,
                           config=None, state_dir=None):
     """Public name for exact execution duplicate lookup."""
     return find_alpha_duplicates(
-        alpha_id, rows=rows, agent=agent, client=client,
+        alpha_id, rows=rows, client=client,
         config=config, state_dir=state_dir,
     )
 
 
-def find_similar_alphas(expression_or_alpha_id, *, rows=None, agent=None,
+def find_similar_alphas(expression_or_alpha_id, *, rows=None,
                         client=None, config=None, state_dir=None, days=None):
     """Return advisory remote exact/structural matches; never blocks a POST."""
     if rows is None:
         repository = _remote_repository(
-            agent=agent, client=client, config=config, state_dir=state_dir
+            client=client, config=config, state_dir=state_dir
         )
         rows = [repository.get_remote_alpha_evidence(item["alpha_id"])
                 for item in repository.list_remote_alphas(days=days)]
     return find_remote_similar(rows, expression_or_alpha_id)
 
 
-def preview_alpha_colors(alpha_ids=None, *, rows=None, agent=None, client=None,
+def preview_alpha_colors(alpha_ids=None, *, rows=None, client=None,
                          config=None, state_dir=None, days=None):
     if rows is None:
         repository = _remote_repository(
-            agent=agent, client=client, config=config, state_dir=state_dir
+            client=client, config=config, state_dir=state_dir
         )
         ids = alpha_ids or [
             item["alpha_id"] for item in repository.list_remote_alphas(days=days)
@@ -507,11 +495,11 @@ def preview_alpha_colors(alpha_ids=None, *, rows=None, agent=None, client=None,
     return preview_remote_colors(rows)
 
 
-def sync_alpha_colors(alpha_ids=None, *, rows=None, agent=None, client=None,
+def sync_alpha_colors(alpha_ids=None, *, rows=None, client=None,
                       config=None, state_dir=None, days=None, overwrite=False,
                       dry_run=False):
     repository = _remote_repository(
-        agent=agent, client=client, config=config, state_dir=state_dir
+        client=client, config=config, state_dir=state_dir
     )
     if rows is None:
         ids = alpha_ids or [

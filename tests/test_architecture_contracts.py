@@ -1,6 +1,9 @@
 import ast
+import inspect
 import pathlib
 import unittest
+
+from wqb_agent import research_api
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "wqb_agent"
@@ -18,6 +21,14 @@ def _imports(path):
 
 
 class RemoteFirstArchitectureTests(unittest.TestCase):
+    def test_public_api_has_no_retired_agent_parameter(self):
+        public = [
+            value for name, value in vars(research_api).items()
+            if inspect.isfunction(value) and not name.startswith("_")
+        ]
+        for function in public:
+            self.assertNotIn("agent", inspect.signature(function).parameters, function.__name__)
+
     def test_public_package_exports_remote_first_tools_only(self):
         tree = ast.parse((PACKAGE / "__init__.py").read_text(encoding="utf-8"))
         exports = next(
