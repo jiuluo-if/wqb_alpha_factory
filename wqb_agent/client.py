@@ -948,14 +948,23 @@ class WQBClient:
         return resp.json()
 
     def get_recordset(self, alpha_id, name):
-        """Fetch an explicitly allow-listed read-only Alpha recordset."""
+        """Fetch an explicitly allow-listed read-only Alpha recordset.
+
+        An HTTP-accepted response with an empty body (a freshly simulated
+        alpha whose PnL has not settled yet) is a valid "no data" response
+        and returns ``None`` instead of raising a JSON parse error that
+        would otherwise break the entire evidence snapshot.
+        """
         if name not in {"pnl"}:
             raise ValueError(f"unsupported alpha recordset: {name}")
         resp = self._request(
             "GET", f"{self.base_url}/alphas/{alpha_id}/recordsets/{name}",
             context=f"GET alpha recordset {name} {alpha_id}",
         )
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError:
+            return None
 
     def get_pnl(self, alpha_id):
         """Fetch the official daily PnL recordset without inventing metrics."""

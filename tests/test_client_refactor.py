@@ -313,6 +313,40 @@ class TestPublicReadAdapters(unittest.TestCase):
                 c.get_all_user_alphas(limit=100, max_results=1000)
 
 
+class TestAlphaRecordset(unittest.TestCase):
+    """The PnL recordset body is optional: a freshly simulated Alpha whose
+    PnL has not settled yet answers 200 with an empty body.  That must read
+    as "no data" (None), not as a JSON parse error breaking the snapshot."""
+
+    class EmptyBodyResponse:
+        status_code = 200
+        text = ""
+        headers = {}
+
+        def json(self):
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+    def test_recordset_returns_payload_when_present(self):
+        c = make_client()
+        c._local.session = FakeSession([
+            FakeResponse(200, payload={"records": [{"date": "2026-09-01"}]}),
+        ])
+        self.assertEqual(
+            c.get_recordset("alpha-1", "pnl"),
+            {"records": [{"date": "2026-09-01"}]},
+        )
+
+    def test_recordset_empty_body_reads_as_no_data(self):
+        c = make_client()
+        c._local.session = FakeSession([self.EmptyBodyResponse()])
+        self.assertIsNone(c.get_recordset("alpha-1", "pnl"))
+
+    def test_recordset_rejects_unknown_names(self):
+        c = make_client()
+        with self.assertRaises(ValueError):
+            c.get_recordset("alpha-1", "evil")
+
+
 class TestClassifiedExceptions(unittest.TestCase):
     def setUp(self):
         self.client = WQBClient.__new__(WQBClient)
