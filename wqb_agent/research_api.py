@@ -32,10 +32,8 @@ from .alpha_grouping import (
     group_remote_evidence,
 )
 from .alpha_templates import AlphaTemplateRegistry
-from .checkpoints import CheckpointStore
 from .config import AppConfig, normalize_config
 from .discovery import FieldDiscovery
-from .factory_runner import AIFactoryRunner
 from .optimization_interfaces import RemoteAlphaEvidenceProvider
 from .proposal_contract import (
     load_operator_syntax_reference,
@@ -44,13 +42,7 @@ from .proposal_contract import (
 from .remote_alpha_repository import RemoteAlphaRepository
 from .remote_colors import preview_remote_colors, sync_remote_colors
 from .remote_quota import RemoteSimulationQuota
-from .research_context import build_research_context, project_cycle
-from .research_cursor import build_research_cursor
-from .research_quality import assess_experiment as _assess_experiment
-from .research_quality import assess_records
 from .simulation_gateway import ExecutionGuard, SimulationGateway, SimulationSpec
-from .state import Trajectory
-from .trial_ledger import TrialLedger
 
 
 def _load_config(config: Mapping[str, Any] | str | None) -> dict[str, Any]:
@@ -577,173 +569,6 @@ def reconcile(progress_url, *, client=None, timeout=60):
 
         client = WQBClient()
     return client.get_progress_snapshot(progress_url, timeout=timeout)
-
-
-def _projection_inputs(state_dir):
-    directory = os.fspath(state_dir or ".wqb_state")
-    trajectory = Trajectory(path=os.path.join(directory, "trajectory.jsonl"))
-    rows = list(trajectory.iter_canonical_rows() or ())
-    ledger = TrialLedger(
-        os.path.join(directory, "trial_ledger.jsonl"),
-        trajectory_path=os.path.join(directory, "trajectory.jsonl"),
-    )
-    ledger_summary = ledger.summarize()
-    checkpoints = CheckpointStore(directory).scan()
-    # The Remote-First API has no proposals inbox.  Keep this legacy
-    # projection's return shape only while its remaining compatibility callers
-    # are migrated; it must not inspect or expose proposals.json.
-    active = None
-    return directory, rows, ledger_summary, checkpoints, active
-
-
-def inspect_runtime_context(*, state_dir=".wqb_state"):
-    """Return bounded runtime facts and safe next actions for the Outer Agent."""
-    directory, rows, ledger_summary, checkpoints, active = _projection_inputs(state_dir)
-    unfinished = [record for record in checkpoints
-                  if record.get("malformed") or not (
-                      isinstance(record.get("checkpoint"), Mapping)
-                      and record["checkpoint"].get("complete") is True
-                  )]
-    unknown = any(
-        str(item.get("status") or "").upper() in {"SUBMIT_UNKNOWN", "UNKNOWN"}
-        for record in unfinished
-        for item in ((record.get("checkpoint") or {}).get("experiments") or [])
-        if isinstance(item, Mapping)
-    )
-    unknown = unknown or any(
-        str(item.get("status") or "").upper() in {"SUBMIT_UNKNOWN", "UNKNOWN"}
-        for item in rows
-        if isinstance(item, Mapping)
-    )
-    runtime_state = "BLOCKED" if unfinished or unknown else "READY"
-    cursor = build_research_cursor(
-        rows, ledger_summary=ledger_summary, checkpoints=checkpoints,
-        runtime_state=runtime_state, active_batch=active,
-    )
-    factory_status = AIFactoryRunner.status_view(directory)
-    return {
-        **cursor,
-        "capabilities": {
-            "simulation": "BLOCKED" if runtime_state == "BLOCKED" else "AVAILABLE",
-            "self_correlation": "UNKNOWN",
-            "targeted_batch": "REMOVED",
-        },
-        "unfinished_checkpoint": [
-            os.path.basename(record.get("path", "")) for record in unfinished
-        ],
-        "submit_unknown_present": unknown,
-        "active_targeted_batch": None,
-        "factory_status": factory_status,
-        "quota_summary": (factory_status or {}).get("quota"),
-        "allowed_actions": ["READ_ONLY"] if runtime_state == "BLOCKED" else [
-            "READ_ONLY", "EXECUTE_PENDING_ROUND",
-        ],
-    }
-
-
-def assess_experiment_quality(experiment_id, *, state_dir=".wqb_state"):
-    """Assess one canonical experiment without reading raw state into output."""
-    directory, rows, ledger_summary, _checkpoints, _active = _projection_inputs(state_dir)
-    row = next((item for item in rows if str(item.get("id")) == str(experiment_id)
-                or str(item.get("proposal_id")) == str(experiment_id)), None)
-    if row is None:
-        return {"status": "NOT_FOUND", "experiment_id": str(experiment_id)}
-    return _assess_experiment(row, trial_summary=ledger_summary).as_dict()
-
-
-def assess_execution_round(round_no, *, state_dir=".wqb_state"):
-    """Return a bounded quality/accounting projection for one execution round."""
-    _directory, rows, ledger_summary, _checkpoints, _active = _projection_inputs(state_dir)
-    result = assess_records(rows, trial_summary=ledger_summary, round_no=int(round_no))
-    result["validation_completeness"] = dict(result["validation_completeness"])
-    result["classification_counts"] = dict(result["classification_counts"])
-    result["status_counts"] = dict(result["status_counts"])
-    result.pop("assessments", None)
-    return result
-
-
-def assess_research_cycle(cycle_id, *, state_dir=".wqb_state"):
-    """Return cycle mapping and quality counts from existing canonical rows."""
-    _directory, rows, ledger_summary, _checkpoints, _active = _projection_inputs(state_dir)
-    selected = [row for row in rows if str(row.get("research_cycle_id") or "") == str(cycle_id)]
-    result = project_cycle(rows, cycle_id)
-    summary = assess_records(selected, trial_summary=ledger_summary)
-    result["quality_status"] = dict(summary["classification_counts"])
-    result["missing_evidence"] = summary["missing_evidence"]
-    return result
-
-
-def inspect_research_context(*, state_dir=".wqb_state", agent=None, client=None,
-                             config=None, limit=8):
-    """Build the bounded Inner-Agent handoff from current canonical projections."""
-    runtime = inspect_runtime_context(state_dir=state_dir)
-    _directory, rows, ledger_summary, _checkpoints, _active = _projection_inputs(state_dir)
-    summaries = [_assess_experiment(row, trial_summary=ledger_summary)
-                 for row in rows[-max(1, min(int(limit), 8)):]]
-    gaps = sorted({gap for item in summaries for gap in item.missing_evidence})
-    return build_research_context(
-        runtime_context=runtime, cursor=runtime, quality_summaries=summaries,
-        optimizer_context={}, capabilities=runtime["capabilities"],
-        unresolved_gaps=gaps, limit=limit,
-    )
-
-
-def inspect_execution_round(round_no, *, state_dir=".wqb_state"):
-    """Expose execution lifecycle and quality for one round."""
-    result = assess_execution_round(round_no, state_dir=state_dir)
-    runtime = inspect_runtime_context(state_dir=state_dir)
-    result["runtime_state"] = runtime["runtime_state"]
-    result["recovery_status"] = "BLOCKED" if runtime["unfinished_checkpoint"] else "CLEAR"
-    return result
-
-
-def inspect_research_cycle(cycle_id, *, state_dir=".wqb_state"):
-    return assess_research_cycle(cycle_id, state_dir=state_dir)
-
-
-def inspect_pending_work(*, state_dir=".wqb_state"):
-    runtime = inspect_runtime_context(state_dir=state_dir)
-    return {
-        "targeted_inbox_present": bool(runtime.get("active_targeted_batch")),
-        "unfinished_checkpoint": runtime["unfinished_checkpoint"],
-        "submit_unknown": runtime["submit_unknown_present"],
-        "factory_blocker": (runtime.get("factory_status") or {}).get("blocker"),
-        "next_safe_action": "READ_ONLY_RECONCILE" if runtime["runtime_state"] == "BLOCKED" else "INSPECT",
-    }
-
-
-def inspect_trial_accounting(*, state_dir=".wqb_state"):
-    summary = _projection_inputs(state_dir)[2]
-    return {key: summary.get(key) for key in (
-        "trial_count", "submitted_count", "completed_count", "effective_trial_count",
-        "history_completeness", "settled_observation_count",
-    )}
-
-
-def inspect_factory_status(*, state_dir=".wqb_state"):
-    return AIFactoryRunner.status_view(os.fspath(state_dir))
-
-
-def assess_experiment(experiment_id, *, state_dir=".wqb_state"):
-    return assess_experiment_quality(experiment_id, state_dir=state_dir)
-
-
-def execute_pending_round(*, state_dir=None, agent=None, client=None, config=None):
-    """Execute the existing canonical proposals through Agent.run_proposals only."""
-    runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
-    path = os.path.join(_state_dir(runtime, state_dir), "proposals.json")
-    if not os.path.exists(path):
-        return {"status": "NO_PENDING_PROPOSALS", "path": path}
-    return runtime.run_proposals(path)
-
-
-def resume_pending_round(**kwargs):
-    """Resume the same canonical pending batch via the existing recovery path."""
-    return execute_pending_round(**kwargs)
-
-
-def request_factory_stop(*, state_dir=".wqb_state"):
-    return AIFactoryRunner.request_stop(os.fspath(state_dir))
 
 
 def research_tool_manifest():
