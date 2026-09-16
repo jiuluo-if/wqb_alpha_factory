@@ -36,7 +36,7 @@ class RuntimeConfig:
     state_dir: str = ".wqb_state"
     alpha_template_catalog: str | None = None
     smoke_dataset: str | None = None
-    max_concurrent_sims: int = 3
+    max_concurrent_sims: int = 10
     fields_per_discovery: int = 6
     pagination_limit: int = 50
     max_pagination_pages: int = 20
@@ -227,7 +227,7 @@ def parse_config(raw):
             else None
         ),
         max_concurrent_sims=_int_in_range(
-            runtime_raw.get("max_concurrent_sims", 3),
+            runtime_raw.get("max_concurrent_sims", 10),
             key="config.runtime.max_concurrent_sims",
             minimum=1,
         ),

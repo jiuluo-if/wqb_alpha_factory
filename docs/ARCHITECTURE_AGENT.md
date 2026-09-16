@@ -15,12 +15,20 @@ BRAIN owns Alpha simulation evidence.
 ## 唯一 Simulation 写链
 
 ```text
-research_api.simulate / simulate_batch
+research_api.simulate_single / simulate_single_batch
+research_api.simulate_multi_batch
  → SimulationGateway
  → Simulator
  → WQBClient
  → BRAIN
 ```
+
+Simulation mode boundaries are explicit: Single Simulation uses a default
+ten-worker window for small optimizations; Multi-Simulation groups at most ten
+children per parent and dispatches at most eight parents concurrently for
+large probes. Region-Agnostic Simulation is a separate capability and is not
+used as a fallback or as part of the Multi window until its write contract is
+verified.
 
 任何其他模块不得直接提交 Simulation。
 

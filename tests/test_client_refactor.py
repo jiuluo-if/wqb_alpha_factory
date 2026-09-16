@@ -187,6 +187,45 @@ class TestOperatorCapabilityClient(unittest.TestCase):
         self.assertEqual(result["status"], "LIVE_VERIFIED")
         self.assertEqual(result["availability"], "AVAILABLE")
 
+    def test_multi_submission_posts_an_array_with_one_idempotency_key(self):
+        c = make_client()
+        response = FakeResponse(201, headers={"Location": "/multi/1"})
+        with mock.patch.object(c, "_request", return_value=response) as request:
+            result = c.submit_multi_simulation([
+                {"expression": "rank(a)", "settings": {"delay": 1}},
+                {"expression": "rank(b)", "settings": {"delay": 1}},
+            ], idempotency_key="multi-fingerprint")
+
+        self.assertEqual(result, "https://api.worldquantbrain.com/multi/1")
+        request.assert_called_once()
+        self.assertEqual(request.call_args.args[:2], (
+            "POST", "https://api.worldquantbrain.com/simulations",
+        ))
+        self.assertEqual(request.call_args.kwargs["json"][0]["regular"], "rank(a)")
+        self.assertEqual(
+            request.call_args.kwargs["headers"],
+            {"X-Idempotency-Key": "multi-fingerprint"},
+        )
+
+    def test_multi_progress_resolves_child_simulations_without_a_new_post(self):
+        c = make_client()
+        with mock.patch.object(c, "get_progress_snapshot", return_value={
+            "status_code": 200,
+            "headers": {},
+            "payload": {"status": "COMPLETE", "children": ["sim-1", "sim-2"]},
+            "retry_after_seconds": 1.0,
+        }), mock.patch.object(
+            c, "poll_progress", side_effect=["alpha-1", "alpha-2"]
+        ) as poll:
+            result = c.poll_multi_progress(f"{c.base_url}/multi/1")
+
+        self.assertEqual(result, ["alpha-1", "alpha-2"])
+        self.assertEqual(
+            [call.args[0] for call in poll.call_args_list],
+            [f"{c.base_url}/simulations/sim-1",
+             f"{c.base_url}/simulations/sim-2"],
+        )
+
 
 class TestPublicReadAdapters(unittest.TestCase):
     def test_progress_snapshot_returns_transport_neutral_payload(self):

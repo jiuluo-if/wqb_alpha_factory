@@ -34,6 +34,7 @@ import math
 import random
 import threading
 import time
+from collections.abc import Mapping
 
 import requests
 
@@ -519,7 +520,7 @@ class WQBClient:
             page_offset = max(0, int(offset))
         except (TypeError, ValueError) as exc:
             raise ValueError("Alpha page limit/offset 必须是整数") from exc
-        params = {"limit": page_limit, "offset": page_offset}
+        params: dict[str, object] = {"limit": page_limit, "offset": page_offset}
         if status is not None:
             if not isinstance(status, str) or not status.strip():
                 raise ValueError("Alpha status 必须是非空字符串")
@@ -673,6 +674,57 @@ class WQBClient:
                 "backend acceptance is unknown."
             ) from exc
 
+    def submit_multi_simulation(self, simulations, idempotency_key=None):
+        """Submit one bounded Multi-Simulation payload.
+
+        The endpoint and write-safety contract are the same as a single
+        Simulation; BRAIN receives a JSON array of up to ten regular child
+        payloads and returns one parent progress URL.
+        """
+        if not isinstance(simulations, (list, tuple)) or not simulations:
+            raise ValueError("Multi-Simulation requires a non-empty sequence")
+        if len(simulations) > 10:
+            raise ValueError("Multi-Simulation supports at most 10 children")
+        payload = []
+        for item in simulations:
+            if not isinstance(item, Mapping):
+                raise TypeError("Multi-Simulation child must be an object")
+            if "regular" in item:
+                child = dict(item)
+            else:
+                child = {
+                    "type": "REGULAR",
+                    "settings": dict(item.get("settings") or {}),
+                    "regular": item.get("expression"),
+                }
+            if not isinstance(child.get("regular"), str) or not child["regular"].strip():
+                raise ValueError("Multi-Simulation child expression must be non-empty")
+            child.setdefault("type", "REGULAR")
+            payload.append(child)
+        headers = {"X-Idempotency-Key": idempotency_key} if idempotency_key else None
+        resp = self._request(
+            "POST",
+            f"{self.base_url}/simulations",
+            json=payload,
+            accepted=(201, 200),
+            context="submit multi simulation",
+            ambiguous_write=True,
+            headers=headers,
+            retry_rate_limit=False,
+        )
+        location = resp.headers.get("Location")
+        if not location:
+            raise WQBSubmitUnknownError(
+                "Multi-Simulation response missing Location header; backend acceptance is unknown."
+            )
+        try:
+            return self._normalize_progress_url(location)
+        except WQBError as exc:
+            raise WQBSubmitUnknownError(
+                "Multi-Simulation response contained an invalid progress Location; "
+                "backend acceptance is unknown."
+            ) from exc
+
     def poll_progress(self, progress_url, timeout_sec=1500, progress_callback=None):
         # MECHANISM_INVARIANT:
         # A known progress URL is the only job that may be polled after POST.
@@ -777,6 +829,72 @@ class WQBClient:
             # handles both (a bare float() would crash on the date form).
             delay = self._retry_after_seconds(resp)
             time.sleep(min(delay, 30, remaining))
+
+    def poll_multi_progress(self, progress_url, timeout_sec=1500, progress_callback=None):
+        """Poll a Multi-Simulation parent and then its child simulations."""
+        progress_url = self._normalize_progress_url(progress_url)
+        timeout_sec = _finite_nonnegative(timeout_sec, 1500.0)
+        start = time.monotonic()
+        polls = 0
+        while True:
+            remaining = max(0.0, timeout_sec - (time.monotonic() - start))
+            if remaining <= 0:
+                raise WQBTimeoutError("Multi-Simulation polling timed out.")
+            snapshot = self.get_progress_snapshot(
+                progress_url, timeout=min(60.0, remaining)
+            )
+            polls += 1
+            status_code = snapshot.get("status_code")
+            if status_code in FAIL_FAST_STATUSES:
+                raise self._classified_exception(
+                    status_code, snapshot.get("text", ""), "poll_multi_progress"
+                )
+            if status_code is not None and status_code >= 500:
+                raise WQBSubmitUnknownError(
+                    "Multi-Simulation parent returned a server error; outcome is unknown."
+                )
+            payload = snapshot.get("payload")
+            if not isinstance(payload, dict):
+                raise WQBSimulationError(
+                    "Multi-Simulation progress returned a non-object JSON payload."
+                )
+            status = payload.get("status")
+            if status in ("ERROR", "FAIL", "FAILED") or payload.get("message"):
+                raise WQBRejectedError(
+                    "Multi-Simulation rejected by platform: "
+                    f"status={status} message={payload.get('message', '')}"
+                )
+            children = payload.get("children")
+            if status in ("COMPLETE", "WARNING") or isinstance(payload.get("alphas"), list):
+                if isinstance(payload.get("alphas"), list):
+                    alpha_ids = [str(item) for item in payload["alphas"] if item]
+                    if alpha_ids:
+                        return alpha_ids
+                if not isinstance(children, list) or not children:
+                    raise WQBSimulationError(
+                        "Multi-Simulation completed without child simulations."
+                    )
+                alpha_ids = []
+                for child in children:
+                    child_id = child.get("id") if isinstance(child, Mapping) else child
+                    if not child_id:
+                        raise WQBSimulationError(
+                            "Multi-Simulation returned a child without an id."
+                        )
+                    child_url = str(child_id)
+                    if not child_url.startswith(("http://", "https://", "/")):
+                        child_url = f"{self.base_url}/simulations/{child_url}"
+                    alpha_ids.append(self.poll_progress(
+                        child_url, timeout_sec=remaining,
+                        progress_callback=progress_callback,
+                    ))
+                return alpha_ids
+            if progress_callback:
+                progress_callback(
+                    time.monotonic() - start, polls, status_code
+                )
+            retry_after = snapshot.get("retry_after_seconds") or 1.0
+            time.sleep(min(float(retry_after), 30.0, remaining))
 
     def get_progress_snapshot(self, progress_url, timeout=60):
         """Read one known progress URL without creating a second job.

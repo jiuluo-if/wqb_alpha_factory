@@ -10,14 +10,75 @@ from wqb_agent.research_api import (
     generate_probes,
     get_capabilities,
     get_operator_reference,
+    get_simulation_modes,
     inspect_template,
+    list_all_datafields,
     list_datafields,
     list_datasets,
     list_templates,
+    simulate_multi_batch,
+    simulate_single,
 )
 
 
 class TestResearchApi(unittest.TestCase):
+    def test_simulation_modes_keep_single_and_multi_explicit(self):
+        modes = get_simulation_modes()
+
+        self.assertEqual(modes["single"]["name"], "Single Simulation")
+        self.assertEqual(modes["single"]["max_concurrent"], 10)
+        self.assertEqual(modes["multi"]["name"], "Multi-Simulation")
+        self.assertEqual(modes["multi"]["children_per_job"], 10)
+        self.assertEqual(modes["multi"]["max_concurrent_jobs"], 8)
+        self.assertFalse(modes["region_agnostic"]["available"])
+
+    def test_single_alias_and_multi_facade_delegate_to_gateway(self):
+        spec = SimulationSpec("rank(close)")
+        with mock.patch("wqb_agent.research_api._simulation_gateway") as factory:
+            gateway = factory.return_value
+            gateway.simulate.return_value = {"status": "DONE"}
+            self.assertEqual(simulate_single(spec), {"status": "DONE"})
+            gateway.simulate.assert_called_once_with(spec)
+
+        with mock.patch("wqb_agent.research_api._simulation_gateway") as factory:
+            gateway = factory.return_value
+            gateway.simulate_multi_batch.return_value = [{"status": "DONE"}]
+            result = simulate_multi_batch(
+                [spec], child_batch_size=1, max_concurrent_multi=1
+            )
+            self.assertEqual(result, [{"status": "DONE"}])
+            gateway.simulate_multi_batch.assert_called_once_with(
+                [spec], child_batch_size=1, max_concurrent_multi=1
+            )
+
+    def test_list_all_datafields_reads_every_bounded_page(self):
+        rows = [{"id": f"field_{index}", "type": "MATRIX"} for index in range(5)]
+        calls = []
+
+        def get_datafields(dataset_id, **kwargs):
+            calls.append((dataset_id, kwargs))
+            start = kwargs["offset"]
+            stop = start + kwargs["limit"]
+            return rows[start:stop], len(rows)
+
+        client = SimpleNamespace(
+            instrument_type="EQUITY",
+            region="GLB",
+            universe="TOPDIV3000",
+            delay=1,
+            get_datafields=get_datafields,
+        )
+
+        result = list_all_datafields(
+            "analyst69", client=client, page_limit=2, field_type="MATRIX"
+        )
+
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["pages"], 3)
+        self.assertEqual(result["count"], 5)
+        self.assertEqual(result["fields"], rows)
+        self.assertEqual([call[1]["offset"] for call in calls], [0, 2, 4])
+
     def test_list_datasets_exposes_live_scope(self):
         client = SimpleNamespace(
             instrument_type="EQUITY",

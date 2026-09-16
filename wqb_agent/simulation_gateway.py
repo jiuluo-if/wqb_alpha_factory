@@ -158,7 +158,7 @@ class ExecutionGuard:
 class SimulationGateway:
     """Single public Simulation write path, independent of research state."""
 
-    def __init__(self, client, *, state_dir=".wqb_state", max_concurrent=3,
+    def __init__(self, client, *, state_dir=".wqb_state", max_concurrent=10,
                  poll_timeout_sec=1500, repoll_attempts=3):
         self.client = client
         self.guard = ExecutionGuard(state_dir)
@@ -240,45 +240,33 @@ class SimulationGateway:
         self.validate_simulation_spec(spec)
         return self.guard.fingerprint(spec.expression, spec.settings)
 
-    def simulate(self, spec):
-        return self.simulate_batch([spec])[0]
-
-    def simulate_batch(self, specs):
-        """Execute a batch through one bounded Simulator window.
-
-        The batch remains one guarded execution per spec; only dispatch and
-        polling share the existing bounded worker pool.
-        """
+    def _preflight_specs(self, specs):
         normalized = [
             item if isinstance(item, SimulationSpec)
             else SimulationSpec(**dict(item))
             for item in (specs or ())
         ]
         results: list[dict[str, Any] | None] = [None] * len(normalized)
-        prepared = []
-        seen = set()
-        if normalized:
-            operator_reader = getattr(self.client, "get_operator_capability", None)
-            operator_capability = (
-                operator_reader() if callable(operator_reader)
-                else _CAPABILITY_READER_ABSENT
-            )
-            field_reader = getattr(self.client, "get_field_capability", None)
-            field_capabilities: dict[tuple[str, ...], Any] = {}
-            remote_reader = getattr(self.client, "get_all_user_alphas", None)
-            remote_rows = _REMOTE_ROWS_UNCHECKED
-            if callable(remote_reader):
-                try:
-                    remote_rows = remote_reader(max_results=1000)
-                except Exception:
-                    # Remote history is advisory; continue without a duplicate
-                    # claim when this read is unavailable.
-                    remote_rows = None
-        else:
-            operator_capability = _CAPABILITY_READER_ABSENT
-            field_reader = None
-            field_capabilities = {}
-            remote_rows = ()
+        if not normalized:
+            return results, [], ()
+
+        operator_reader = getattr(self.client, "get_operator_capability", None)
+        operator_capability = (
+            operator_reader() if callable(operator_reader)
+            else _CAPABILITY_READER_ABSENT
+        )
+        field_reader = getattr(self.client, "get_field_capability", None)
+        field_capabilities: dict[tuple[str, ...], Any] = {}
+        remote_reader = getattr(self.client, "get_all_user_alphas", None)
+        remote_rows = _REMOTE_ROWS_UNCHECKED
+        if callable(remote_reader):
+            try:
+                remote_rows = remote_reader(max_results=1000)
+            except Exception:
+                # Remote history is advisory; continue without a duplicate
+                # claim when this read is unavailable.
+                remote_rows = None
+
         validated = []
         for index, spec in enumerate(normalized):
             fingerprint = self.execution_fingerprint(spec)
@@ -294,7 +282,20 @@ class SimulationGateway:
                 field_capability=field_capability,
             )
             validated.append((index, spec, fingerprint))
+        return results, validated, remote_rows
 
+    def simulate(self, spec):
+        return self.simulate_batch([spec])[0]
+
+    def simulate_batch(self, specs):
+        """Execute a batch through one bounded Simulator window.
+
+        The batch remains one guarded execution per spec; only dispatch and
+        polling share the existing bounded worker pool.
+        """
+        results, validated, remote_rows = self._preflight_specs(specs)
+        prepared = []
+        seen = set()
         for index, spec, fingerprint in validated:
             if fingerprint in seen:
                 results[index] = {
@@ -379,6 +380,164 @@ class SimulationGateway:
                 "fingerprint": fingerprint,
                 "error": "dispatch paused before submission",
             }
+        return results
+
+    def simulate_multi_batch(
+        self, specs, *, child_batch_size=10, max_concurrent_multi=8
+    ):
+        """Execute large probe windows as bounded Multi-Simulation parents."""
+        if isinstance(child_batch_size, bool) or not isinstance(child_batch_size, int):
+            raise TypeError("child_batch_size must be an integer")
+        if child_batch_size < 1 or child_batch_size > 10:
+            raise ValueError("child_batch_size must be between 1 and 10")
+        if isinstance(max_concurrent_multi, bool) or not isinstance(max_concurrent_multi, int):
+            raise TypeError("max_concurrent_multi must be an integer")
+        if max_concurrent_multi < 1 or max_concurrent_multi > 8:
+            raise ValueError("max_concurrent_multi must be between 1 and 8")
+
+        results, validated, remote_rows = self._preflight_specs(specs)
+        eligible = []
+        seen = set()
+        for index, spec, fingerprint in validated:
+            if fingerprint in seen:
+                results[index] = {
+                    "status": "EXACT_DUPLICATE", "fingerprint": fingerprint,
+                }
+                continue
+            seen.add(fingerprint)
+            remote = self._remote_duplicate(spec, fingerprint, rows=remote_rows)
+            if remote is not None:
+                results[index] = {
+                    "status": "EXACT_DUPLICATE",
+                    "fingerprint": fingerprint,
+                    **remote,
+                }
+                continue
+            eligible.append((index, spec, fingerprint))
+
+        batches = []
+        grouped: list[list[tuple[int, SimulationSpec, str]]] = []
+        current_key = None
+        for row in eligible:
+            _index, spec, _fingerprint = row
+            key = (
+                spec.settings.get("region", getattr(self.client, "region", None)),
+                spec.settings.get("delay", getattr(self.client, "delay", None)),
+            )
+            if not grouped or key != current_key:
+                grouped.append([])
+                current_key = key
+            grouped[-1].append(row)
+
+        for group in grouped:
+            for start in range(0, len(group), child_batch_size):
+                children = group[start:start + child_batch_size]
+                child_fingerprints = [row[2] for row in children]
+                batch_fingerprint = self.guard.fingerprint(
+                    "MULTI[" + ",".join(child_fingerprints) + "]",
+                    {"mode": "MULTI", "children": len(children)},
+                )
+                existing = self.guard.find(batch_fingerprint)
+                if existing is not None:
+                    status = (
+                        "SUBMIT_UNKNOWN"
+                        if existing.get("status") == "SUBMIT_UNKNOWN"
+                        else "EXACT_DUPLICATE"
+                    )
+                    for index, _spec, fingerprint in children:
+                        results[index] = {
+                            "status": status,
+                            "fingerprint": fingerprint,
+                            "batch_fingerprint": batch_fingerprint,
+                            "progress_url": existing.get("progress_url"),
+                        }
+                    continue
+                if not self.guard.register(batch_fingerprint):
+                    for index, _spec, fingerprint in children:
+                        results[index] = {
+                            "status": "EXACT_DUPLICATE",
+                            "fingerprint": fingerprint,
+                            "batch_fingerprint": batch_fingerprint,
+                        }
+                    continue
+                child_records = [
+                    SimpleNamespace(
+                        index=index,
+                        submission_fingerprint=fingerprint,
+                        expression=spec.expression,
+                        settings=dict(spec.settings),
+                        status="PENDING",
+                        alpha_id=None,
+                        progress_url=None,
+                        error=None,
+                        evidence=None,
+                    )
+                    for index, spec, fingerprint in children
+                ]
+                batches.append((
+                    batch_fingerprint,
+                    SimpleNamespace(
+                        id=batch_fingerprint[:16],
+                        submission_fingerprint=batch_fingerprint,
+                        children=child_records,
+                        status="PENDING",
+                        progress_url=None,
+                        error=None,
+                        elapsed_sec=0.0,
+                    ),
+                ))
+
+        def on_update(batch):
+            status = "SUBMIT_UNKNOWN" if batch.status == "UNKNOWN" else batch.status
+            if status in ExecutionGuard.STATUSES:
+                self.guard.update(
+                    batch.submission_fingerprint,
+                    status=status,
+                    progress_url=batch.progress_url,
+                )
+
+        completed = self.simulator.run_multi(
+            [batch for _fingerprint, batch in batches],
+            on_update=on_update,
+            max_concurrent=max_concurrent_multi,
+        )
+        completed_fingerprints = {
+            batch.submission_fingerprint for batch in completed
+        }
+        for batch in completed:
+            batch_fingerprint = batch.submission_fingerprint
+            if batch.status in {"DONE", "FAILED"}:
+                self.guard.remove(batch_fingerprint)
+            for child in batch.children:
+                if batch.status == "DONE":
+                    results[child.index] = self._result(
+                        child, child.submission_fingerprint
+                    )
+                elif batch.status == "FAILED":
+                    results[child.index] = {
+                        "status": "FAILED",
+                        "fingerprint": child.submission_fingerprint,
+                        "batch_fingerprint": batch_fingerprint,
+                        "error": batch.error,
+                    }
+                else:
+                    results[child.index] = {
+                        "status": "SUBMIT_UNKNOWN",
+                        "fingerprint": child.submission_fingerprint,
+                        "batch_fingerprint": batch_fingerprint,
+                        "error": batch.error,
+                    }
+        for batch_fingerprint, batch in batches:
+            if batch_fingerprint in completed_fingerprints:
+                continue
+            self.guard.remove(batch_fingerprint)
+            for child in batch.children:
+                results[child.index] = {
+                    "status": "NOT_DISPATCHED",
+                    "fingerprint": child.submission_fingerprint,
+                    "batch_fingerprint": batch_fingerprint,
+                    "error": "dispatch paused before submission",
+                }
         return results
 
     def resume_execution(self, fingerprint):

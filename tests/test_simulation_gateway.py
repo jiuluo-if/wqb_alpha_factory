@@ -90,6 +90,42 @@ class ConcurrentGatewayClient(FakeGatewayClient):
                 self._active -= 1
 
 
+class MultiGatewayClient(FakeGatewayClient):
+    def __init__(self):
+        super().__init__()
+        self.multi_submissions = []
+        self._active_multi = 0
+        self._active_lock = threading.Lock()
+        self.max_active_multi = 0
+        self._multi_sizes = {}
+
+    def submit_multi_simulation(self, payloads, **kwargs):
+        with self._active_lock:
+            self._active_multi += 1
+            self.max_active_multi = max(self.max_active_multi, self._active_multi)
+        try:
+            time.sleep(0.03)
+            self.multi_submissions.append((payloads, kwargs))
+            progress_url = f"multi-progress-{len(self.multi_submissions)}"
+            self._multi_sizes[progress_url] = len(payloads)
+            return progress_url
+        finally:
+            with self._active_lock:
+                self._active_multi -= 1
+
+    def poll_multi_progress(self, progress_url, **kwargs):
+        return [
+            f"multi-alpha-{progress_url}-{index}"
+            for index in range(self._multi_sizes[progress_url])
+        ]
+
+
+class UnknownMultiGatewayClient(MultiGatewayClient):
+    def submit_multi_simulation(self, payloads, **kwargs):
+        self.multi_submissions.append((payloads, kwargs))
+        raise WQBSubmitUnknownError("multi response ambiguous")
+
+
 class TestSimulationGateway(unittest.TestCase):
     def test_public_batch_uses_bounded_gateway_concurrency(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -111,6 +147,73 @@ class TestSimulationGateway(unittest.TestCase):
             self.assertEqual([item["status"] for item in results], ["DONE"] * 3)
             self.assertEqual(len(client.submissions), 3)
             self.assertEqual(client.max_active, 2)
+
+    def test_single_batch_defaults_to_ten_concurrent_simulations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = ConcurrentGatewayClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            specs = [
+                SimulationSpec(f"rank(field_{index})", {"delay": 1})
+                for index in range(11)
+            ]
+
+            results = gateway.simulate_batch(specs)
+
+            self.assertEqual([item["status"] for item in results], ["DONE"] * 11)
+            self.assertEqual(client.max_active, 10)
+
+    def test_multi_batch_groups_ten_children_and_bounds_eight_jobs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = MultiGatewayClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            specs = [
+                SimulationSpec(f"rank(field_{index})", {"delay": 1})
+                for index in range(21)
+            ]
+
+            results = gateway.simulate_multi_batch(
+                specs, child_batch_size=10, max_concurrent_multi=2
+            )
+
+            self.assertEqual([item["status"] for item in results], ["DONE"] * 21)
+            self.assertEqual(
+                [len(payloads) for payloads, _kwargs in client.multi_submissions],
+                [10, 10, 1],
+            )
+            self.assertTrue(all(
+                payload["type"] == "REGULAR"
+                and payload["regular"].startswith("rank(field_")
+                for payloads, _kwargs in client.multi_submissions
+                for payload in payloads
+            ))
+            self.assertEqual(client.max_active_multi, 2)
+            self.assertEqual(gateway.guard.entries(), [])
+
+    def test_multi_unknown_keeps_one_parent_guard_and_never_reposts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            specs = [
+                SimulationSpec(f"rank(field_{index})", {"delay": 1})
+                for index in range(2)
+            ]
+            first_client = UnknownMultiGatewayClient()
+            first = SimulationGateway(first_client, state_dir=tmp)
+            first_results = first.simulate_multi_batch(specs)
+
+            self.assertEqual(
+                [item["status"] for item in first_results],
+                ["SUBMIT_UNKNOWN", "SUBMIT_UNKNOWN"],
+            )
+            self.assertEqual(len(first.guard.entries()), 1)
+
+            second_client = UnknownMultiGatewayClient()
+            second = SimulationGateway(second_client, state_dir=tmp)
+            second_results = second.simulate_multi_batch(specs)
+
+            self.assertEqual(
+                [item["status"] for item in second_results],
+                ["SUBMIT_UNKNOWN", "SUBMIT_UNKNOWN"],
+            )
+            self.assertEqual(second_client.multi_submissions, [])
 
     def test_batch_marks_unsubmitted_tail_without_creating_unknown_guard(self):
         with tempfile.TemporaryDirectory() as tmp:

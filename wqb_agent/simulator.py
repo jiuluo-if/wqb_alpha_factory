@@ -27,6 +27,7 @@ Safety semantics (rolling executor, three windows):
 import time
 from collections import deque
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from typing import Any
 
 from .client import (
     WQBAuthError,
@@ -43,7 +44,7 @@ UNKNOWN_STATUSES = frozenset({"SUBMIT_UNKNOWN", "UNKNOWN"})
 
 
 class Simulator:
-    def __init__(self, client, max_concurrent=3, poll_timeout_sec=1500,
+    def __init__(self, client, max_concurrent=10, poll_timeout_sec=1500,
                  repoll_attempts=3, repoll_backoff_sec=60):
         self.client = client
         self.max_concurrent = max_concurrent
@@ -59,7 +60,7 @@ class Simulator:
         self.paused_reason = None
         pending = deque(executions)
         completed = []
-        in_flight = {}
+        in_flight: dict[Any, Any] = {}
 
         with ThreadPoolExecutor(
             max_workers=self.max_concurrent, thread_name_prefix="wqb-sim"
@@ -95,6 +96,57 @@ class Simulator:
         if self.paused_reason:
             # 注意：不要用非 ASCII 前缀符号（如 U+23F8），Windows GBK 控制台
             # 会抛 UnicodeEncodeError 导致派发线程崩溃（基线测试已复现）。
+            print(f"[PAUSED] 暂停新派发：{self.paused_reason}；先只读审计后继续。")
+        return completed
+
+    def run_multi(self, batches, on_update=None, max_concurrent=None):
+        """Run bounded Multi-Simulation parent jobs.
+
+        Each item in ``batches`` represents one parent POST and contains up
+        to ten transient child execution records.  The parent is the guarded
+        write identity; child results are attached only after BRAIN confirms
+        their individual alpha ids.
+        """
+        self.stop_dispatch = False
+        self.paused_reason = None
+        pending = deque(batches)
+        completed = []
+        in_flight: dict[Any, Any] = {}
+        workers = self.max_concurrent if max_concurrent is None else max_concurrent
+
+        with ThreadPoolExecutor(
+            max_workers=workers, thread_name_prefix="wqb-multi"
+        ) as executor:
+            def fill_window():
+                while (
+                    pending
+                    and len(in_flight) < workers
+                    and not self.stop_dispatch
+                ):
+                    batch = pending.popleft()
+                    in_flight[executor.submit(
+                        self._simulate_multi_one, batch, on_update
+                    )] = batch
+
+            fill_window()
+            while in_flight:
+                done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+                for future in done:
+                    batch = in_flight.pop(future)
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        batch.status = "UNKNOWN"
+                        batch.error = f"UNKNOWN_LOCAL {type(exc).__name__}: {exc}"
+                    if self._pauses_dispatch(batch):
+                        self.stop_dispatch = True
+                        self.paused_reason = f"{batch.status}:{batch.id}"
+                    if batch.status in {"DONE", "FAILED"} and on_update is not None:
+                        on_update(batch)
+                    completed.append(batch)
+                fill_window()
+
+        if self.paused_reason:
             print(f"[PAUSED] 暂停新派发：{self.paused_reason}；先只读审计后继续。")
         return completed
 
@@ -289,3 +341,94 @@ class Simulator:
         finally:
             # 计时只用于当前调用的 transient result，不写入本地研究状态。
             experiment.elapsed_sec = time.time() - _t0
+
+    def _simulate_multi_one(self, batch, on_update=None):
+        """Submit and poll one Multi-Simulation parent exactly once."""
+        _t0 = time.time()
+
+        def persist():
+            if on_update is not None and batch.status not in {"DONE", "FAILED"}:
+                on_update(batch)
+
+        try:
+            if batch.status in ("SUBMITTING", "SUBMIT_UNKNOWN"):
+                batch.status = "SUBMIT_UNKNOWN"
+                batch.error = batch.error or (
+                    "multi submission outcome unknown after interrupted POST"
+                )
+                persist()
+                return batch
+
+            if batch.progress_url:
+                batch.status = "RUNNING"
+                persist()
+            else:
+                batch.status = "SUBMITTING"
+                persist()
+                payloads = [
+                    {
+                        "type": "REGULAR",
+                        "settings": dict(child.settings),
+                        "regular": child.expression,
+                    }
+                    for child in batch.children
+                ]
+                try:
+                    batch.progress_url = self.client.submit_multi_simulation(
+                        payloads,
+                        idempotency_key=batch.submission_fingerprint,
+                    )
+                except TypeError as exc:
+                    if "idempotency_key" not in str(exc):
+                        raise
+                    batch.progress_url = self.client.submit_multi_simulation(payloads)
+                batch.status = "RUNNING"
+                persist()
+
+            alpha_ids = self.client.poll_multi_progress(
+                batch.progress_url, timeout_sec=self.poll_timeout_sec
+            )
+            if not isinstance(alpha_ids, (list, tuple)) or len(alpha_ids) != len(batch.children):
+                raise WQBSimulationError(
+                    "Multi-Simulation returned an incomplete child result set."
+                )
+            for child, alpha_id in zip(batch.children, alpha_ids):
+                child.alpha_id = alpha_id
+                child.evidence = self.client.get_alpha(alpha_id)
+                child.status = "DONE"
+            batch.status = "DONE"
+            persist()
+            return batch
+        except WQBRejectedError as exc:
+            batch.error = f"{type(exc).__name__}: {exc}"
+            batch.status = "FAILED"
+            for child in batch.children:
+                child.status = "FAILED"
+                child.error = batch.error
+            persist()
+            return batch
+        except WQBAuthError as exc:
+            batch.error = f"{type(exc).__name__}: {exc}"
+            batch.status = "FAILED"
+            for child in batch.children:
+                child.status = "FAILED"
+                child.error = batch.error
+            persist()
+            return batch
+        except WQBSubmitUnknownError as exc:
+            batch.error = f"{type(exc).__name__}: {exc}"
+            batch.status = "SUBMIT_UNKNOWN"
+            persist()
+            return batch
+        except WQBError as exc:
+            batch.error = f"{type(exc).__name__}: {exc}"
+            batch.status = "UNKNOWN"
+            persist()
+            return batch
+        except Exception as exc:
+            batch.error = f"{type(exc).__name__}: {exc}"
+            batch.status = "UNKNOWN"
+            persist()
+            return batch
+        finally:
+            batch.elapsed_sec = time.time() - _t0

@@ -17,7 +17,7 @@
     "state_dir": ".wqb_state",
     "alpha_template_catalog": null,
     "smoke_dataset": null,
-    "max_concurrent_sims": 3,
+    "max_concurrent_sims": 10,
     "fields_per_discovery": 100,
     "pagination_limit": 50,
     "max_pagination_pages": 20,

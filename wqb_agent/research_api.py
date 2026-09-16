@@ -188,6 +188,55 @@ def list_datafields(
     }
 
 
+def list_all_datafields(
+    dataset_id, *, client=None, config=None, page_limit=None,
+    field_type=None, max_pages=100,
+):
+    """Read every live datafield page within a bounded pagination budget."""
+    try:
+        page_cap = int(max_pages)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("max_pages must be an integer") from exc
+    if page_cap < 1:
+        raise ValueError("max_pages must be positive")
+
+    first = list_datafields(
+        dataset_id,
+        client=client,
+        config=config,
+        limit=page_limit,
+        offset=0,
+        field_type=field_type,
+    )
+    fields = list(first["fields"])
+    total = first["count"]
+    pages = 1
+    offset = len(fields)
+    while offset < total:
+        if pages >= page_cap:
+            raise RuntimeError("LIVE_DATAFIELD_PAGINATION_INCOMPLETE")
+        page = list_datafields(
+            dataset_id,
+            client=client,
+            config=config,
+            limit=first["limit"],
+            offset=offset,
+            field_type=field_type,
+        )
+        chunk = list(page["fields"])
+        if not chunk or page["count"] != total:
+            raise RuntimeError("LIVE_DATAFIELD_PAGINATION_INCOMPLETE")
+        fields.extend(chunk)
+        offset += len(chunk)
+        pages += 1
+    return {
+        **first,
+        "pages": pages,
+        "complete": len(fields) == total,
+        "fields": fields,
+    }
+
+
 def generate_probes(query=None, *, template_ids=None, count=100, seed=None,
                     fields=None, client=None, config=None, state_dir=None):
     """Generate reviewable ``SimulationSpec`` probes without an inbox write."""
@@ -330,12 +379,65 @@ def simulate(spec, *, client=None, config=None, state_dir=None):
     ).simulate(spec)
 
 
+def simulate_single(spec, *, client=None, config=None, state_dir=None):
+    """Explicit small-optimization alias for one Single Simulation."""
+    return simulate(spec, client=client, config=config, state_dir=state_dir)
+
+
 def simulate_batch(specs, *, client=None, config=None, state_dir=None):
-    """Execute a bounded batch through the Gateway's concurrency window."""
+    """Execute Single Simulations through the ten-worker window by default."""
     gateway = _simulation_gateway(
         client=client, config=config, state_dir=state_dir
     )
     return gateway.simulate_batch(specs)
+
+
+def simulate_single_batch(specs, *, client=None, config=None, state_dir=None):
+    """Explicit small-optimization batch alias for Single Simulation."""
+    return simulate_batch(
+        specs, client=client, config=config, state_dir=state_dir
+    )
+
+
+def simulate_multi_batch(
+    specs, *, client=None, config=None, state_dir=None,
+    child_batch_size=10, max_concurrent_multi=8,
+):
+    """Execute probe windows as Multi-Simulation parents.
+
+    Each parent contains at most ten children and at most eight parent jobs
+    are dispatched concurrently.  The Gateway remains the only write path.
+    """
+    gateway = _simulation_gateway(
+        client=client, config=config, state_dir=state_dir
+    )
+    return gateway.simulate_multi_batch(
+        specs,
+        child_batch_size=child_batch_size,
+        max_concurrent_multi=max_concurrent_multi,
+    )
+
+
+def get_simulation_modes() -> dict[str, dict[str, Any]]:
+    """Describe the three UI modes without implying unverified write access."""
+    return {
+        "single": {
+            "name": "Single Simulation",
+            "available": True,
+            "max_concurrent": 10,
+        },
+        "multi": {
+            "name": "Multi-Simulation",
+            "available": True,
+            "children_per_job": 10,
+            "max_concurrent_jobs": 8,
+        },
+        "region_agnostic": {
+            "name": "Region-Agnostic Simulation",
+            "available": False,
+            "reason": "NO_VERIFIED_WRITE_CONTRACT",
+        },
+    }
 
 
 def get_pending_executions(*, state_dir=".wqb_state"):
@@ -587,6 +689,7 @@ def research_tool_manifest():
         {"name": "get_capabilities", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "list_datasets", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "list_datafields", "mode": "READ_ONLY", "owner": "BRAIN"},
+        {"name": "list_all_datafields", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "discover_fields", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "get_operators", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "list_templates", "mode": "READ_ONLY", "owner": "AlphaFactory"},
@@ -595,6 +698,10 @@ def research_tool_manifest():
         {"name": "validate_simulation_spec", "mode": "READ_ONLY", "owner": "SimulationGateway"},
         {"name": "simulate", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
         {"name": "simulate_batch", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
+        {"name": "simulate_single", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
+        {"name": "simulate_single_batch", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
+        {"name": "simulate_multi_batch", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
+        {"name": "get_simulation_modes", "mode": "READ_ONLY", "owner": "SimulationGateway"},
         {"name": "resume_execution", "mode": "READ_ONLY", "remote_write": False, "owner": "ExecutionGuard"},
         {"name": "reconcile_execution", "mode": "READ_ONLY", "remote_write": False, "owner": "ExecutionGuard"},
         {"name": "get_alpha_evidence", "mode": "READ_ONLY", "owner": "BRAIN"},
@@ -611,12 +718,15 @@ def research_tool_manifest():
 
 
 __all__ = [
-    "SimulationSpec", "list_datasets", "list_datafields", "discover_fields",
+    "SimulationSpec", "list_datasets", "list_datafields", "list_all_datafields",
+    "discover_fields",
     "generate_probes",
     "get_capabilities", "get_operators", "get_operator_reference", "get_operator_syntax_reference",
     "list_templates", "inspect_template",
     "validate_simulation_spec", "execution_fingerprint",
-    "simulate", "simulate_batch", "get_pending_executions", "resume_execution",
+    "simulate", "simulate_single", "simulate_batch", "simulate_single_batch",
+    "simulate_multi_batch", "get_simulation_modes",
+    "get_pending_executions", "resume_execution",
     "reconcile_execution",
     "get_alpha", "get_alpha_evidence", "get_alpha_metrics",
     "get_alpha_aggregates", "get_alpha_pnl", "get_alpha_self_correlation",
