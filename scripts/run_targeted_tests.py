@@ -24,10 +24,7 @@ DIRECT_TESTS = {
     "scripts/archive_completed_rounds.py": (
         "tests/test_checkpoint_store.py",
     ),
-    "scripts/reconcile_pending.py": (
-        "tests/test_recovery.py",
-        "tests/test_proposal_safety.py",
-    ),
+    "scripts/reconcile_pending.py": ("tests/test_proposal_safety.py",),
     "wqb_agent/client.py": (
         "tests/test_client_refactor.py",
         "tests/test_protocol_truth.py",
@@ -119,10 +116,7 @@ DIRECT_TESTS = {
         "tests/test_proposal_execution.py",
         "tests/test_runtime_composition.py",
     ),
-    "wqb_agent/checkpoints.py": (
-        "tests/test_checkpoint_store.py",
-        "tests/test_recovery.py",
-    ),
+    "wqb_agent/checkpoints.py": ("tests/test_checkpoint_store.py",),
     "wqb_agent/audit.py": (
         "tests/test_remote_diagnostics.py",
         "tests/test_cli.py",
@@ -132,7 +126,6 @@ DIRECT_TESTS = {
     ),
     "wqb_agent/state.py": (
         "tests/test_state.py",
-        "tests/test_recovery.py",
         "tests/test_settled_evidence_durability.py",
     ),
     "wqb_agent/artifacts.py": (
@@ -194,7 +187,6 @@ DIRECT_TESTS = {
     "wqb_agent/proposal_execution.py": (
         "tests/test_proposal_execution.py",
         "tests/test_proposal_safety.py",
-        "tests/test_recovery.py",
         "tests/test_settled_evidence_durability.py",
         "tests/test_simulator.py",
         "tests/test_search_policy.py",
@@ -202,17 +194,14 @@ DIRECT_TESTS = {
     "wqb_agent/terminal_evidence.py": (
         "tests/test_execution_projections.py",
         "tests/test_proposal_execution.py",
-        "tests/test_recovery.py",
     ),
     "wqb_agent/execution_recovery.py": (
         "tests/test_execution_projections.py",
-        "tests/test_recovery.py",
         "tests/test_proposal_execution.py",
     ),
     "wqb_agent/simulator.py": (
         "tests/test_simulator.py",
         "tests/test_proposal_execution.py",
-        "tests/test_recovery.py",
     ),
     "wqb_agent/weekly_quota.py": (
     ),
@@ -266,7 +255,6 @@ DIRECT_TESTS = {
     "wqb_agent/search_policy.py": (
         "tests/test_search_policy.py",
         "tests/test_search_calibration.py",
-        "tests/test_recovery.py",
     ),
     "wqb_agent/alpha_templates/model.py": ("tests/test_alpha_template_catalog.py",),
     "wqb_agent/alpha_templates/loader.py": (
@@ -312,7 +300,6 @@ DIRECT_TESTS = {
         "tests/test_optimization_selection_accounting.py",
         "tests/test_protocol_truth.py",
         "tests/test_proposal_safety.py",
-        "tests/test_recovery.py",
         "tests/test_search_calibration.py",
         "tests/test_trial_ledger_io.py",
     ),

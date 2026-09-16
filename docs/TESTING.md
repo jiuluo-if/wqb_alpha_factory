@@ -30,4 +30,4 @@ Targeted Fast Lane 与 whole-repository final gate 是不同层次：前者验�
 
 ## Contract focus
 
-必须持续覆盖：唯一 Simulation 写链、checkpoint exactly-once、`SUBMIT_UNKNOWN` 不重 POST、known progress URL 只读轮询、TrialLedger denominator、validation incomplete 无 settlement side effect、research cursor/cycle 稳定性、quality finality、facade authorization、bounded Inner context 与 privacy。
+必须持续覆盖：唯一 Simulation 写链、ExecutionGuard exactly-once、`SUBMIT_UNKNOWN` 不重 POST、known progress URL 只读轮询、远端 evidence 缺失保持 UNKNOWN、live/cache 优先级、颜色 PATCH readback、facade authorization 与 privacy。旧 checkpoint、Trajectory、TrialLedger、settlement、research cursor/cycle 测试已随本地研究状态机退休。

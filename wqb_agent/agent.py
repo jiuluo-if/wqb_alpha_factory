@@ -497,21 +497,6 @@ class Agent:
         except OwnerBusyError:
             return self._local_owner_busy()
 
-    def settle_stale_trajectory(self, round_no=None, dry_run=False, min_attempts=3):
-        """Backfill closed checkpoint terminal states into the trajectory.
-
-        Local-only settlement of UNKNOWN/SUBMIT_UNKNOWN rows whose round
-        checkpoint is already complete with terminal facts.  No remote call
-        and no re-POST happen on this path.
-        """
-        try:
-            with self._mutation_scope("settle-stale-trajectory"):
-                return self.proposal_execution.settle_stale_trajectory(
-                    round_no=round_no, dry_run=dry_run, min_attempts=min_attempts,
-                )
-        except OwnerBusyError:
-            return self._local_owner_busy()
-
     def _unfinished_checkpoint_except(self, round_no):
         return self.checkpoints.unfinished_except(round_no)
 
