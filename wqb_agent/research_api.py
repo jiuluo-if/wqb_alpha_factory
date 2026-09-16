@@ -36,6 +36,7 @@ from .expression import analyze_expression
 from .factory_runner import AIFactoryRunner
 from .locking import OwnerBusyError, single_instance_scope
 from .optimization_decision import OptimizationDecision, optimization_decision_identity
+from .optimization_interfaces import RemoteAlphaEvidenceProvider
 from .proposal_contract import (
     TARGETED_BATCH_TTL_SEC,
     TARGETED_BATCH_TYPE,
@@ -48,6 +49,7 @@ from .research_cursor import build_research_cursor
 from .research_cursor import research_cycle_id as _research_cycle_id
 from .research_quality import assess_experiment as _assess_experiment
 from .research_quality import assess_records
+from .simulation_gateway import ExecutionGuard, SimulationGateway, SimulationSpec
 from .state import Trajectory
 from .trial_ledger import TrialLedger
 
@@ -355,6 +357,123 @@ def run_experiment(spec, *, agent=None, client=None, config=None, state_dir=None
             os.remove(path)
         except OSError:
             pass
+
+
+def _simulation_gateway(*, agent=None, client=None, config=None, state_dir=None):
+    """Build the Remote-First gateway without constructing the research Agent."""
+    if client is None and agent is not None:
+        client = agent.client
+    if client is None:
+        from .client import WQBClient
+        client = WQBClient()
+    directory = state_dir or getattr(agent, "state_dir", None) or ".wqb_state"
+    runtime = getattr(agent, "runtime_policy", None)
+    max_concurrent = getattr(runtime, "max_concurrent_sims", 3)
+    poll_timeout = getattr(runtime, "poll_timeout_sec", 1500)
+    return SimulationGateway(
+        client, state_dir=directory, max_concurrent=max_concurrent,
+        poll_timeout_sec=poll_timeout,
+    )
+
+
+def validate_simulation_spec(spec, *, agent=None, client=None, config=None,
+                             state_dir=None):
+    """Validate only executable request shape and return bounded facts."""
+    gateway = _simulation_gateway(
+        agent=agent, client=client, config=config, state_dir=state_dir
+    )
+    return gateway.validate_simulation_spec(spec)
+
+
+def execution_fingerprint(spec, *, agent=None, client=None, config=None,
+                          state_dir=None):
+    return _simulation_gateway(
+        agent=agent, client=client, config=config, state_dir=state_dir
+    ).execution_fingerprint(spec)
+
+
+def simulate(spec, *, agent=None, client=None, config=None, state_dir=None):
+    """Start one real Simulation through the only public write gateway."""
+    return _simulation_gateway(
+        agent=agent, client=client, config=config, state_dir=state_dir
+    ).simulate(spec)
+
+
+def simulate_batch(specs, *, agent=None, client=None, config=None, state_dir=None):
+    """Execute a bounded batch while applying exact dedupe per item."""
+    gateway = _simulation_gateway(
+        agent=agent, client=client, config=config, state_dir=state_dir
+    )
+    return [gateway.simulate(item) for item in (specs or ())]
+
+
+def get_pending_executions(*, state_dir=".wqb_state"):
+    return {"entries": ExecutionGuard(state_dir).entries()}
+
+
+def resume_execution(fingerprint, *, agent=None, client=None, config=None,
+                     state_dir=None):
+    return _simulation_gateway(
+        agent=agent, client=client, config=config, state_dir=state_dir
+    ).resume_execution(fingerprint)
+
+
+def _remote_client(*, agent=None, client=None):
+    if client is not None:
+        return client
+    if agent is not None:
+        return agent.client
+    from .client import WQBClient
+    return WQBClient()
+
+
+def get_alpha(alpha_id, *, agent=None, client=None, config=None):
+    return _remote_client(agent=agent, client=client).get_alpha(str(alpha_id).strip())
+
+
+def get_alpha_evidence(alpha_id, *, agent=None, client=None, config=None,
+                       live=True):
+    if not live:
+        raise ValueError("LIVE_EVIDENCE_REQUIRED")
+    import time as _time
+    snapshot = RemoteAlphaEvidenceProvider(
+        _remote_client(agent=agent, client=client)
+    ).collect(str(alpha_id).strip())
+    return {
+        "alpha_id": snapshot.alpha_id, "source": "LIVE",
+        "fetched_at": _time.time(), "age_sec": 0.0,
+        "alpha": dict(snapshot.alpha_detail),
+        "aggregates": snapshot.aggregates, "pnl": snapshot.pnl,
+        "self_correlation": snapshot.self_correlation,
+        "status": dict(snapshot.status), "availability": dict(snapshot.availability),
+    }
+
+
+def get_alpha_metrics(alpha_id, *, agent=None, client=None, config=None):
+    return get_alpha_evidence(alpha_id, agent=agent, client=client,
+                              config=config)["alpha"].get("is", {})
+
+
+def get_alpha_aggregates(alpha_id, *, agent=None, client=None, config=None):
+    return get_alpha_evidence(alpha_id, agent=agent, client=client,
+                              config=config)["aggregates"]
+
+
+def get_alpha_pnl(alpha_id, *, agent=None, client=None, config=None):
+    return get_alpha_evidence(alpha_id, agent=agent, client=client,
+                              config=config)["pnl"]
+
+
+def get_alpha_self_correlation(alpha_id, *, agent=None, client=None, config=None):
+    return get_alpha_evidence(alpha_id, agent=agent, client=client,
+                              config=config)["self_correlation"]
+
+
+def compare_alphas(alpha_ids, *, agent=None, client=None, config=None):
+    return {"source": "LIVE", "alphas": [
+        get_alpha_evidence(item, agent=agent, client=client, config=config)
+        for item in (alpha_ids or ())
+    ]}
 
 
 def get_experiment(experiment_id, *, state_dir=".wqb_state"):
@@ -866,9 +985,13 @@ def research_tool_manifest():
 
 
 __all__ = [
-    "ExperimentSpec", "inspect_state", "discover_fields",
+    "ExperimentSpec", "SimulationSpec", "inspect_state", "discover_fields",
     "get_operator_reference", "get_operator_syntax_reference",
-    "run_experiment", "get_experiment",
+    "run_experiment", "validate_simulation_spec", "execution_fingerprint",
+    "simulate", "simulate_batch", "get_pending_executions", "resume_execution",
+    "get_alpha", "get_alpha_evidence", "get_alpha_metrics",
+    "get_alpha_aggregates", "get_alpha_pnl", "get_alpha_self_correlation",
+    "compare_alphas", "get_experiment",
     "compare_experiments", "search_history", "reconcile",
     "inspect_optimizer_parents", "inspect_optimizer_context",
     "propose_optimization", "materialize_targeted_batch",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -92,6 +93,47 @@ class ClientOptimizationEvidenceProvider:
                 return {"status": "UNAVAILABLE", "availability": "UNAVAILABLE",
                         "slot": name, "reason": str(exc) or "capability unavailable"}
             raise
+
+
+class RemoteAlphaEvidenceProvider(ClientOptimizationEvidenceProvider):
+    """Remote-first name for the live Alpha evidence read boundary."""
+
+    def get_alpha(self, alpha_id):
+        return self.client.get_alpha(str(alpha_id).strip())
+
+    def get_alpha_evidence(self, alpha_id, *, live=True):
+        if not live:
+            raise ValueError("LIVE_EVIDENCE_REQUIRED")
+        snapshot = self.collect(alpha_id)
+        return {
+            "alpha_id": snapshot.alpha_id,
+            "source": "LIVE",
+            "fetched_at": time.time(),
+            "age_sec": 0.0,
+            "alpha": dict(snapshot.alpha_detail),
+            "aggregates": snapshot.aggregates,
+            "pnl": snapshot.pnl,
+            "self_correlation": snapshot.self_correlation,
+            "status": dict(snapshot.status),
+            "availability": dict(snapshot.availability),
+        }
+
+    def get_alpha_metrics(self, alpha_id):
+        return self.get_alpha_evidence(alpha_id)["alpha"].get("is", {})
+
+    def get_alpha_aggregates(self, alpha_id):
+        return self.get_alpha_evidence(alpha_id)["aggregates"]
+
+    def get_alpha_pnl(self, alpha_id):
+        return self.get_alpha_evidence(alpha_id)["pnl"]
+
+    def get_alpha_self_correlation(self, alpha_id):
+        return self.get_alpha_evidence(alpha_id)["self_correlation"]
+
+    def compare_alphas(self, alpha_ids):
+        return {"source": "LIVE", "alphas": [
+            self.get_alpha_evidence(item) for item in (alpha_ids or ())
+        ]}
 
 
 @dataclass(frozen=True)
