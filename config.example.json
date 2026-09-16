@@ -17,118 +17,34 @@
     "visualization": false
   },
   "agent": {
-    "max_rounds": 5,
-    "candidates_per_round": 100,
-    "max_proposals_per_round": 100,
+    "state_dir": ".wqb_state",
+    "alpha_template_catalog": null,
+    "smoke_dataset": null,
     "max_concurrent_sims": 3,
-    "research_integrity": true,
-    "correlation_refresh_window": 256,
     "fields_per_discovery": 100,
-    "field_selection": {
-      "max_alpha_count": 1000000,
-      "mode": "semantic_random",
-      "random_fraction": 0.35,
-      "random_seed": "newwqb-field-exploration",
-      "platform_usage_refresh": true,
-      "require_platform_alpha_count": true,
-      "dataset_sampling": "stratified",
-      "dataset_pool": ["pv1", "pv13", "option8", "option9", "fundamental6", "news18"],
-      "min_datasets": 3,
-      "min_cross_dataset_pairs": 1,
-      "persist_catalog": true
-    },
-    "submission_pool": {
-      "filename": "submission_pool.json"
-    },
-    "research_allocation": {
-      "max_simulations": 100,
-      "maximum": {
-        "EXPLOIT": 4,
-        "VALIDATION": 4
-      }
-    },
-    "search_policy": {
-      "enabled": true,
-      "max_simulations": 100,
-      "max_pending_per_arm": 1,
-      "ucb_exploration": 1.0,
-      "validation_max_simulations": 4
-    },
-    "statistical_policy": {
-      "mode": "required_when_available",
-      "min_psr": 0.95,
-      "min_dsr": 0.95,
-      "max_pbo_proxy": null
-    },
-    "robustness_policy": {
-      "min_sharpe_retention": 0.7,
-      "min_fitness_retention": 0.6,
-      "max_turnover_multiple": 1.5,
-      "max_drawdown_multiple": 1.5,
-      "require_checks_passed": true
-    },
-    "incremental_value": {
-      "max_abs_correlation": 0.7,
-      "min_overlap": 60,
-      "mode": "required_when_available"
-    },
-    "yearly_policy": {
-      "min_years": 2
-    },
     "pagination_limit": 50,
     "max_pagination_pages": 20,
-    "state_dir": ".wqb_state",
-    "factory": {
-      "batch_size": 100,
-      "max_runtime_sec": 86400,
-      "max_rounds": 0,
-      "idle_sleep_sec": 30,
-      "max_simulations": 11200,
-      "daily_simulation_cap": 1600,
-      "weekly_simulation_cap": 11200,
-      "max_proposals_per_round": 100,
-      "template_mode": "economic"
-    },
     "poll_timeout_sec": 1500,
     "replace_attempts": 3,
     "replace_backoff_sec": 60,
-    "trajectory_window": 512,
-    "context_experiments": 10,
-    "memory": {
-      "max_lessons": 20,
-      "max_avoid": 30,
-      "max_next": 15,
-      "max_hypotheses": 12,
-      "max_short_term": 30,
-      "short_term_window": 5,
-      "promote_hits": 2,
-      "max_garbage": 200,
-      "garbage_max_age_rounds": 60,
-      "next_max_age_rounds": 20,
-      "max_lineages": 256
+    "field_selection": {
+      "mode": "semantic_random",
+      "random_fraction": 0.35,
+      "random_seed": "synthetic-example",
+      "platform_usage_refresh": false,
+      "require_platform_alpha_count": false,
+      "dataset_sampling": "stratified",
+      "dataset_pool": [],
+      "min_datasets": 1,
+      "min_cross_dataset_pairs": 0,
+      "persist_catalog": false
     },
-    "quality": {
-      "success_sharpe": 1.25,
-      "success_fitness": 1.0,
-      "promising_sharpe": 0.9,
-      "promising_fitness": 0.6,
-      "min_turnover": 0.01,
-      "max_turnover": 0.7,
-      "max_drawdown": 0.5,
-      "excellent": {
-        "min_sharpe": 1.58,
-        "min_fitness": 1.5,
-        "min_margin": 0.0004,
-        "min_turnover": 0.049,
-        "max_turnover": 0.3
-      },
-      "spectacular": {
-        "min_sharpe": 2.0,
-        "min_fitness": 2.5,
-        "min_margin": 0.0006,
-        "min_turnover": 0.1,
-        "max_turnover": 0.2
-      }
+    "factory": {
+      "max_simulations": 11200,
+      "daily_simulation_cap": 1600,
+      "weekly_simulation_cap": 11200,
+      "max_runtime_sec": 86400,
+      "include_partial_operator_branches": true
     }
   }
 }

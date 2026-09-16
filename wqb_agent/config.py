@@ -6,21 +6,6 @@ import copy
 import math
 from dataclasses import dataclass, field, replace
 
-_MEMORY_DEFAULTS = {
-    "max_lessons": 20,
-    "max_avoid": 30,
-    "max_next": 15,
-    "max_hypotheses": 12,
-    "max_short_term": 30,
-    "short_term_window": 5,
-    "promote_hits": 2,
-    "max_garbage": 200,
-    "garbage_max_age_rounds": 60,
-    "next_max_age_rounds": 20,
-    "max_lineages": 256,
-    "max_seen_expressions": 4096,
-    "max_used_hypotheses": 256,
-}
 _FIELD_SELECTION_DEFAULTS = {
     "mode": "semantic_random",
     "random_fraction": 0.35,
@@ -35,28 +20,6 @@ _FIELD_SELECTION_DEFAULTS = {
     "min_cross_dataset_pairs": 0,
     "persist_catalog": False,
 }
-_QUALITY_DEFAULTS = {
-    "max_self_correlation": 0.5,
-    "success_sharpe": 1.25,
-    "success_fitness": 1.0,
-    "promising_sharpe": 0.9,
-    "promising_fitness": 0.6,
-    "min_turnover": 0.01,
-    "max_turnover": 0.7,
-    "max_drawdown": 0.5,
-}
-
-
-@dataclass(frozen=True)
-class ValidationConfig:
-    yearly_min_years: int = 2
-
-
-@dataclass(frozen=True)
-class StatisticalConfig:
-    mode: str = "required_when_available"
-
-
 @dataclass(frozen=True)
 class SimulationConfig:
     settings: dict = field(default_factory=lambda: {"neutralization": "SUBINDUSTRY"})
@@ -79,47 +42,16 @@ class AgentRuntimeConfig:
     state_dir: str = ".wqb_state"
     alpha_template_catalog: str | None = None
     smoke_dataset: str | None = None
-    max_rounds: int = 5
-    candidates_per_round: int = 6
-    max_proposals_per_round: int = 18
     max_concurrent_sims: int = 3
-    research_integrity: bool = False
-    correlation_refresh_window: int = 256
     fields_per_discovery: int = 6
     pagination_limit: int = 50
     max_pagination_pages: int = 20
     poll_timeout_sec: float = 1500
     replace_attempts: int = 3
     replace_backoff_sec: float = 60
-    trajectory_window: int = 100
-    context_experiments: int = 10
     fields_cache_ttl_sec: float = 7 * 24 * 3600
-    alpha_feed_refresh_interval_sec: float = 3 * 3600
-    heartbeat_interval_sec: float = 20.0
     max_field_alpha_count: int | None = None
-    factory: dict = field(default_factory=dict)
-    research_allocation: dict = field(default_factory=dict)
     field_selection: dict = field(default_factory=lambda: dict(_FIELD_SELECTION_DEFAULTS))
-    submission_pool_filename: str = "submission_pool.json"
-    memory: dict = field(default_factory=lambda: dict(_MEMORY_DEFAULTS))
-    quality: dict = field(default_factory=lambda: dict(_QUALITY_DEFAULTS))
-    statistical_policy: dict = field(default_factory=dict)
-    yearly_policy: dict = field(default_factory=lambda: {"min_years": 2})
-
-@dataclass(frozen=True)
-class SearchConfig:
-    enabled: bool = True
-    max_simulations: int = 100
-    validation_max_simulations: int = 4
-
-
-@dataclass(frozen=True)
-class ResearchAllocation:
-    """Per-round role allocation, separate from the process hard cap."""
-
-    max_simulations: int = 100
-    maximum: dict = field(default_factory=dict)
-
 
 @dataclass(frozen=True)
 class FactoryConfig:
@@ -132,11 +64,7 @@ class FactoryConfig:
 
 @dataclass(frozen=True)
 class AppConfig:
-    search: SearchConfig = field(default_factory=SearchConfig)
-    research_allocation: ResearchAllocation = field(default_factory=ResearchAllocation)
     factory: FactoryConfig = field(default_factory=FactoryConfig)
-    validation: ValidationConfig = field(default_factory=ValidationConfig)
-    statistical: StatisticalConfig = field(default_factory=StatisticalConfig)
     simulation_config: SimulationConfig = field(default_factory=SimulationConfig)
     remote_cache: RemoteCacheConfig = field(default_factory=RemoteCacheConfig)
     runtime: AgentRuntimeConfig = field(default_factory=AgentRuntimeConfig)
@@ -202,24 +130,7 @@ def _optional_int_in_range(value, *, key, minimum=None, maximum=None):
     )
 
 
-def _resolved_ints(values, defaults, *, minimum=0):
-    resolved = dict(values)
-    for key, default in defaults.items():
-        resolved[key] = _int_in_range(
-            values.get(key, default),
-            key=f"config.agent.{key}",
-            minimum=minimum,
-        )
-    return resolved
-
-
-def _resolve_runtime_policies(agent):
-    memory_raw = dict(agent.get("memory") or {})
-    memory = _resolved_ints(memory_raw, _MEMORY_DEFAULTS)
-    for key in ("max_lineages", "max_seen_expressions", "max_used_hypotheses"):
-        if memory[key] < 1:
-            raise ValueError(f"config.agent.memory.{key} 必须大于 0")
-
+def _resolve_field_selection(agent):
     field_selection = {**_FIELD_SELECTION_DEFAULTS, **dict(agent.get("field_selection") or {})}
     field_selection["random_fraction"] = _finite_float(
         field_selection["random_fraction"],
@@ -266,33 +177,7 @@ def _resolve_runtime_policies(agent):
             continue
         raise ValueError(f"config.agent.field_selection.{key} 必须是布尔值")
 
-    quality = {**_QUALITY_DEFAULTS, **dict(agent.get("quality") or {})}
-    for key in _QUALITY_DEFAULTS:
-        quality[key] = _finite_float(
-            quality[key], key=f"config.agent.quality.{key}"
-        )
-    for group_name, keys in {
-        "excellent": (
-            "min_sharpe", "min_fitness", "min_margin",
-            "min_turnover", "max_turnover",
-        ),
-        "spectacular": (
-            "min_sharpe", "min_fitness", "min_margin",
-            "min_turnover", "max_turnover",
-        ),
-    }.items():
-        group = quality.get(group_name)
-        if group is None:
-            continue
-        if not isinstance(group, dict):
-            raise ValueError(f"config.agent.quality.{group_name} 必须是对象")
-        for key in keys:
-            if key in group:
-                group[key] = _finite_float(
-                    group[key],
-                    key=f"config.agent.quality.{group_name}.{key}",
-                )
-    return memory, field_selection, quality
+    return field_selection
 
 def parse_config(raw):
     if not isinstance(raw, dict) or not isinstance(raw.get("simulation", {}), dict):
@@ -307,23 +192,9 @@ def parse_config(raw):
         remote_cache_raw.get("retention_days", 7),
         key="config.remote_cache.retention_days", minimum=1, maximum=90,
     ))
-    search_raw = dict(agent.get("search_policy") or {})
-    research_raw = dict(agent.get("research_allocation") or {})
-    search_max = _int_in_range(
-        search_raw.get(
-            "max_simulations", research_raw.get("max_simulations", 100)
-        ),
-        key="config.agent.search_policy.max_simulations",
-        minimum=0,
-    )
-    research_max = _int_in_range(
-        research_raw.get("max_simulations", search_max),
-        key="config.agent.research_allocation.max_simulations",
-        minimum=0,
-    )
     factory_raw = dict(agent.get("factory") or {})
     legacy_factory_max = _int_in_range(
-        factory_raw.get("max_simulations", search_max),
+        factory_raw.get("max_simulations", 11200),
         key="config.agent.factory.max_simulations",
         minimum=0,
     )
@@ -339,33 +210,6 @@ def parse_config(raw):
     )
     if daily_factory_max > factory_max:
         raise ValueError("daily_simulation_cap 不得超过 weekly_simulation_cap")
-    search = SearchConfig(
-        enabled=_as_bool(
-            search_raw.get("enabled"), bool(research_raw),
-            "config.agent.search_policy.enabled",
-        ),
-        max_simulations=search_max,
-        validation_max_simulations=_int_in_range(
-            search_raw.get("validation_max_simulations", 0),
-            key="config.agent.search_policy.validation_max_simulations",
-            minimum=0,
-        ),
-    )
-    maximum_raw = research_raw.get("maximum") or {}
-    if not isinstance(maximum_raw, dict):
-        raise ValueError("config.agent.research_allocation.maximum 必须是对象")
-    maximum = {
-        role: _int_in_range(
-            value,
-            key=f"config.agent.research_allocation.maximum.{role}",
-            minimum=0,
-        )
-        for role, value in maximum_raw.items()
-    }
-    allocation = ResearchAllocation(
-        max_simulations=research_max,
-        maximum=maximum,
-    )
     factory = FactoryConfig(
         max_simulations=factory_max,
         max_runtime_sec=_int_in_range(
@@ -380,65 +224,7 @@ def parse_config(raw):
             "config.agent.factory.include_partial_operator_branches",
         ),
     )
-    if search.max_simulations + search.validation_max_simulations > factory.max_simulations:
-        raise ValueError("discovery + validation 预算不得超过 factory.max_simulations")
-    memory, field_selection, quality = _resolve_runtime_policies(agent)
-    # Keep the validated typed factory model; the raw mapping remains
-    # available only through ``runtime.factory`` for extensible legacy keys.
-    factory_settings = dict(agent.get("factory") or {})
-    # The compatibility runner still treats this legacy key as its per-run
-    # cap; the typed FactoryConfig separately owns the weekly cap.
-    factory_settings["max_simulations"] = legacy_factory_max
-    factory_settings["max_runtime_sec"] = factory.max_runtime_sec
-    factory_settings["daily_simulation_cap"] = daily_factory_max
-    factory_settings["weekly_simulation_cap"] = factory_max
-    factory_settings["include_partial_operator_branches"] = factory.include_partial_operator_branches
-    if "max_rounds" in factory_settings:
-        factory_settings["max_rounds"] = _int_in_range(
-            factory_settings["max_rounds"],
-            key="config.agent.factory.max_rounds",
-            minimum=0,
-        )
-    else:
-        factory_settings["max_rounds"] = 0
-    if "idle_sleep_sec" in factory_settings:
-        factory_settings["idle_sleep_sec"] = _finite_float(
-            factory_settings["idle_sleep_sec"],
-            key="config.agent.factory.idle_sleep_sec",
-            minimum=1.0,
-            maximum=60.0,
-        )
-    else:
-        factory_settings["idle_sleep_sec"] = 30.0
-    factory_settings["max_route_attempts"] = _int_in_range(
-        factory_settings.get("max_route_attempts", 3),
-        key="config.agent.factory.max_route_attempts", minimum=0,
-    )
-    factory_settings["max_no_gain_attempts"] = _int_in_range(
-        factory_settings.get("max_no_gain_attempts", 2),
-        key="config.agent.factory.max_no_gain_attempts", minimum=1,
-    )
-    factory_settings["blocker_recheck_sec"] = _finite_float(
-        factory_settings.get("blocker_recheck_sec", 3600.0),
-        key="config.agent.factory.blocker_recheck_sec", minimum=0.0,
-    )
-    research_allocation_raw = dict(agent.get("research_allocation") or {})
-    statistical_policy = dict(agent.get("statistical_policy") or {})
-    yearly_policy = dict(agent.get("yearly_policy") or {})
-    yearly_policy["min_years"] = _int_in_range(
-        yearly_policy.get("min_years", 2),
-        key="config.agent.yearly_policy.min_years",
-        minimum=1,
-    )
-    statistical_policy.setdefault("mode", "required_when_available")
-    for key in ("min_psr", "min_dsr", "max_pbo_proxy"):
-        if key in statistical_policy and statistical_policy[key] is not None:
-            statistical_policy[key] = _finite_float(
-                statistical_policy[key],
-                key=f"config.agent.statistical_policy.{key}",
-                minimum=0.0,
-                maximum=1.0,
-            )
+    field_selection = _resolve_field_selection(agent)
     runtime = AgentRuntimeConfig(
         state_dir=str(agent.get("state_dir", ".wqb_state")),
         alpha_template_catalog=(
@@ -450,34 +236,9 @@ def parse_config(raw):
             if agent.get("smoke_dataset") is not None
             else None
         ),
-        max_rounds=_int_in_range(
-            agent.get("max_rounds", 5),
-            key="config.agent.max_rounds",
-            minimum=0,
-        ),
-        candidates_per_round=_int_in_range(
-            agent.get("candidates_per_round", 6),
-            key="config.agent.candidates_per_round",
-            minimum=0,
-        ),
-        max_proposals_per_round=_int_in_range(
-            agent.get("max_proposals_per_round", 18),
-            key="config.agent.max_proposals_per_round",
-            minimum=0,
-            maximum=100,
-        ),
         max_concurrent_sims=_int_in_range(
             agent.get("max_concurrent_sims", 3),
             key="config.agent.max_concurrent_sims",
-            minimum=1,
-        ),
-        research_integrity=_as_bool(
-            agent.get("research_integrity"), False,
-            "config.agent.research_integrity",
-        ),
-        correlation_refresh_window=_int_in_range(
-            agent.get("correlation_refresh_window", 256),
-            key="config.agent.correlation_refresh_window",
             minimum=1,
         ),
         fields_per_discovery=_int_in_range(
@@ -510,53 +271,20 @@ def parse_config(raw):
             key="config.agent.replace_backoff_sec",
             minimum=0.0,
         ),
-        trajectory_window=_int_in_range(
-            agent.get("trajectory_window", 100),
-            key="config.agent.trajectory_window",
-            minimum=1,
-        ),
-        context_experiments=_int_in_range(
-            agent.get("context_experiments", 10),
-            key="config.agent.context_experiments",
-            minimum=0,
-        ),
         fields_cache_ttl_sec=_finite_float(
             agent.get("fields_cache_ttl_sec", 7 * 24 * 3600),
             key="config.agent.fields_cache_ttl_sec",
             minimum=0.0,
-        ),
-        alpha_feed_refresh_interval_sec=_finite_float(
-            agent.get("alpha_feed_refresh_interval_sec", 3 * 3600),
-            key="config.agent.alpha_feed_refresh_interval_sec",
-            minimum=1.0, maximum=7 * 24 * 3600,
-        ),
-        heartbeat_interval_sec=_finite_float(
-            agent.get("heartbeat_interval_sec", 20.0),
-            key="config.agent.heartbeat_interval_sec",
-            minimum=1.0, maximum=300.0,
         ),
         max_field_alpha_count=_optional_int_in_range(
             field_selection.get("max_alpha_count"),
             key="config.agent.field_selection.max_alpha_count",
             minimum=0,
         ),
-        factory=copy.deepcopy(factory_settings),
-        research_allocation=copy.deepcopy(research_allocation_raw),
         field_selection=copy.deepcopy(field_selection),
-        submission_pool_filename=str(
-            (agent.get("submission_pool") or {}).get("filename", "submission_pool.json")
-        ),
-        memory=copy.deepcopy(memory),
-        quality=copy.deepcopy(quality),
-        statistical_policy=copy.deepcopy(statistical_policy),
-        yearly_policy=copy.deepcopy(yearly_policy),
     )
     return AppConfig(
-        search=search,
-        research_allocation=allocation,
         factory=factory,
-        validation=ValidationConfig(yearly_policy["min_years"]),
-        statistical=StatisticalConfig(str((agent.get("statistical_policy") or {}).get("mode", "required_when_available"))),
         simulation_config=SimulationConfig({
             "neutralization": "SUBINDUSTRY",
             **copy.deepcopy(raw.get("simulation", {})),
