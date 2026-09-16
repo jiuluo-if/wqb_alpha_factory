@@ -121,9 +121,7 @@ class TestResearchApi(unittest.TestCase):
 
     def test_discovery_without_agent_does_not_construct_legacy_runtime(self):
         client = SimpleNamespace()
-        with mock.patch("wqb_agent.research_api._agent", side_effect=AssertionError(
-            "Remote-First discovery must not construct Agent"
-        )), mock.patch("wqb_agent.research_api.FieldDiscovery") as discovery_type:
+        with mock.patch("wqb_agent.research_api.FieldDiscovery") as discovery_type:
             discovery = discovery_type.return_value
             discovery.discover.return_value = [{"id": "close", "type": "MATRIX"}]
             discovery.source_provenance.return_value = {"kind": "brain_api"}
@@ -145,9 +143,7 @@ class TestResearchApi(unittest.TestCase):
         })
         factory = mock.Mock()
         factory.generate_probe_specs.return_value = [SimulationSpec("rank(close)")]
-        with mock.patch("wqb_agent.research_api._agent", side_effect=AssertionError(
-            "Remote-First probes must not construct Agent"
-        )), mock.patch("wqb_agent.research_api.FieldDiscovery") as discovery_type, \
+        with mock.patch("wqb_agent.research_api.FieldDiscovery") as discovery_type, \
                 mock.patch("wqb_agent.research_api.AlphaFactory", return_value=factory):
             discovery = discovery_type.return_value
             discovery.discover.return_value = [{"id": "close", "type": "MATRIX"}]

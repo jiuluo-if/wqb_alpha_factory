@@ -65,21 +65,6 @@ def _reject_legacy_agent(agent):
         )
 
 
-def _agent(*, agent=None, client=None, config=None, state_dir=None):
-    if agent is not None:
-        _reject_legacy_agent(agent)
-    if client is None:
-        from .client import WQBClient
-
-        client = WQBClient()
-    raw = _load_config(config)
-    if state_dir is not None:
-        raw.setdefault("agent", {})["state_dir"] = state_dir
-    from .agent import Agent
-
-    return Agent(client, normalize_config(raw))
-
-
 def _remote_research_components(*, client, config=None, state_dir=None,
                                 include_factory=False):
     """Build only rebuildable components for public discovery/probe tools."""
@@ -117,18 +102,14 @@ def _remote_research_components(*, client, config=None, state_dir=None,
 
 def discover_fields(query, *, agent=None, client=None, config=None, state_dir=None, limit=None):
     """Discover fields through the existing BRAIN-backed discovery component."""
-    if agent is not None:
-        runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
-        discovery = runtime.discovery
-        default_limit = runtime.fields_per_discovery
-    else:
-        if client is None:
-            from .client import WQBClient
-            client = WQBClient()
-        _typed, discovery, _factory = _remote_research_components(
-            client=client, config=config, state_dir=state_dir
-        )
-        default_limit = _typed.runtime.fields_per_discovery
+    _reject_legacy_agent(agent)
+    if client is None:
+        from .client import WQBClient
+        client = WQBClient()
+    _typed, discovery, _factory = _remote_research_components(
+        client=client, config=config, state_dir=state_dir
+    )
+    default_limit = _typed.runtime.fields_per_discovery
     if isinstance(query, str):
         hypothesis = {"id": "agent-query", "statement": query, "tags": query.split(), "datasets": []}
     elif isinstance(query, Mapping):
@@ -149,20 +130,15 @@ def discover_fields(query, *, agent=None, client=None, config=None, state_dir=No
 def generate_probes(query=None, *, template_ids=None, count=100, seed=None,
                     agent=None, client=None, config=None, state_dir=None):
     """Generate reviewable ``SimulationSpec`` probes without an inbox write."""
-    if agent is not None:
-        runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
-        discovery = runtime.discovery
-        factory = runtime.alpha_factory
-        reference = runtime.operator_reference
-    else:
-        if client is None:
-            from .client import WQBClient
-            client = WQBClient()
-        _typed, discovery, factory = _remote_research_components(
-            client=client, config=config, state_dir=state_dir,
-            include_factory=True,
-        )
-        reference = get_operator_reference(client=client, config=config)
+    _reject_legacy_agent(agent)
+    if client is None:
+        from .client import WQBClient
+        client = WQBClient()
+    _typed, discovery, factory = _remote_research_components(
+        client=client, config=config, state_dir=state_dir,
+        include_factory=True,
+    )
+    reference = get_operator_reference(client=client, config=config)
     try:
         target = int(count)
     except (TypeError, ValueError) as exc:
@@ -199,16 +175,10 @@ def get_operator_syntax_reference(path=None) -> dict[str, Any]:
 
 def get_operator_reference(*, agent=None, client=None, config=None) -> dict[str, Any]:
     """Return a bounded current operator view from the existing BRAIN client."""
+    _reject_legacy_agent(agent)
     if agent is None and client is None:
         raise RuntimeError("LIVE_OPERATOR_CAPABILITY_REQUIRED")
     capability = None
-    if agent is not None:
-        runtime = _agent(agent=agent, client=client, config=config)
-        capability = getattr(runtime, "operator_capability", None)
-        if callable(capability):
-            capability = capability()
-        if capability is None:
-            client = runtime.client
     if capability is None:
         reader = getattr(client, "get_operator_capability", None)
         if not callable(reader):
