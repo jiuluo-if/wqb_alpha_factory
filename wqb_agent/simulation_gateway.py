@@ -155,12 +155,12 @@ class SimulationGateway:
     """Single public Simulation write path, independent of research state."""
 
     def __init__(self, client, *, state_dir=".wqb_state", max_concurrent=3,
-                 poll_timeout_sec=1500, replace_attempts=3):
+                 poll_timeout_sec=1500, repoll_attempts=3):
         self.client = client
         self.guard = ExecutionGuard(state_dir)
         self.simulator = Simulator(
             client, max_concurrent=max_concurrent, poll_timeout_sec=poll_timeout_sec,
-            replace_attempts=replace_attempts,
+            repoll_attempts=repoll_attempts,
         )
 
     @staticmethod

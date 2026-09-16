@@ -41,8 +41,8 @@ class AgentRuntimeConfig:
     pagination_limit: int = 50
     max_pagination_pages: int = 20
     poll_timeout_sec: float = 1500
-    replace_attempts: int = 3
-    replace_backoff_sec: float = 60
+    repoll_attempts: int = 3
+    repoll_backoff_sec: float = 60
     fields_cache_ttl_sec: float = 7 * 24 * 3600
     max_field_alpha_count: int | None = None
     field_selection: dict = field(default_factory=lambda: dict(_FIELD_SELECTION_DEFAULTS))
@@ -251,14 +251,14 @@ def parse_config(raw):
             key="config.runtime.poll_timeout_sec",
             minimum=0.0,
         ),
-        replace_attempts=_int_in_range(
-            runtime_raw.get("replace_attempts", 3),
-            key="config.runtime.replace_attempts",
+        repoll_attempts=_int_in_range(
+            runtime_raw.get("repoll_attempts", 3),
+            key="config.runtime.repoll_attempts",
             minimum=1,
         ),
-        replace_backoff_sec=_finite_float(
-            runtime_raw.get("replace_backoff_sec", 60),
-            key="config.runtime.replace_backoff_sec",
+        repoll_backoff_sec=_finite_float(
+            runtime_raw.get("repoll_backoff_sec", 60),
+            key="config.runtime.repoll_backoff_sec",
             minimum=0.0,
         ),
         fields_cache_ttl_sec=_finite_float(

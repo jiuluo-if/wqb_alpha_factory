@@ -15,7 +15,7 @@ Safety semantics (rolling executor, three windows):
   and does NOT pause dispatch — it is a property of the expression.
 - Polling timeout / platform 5xx / network errors for a known progress URL are
   handled by REPOLL: the same remote Simulation is polled again, up to
-  `replace_attempts` times with growing backoff. No replacement POST is made;
+  `repoll_attempts` times with growing backoff. No replacement POST is made;
   an exhausted poll budget settles as UNKNOWN and remains eligible for
   read-only reconciliation.
 - An authentication rejection (401/403) marks FAILED and PAUSES dispatch:
@@ -44,12 +44,12 @@ UNKNOWN_STATUSES = frozenset({"SUBMIT_UNKNOWN", "UNKNOWN"})
 
 class Simulator:
     def __init__(self, client, max_concurrent=3, poll_timeout_sec=1500,
-                 replace_attempts=3, replace_backoff_sec=60):
+                 repoll_attempts=3, repoll_backoff_sec=60):
         self.client = client
         self.max_concurrent = max_concurrent
         self.poll_timeout_sec = poll_timeout_sec
-        self.replace_attempts = max(1, replace_attempts)
-        self.replace_backoff_sec = max(0, replace_backoff_sec)
+        self.repoll_attempts = max(1, repoll_attempts)
+        self.repoll_backoff_sec = max(0, repoll_backoff_sec)
         self.stop_dispatch = False
         self.paused_reason = None
 
@@ -144,7 +144,7 @@ class Simulator:
                 experiment.status = "SUBMITTING"
                 experiment.submission_started_at = time.time()
                 persist()
-                for _submit_attempt in range(1, self.replace_attempts + 1):
+                for _submit_attempt in range(1, self.repoll_attempts + 1):
                     try:
                         try:
                             experiment.progress_url = self.client.submit_simulation(
@@ -204,7 +204,7 @@ class Simulator:
             # A known progress URL is always polled again.  Poll failures no
             # longer trigger a replacement POST: the original BRAIN job owns
             # this budget slot and can be resumed safely after a crash.
-            for attempt in range(1, self.replace_attempts + 1):
+            for attempt in range(1, self.repoll_attempts + 1):
                 try:
                     progress_url = experiment.progress_url
                     def callback(elapsed, polls, code):
@@ -241,10 +241,10 @@ class Simulator:
                     return experiment
                 except recoverable as exc:
                     last_error = f"{type(exc).__name__}: {exc}"
-                    if attempt < self.replace_attempts:
-                        delay = self.replace_backoff_sec * attempt
+                    if attempt < self.repoll_attempts:
+                        delay = self.repoll_backoff_sec * attempt
                         print(
-                            f"[REPOLL] {experiment.id} 第{attempt}/{self.replace_attempts}"
+                            f"[REPOLL] {experiment.id} 第{attempt}/{self.repoll_attempts}"
                             f"次轮询失败，{delay}s 后重试同一 simulation：{last_error[:90]}"
                         )
                         time.sleep(delay)

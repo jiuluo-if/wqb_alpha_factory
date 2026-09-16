@@ -22,8 +22,8 @@
     "pagination_limit": 50,
     "max_pagination_pages": 20,
     "poll_timeout_sec": 1500,
-    "replace_attempts": 3,
-    "replace_backoff_sec": 60,
+    "repoll_attempts": 3,
+    "repoll_backoff_sec": 60,
     "field_selection": {
       "mode": "semantic_random",
       "random_fraction": 0.35,
