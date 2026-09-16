@@ -24,17 +24,11 @@ research_api -> SimulationGateway -> Simulator / WQBClient -> BRAIN
 不得恢复 Agent runtime、Factory session/control-plane、proposals inbox、round/parent/lineage、
 Trajectory/TrialLedger/Checkpoint 或第二套状态/配置抽象。旧兼容文件只能被迁移和删除，不能成为新 consumer。
 
-## 研究交接
+## 研究边界
 
-遇到经济机制、字段选择、实验优先级或结果解释时输出：
-
-```text
-REQUIRES_INNER_RESEARCH_DECISION
-```
-
-只向内层提供 bounded 的 live capability、远端证据摘要和预算信息，不提供 credentials、
-绝对路径、raw `.wqb_state`、trajectory、audit export 或私有研究资料。内层只返回研究决策；
-维护 Agent 不重新解释机制，也不绕过 Python safety gate。
+遇到经济机制、字段选择、实验优先级或结果解释时，不替 Research Agent 做判断；只提供
+bounded 的 live capability 和远端证据摘要，不提供 credentials、绝对路径、raw `.wqb_state`、
+trajectory、audit export 或私有研究资料，也不绕过 Python safety gate。
 
 ## 安全与隐私
 

@@ -92,7 +92,7 @@ def build_parser():
     context.add_argument(
         "--task",
         default="general",
-        help="任务路由：general/state-recovery/execution/config/expression",
+        help="任务路由：general/execution/config/expression",
     )
     _add_offline(context)
     _set_command(context, "context", "show")
