@@ -56,6 +56,29 @@ def main(argv=None):
         print(f"配置无效: {exc}")
         sys.exit(1)
 
+    # Remote-First is the only production execution model.  Keep parsing the
+    # retired commands for a short compatibility window so callers receive a
+    # deterministic migration error, but never construct Agent, a factory
+    # session, or the proposals inbox for them.
+    if command_key in {
+        ("factory", "run"),
+        ("factory", "stop"),
+        ("factory", "status"),
+        ("research", "run-proposals"),
+        ("recovery", "skip-stale"),
+        ("recovery", "skip-submit-unknown"),
+        ("recovery", "finalize-round"),
+        ("recovery", "settle-stale-trajectory"),
+    }:
+        print(json.dumps({
+            "status": "REMOVED",
+            "reason": "REMOTE_FIRST_PUBLIC_API_REQUIRED",
+            "command": " ".join(command_key),
+            "next": "Use wqb_agent.research_api.simulate/remote repository tools",
+            "network_write": False,
+        }, ensure_ascii=False, indent=2))
+        sys.exit(2)
+
     if command_key == ("state", "doctor"):
         from wqb_agent.doctor import run_doctor
         print(json.dumps(run_doctor(typed_config, offline=True), ensure_ascii=False, indent=2))
@@ -137,26 +160,6 @@ def main(argv=None):
             release_single_instance_lock(lock_path)
         return
 
-    if command_key in {("factory", "stop"), ("factory", "status")}:
-        from wqb_agent.factory_runner import AIFactoryRunner
-
-        state_dir = typed_config.runtime.state_dir
-        if command_key == ("factory", "stop"):
-            session = AIFactoryRunner.request_stop(state_dir)
-            if session is None:
-                print("未找到可停止的工厂会话")
-                return
-        else:
-            session = AIFactoryRunner.status_view(state_dir)
-        if command_key == ("factory", "stop"):
-            session = AIFactoryRunner.status_view(state_dir)
-        print(json.dumps(session or {"status": "NOT_STARTED"}, ensure_ascii=False, indent=2))
-        return
-
-    # Keep read-only factory control commands independent from the production
-    # HTTP/client import chain.  This matters on an unattended host where a
-    # status/stop operation must work even when credentials or requests are
-    # unavailable.
     from wqb_agent import Agent, WQBClient
 
     try:
@@ -210,35 +213,8 @@ def main(argv=None):
             )
             print(json.dumps(result or {"status": "LOCAL_OWNER_BUSY"},
                              ensure_ascii=False, indent=2))
-        elif command_key == ("factory", "run"):
-            from wqb_agent.factory_runner import AIFactoryRunner
-
-            factory_cfg = typed_config.runtime.factory
-            hours = (
-                command.hours
-                if command.hours is not None
-                else float(factory_cfg.get("max_runtime_sec", 86400)) / 3600
-            )
-            session = AIFactoryRunner(agent).run(
-                duration_sec=max(0.0, hours) * 3600,
-                max_rounds=factory_cfg.get("max_rounds", 0),
-                idle_sleep_sec=factory_cfg.get("idle_sleep_sec", 30),
-                max_simulations=factory_cfg.get("max_simulations", 240),
-                daily_simulation_cap=factory_cfg.get(
-                    "daily_simulation_cap",
-                    factory_cfg.get("max_simulations", 240),
-                ),
-                weekly_simulation_cap=factory_cfg.get(
-                    "weekly_simulation_cap",
-                    factory_cfg.get("max_simulations", 240),
-                ),
-            )
-            print(json.dumps(session, ensure_ascii=False, indent=2))
         elif command_key == ("research", "run-proposals"):
-            agent.run_proposals(
-                command.path,
-                allow_unresolved_checkpoint=command.force_new_round,
-            )
+            raise RuntimeError("unreachable retired Remote-First command")
         elif command_key == ("recovery", "skip-stale"):
             agent.skip_stale_reconciled(int(command.round_value), command.identifier)
         elif command_key == ("recovery", "skip-submit-unknown"):

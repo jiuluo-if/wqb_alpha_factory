@@ -347,24 +347,18 @@ class TestCliRuntimeSafety(unittest.TestCase):
                             self.assertNotEqual(exc.code, 2)
             acquire.assert_not_called()
 
-    def test_run_proposals_keeps_owner_lock_scope(self):
-        with patch.object(
-            main_entry, "acquire_single_instance_lock", return_value="lock"
-        ) as acquire, patch.object(
-            main_entry, "release_single_instance_lock"
-        ) as release, patch(
-            "wqb_agent.WQBClient"
-        ), patch("wqb_agent.Agent") as agent_class:
-            main_entry.main([
-                "--config", "config.example.json", "run-proposals", "custom.json"
-            ])
-        acquire.assert_called_once_with(
-            ".wqb_state", operation="run-proposals"
-        )
-        release.assert_called_once_with("lock")
-        agent_class.return_value.run_proposals.assert_called_once_with(
-            "custom.json", allow_unresolved_checkpoint=False
-        )
+    def test_run_proposals_is_rejected_without_constructing_legacy_runtime(self):
+        with patch.object(main_entry, "acquire_single_instance_lock") as acquire, \
+                patch("wqb_agent.WQBClient") as client_class, \
+                patch("wqb_agent.Agent") as agent_class:
+            with self.assertRaises(SystemExit) as raised:
+                main_entry.main([
+                    "--config", "config.example.json", "run-proposals", "custom.json"
+                ])
+        self.assertEqual(raised.exception.code, 2)
+        acquire.assert_not_called()
+        client_class.assert_not_called()
+        agent_class.assert_not_called()
 
     def test_audit_and_preflight_semantic_blocks_exit_two(self):
         with patch.object(
