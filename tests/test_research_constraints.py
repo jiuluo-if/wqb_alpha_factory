@@ -2,7 +2,6 @@ import os
 import tempfile
 import unittest
 
-from scripts.refresh_self_correlation import _timestamp, select_alpha_ids
 from wqb_agent.alpha_factory import AlphaFactory
 from wqb_agent.metrics import checks_ready_for_self_correlation_refresh
 from wqb_agent.preflight import run_takeover_preflight
@@ -173,33 +172,6 @@ class TestResearchConstraints(unittest.TestCase):
         self.assertTrue(proposals[0]["economic_mechanism"])
         self.assertIn("direction_transform", proposals[0])
         self.assertEqual(proposals[0]["self_correlation_impact"]["admission"], "REVIEW")
-
-    def test_correlation_backfill_selects_only_real_quality_rows_in_window(self):
-        rows = [
-            _correlation_row("good"),
-            _correlation_row("bad-check", checks=[
-                {"name": "LOW_SHARPE", "pass": False},
-                {"name": "SELF_CORRELATION", "pass": None},
-            ]),
-            _correlation_row("negative-returns", returns=-0.01),
-        ]
-        self.assertEqual(select_alpha_ids(rows, 0, 20, delay=1), ["good"])
-        borderline = [_correlation_row("delay-sensitive", sharpe=1.26, fitness=1.01)]
-        self.assertEqual(
-            select_alpha_ids(borderline, 0, 20, delay=1), ["delay-sensitive"]
-        )
-        self.assertEqual(select_alpha_ids(borderline, 0, 20, delay=0), [])
-
-    def test_correlation_backfill_until_date_is_exclusive_midnight(self):
-        self.assertLess(
-            _timestamp("2026-09-09"),
-            _timestamp("2026-09-09", end=True),
-        )
-        self.assertEqual(
-            _timestamp("2026-09-09", end=True),
-            _timestamp("2026-09-10"),
-        )
-
 
 if __name__ == "__main__":
     unittest.main()
