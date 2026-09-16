@@ -27,9 +27,6 @@ from .alpha_templates.validation import (
     effective_semantic_contract,
     evaluate_semantic_contract,
 )
-from .diversity import (
-    extract_fields,
-)
 from .expression import analyze_expression, canonical_expression
 
 __all__ = [
@@ -40,6 +37,16 @@ __all__ = [
 
 
 _derive_field_semantic_traits = derive_field_semantic_traits
+
+
+def _extract_fields(expression, known_fields):
+    """Return the known fields that actually occur in an expression."""
+    fields = [
+        str(field) for field in (known_fields or [])
+        if isinstance(field, (str, int)) and str(field)
+    ]
+    found = set(analyze_expression(expression, fields).fields)
+    return [field for field in sorted(set(fields), key=len, reverse=True) if field in found]
 
 
 class AlphaFactory:
@@ -227,7 +234,7 @@ class AlphaFactory:
             return expression_memo[expression]
         facts = {
             "identity": canonical_expression(expression),
-            "fields": extract_fields(expression, normalized),
+            "fields": _extract_fields(expression, normalized),
             "analysis": analyze_expression(expression),
         }
         if expression_memo is not None:

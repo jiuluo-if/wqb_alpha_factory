@@ -75,8 +75,6 @@ DIRECT_TESTS = {
         "tests/test_research_api.py",
     ),
     "wqb_agent/alpha_feed_cache.py": (),
-    "wqb_agent/diversity.py": (
-    ),
     "wqb_agent/alpha_templates/model.py": ("tests/test_alpha_template_catalog.py",),
     "wqb_agent/alpha_templates/loader.py": (
         "tests/test_alpha_template_catalog.py",
