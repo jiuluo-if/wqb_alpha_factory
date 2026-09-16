@@ -27,6 +27,7 @@ import time
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .alpha_factory import AlphaFactory
 from .alpha_grouping import (
     find_remote_duplicates,
     find_remote_similar,
@@ -36,6 +37,7 @@ from .alpha_templates import AlphaTemplateRegistry
 from .artifacts import atomic_write_json_if_changed
 from .checkpoints import CheckpointStore
 from .config import AppConfig, normalize_config
+from .discovery import FieldDiscovery
 from .factory_runner import AIFactoryRunner
 from .locking import OwnerBusyError, single_instance_scope
 from .optimization_decision import OptimizationDecision, optimization_decision_identity
@@ -92,6 +94,41 @@ def _state_dir(agent=None, state_dir=None) -> str:
     return state_dir or getattr(agent, "state_dir", ".wqb_state")
 
 
+def _remote_research_components(*, client, config=None, state_dir=None,
+                                include_factory=False):
+    """Build only rebuildable components for public discovery/probe tools."""
+    typed = normalize_config(_load_config(config))
+    runtime = typed.runtime
+    directory = state_dir or runtime.state_dir
+    selection = runtime.field_selection
+    discovery = FieldDiscovery(
+        client,
+        pagination_limit=runtime.pagination_limit,
+        max_pages=runtime.max_pagination_pages,
+        cache_path=os.path.join(directory, "fields_cache.json"),
+        cache_ttl_sec=runtime.fields_cache_ttl_sec,
+        catalog_root=directory,
+        max_alpha_count=runtime.max_field_alpha_count,
+        selection_mode=selection["mode"],
+        random_fraction=selection["random_fraction"],
+        random_seed=selection["random_seed"],
+        platform_usage_refresh=selection["platform_usage_refresh"],
+        require_platform_alpha_count=selection["require_platform_alpha_count"],
+        dataset_sampling=selection["dataset_sampling"],
+        min_datasets=selection["min_datasets"],
+        dataset_pool=selection["dataset_pool"],
+        persist_catalog=selection["persist_catalog"],
+    )
+    factory = None
+    if include_factory:
+        factory = AlphaFactory(
+            neutralization=typed.simulation_config.settings["neutralization"],
+            catalog_path=runtime.alpha_template_catalog,
+            require_private=True,
+        )
+    return typed, discovery, factory
+
+
 def inspect_state(*, state_dir=".wqb_state", limit=10) -> dict[str, Any]:
     """Return a compact view of immutable experiment evidence and workspace files."""
     trajectory = Trajectory(max_len=max(1, int(limit)), path=os.path.join(state_dir, "trajectory.jsonl"))
@@ -108,20 +145,31 @@ def inspect_state(*, state_dir=".wqb_state", limit=10) -> dict[str, Any]:
 
 def discover_fields(query, *, agent=None, client=None, config=None, state_dir=None, limit=None):
     """Discover fields through the existing BRAIN-backed discovery component."""
-    runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
+    if agent is not None:
+        runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
+        discovery = runtime.discovery
+        default_limit = runtime.fields_per_discovery
+    else:
+        if client is None:
+            from .client import WQBClient
+            client = WQBClient()
+        _typed, discovery, _factory = _remote_research_components(
+            client=client, config=config, state_dir=state_dir
+        )
+        default_limit = _typed.runtime.fields_per_discovery
     if isinstance(query, str):
         hypothesis = {"id": "agent-query", "statement": query, "tags": query.split(), "datasets": []}
     elif isinstance(query, Mapping):
         hypothesis = dict(query)
     else:
         raise TypeError("query must be a string or object")
-    fields = runtime.discovery.discover(
+    fields = discovery.discover(
         hypothesis,
-        target_count=limit or runtime.fields_per_discovery,
+        target_count=limit or default_limit,
     )
     return {
         "fields": fields,
-        "field_source": runtime.discovery.source_provenance(),
+        "field_source": discovery.source_provenance(),
         "query": hypothesis,
     }
 
@@ -129,7 +177,20 @@ def discover_fields(query, *, agent=None, client=None, config=None, state_dir=No
 def generate_probes(query=None, *, template_ids=None, count=100, seed=None,
                     agent=None, client=None, config=None, state_dir=None):
     """Generate reviewable ``SimulationSpec`` probes without an inbox write."""
-    runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
+    if agent is not None:
+        runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
+        discovery = runtime.discovery
+        factory = runtime.alpha_factory
+        reference = runtime.operator_reference
+    else:
+        if client is None:
+            from .client import WQBClient
+            client = WQBClient()
+        _typed, discovery, factory = _remote_research_components(
+            client=client, config=config, state_dir=state_dir,
+            include_factory=True,
+        )
+        reference = get_operator_reference(client=client, config=config)
     try:
         target = int(count)
     except (TypeError, ValueError) as exc:
@@ -149,11 +210,10 @@ def generate_probes(query=None, *, template_ids=None, count=100, seed=None,
         raise TypeError("query must be a string, object, or None")
     requested_templates = list(template_ids or [])
     hypothesis["template_ids"] = requested_templates
-    fields = runtime.discovery.discover(hypothesis, target_count=target)
-    reference = runtime.operator_reference
+    fields = discovery.discover(hypothesis, target_count=target)
     if callable(reference):
         reference = reference()
-    return runtime.alpha_factory.generate_probe_specs(
+    return factory.generate_probe_specs(
         hypothesis, fields, reference, target=target, seed=seed,
     )
 
@@ -169,15 +229,19 @@ def get_operator_reference(*, agent=None, client=None, config=None) -> dict[str,
     """Return a bounded current operator view from the existing BRAIN client."""
     if agent is None and client is None:
         raise RuntimeError("LIVE_OPERATOR_CAPABILITY_REQUIRED")
-    runtime = _agent(agent=agent, client=client, config=config)
-    capability = getattr(runtime, "operator_capability", None)
-    if callable(capability):
-        capability = capability()
+    capability = None
+    if agent is not None:
+        runtime = _agent(agent=agent, client=client, config=config)
+        capability = getattr(runtime, "operator_capability", None)
+        if callable(capability):
+            capability = capability()
+        if capability is None:
+            client = runtime.client
     if capability is None:
-        capability = getattr(runtime.client, "get_operator_capability", None)
-        if not callable(capability):
+        reader = getattr(client, "get_operator_capability", None)
+        if not callable(reader):
             raise RuntimeError("LIVE_OPERATOR_CAPABILITY_REQUIRED")
-        capability = capability()
+        capability = reader()
     return {
         key: capability[key]
         for key in (

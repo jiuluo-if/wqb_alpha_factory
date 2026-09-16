@@ -120,6 +120,18 @@ class TestResearchApi(unittest.TestCase):
         self.assertEqual(result["fields"][0]["id"], "close")
         self.assertEqual(result["field_source"]["kind"], "brain_api")
 
+    def test_discovery_without_agent_does_not_construct_legacy_runtime(self):
+        client = SimpleNamespace()
+        with mock.patch("wqb_agent.research_api._agent", side_effect=AssertionError(
+            "Remote-First discovery must not construct Agent"
+        )), mock.patch("wqb_agent.research_api.FieldDiscovery") as discovery_type:
+            discovery = discovery_type.return_value
+            discovery.discover.return_value = [{"id": "close", "type": "MATRIX"}]
+            discovery.source_provenance.return_value = {"kind": "brain_api"}
+            result = discover_fields("price reversal", client=client)
+        self.assertEqual(result["fields"][0]["id"], "close")
+        discovery_type.assert_called_once()
+
     def test_generate_probes_returns_simulation_specs_without_inbox_envelope(self):
         with tempfile.TemporaryDirectory() as directory:
             agent = _ProbeAgent(directory)
@@ -128,6 +140,21 @@ class TestResearchApi(unittest.TestCase):
             )
             self.assertEqual(result, [SimulationSpec("rank(close)", {"delay": 1}, ("close",))])
             self.assertEqual(agent.alpha_factory.received[0]["template_ids"], [])
+
+    def test_generate_probes_without_agent_does_not_construct_legacy_runtime(self):
+        client = SimpleNamespace(get_operator_capability=lambda: {
+            "valid": True, "operators": ["rank"],
+        })
+        factory = mock.Mock()
+        factory.generate_probe_specs.return_value = [SimulationSpec("rank(close)")]
+        with mock.patch("wqb_agent.research_api._agent", side_effect=AssertionError(
+            "Remote-First probes must not construct Agent"
+        )), mock.patch("wqb_agent.research_api.FieldDiscovery") as discovery_type, \
+                mock.patch("wqb_agent.research_api.AlphaFactory", return_value=factory):
+            discovery = discovery_type.return_value
+            discovery.discover.return_value = [{"id": "close", "type": "MATRIX"}]
+            result = generate_probes(client=client, count=1)
+        self.assertEqual(result, [SimulationSpec("rank(close)")])
 
     def test_run_experiment_simulation_spec_uses_remote_first_gateway(self):
         with tempfile.TemporaryDirectory() as directory:
