@@ -144,19 +144,6 @@ class TestResearchInstrument(unittest.TestCase):
         self.assertEqual(result["finality"], "FINAL")
         self.assertEqual(round_result["settled_experiments"], 1)
 
-    def test_cycle_provenance_is_carried_without_changing_execution_identity(self):
-        from wqb_agent.research_api import ExperimentSpec
-
-        proposal = ExperimentSpec(
-            "hypothesis", "rank(close)", fields=("close",),
-            source_research_cursor="sha256:" + "a" * 64,
-            research_cycle_id="research-cycle:1",
-        ).to_proposal()
-        self.assertEqual(proposal["source_research_cursor"], "sha256:" + "a" * 64)
-        self.assertEqual(proposal["research_cycle_id"], "research-cycle:1")
-        self.assertNotIn("research_cycle_id", research_api.ExperimentSpec.__dataclass_fields__
-                         ["settings"].default_factory())
-
     def test_current_docs_and_public_exports_match_remote_first_surface(self):
         root = os.path.dirname(os.path.dirname(__file__))
         from pathlib import Path

@@ -23,10 +23,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import tempfile
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
 from typing import Any
 
 from .alpha_grouping import (
@@ -38,7 +36,6 @@ from .alpha_templates import AlphaTemplateRegistry
 from .artifacts import atomic_write_json_if_changed
 from .checkpoints import CheckpointStore
 from .config import AppConfig, normalize_config
-from .expression import analyze_expression
 from .factory_runner import AIFactoryRunner
 from .locking import OwnerBusyError, single_instance_scope
 from .optimization_decision import OptimizationDecision, optimization_decision_identity
@@ -61,111 +58,6 @@ from .research_quality import assess_records
 from .simulation_gateway import ExecutionGuard, SimulationGateway, SimulationSpec
 from .state import Trajectory
 from .trial_ledger import TrialLedger
-
-
-@dataclass(frozen=True)
-class ExperimentSpec:
-    """The minimal input an external research agent should author.
-
-    The existing proposal contract remains authoritative. ``to_proposal`` is
-    only a compatibility adapter; it must not invent research evidence or
-    semantic claims before normal Agent preflight.
-    """
-
-    hypothesis: str
-    expression: str
-    fields: tuple[str, ...] = field(default_factory=tuple)
-    settings: Mapping[str, Any] = field(default_factory=dict)
-    rationale: str = ""
-    operator_mapping: str = ""
-    experiment_question: str = ""
-    parent_id: str | None = None
-    change: Any = None
-    source_research_cursor: str | None = None
-    research_cycle_id: str | None = None
-
-    def __post_init__(self):
-        if not isinstance(self.hypothesis, str) or not self.hypothesis.strip():
-            raise ValueError("hypothesis must be a non-empty string")
-        if not isinstance(self.expression, str) or not self.expression.strip():
-            raise ValueError("expression must be a non-empty string")
-        object.__setattr__(
-            self,
-            "fields",
-            tuple(str(value) for value in (self.fields or ()) if str(value).strip()),
-        )
-        object.__setattr__(self, "settings", dict(self.settings or {}))
-
-    @classmethod
-    def from_mapping(cls, value: Mapping[str, Any]) -> ExperimentSpec:
-        if not isinstance(value, Mapping):
-            raise TypeError("experiment spec must be an object")
-        return cls(
-            hypothesis=value.get("hypothesis", ""),
-            expression=value.get("expression", ""),
-            fields=tuple(value.get("fields") or ()),
-            settings=value.get("settings") or {},
-            rationale=value.get("rationale", "") or "",
-            operator_mapping=value.get("operator_mapping", "") or "",
-            experiment_question=value.get("experiment_question", "") or "",
-            parent_id=value.get("parent_id"),
-            change=value.get("change"),
-            source_research_cursor=value.get("source_research_cursor"),
-            research_cycle_id=value.get("research_cycle_id"),
-        )
-
-    def to_proposal(self, *, round_no: int = 1, context: Mapping[str, Any] | None = None) -> dict[str, Any]:
-        """Adapt this lightweight input to the current proposal envelope.
-
-        Missing discovery/evaluation metadata is intentionally not fabricated.
-        The existing validation path will reject an incomplete proposal before
-        a remote Simulation write, preserving fail-closed behavior.
-        """
-        context = dict(context or {})
-        change_type = context.get("change_type")
-        changed_variable = context.get("changed_variable")
-        if isinstance(self.change, Mapping):
-            change_type = change_type or self.change.get("type") or self.change.get("kind")
-            changed_variable = changed_variable or self.change.get("variable")
-        elif isinstance(self.change, str):
-            change_type = change_type or self.change
-        proposal = {
-            "hypothesis": self.hypothesis,
-            "hypothesis_id": context.get("hypothesis_id") or "agent-proposed",
-            "expression": self.expression.strip(),
-            "fields": list(self.fields),
-            "settings": dict(self.settings),
-            "rationale": self.rationale.strip() or self.hypothesis.strip(),
-            "parent_id": self.parent_id,
-            "parent_expression": context.get("parent_expression"),
-            "change": self.change,
-            "change_type": change_type or "baseline",
-            "changed_variable": changed_variable,
-            "round": int(round_no),
-            "experiment_stage": context.get("experiment_stage") or ("CHILD" if self.parent_id else "BASELINE"),
-            "research_role": context.get("research_role") or ("EXPLOIT" if self.parent_id else "EXPLORE"),
-        }
-        if self.source_research_cursor:
-            proposal["source_research_cursor"] = self.source_research_cursor
-        if self.research_cycle_id:
-            proposal["research_cycle_id"] = self.research_cycle_id
-        operator_mapping = context.get("operator_mapping") or self.operator_mapping.strip()
-        experiment_question = context.get("experiment_question") or self.experiment_question.strip()
-        if operator_mapping:
-            proposal["operator_mapping"] = operator_mapping
-        if experiment_question:
-            proposal["experiment_question"] = experiment_question
-        if "expected_failure_modes" in context:
-            proposal["expected_failure_modes"] = list(context.get("expected_failure_modes") or [])
-        if "tuning_risk" in context:
-            proposal["tuning_risk"] = bool(context["tuning_risk"])
-        for key in (
-            "datasets", "field_source", "field_understanding", "field_analysis",
-            "field_hypothesis_basis", "operator_evidence", "validation_plan",
-        ):
-            if key in context:
-                proposal[key] = context[key]
-        return proposal
 
 
 def _load_config(config: Mapping[str, Any] | str | None) -> dict[str, Any]:
@@ -333,115 +225,12 @@ def inspect_template(template_id, *, catalog_path=None, require_private=False):
     return template.catalog_entry()
 
 
-def _suggestion_context(state_dir: str) -> dict[str, Any]:
-    path = os.path.join(state_dir, "suggestions.json")
-    try:
-        with open(path, encoding="utf-8") as handle:
-            payload = json.load(handle)
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(payload, dict):
-        return {}
-    return {
-        key: payload[key]
-        for key in (
-            "round_no", "fields", "field_source", "operator_reference",
-            "research_space",
-        )
-        if key in payload
-    }
-
-
 def run_experiment(spec, *, agent=None, client=None, config=None, state_dir=None, context=None):
-    """Run an experiment, preferring the Remote-First path for ``SimulationSpec``.
-
-    ``SimulationSpec`` is the current execution contract and never constructs
-    an Agent or writes local research results.  ``ExperimentSpec`` and its
-    mapping adapter remain a bounded compatibility path until their callers
-    have migrated.
-
-    The legacy adapter creates a temporary input envelope only; its existing
-    checkpoint owner remains unchanged while migration is in progress.
-    """
-    if isinstance(spec, SimulationSpec):
-        return simulate(spec, agent=agent, client=client, config=config,
-                        state_dir=state_dir)
-    runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
-    spec = spec if isinstance(spec, ExperimentSpec) else ExperimentSpec.from_mapping(spec)
-    directory = _state_dir(runtime, state_dir)
-    suggestion = _suggestion_context(directory)
-    merged = dict(suggestion)
-    merged.update(dict(context or {}))
-    if spec.parent_id and not merged.get("parent_expression"):
-        parent = get_experiment(spec.parent_id, state_dir=directory)
-        if parent:
-            merged["parent_expression"] = parent.get("expression")
-    profiles = {
-        str(row.get("id")): row
-        for row in (merged.get("fields") or [])
-        if isinstance(row, Mapping) and row.get("id")
-    }
-    used_profiles = [profiles[field_id] for field_id in spec.fields if field_id in profiles]
-    if used_profiles:
-        merged.setdefault("datasets", sorted({
-            str(row.get("dataset")) for row in used_profiles if row.get("dataset")
-        }))
-        merged.setdefault("field_understanding", {
-            str(row["id"]): row.get("description", "")
-            for row in used_profiles
-        })
-        field_analysis = {
-            str(row["id"]): {
-                "semantic": row.get("description", ""),
-                "coverage": row.get("coverage"),
-                "frequency": row.get("frequency"),
-                "data_type": row.get("type"),
-            }
-            for row in used_profiles
-        }
-        for row in used_profiles:
-            if "frequency_evidence" in row:
-                field_analysis.setdefault(str(row["id"]), {})["frequency_evidence"] = (
-                    row["frequency_evidence"]
-                )
-        merged.setdefault("field_analysis", field_analysis)
-        merged.setdefault("field_hypothesis_basis", {
-            str(row["id"]): {
-                "description": row.get("description", ""),
-                "mechanism": spec.rationale.strip() or spec.hypothesis.strip(),
-            }
-            for row in used_profiles
-        })
-    reference = merged.get("operator_reference") or getattr(runtime, "operator_reference", None)
-    if reference:
-        merged.setdefault("operator_evidence", {
-            "sha256": reference.get("sha256"),
-            "operators": list(analyze_expression(spec.expression).operators),
-            "rationale": spec.rationale.strip() or spec.hypothesis.strip(),
-        })
-    round_no = int(merged.get("round_no") or runtime.next_round_no())
-    proposal = spec.to_proposal(round_no=round_no, context=merged)
-    envelope = {
-        "round_no": round_no,
-        "hypothesis": {
-            "id": merged.get("hypothesis_id") or "agent-proposed",
-            "statement": spec.hypothesis,
-            "tags": ["agent-authored"],
-            "datasets": list(merged.get("datasets") or []),
-        },
-        "proposals": [proposal],
-    }
-    os.makedirs(directory, exist_ok=True)
-    fd, path = tempfile.mkstemp(prefix="experiment-", suffix=".json", dir=directory, text=True)
-    os.close(fd)
-    try:
-        atomic_write_json_if_changed(path, envelope)
-        return runtime.run_proposals(path)
-    finally:
-        try:
-            os.remove(path)
-        except OSError:
-            pass
+    """Execute only the stable Remote-First ``SimulationSpec`` contract."""
+    if not isinstance(spec, SimulationSpec):
+        raise TypeError("run_experiment requires SimulationSpec")
+    return simulate(spec, agent=agent, client=client, config=config,
+                    state_dir=state_dir)
 
 
 def _simulation_gateway(*, agent=None, client=None, config=None, state_dir=None):
