@@ -7,12 +7,12 @@ import threading
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 from .artifacts import atomic_write_json_if_changed
 from .expression import analyze_expression, submission_fingerprint
 from .simulator import Simulator
-from .state import Experiment
 
 
 @dataclass(frozen=True)
@@ -201,10 +201,17 @@ class SimulationGateway:
                         "progress_url": existing.get("progress_url")}
             return {"status": "EXACT_DUPLICATE", "fingerprint": fingerprint}
         self.guard.register(fingerprint)
-        experiment = Experiment(
-            1, "agent-authored", spec.expression, dict(spec.settings), list(spec.fields)
+        # Simulator only needs a mutable transport record.  Keeping this
+        # record local avoids constructing the legacy research ``Experiment``
+        # model or handing result ownership to Trajectory/TrialLedger.
+        experiment = SimpleNamespace(
+            id=fingerprint[:16], expression=spec.expression,
+            settings=dict(spec.settings), fields=list(spec.fields),
+            status="PENDING", alpha_id=None, progress_url=None,
+            error=None, metrics=None, yearly_evidence=None, health=None,
+            elapsed_sec=0.0, submission_fingerprint=fingerprint,
+            submission_started_at=None,
         )
-        experiment.submission_fingerprint = fingerprint
 
         def on_update(item):
             status = "SUBMIT_UNKNOWN" if item.status == "UNKNOWN" else item.status

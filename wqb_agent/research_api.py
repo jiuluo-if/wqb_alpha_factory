@@ -29,7 +29,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from .alpha_grouping import find_remote_duplicates, group_remote_evidence
+from .alpha_grouping import (
+    find_remote_duplicates,
+    find_remote_similar,
+    group_remote_evidence,
+)
+from .alpha_templates import AlphaTemplateRegistry
 from .artifacts import atomic_write_json_if_changed
 from .checkpoints import CheckpointStore
 from .config import AppConfig, normalize_config
@@ -291,6 +296,36 @@ def get_operator_reference(*, agent=None, client=None, config=None) -> dict[str,
     }
 
 
+def get_capabilities(*, agent=None, client=None, config=None) -> dict[str, Any]:
+    """Return a bounded live platform capability view for the AI tools."""
+    reference = get_operator_reference(agent=agent, client=client, config=config)
+    return {
+        "source": "BRAIN_LIVE_ONLY",
+        "operators": list(reference.get("operators") or []),
+        "operator_capability": reference,
+    }
+
+
+def list_templates(*, catalog_path=None, require_private=False):
+    """List validated template metadata without constructing research state."""
+    registry = (
+        AlphaTemplateRegistry.from_private(catalog_path)
+        if require_private else AlphaTemplateRegistry(private_catalog=catalog_path)
+    )
+    return registry.catalog()
+
+
+def inspect_template(template_id, *, catalog_path=None, require_private=False):
+    registry = (
+        AlphaTemplateRegistry.from_private(catalog_path)
+        if require_private else AlphaTemplateRegistry(private_catalog=catalog_path)
+    )
+    template = registry.get(str(template_id))
+    if template is None:
+        raise KeyError(f"template not found: {template_id}")
+    return template.catalog_entry()
+
+
 def _suggestion_context(state_dir: str) -> dict[str, Any]:
     path = os.path.join(state_dir, "suggestions.json")
     try:
@@ -461,6 +496,15 @@ def resume_execution(fingerprint, *, agent=None, client=None, config=None,
     ).resume_execution(fingerprint)
 
 
+def reconcile_execution(fingerprint, *, agent=None, client=None, config=None,
+                        state_dir=None):
+    """Read-only recovery of one guarded execution; never submits again."""
+    return resume_execution(
+        fingerprint, agent=agent, client=client, config=config,
+        state_dir=state_dir,
+    )
+
+
 def _remote_client(*, agent=None, client=None):
     if client is not None:
         return client
@@ -627,6 +671,18 @@ def find_alpha_duplicates(alpha_id, *, rows=None, agent=None, client=None,
         for item in repository.list_remote_alphas():
             rows.append(repository.get_remote_alpha_evidence(item["alpha_id"]))
     return find_remote_duplicates(rows, alpha_id)
+
+
+def find_similar_alphas(expression_or_alpha_id, *, rows=None, agent=None,
+                        client=None, config=None, state_dir=None, days=None):
+    """Return advisory remote exact/structural matches; never blocks a POST."""
+    if rows is None:
+        repository = _remote_repository(
+            agent=agent, client=client, config=config, state_dir=state_dir
+        )
+        rows = [repository.get_remote_alpha_evidence(item["alpha_id"])
+                for item in repository.list_remote_alphas(days=days)]
+    return find_remote_similar(rows, expression_or_alpha_id)
 
 
 def preview_alpha_colors(alpha_ids=None, *, rows=None, agent=None, client=None,
@@ -1171,15 +1227,17 @@ def research_tool_manifest():
 __all__ = [
     "ExperimentSpec", "SimulationSpec", "inspect_state", "discover_fields",
     "generate_probes",
-    "get_operator_reference", "get_operator_syntax_reference",
+    "get_capabilities", "get_operator_reference", "get_operator_syntax_reference",
+    "list_templates", "inspect_template",
     "run_experiment", "validate_simulation_spec", "execution_fingerprint",
     "simulate", "simulate_batch", "get_pending_executions", "resume_execution",
+    "reconcile_execution",
     "get_alpha", "get_alpha_evidence", "get_alpha_metrics",
     "get_alpha_aggregates", "get_alpha_pnl", "get_alpha_self_correlation",
     "compare_alphas", "refresh_remote_alphas", "list_remote_alphas",
     "get_remote_alpha", "get_remote_alpha_evidence", "remote_cache_status",
     "purge_remote_cache", "simulation_quota", "group_alphas",
-    "find_alpha_duplicates", "preview_alpha_colors", "sync_alpha_colors",
+    "find_alpha_duplicates", "find_similar_alphas", "preview_alpha_colors", "sync_alpha_colors",
     "get_experiment",
     "compare_experiments", "search_history", "reconcile",
     "inspect_optimizer_parents", "inspect_optimizer_context",

@@ -10,11 +10,15 @@ from wqb_agent.research_api import (
     SimulationSpec,
     compare_experiments,
     discover_fields,
+    find_similar_alphas,
     generate_probes,
+    get_capabilities,
     get_experiment,
     get_operator_reference,
     inspect_optimizer_context,
     inspect_state,
+    inspect_template,
+    list_templates,
     reconcile,
     run_experiment,
     search_history,
@@ -97,6 +101,27 @@ class _RemoteFirstClient:
 
 
 class TestResearchApi(unittest.TestCase):
+    def test_remote_first_tool_surface_has_capabilities_and_templates(self):
+        capabilities = get_capabilities(client=SimpleNamespace(
+            get_operator_capability=lambda: {
+                "status": "LIVE_VERIFIED", "availability": "AVAILABLE",
+                "source": "BRAIN_LIVE_ONLY", "operators": ["rank"],
+            }
+        ))
+        self.assertEqual(capabilities["operators"], ["rank"])
+        templates = list_templates()
+        self.assertTrue(templates)
+        template_id = templates[0]["template_id"]
+        self.assertEqual(inspect_template(template_id)["template_id"], template_id)
+
+    def test_similarity_is_advisory_and_does_not_require_local_trajectory(self):
+        rows = [
+            {"alpha_id": "a1", "alpha": {"regular": "rank(close)"}, "settings": {"delay": 1}},
+            {"alpha_id": "a2", "alpha": {"regular": "rank(open)"}, "settings": {"delay": 1}},
+        ]
+        result = find_similar_alphas("rank(close)", rows=rows)
+        self.assertEqual(result["kind"], "STRUCTURALLY_SIMILAR")
+        self.assertEqual([item["alpha_id"] for item in result["matches"]], ["a2"])
     def test_experiment_spec_is_lightweight_and_adapts_to_existing_contract(self):
         spec = ExperimentSpec(
             hypothesis="short-term reversal",

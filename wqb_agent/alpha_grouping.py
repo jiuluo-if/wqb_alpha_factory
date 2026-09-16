@@ -56,3 +56,52 @@ def find_remote_duplicates(rows, alpha_id):
         if any(str(item.get("alpha_id")) == str(alpha_id) for item in members):
             return {"alpha_id": str(alpha_id), "kind": "EXACT", "matches": members}
     return {"alpha_id": str(alpha_id), "kind": "UNKNOWN", "matches": []}
+
+
+def find_remote_similar(rows, expression_or_alpha_id):
+    """Return advisory exact/structural matches from remote evidence only."""
+    rows = [row for row in (rows or ()) if isinstance(row, Mapping)]
+    target = None
+    target_id = None
+    for row in rows:
+        row_id = str(row.get("alpha_id") or row.get("id") or "")
+        alpha = row.get("alpha") if isinstance(row.get("alpha"), Mapping) else {}
+        expression = alpha.get("regular") or row.get("expression")
+        if str(expression_or_alpha_id) == row_id:
+            target = expression
+            target_id = row_id
+            break
+    if target is None:
+        target = str(expression_or_alpha_id or "")
+    if not target.strip():
+        return {"kind": "UNKNOWN", "matches": []}
+    target_exec = submission_fingerprint(
+        target, next((row.get("settings") for row in rows
+                      if str(row.get("alpha_id") or row.get("id") or "") == target_id), {})
+    ) if target_id else None
+    target_structural = structural_fingerprint(target)
+    exact = []
+    structural = []
+    for row in rows:
+        row_id = str(row.get("alpha_id") or row.get("id") or "")
+        if target_id and row_id == target_id:
+            continue
+        alpha = row.get("alpha") if isinstance(row.get("alpha"), Mapping) else {}
+        expression = alpha.get("regular") or row.get("expression")
+        if not isinstance(expression, str) or not expression.strip():
+            continue
+        item = dict(row)
+        if not target_id and expression.strip() == target.strip():
+            continue
+        fingerprint = row.get("execution_fingerprint") or submission_fingerprint(
+            expression, row.get("settings") if isinstance(row.get("settings"), Mapping) else {}
+        )
+        if target_exec and fingerprint == target_exec:
+            exact.append(item)
+        elif structural_fingerprint(expression) == target_structural:
+            structural.append(item)
+    if exact:
+        return {"kind": "EXACT", "matches": exact}
+    if structural:
+        return {"kind": "STRUCTURALLY_SIMILAR", "matches": structural}
+    return {"kind": "UNKNOWN", "matches": []}
