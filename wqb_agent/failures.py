@@ -86,16 +86,16 @@ def classify_error(error_text, status_code=None):
     return FailureKind.RESEARCH
 
 
-def classify_experiment(experiment):
-    """便捷入口：把 Experiment 的 status + error 转为 FailureKind。
+def classify_execution(execution):
+    """Classify a transient execution record by status and error.
 
     - UNKNOWN：本地不确定语义，归为 TIMEOUT/INFRA 之外的特殊类，
       调用方应走短期待对账而非直接写入记忆。
     - FAILED：按 error 文本分类。
     """
-    if experiment.status == "UNKNOWN":
+    if execution.status == "UNKNOWN":
         return None  # 待对账，不属于任何可学习类别
-    error = experiment.error if isinstance(experiment.error, str) else str(experiment.error or "")
+    error = execution.error if isinstance(execution.error, str) else str(execution.error or "")
     # 新 client 的分类异常名（WQBError 子类），先按类名精确识别；
     # 再回退到文本特征（兼容旧 client 的字符串错误）。
     if "WQBAuthError" in error:

@@ -31,7 +31,7 @@ from wqb_agent.client import (
     WQBTimeoutError,
 )
 from wqb_agent.discovery import FieldDiscovery
-from wqb_agent.failures import FailureKind, classify_error, classify_experiment
+from wqb_agent.failures import FailureKind, classify_error, classify_execution
 
 
 class TestProgressUrlSafety(unittest.TestCase):
@@ -394,17 +394,17 @@ class TestClassifiedExceptions(unittest.TestCase):
                 self.assertIsInstance(expected_type("test"), WQBError)
                 self.assertEqual(expected_type.kind, expected_kind)
 
-    def test_classify_experiment_new_names(self):
+    def test_classify_execution_new_names(self):
         exp = SimpleNamespace(status="FAILED", error=None)
         exp.status = "FAILED"
         exp.error = "WQBRejectedError: Simulation rejected (422)"
-        self.assertEqual(classify_experiment(exp), FailureKind.SYNTAX)
+        self.assertEqual(classify_execution(exp), FailureKind.SYNTAX)
         exp.error = "WQBRateLimitError: 429 too many"
-        self.assertEqual(classify_experiment(exp), FailureKind.RATE_LIMIT)
+        self.assertEqual(classify_execution(exp), FailureKind.RATE_LIMIT)
         exp.error = "WQBTimeoutError: polling timed out"
-        self.assertEqual(classify_experiment(exp), FailureKind.TIMEOUT)
+        self.assertEqual(classify_execution(exp), FailureKind.TIMEOUT)
         exp.error = "WQBNotFoundError: field not found"
-        self.assertEqual(classify_experiment(exp), FailureKind.DATA)
+        self.assertEqual(classify_execution(exp), FailureKind.DATA)
 
 
 class TestSharedRateLimitGate(unittest.TestCase):
