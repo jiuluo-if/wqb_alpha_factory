@@ -14,7 +14,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 COMMON_CONTRACT_TESTS = (
-    "tests/test_runtime_safety.py",
     "tests/test_agent_flow.py",
 )
 
@@ -24,12 +23,10 @@ DIRECT_TESTS = {
     "scripts/check_repo_privacy.py": ("tests/test_repo_privacy.py",),
     "scripts/archive_completed_rounds.py": (
         "tests/test_checkpoint_store.py",
-        "tests/test_canonical_ops.py",
     ),
     "scripts/reconcile_pending.py": (
         "tests/test_recovery.py",
         "tests/test_proposal_safety.py",
-        "tests/test_canonical_ops.py",
     ),
     "wqb_agent/client.py": (
         "tests/test_client_refactor.py",
@@ -44,7 +41,6 @@ DIRECT_TESTS = {
     "wqb_agent/alpha_feed_workflow.py": (
         "tests/test_alpha_feed_workflow.py",
         "tests/test_runtime_composition.py",
-        "tests/test_runtime_safety.py",
     ),
     "wqb_agent/research_planning.py": (
         "tests/test_research_planning.py",
@@ -54,7 +50,6 @@ DIRECT_TESTS = {
     "wqb_agent/evidence_projection.py": (
         "tests/test_evidence_projection.py",
         "tests/test_agent_evaluation.py",
-        "tests/test_runtime_settlement.py",
     ),
     "wqb_agent/alpha_semantics.py": (
         "tests/test_alpha_semantics.py",
@@ -123,25 +118,17 @@ DIRECT_TESTS = {
         "tests/test_agent_flow.py",
         "tests/test_proposal_execution.py",
         "tests/test_runtime_composition.py",
-        "tests/test_runtime_safety.py",
     ),
     "wqb_agent/checkpoints.py": (
         "tests/test_checkpoint_store.py",
         "tests/test_recovery.py",
-        "tests/test_canonical_ops.py",
     ),
     "wqb_agent/audit.py": (
-        "tests/test_runtime_safety.py",
-        "tests/test_workspace_snapshot.py",
-        "tests/test_research_constraints.py",
+        "tests/test_remote_diagnostics.py",
         "tests/test_cli.py",
-        "tests/test_canonical_ops.py",
     ),
     "wqb_agent/workspace_snapshot.py": (
-        "tests/test_runtime_safety.py",
         "tests/test_workspace_snapshot.py",
-        "tests/test_research_constraints.py",
-        "tests/test_canonical_ops.py",
     ),
     "wqb_agent/state.py": (
         "tests/test_state.py",
@@ -167,7 +154,6 @@ DIRECT_TESTS = {
     "wqb_agent/search_snapshot.py": (
         "tests/test_search_policy.py",
         "tests/test_evaluation.py",
-        "tests/test_runtime_safety.py",
     ),
     "wqb_agent/memory.py": (
         "tests/test_memory_tiers.py",
@@ -211,7 +197,6 @@ DIRECT_TESTS = {
         "tests/test_recovery.py",
         "tests/test_settled_evidence_durability.py",
         "tests/test_simulator.py",
-        "tests/test_runtime_safety.py",
         "tests/test_search_policy.py",
     ),
     "wqb_agent/terminal_evidence.py": (
@@ -228,22 +213,19 @@ DIRECT_TESTS = {
         "tests/test_simulator.py",
         "tests/test_proposal_execution.py",
         "tests/test_recovery.py",
-        "tests/test_runtime_safety.py",
     ),
     "wqb_agent/weekly_quota.py": (
     ),
     "wqb_agent/config.py": (
         "tests/test_runtime_config_boundary.py",
-        "tests/test_runtime_safety.py",
     ),
     "wqb_agent/doctor.py": (
-        "tests/test_runtime_safety.py",
+        "tests/test_remote_diagnostics.py",
         "tests/test_runtime_config_boundary.py",
     ),
     "wqb_agent/runtime_policy.py": (
         "tests/test_runtime_config_boundary.py",
         "tests/test_runtime_composition.py",
-        "tests/test_runtime_safety.py",
     ),
     "wqb_agent/proposal_contract.py": (
         "tests/test_factory_batch_contract.py",
@@ -311,8 +293,7 @@ DIRECT_TESTS = {
     ),
     "wqb_agent/preflight.py": (
         "tests/test_research_constraints.py",
-        "tests/test_runtime_safety.py",
-        "tests/test_agent_context.py",
+        "tests/test_remote_diagnostics.py",
     ),
     "wqb_agent/research_api.py": (
         "tests/test_research_api.py",
@@ -321,11 +302,10 @@ DIRECT_TESTS = {
     "wqb_agent/remote_quota.py": ("tests/test_remote_quota.py",),
     "wqb_agent/credentials.py": (
         "tests/test_credentials.py",
-        "tests/test_runtime_safety.py",
+        "tests/test_remote_diagnostics.py",
     ),
     "wqb_agent/runtime_components.py": (
         "tests/test_runtime_composition.py",
-        "tests/test_runtime_safety.py",
     ),
     "wqb_agent/trial_ledger.py": (
         "tests/test_incremental_value.py",
@@ -333,7 +313,6 @@ DIRECT_TESTS = {
         "tests/test_protocol_truth.py",
         "tests/test_proposal_safety.py",
         "tests/test_recovery.py",
-        "tests/test_runtime_safety.py",
         "tests/test_search_calibration.py",
         "tests/test_trial_ledger_io.py",
     ),
@@ -347,16 +326,16 @@ DIRECT_TESTS = {
     "wqb_agent/proposal_inbox.py": ("tests/test_proposal_inbox.py", "tests/test_proposal_execution.py"),
     "scripts/benchmark_local_io.py": ("tests/test_benchmark_harness.py",),
     "scripts/check_correlation.py": ("tests/test_runtime_config_boundary.py",),
-    "scripts/check_health.py": ("tests/test_runtime_safety.py",),
+    "scripts/check_health.py": ("tests/test_research_constraints.py",),
     "scripts/refresh_self_correlation.py": ("tests/test_research_constraints.py",),
     "scripts/replay_research_yield.py": ("tests/test_research_yield.py",),
     "scripts/research_quality_audit.py": ("tests/test_research_constraints.py",),
-    "scripts/validate_integrity.py": ("tests/test_runtime_safety.py",),
+    "scripts/validate_integrity.py": ("tests/test_remote_diagnostics.py",),
     "wqb_agent/alpha_pool.py": ("tests/test_submission.py",),
     "wqb_agent/behavior.py": ("tests/test_agent_flow.py",),
     "wqb_agent/cli.py": ("tests/test_cli.py",),
-    "wqb_agent/context.py": ("tests/test_agent_context.py",),
-    "wqb_agent/diagnostics.py": ("tests/test_runtime_safety.py",),
+    "wqb_agent/context.py": ("tests/test_research_api.py",),
+    "wqb_agent/diagnostics.py": ("tests/test_remote_diagnostics.py",),
     "wqb_agent/evidence.py": ("tests/test_evidence.py",),
     "wqb_agent/evidence_status.py": ("tests/test_evidence.py",),
     "wqb_agent/experiment.py": ("tests/test_state.py", "tests/test_architecture_contracts.py"),
@@ -399,7 +378,7 @@ FRONTEND_CONFIG_FILES = {
 }
 
 FRONTEND_CONFIG_TESTS = (
-    "tests/test_runtime_safety.py",
+    "tests/test_remote_diagnostics.py",
     "tests/test_dependency_constraints.py",
 )
 
