@@ -10,6 +10,7 @@ from wqb_agent.research_api import (
     SimulationSpec,
     compare_experiments,
     discover_fields,
+    generate_probes,
     get_experiment,
     get_operator_reference,
     inspect_optimizer_context,
@@ -52,6 +53,22 @@ class _FakeAgent:
     def optimizer_context(self, *, limit=8):
         self.optimizer_limit = limit
         return {"limit": limit, "parents": []}
+
+
+class _ProbeFactory:
+    def generate_probe_specs(self, hypothesis, fields, operator_reference, **kwargs):
+        self.received = (hypothesis, fields, operator_reference, kwargs)
+        return [SimulationSpec("rank(close)", {"delay": 1}, ("close",))]
+
+
+class _ProbeAgent(_FakeAgent):
+    def __init__(self, state_dir):
+        super().__init__(state_dir)
+        self.alpha_factory = _ProbeFactory()
+        self.operator_reference = {
+            "status": "LIVE_VERIFIED", "availability": "AVAILABLE",
+            "source": "BRAIN_LIVE_ONLY", "operators": ["rank"],
+        }
 
 
 class _FakeClient:
@@ -110,6 +127,15 @@ class TestResearchApi(unittest.TestCase):
         result = discover_fields("price reversal", agent=_FakeAgent(tempfile.gettempdir()))
         self.assertEqual(result["fields"][0]["id"], "close")
         self.assertEqual(result["field_source"]["kind"], "brain_api")
+
+    def test_generate_probes_returns_simulation_specs_without_inbox_envelope(self):
+        with tempfile.TemporaryDirectory() as directory:
+            agent = _ProbeAgent(directory)
+            result = generate_probes(
+                query="short-term reversal", agent=agent, count=1,
+            )
+            self.assertEqual(result, [SimulationSpec("rank(close)", {"delay": 1}, ("close",))])
+            self.assertEqual(agent.alpha_factory.received[0]["template_ids"], [])
 
     def test_run_experiment_delegates_to_guarded_agent_path(self):
         with tempfile.TemporaryDirectory() as directory:

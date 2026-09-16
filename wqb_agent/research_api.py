@@ -229,6 +229,38 @@ def discover_fields(query, *, agent=None, client=None, config=None, state_dir=No
     }
 
 
+def generate_probes(query=None, *, template_ids=None, count=100, seed=None,
+                    agent=None, client=None, config=None, state_dir=None):
+    """Generate reviewable ``SimulationSpec`` probes without an inbox write."""
+    runtime = _agent(agent=agent, client=client, config=config, state_dir=state_dir)
+    try:
+        target = int(count)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("count 必须是整数") from exc
+    if target < 0:
+        raise ValueError("count 必须是非负整数")
+    if query is None:
+        hypothesis = {"id": "agent-query", "statement": "", "tags": [], "datasets": []}
+    elif isinstance(query, str):
+        hypothesis = {
+            "id": "agent-query", "statement": query,
+            "tags": query.split(), "datasets": [],
+        }
+    elif isinstance(query, Mapping):
+        hypothesis = dict(query)
+    else:
+        raise TypeError("query must be a string, object, or None")
+    requested_templates = list(template_ids or [])
+    hypothesis["template_ids"] = requested_templates
+    fields = runtime.discovery.discover(hypothesis, target_count=target)
+    reference = runtime.operator_reference
+    if callable(reference):
+        reference = reference()
+    return runtime.alpha_factory.generate_probe_specs(
+        hypothesis, fields, reference, target=target, seed=seed,
+    )
+
+
 def get_operator_syntax_reference(path=None) -> dict[str, Any]:
     """Return evergreen syntax hints, never current capability truth."""
     if path is None:
@@ -1138,6 +1170,7 @@ def research_tool_manifest():
 
 __all__ = [
     "ExperimentSpec", "SimulationSpec", "inspect_state", "discover_fields",
+    "generate_probes",
     "get_operator_reference", "get_operator_syntax_reference",
     "run_experiment", "validate_simulation_spec", "execution_fingerprint",
     "simulate", "simulate_batch", "get_pending_executions", "resume_execution",
