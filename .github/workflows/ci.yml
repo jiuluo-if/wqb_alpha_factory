@@ -29,7 +29,6 @@ jobs:
           wqb_agent/suggestion_workflow.py
           wqb_agent/alpha_feed_workflow.py
           wqb_agent/optimizer_workflow.py
-          wqb_agent/alpha_color_workflow.py
       - name: Ruff
         run: python -m ruff check .
       - name: Targeted Fast Lane
