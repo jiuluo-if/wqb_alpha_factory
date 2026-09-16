@@ -6,9 +6,6 @@ SETTINGS_ARMS = {
     "BASE", "UNIVERSE_ARM", "DECAY_DOWN", "DECAY_UP",
     "TRUNCATION_LOW", "TRUNCATION_HIGH",
 }
-RESEARCH_VARIABLES = {
-    "HORIZON", "FIELD", "MECHANISM", "UNIVERSE", "DECAY", "TRUNCATION",
-}
 RELATIONSHIP_CONTRACTS = frozenset({
     "SINGLE_FIELD", "COMPARABLE_SPREAD", "DIRECTIONAL_RATIO",
     "CO_MOVEMENT", "MULTI_FIELD_CONFIRMATION", "UNDECLARED",
@@ -202,11 +199,3 @@ def validate_template_contract(template):
                 "DECLARED" if semantic_contract != "UNDECLARED"
                 else "LEGACY_UNDECLARED"
             )}
-
-
-def validate_single_variable_change(changed_variable):
-    """Validate the research-policy arm without evaluating its performance."""
-    value = str(changed_variable or "").upper()
-    return {"ok": value in RESEARCH_VARIABLES,
-            "changed_variable": value,
-            "reason": "one major research variable per experiment"}

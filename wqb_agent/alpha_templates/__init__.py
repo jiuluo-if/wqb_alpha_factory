@@ -21,7 +21,6 @@ from .validation import (
     effective_relationship_contract,
     effective_semantic_contract,
     evaluate_semantic_contract,
-    validate_single_variable_change,
     validate_template_contract,
 )
 
@@ -40,7 +39,6 @@ __all__ = [
     "PrivateTemplateCatalogError",
     "load_templates",
     "validate_template_contract",
-    "validate_single_variable_change",
     "RELATIONSHIP_CONTRACTS",
     "SEMANTIC_CONTRACTS",
     "effective_relationship_contract",

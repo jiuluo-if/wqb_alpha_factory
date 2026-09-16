@@ -11,7 +11,6 @@ from wqb_agent.alpha_templates.loader import (
 from wqb_agent.alpha_templates.model import HORIZON_LATTICE
 from wqb_agent.alpha_factory import AlphaFactory
 from wqb_agent.alpha_templates.registry import AlphaTemplateRegistry
-from wqb_agent.alpha_templates.validation import validate_single_variable_change
 
 PRIVATE_TOML = """
 [[templates]]
@@ -22,7 +21,6 @@ kind = "economic"
 family = "private-test"
 expression = "rank(add(ts_zscore({p}, 5), ts_zscore({s}, 22)))"
 required_slots = ["p", "s"]
-stage_path = "test"
 economic_mechanism = "private test confirmation"
 field_roles = ["signal", "confirmation"]
 fixed_field_bindings = []
@@ -122,10 +120,6 @@ class TestPrivateTemplateContract(unittest.TestCase):
         self.assertIn("rank", coverage["used"])
         self.assertIn("sqrt", coverage["uncovered"])
         self.assertIn("economic mechanism", coverage["policy"])
-
-    def test_settings_changes_are_single_variable(self):
-        self.assertTrue(validate_single_variable_change("DECAY")["ok"])
-        self.assertFalse(validate_single_variable_change("DECAY+HORIZON")["ok"])
 
     def test_real_catalog_and_private_assets_are_not_tracked(self):
         tracked = check_output(["git", "ls-files"], text=True).splitlines()
