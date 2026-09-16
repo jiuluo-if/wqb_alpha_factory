@@ -79,7 +79,7 @@ class ArchitectureDependencyContracts(unittest.TestCase):
     def test_legacy_architecture_non_execution_surfaces_remain_write_free(self):
         for name in (
             "suggestion_workflow.py", "alpha_feed_workflow.py",
-            "optimizer_workflow.py", "alpha_color_workflow.py",
+            "optimizer_workflow.py",
             "research_api.py", "doctor.py", "audit.py", "preflight.py",
         ):
             source = (PACKAGE_ROOT / name).read_text(encoding="utf-8")
@@ -92,6 +92,10 @@ class ArchitectureDependencyContracts(unittest.TestCase):
             "get_all_user_alphas(", "set_alpha_color(",
         ):
             self.assertNotIn(forbidden, optimizer, forbidden)
+
+    def test_legacy_local_color_modules_are_absent(self):
+        for name in ("alpha_color_workflow.py",):
+            self.assertFalse((PACKAGE_ROOT / name).exists(), name)
 
     def test_legacy_architecture_research_yield_is_pure(self):
         imports = _imports(PACKAGE_ROOT / "research_yield.py")
@@ -156,7 +160,6 @@ class ArchitectureDependencyContracts(unittest.TestCase):
 
     def test_domain_modules_do_not_import_transport_or_orchestration(self):
         domain_paths = (
-            "wqb_agent/alpha_colors.py",
             "wqb_agent/diversity.py",
             "wqb_agent/metrics.py",
             "wqb_agent/pre_correlation.py",
