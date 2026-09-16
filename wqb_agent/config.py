@@ -10,8 +10,7 @@ _FIELD_SELECTION_DEFAULTS = {
     "mode": "semantic_random",
     "random_fraction": 0.35,
     "random_seed": "newwqb",
-    # Field usage is platform truth when local Simulation/Alpha results are
-    # intentionally ephemeral.  Keep the switch explicit for offline tests.
+    # Field usage is platform truth; keep the switch explicit for offline tests.
     "platform_usage_refresh": False,
     "require_platform_alpha_count": False,
     "dataset_sampling": "stratified",
@@ -32,12 +31,7 @@ class RemoteCacheConfig:
 
 @dataclass(frozen=True)
 class AgentRuntimeConfig:
-    """Typed values consumed while constructing the existing Agent runtime.
-
-    Policy mappings remain mappings because their schemas are intentionally
-    extensible; scalar defaults and path/limit values are resolved once here.
-    This is a configuration boundary, not a second runtime or state model.
-    """
+    """Typed values for platform access, discovery and local safety paths."""
 
     state_dir: str = ".wqb_state"
     alpha_template_catalog: str | None = None
@@ -55,19 +49,23 @@ class AgentRuntimeConfig:
 
 @dataclass(frozen=True)
 class FactoryConfig:
-    max_simulations: int = 11200
-    max_runtime_sec: int = 86400
-    daily_simulation_cap: int = 1600
-    weekly_simulation_cap: int = 11200
-    include_partial_operator_branches: bool = True
+    default_probe_count: int = 100
+
+
+@dataclass(frozen=True)
+class QuotaConfig:
+    daily: int = 1600
+    rolling_days: int = 7
+    rolling_limit: int = 11200
 
 
 @dataclass(frozen=True)
 class AppConfig:
-    factory: FactoryConfig = field(default_factory=FactoryConfig)
     simulation_config: SimulationConfig = field(default_factory=SimulationConfig)
-    remote_cache: RemoteCacheConfig = field(default_factory=RemoteCacheConfig)
     runtime: AgentRuntimeConfig = field(default_factory=AgentRuntimeConfig)
+    remote_cache: RemoteCacheConfig = field(default_factory=RemoteCacheConfig)
+    quota: QuotaConfig = field(default_factory=QuotaConfig)
+    factory: FactoryConfig = field(default_factory=FactoryConfig)
 
 
 def _as_bool(value, default, key):
@@ -130,11 +128,11 @@ def _optional_int_in_range(value, *, key, minimum=None, maximum=None):
     )
 
 
-def _resolve_field_selection(agent):
-    field_selection = {**_FIELD_SELECTION_DEFAULTS, **dict(agent.get("field_selection") or {})}
+def _resolve_field_selection(runtime):
+    field_selection = {**_FIELD_SELECTION_DEFAULTS, **dict(runtime.get("field_selection") or {})}
     field_selection["random_fraction"] = _finite_float(
         field_selection["random_fraction"],
-        key="config.agent.field_selection.random_fraction",
+        key="config.runtime.field_selection.random_fraction",
         minimum=0.0,
         maximum=1.0,
     )
@@ -145,19 +143,19 @@ def _resolve_field_selection(agent):
     ).lower()
     field_selection["min_datasets"] = _int_in_range(
         field_selection["min_datasets"],
-        key="config.agent.field_selection.min_datasets",
+        key="config.runtime.field_selection.min_datasets",
         minimum=1,
     )
     field_selection["min_cross_dataset_pairs"] = _int_in_range(
         field_selection["min_cross_dataset_pairs"],
-        key="config.agent.field_selection.min_cross_dataset_pairs",
+        key="config.runtime.field_selection.min_cross_dataset_pairs",
         minimum=0,
     )
     raw_pool = field_selection.get("dataset_pool") or []
     if isinstance(raw_pool, (str, int)):
         raw_pool = [raw_pool]
     if not isinstance(raw_pool, list):
-        raise ValueError("config.agent.field_selection.dataset_pool 必须是数组")
+        raise ValueError("config.runtime.field_selection.dataset_pool 必须是数组")
     field_selection["dataset_pool"] = [
         str(item.get("id") or item.get("name")) if isinstance(item, dict)
         else str(item)
@@ -175,16 +173,16 @@ def _resolve_field_selection(agent):
         if isinstance(value, str) and value.strip().lower() in {"true", "false"}:
             field_selection[key] = value.strip().lower() == "true"
             continue
-        raise ValueError(f"config.agent.field_selection.{key} 必须是布尔值")
+        raise ValueError(f"config.runtime.field_selection.{key} 必须是布尔值")
 
     return field_selection
 
 def parse_config(raw):
     if not isinstance(raw, dict) or not isinstance(raw.get("simulation", {}), dict):
         raise ValueError("config.simulation 必须是对象")  # noqa: TRY004
-    agent = raw.get("agent")
-    if not isinstance(agent, dict):
-        raise ValueError("config.agent 必须是对象")  # noqa: TRY004
+    runtime_raw = raw.get("runtime", {})
+    if not isinstance(runtime_raw, dict):
+        raise ValueError("config.runtime 必须是对象")  # noqa: TRY004
     remote_cache_raw = raw.get("remote_cache", {})
     if not isinstance(remote_cache_raw, dict):
         raise ValueError("config.remote_cache 必须是对象")
@@ -192,93 +190,85 @@ def parse_config(raw):
         remote_cache_raw.get("retention_days", 7),
         key="config.remote_cache.retention_days", minimum=1, maximum=90,
     ))
-    factory_raw = dict(agent.get("factory") or {})
-    legacy_factory_max = _int_in_range(
-        factory_raw.get("max_simulations", 11200),
-        key="config.agent.factory.max_simulations",
+    quota_raw = raw.get("quota", {})
+    if not isinstance(quota_raw, dict):
+        raise ValueError("config.quota 必须是对象")
+    rolling_days = _int_in_range(
+        quota_raw.get("rolling_days", 7), key="config.quota.rolling_days",
+        minimum=1, maximum=90,
+    )
+    rolling_limit = _int_in_range(
+        quota_raw.get("rolling_limit", 11200), key="config.quota.rolling_limit",
         minimum=0,
     )
-    factory_max = _int_in_range(
-        factory_raw.get("weekly_simulation_cap", legacy_factory_max),
-        key="config.agent.factory.weekly_simulation_cap",
-        minimum=0,
+    daily_limit = _int_in_range(
+        quota_raw.get("daily", 1600), key="config.quota.daily", minimum=0,
     )
-    daily_factory_max = _int_in_range(
-        factory_raw.get("daily_simulation_cap", factory_max),
-        key="config.agent.factory.daily_simulation_cap",
-        minimum=0,
-    )
-    if daily_factory_max > factory_max:
-        raise ValueError("daily_simulation_cap 不得超过 weekly_simulation_cap")
-    factory = FactoryConfig(
-        max_simulations=factory_max,
-        max_runtime_sec=_int_in_range(
-            factory_raw.get("max_runtime_sec", 86400),
-            key="config.agent.factory.max_runtime_sec",
-            minimum=0,
-        ),
-        daily_simulation_cap=daily_factory_max,
-        weekly_simulation_cap=factory_max,
-        include_partial_operator_branches=_as_bool(
-            factory_raw.get("include_partial_operator_branches"), True,
-            "config.agent.factory.include_partial_operator_branches",
-        ),
-    )
-    field_selection = _resolve_field_selection(agent)
+    if daily_limit > rolling_limit:
+        raise ValueError("config.quota.daily 不得超过 config.quota.rolling_limit")
+    quota = QuotaConfig(daily_limit, rolling_days, rolling_limit)
+    factory_raw = raw.get("factory", {})
+    if not isinstance(factory_raw, dict):
+        raise ValueError("config.factory 必须是对象")
+    factory = FactoryConfig(_int_in_range(
+        factory_raw.get("default_probe_count", 100),
+        key="config.factory.default_probe_count", minimum=1,
+    ))
+    field_selection = _resolve_field_selection(runtime_raw)
     runtime = AgentRuntimeConfig(
-        state_dir=str(agent.get("state_dir", ".wqb_state")),
+        state_dir=str(runtime_raw.get("state_dir", ".wqb_state")),
         alpha_template_catalog=(
-            str(agent["alpha_template_catalog"])
-            if agent.get("alpha_template_catalog") is not None else None
+            str(runtime_raw["alpha_template_catalog"])
+            if runtime_raw.get("alpha_template_catalog") is not None else None
         ),
         smoke_dataset=(
-            str(agent["smoke_dataset"])
-            if agent.get("smoke_dataset") is not None
+            str(runtime_raw["smoke_dataset"])
+            if runtime_raw.get("smoke_dataset") is not None
             else None
         ),
         max_concurrent_sims=_int_in_range(
-            agent.get("max_concurrent_sims", 3),
-            key="config.agent.max_concurrent_sims",
+            runtime_raw.get("max_concurrent_sims", 3),
+            key="config.runtime.max_concurrent_sims",
             minimum=1,
         ),
         fields_per_discovery=_int_in_range(
-            agent.get("fields_per_discovery", 6),
-            key="config.agent.fields_per_discovery",
+            runtime_raw.get("fields_per_discovery", 6),
+            key="config.runtime.fields_per_discovery",
             minimum=1,
         ),
         pagination_limit=_int_in_range(
-            agent.get("pagination_limit", 50),
-            key="config.agent.pagination_limit",
+            runtime_raw.get("pagination_limit", 50),
+            key="config.runtime.pagination_limit",
             minimum=1,
         ),
         max_pagination_pages=_int_in_range(
-            agent.get("max_pagination_pages", 20),
-            key="config.agent.max_pagination_pages",
+            runtime_raw.get("max_pagination_pages", 20),
+            key="config.runtime.max_pagination_pages",
             minimum=1,
         ),
         poll_timeout_sec=_finite_float(
-            agent.get("poll_timeout_sec", 1500),
-            key="config.agent.poll_timeout_sec",
+            runtime_raw.get("poll_timeout_sec", 1500),
+            key="config.runtime.poll_timeout_sec",
             minimum=0.0,
         ),
         replace_attempts=_int_in_range(
-            agent.get("replace_attempts", 3),
-            key="config.agent.replace_attempts",
+            runtime_raw.get("replace_attempts", 3),
+            key="config.runtime.replace_attempts",
             minimum=1,
         ),
         replace_backoff_sec=_finite_float(
-            agent.get("replace_backoff_sec", 60),
-            key="config.agent.replace_backoff_sec",
+            runtime_raw.get("replace_backoff_sec", 60),
+            key="config.runtime.replace_backoff_sec",
             minimum=0.0,
         ),
         fields_cache_ttl_sec=_finite_float(
-            agent.get("fields_cache_ttl_sec", 7 * 24 * 3600),
-            key="config.agent.fields_cache_ttl_sec",
+            runtime_raw.get("fields_cache_ttl_sec", 7 * 24 * 3600),
+            key="config.runtime.fields_cache_ttl_sec",
             minimum=0.0,
         ),
         max_field_alpha_count=_optional_int_in_range(
             field_selection.get("max_alpha_count"),
-            key="config.agent.field_selection.max_alpha_count",
+            key="config.runtime.field_selection.max_alpha_count",
             minimum=0,
         ),
         field_selection=copy.deepcopy(field_selection),
@@ -290,6 +280,7 @@ def parse_config(raw):
             **copy.deepcopy(raw.get("simulation", {})),
         }),
         remote_cache=remote_cache,
+        quota=quota,
         runtime=runtime,
     )
 

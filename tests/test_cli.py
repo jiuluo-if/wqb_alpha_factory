@@ -81,14 +81,14 @@ class TestCliRuntimeSafety(unittest.TestCase):
         with patch("main.acquire_single_instance_lock") as acquire, \
                 patch("wqb_agent.WQBClient"), \
                 patch("wqb_agent.research_api.discover_fields", return_value={"fields": []}) as discover, \
-                patch.object(main_entry, "load_config", return_value={"simulation": {}, "agent": {}}):
+                patch.object(main_entry, "load_config", return_value={"simulation": {}, "runtime": {}}):
             with contextlib.redirect_stdout(io.StringIO()):
                 main_entry.main(["suggest"])
         acquire.assert_not_called()
         discover.assert_called_once()
 
     def test_audit_failure_exits_two(self):
-        with patch.object(main_entry, "load_config", return_value={"simulation": {}, "agent": {}}), \
+        with patch.object(main_entry, "load_config", return_value={"simulation": {}, "runtime": {}}), \
                 patch("wqb_agent.audit.audit_execution_surface",
                       return_value={"ok": False, "errors": ["blocked"]}):
             with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as raised:
@@ -96,7 +96,7 @@ class TestCliRuntimeSafety(unittest.TestCase):
         self.assertEqual(raised.exception.code, 2)
 
     def test_smoke_runtime_failure_is_unavailable(self):
-        with patch.object(main_entry, "load_config", return_value={"simulation": {}, "agent": {}}), \
+        with patch.object(main_entry, "load_config", return_value={"simulation": {}, "runtime": {}}), \
                 patch("wqb_agent.WQBClient", side_effect=RuntimeError("credentials unavailable")):
             with contextlib.redirect_stdout(io.StringIO()) as output, self.assertRaises(SystemExit) as raised:
                 main_entry.main(["smoke"])

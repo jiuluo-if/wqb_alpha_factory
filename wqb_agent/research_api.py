@@ -406,15 +406,15 @@ def simulation_quota(*, client=None, config=None, state_dir=None):
         require_client=False,
     )
     if isinstance(config, AppConfig):
-        factory = config.factory
+        quota = config.quota
     elif config is not None:
-        factory = normalize_config(_load_config(config)).factory
+        quota = normalize_config(_load_config(config)).quota
     else:
-        factory = None
+        quota = None
     return SimulationQuota(
         repository, ExecutionGuard(state_dir or ".wqb_state"),
-        daily_cap=factory.daily_simulation_cap if factory else 1600,
-        rolling_cap=factory.weekly_simulation_cap if factory else 11200,
+        daily_cap=quota.daily if quota else 1600,
+        rolling_cap=quota.rolling_limit if quota else 11200,
     ).snapshot()
 
 

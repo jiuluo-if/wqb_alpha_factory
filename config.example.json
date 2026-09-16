@@ -1,7 +1,4 @@
 {
-  "remote_cache": {
-    "retention_days": 7
-  },
   "simulation": {
     "instrumentType": "EQUITY",
     "region": "USA",
@@ -16,7 +13,7 @@
     "language": "FASTEXPR",
     "visualization": false
   },
-  "agent": {
+  "runtime": {
     "state_dir": ".wqb_state",
     "alpha_template_catalog": null,
     "smoke_dataset": null,
@@ -38,13 +35,17 @@
       "min_datasets": 1,
       "min_cross_dataset_pairs": 0,
       "persist_catalog": false
-    },
-    "factory": {
-      "max_simulations": 11200,
-      "daily_simulation_cap": 1600,
-      "weekly_simulation_cap": 11200,
-      "max_runtime_sec": 86400,
-      "include_partial_operator_branches": true
     }
+  },
+  "remote_cache": {
+    "retention_days": 7
+  },
+  "quota": {
+    "daily": 1600,
+    "rolling_days": 7,
+    "rolling_limit": 11200
+  },
+  "factory": {
+    "default_probe_count": 100
   }
 }

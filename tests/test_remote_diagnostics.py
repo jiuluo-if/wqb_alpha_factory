@@ -10,7 +10,7 @@ from wqb_agent.simulation_gateway import ExecutionGuard
 
 class TestRemoteDiagnostics(unittest.TestCase):
     def config(self, state_dir):
-        return {"simulation": {}, "agent": {"state_dir": state_dir}}
+        return {"simulation": {}, "runtime": {"state_dir": state_dir}}
 
     def test_doctor_reports_only_guard_and_rebuildable_cache(self):
         with tempfile.TemporaryDirectory() as state_dir:

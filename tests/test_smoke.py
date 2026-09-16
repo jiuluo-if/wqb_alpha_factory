@@ -22,7 +22,7 @@ class TestReadOnlySmoke(unittest.TestCase):
         client = ReadOnlyClient()
         result = run_readonly_smoke(
             client,
-            normalize_config({"simulation": {}, "agent": {"smoke_dataset": "pv1"}}),
+            normalize_config({"simulation": {}, "runtime": {"smoke_dataset": "pv1"}}),
         )
         self.assertEqual(result["datasets"]["status"], "PASS")
         self.assertEqual(result["fields"]["status"], "PASS")
@@ -30,11 +30,11 @@ class TestReadOnlySmoke(unittest.TestCase):
 
     def test_smoke_degrades_without_read_capability(self):
         result = run_readonly_smoke(
-            object(), normalize_config({"simulation": {}, "agent": {}})
+            object(), normalize_config({"simulation": {}, "runtime": {}})
         )
         self.assertEqual(result["datasets"]["status"], "UNAVAILABLE")
         self.assertEqual(result["fields"]["status"], "UNAVAILABLE")
 
     def test_smoke_rejects_raw_config_input(self):
         with self.assertRaises(TypeError):
-            run_readonly_smoke(ReadOnlyClient(), {"agent": {}})
+            run_readonly_smoke(ReadOnlyClient(), {"runtime": {}})

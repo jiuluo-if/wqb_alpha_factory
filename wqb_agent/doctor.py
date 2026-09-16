@@ -31,7 +31,7 @@ def run_doctor(raw_config, *, offline=True, snapshot=None):
     cache = WeeklyAlphaFeedCache(
         cache_path,
         retention_days=parsed.remote_cache.retention_days,
-        weekly_simulation_cap=parsed.factory.weekly_simulation_cap,
+        weekly_simulation_cap=parsed.quota.rolling_limit,
     )
     entries = guard.entries()
     legacy = [name for name in _LEGACY_ARTIFACTS
