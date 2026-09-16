@@ -32,7 +32,7 @@ from typing import Any
 from .alpha_grouping import find_remote_duplicates, group_remote_evidence
 from .artifacts import atomic_write_json_if_changed
 from .checkpoints import CheckpointStore
-from .config import normalize_config
+from .config import AppConfig, normalize_config
 from .expression import analyze_expression
 from .factory_runner import AIFactoryRunner
 from .locking import OwnerBusyError, single_instance_scope
@@ -490,9 +490,12 @@ def _remote_repository(*, agent=None, client=None, config=None, state_dir=None,
                        require_client=True):
     if require_client or client is not None or agent is not None:
         client = _remote_client(agent=agent, client=client)
-    raw = _load_config(config) if config is not None else {}
-    retention = ((raw.get("remote_cache") or {}).get("retention_days", 7)
-                 if isinstance(raw, Mapping) else 7)
+    if isinstance(config, AppConfig):
+        retention = config.remote_cache.retention_days
+    elif config is not None:
+        retention = normalize_config(_load_config(config)).remote_cache.retention_days
+    else:
+        retention = 7
     directory = state_dir or getattr(agent, "state_dir", None) or ".wqb_state"
     cache_path = os.path.join(directory, ".alpha_feed_cache", "remote.json")
     return RemoteAlphaRepository(

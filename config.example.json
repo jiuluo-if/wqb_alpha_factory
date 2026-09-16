@@ -1,4 +1,7 @@
 {
+  "remote_cache": {
+    "retention_days": 7
+  },
   "simulation": {
     "instrumentType": "EQUITY",
     "region": "USA",

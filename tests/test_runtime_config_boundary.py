@@ -13,7 +13,13 @@ import wqb_agent.config as config_module
 from wqb_agent.agent import Agent
 from wqb_agent.audit import audit_state
 from wqb_agent.behavior import extract_behavior_series
-from wqb_agent.config import AppConfig, FactoryConfig, normalize_config, parse_config
+from wqb_agent.config import (
+    AppConfig,
+    FactoryConfig,
+    RemoteCacheConfig,
+    normalize_config,
+    parse_config,
+)
 from wqb_agent.diagnostics import DiagnosticEvent
 from wqb_agent.doctor import run_doctor
 from wqb_agent.incremental_policy import IncrementalValuePolicy
@@ -25,6 +31,20 @@ from wqb_agent.workspace_snapshot import read_workspace_snapshot
 
 
 class TestRuntimeConfigBoundary(unittest.TestCase):
+
+    def test_remote_cache_retention_is_typed_and_bounded(self):
+        typed = parse_config({
+            "simulation": {}, "agent": {},
+            "remote_cache": {"retention_days": 14},
+        })
+        self.assertIsInstance(typed.remote_cache, RemoteCacheConfig)
+        self.assertEqual(typed.remote_cache.retention_days, 14)
+        for value in (0, 91, "bad"):
+            with self.assertRaises(ValueError):
+                parse_config({
+                    "simulation": {}, "agent": {},
+                    "remote_cache": {"retention_days": value},
+                })
 
     def test_feed_and_heartbeat_intervals_are_typed_positive_and_bounded(self):
         typed = parse_config({"simulation": {}, "agent": {

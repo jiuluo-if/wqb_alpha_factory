@@ -83,6 +83,11 @@ class SimulationConfig:
 
 
 @dataclass(frozen=True)
+class RemoteCacheConfig:
+    retention_days: int = 7
+
+
+@dataclass(frozen=True)
 class AgentRuntimeConfig:
     """Typed values consumed while constructing the existing Agent runtime.
 
@@ -157,6 +162,7 @@ class AppConfig:
     statistical: StatisticalConfig = field(default_factory=StatisticalConfig)
     robustness: RobustnessConfig = field(default_factory=RobustnessConfig)
     simulation_config: SimulationConfig = field(default_factory=SimulationConfig)
+    remote_cache: RemoteCacheConfig = field(default_factory=RemoteCacheConfig)
     runtime: AgentRuntimeConfig = field(default_factory=AgentRuntimeConfig)
 
 
@@ -330,6 +336,13 @@ def parse_config(raw):
     agent = raw.get("agent")
     if not isinstance(agent, dict):
         raise ValueError("config.agent 必须是对象")  # noqa: TRY004
+    remote_cache_raw = raw.get("remote_cache", {})
+    if not isinstance(remote_cache_raw, dict):
+        raise ValueError("config.remote_cache 必须是对象")
+    remote_cache = RemoteCacheConfig(_int_in_range(
+        remote_cache_raw.get("retention_days", 7),
+        key="config.remote_cache.retention_days", minimum=1, maximum=90,
+    ))
     incremental = dict(agent.get("incremental_value") or {})
     incremental_max_correlation = _finite_float(
         incremental.get("max_abs_correlation", 0.7),
@@ -633,6 +646,7 @@ def parse_config(raw):
             "neutralization": "SUBINDUSTRY",
             **copy.deepcopy(raw.get("simulation", {})),
         }),
+        remote_cache=remote_cache,
         runtime=runtime,
     )
 
