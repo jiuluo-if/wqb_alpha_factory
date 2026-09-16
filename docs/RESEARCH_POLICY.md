@@ -1,67 +1,39 @@
-# Research policy
+# Remote-First Research Policy
 
-本文只描述当前研究方法与安全边界，不代替 BRAIN live response，也不包含真实字段、Alpha、指标、研究结果或 campaign history。
+## 责任边界
 
-## Research Cycle Discipline
+- AI 负责 hypothesis、经济机制、表达式、实验选择、结果解释和是否继续。
+- Python 负责 schema、实时平台能力、fingerprint、exactly-once、Retry/timeout、远端读取和隐私边界。
+- BRAIN 负责 Alpha/Simulation 的 metrics、checks、aggregates、PnL、correlation 和提交状态。
 
-Research cycle 不等于 execution round。Inner Agent 基于一个确定的
-`source_research_cursor` 作出一次 decision，Outer Agent 可以把它物化为一个或多个
-`round_no`；recovery 不创建新的 execution counter。cursor 过期时必须重新 inspect，
-不能重放旧 decision。失败、UNKNOWN、SUBMIT_UNKNOWN 和被剪枝的 trial 仍由既有
-TrialLedger 计入，不能从 cycle accounting 消失。
+Python 不得用本地研究状态机替 AI 生成经济结论或下一组参数。
 
-`ResearchQualityAssessment` 只描述已存在的证据、完整性和 blocker，不生成经济机制、
-窗口、字段或参数方向。`research_cycle_id` 只作 provenance，不能进入 Simulation
-execution fingerprint；同一 fingerprint 被不同 cycle 引用时不得重复 POST。
+## 研究闭环
 
-## 事实与执行边界
+```text
+discover fields/operators → generate/review SimulationSpec → simulate
+→ get_alpha_evidence(live=True) → AI 比较与解释 → AI 创建下一份 SimulationSpec
+```
 
-- BRAIN live response 是 datasets、fields、operators、Simulation、metrics、checks、aggregates 和 correlation 的事实源。
-- `trajectory.jsonl` 是 append-only 实验证据，checkpoint 是 exactly-once 恢复边界；二者不得手工改写。
-- Simulation 写入只能沿 `Agent.run_proposals()` → `ProposalExecutionWorkflow` → `Simulator` → `WQBClient`；未知结果保持 `SUBMIT_UNKNOWN`，不得重 POST。
-- 缺失或含糊证据保持 `UNKNOWN` / `UNAVAILABLE`；Alpha submission 始终由用户手工完成。
+优化不是 `parent → CHILD` 的 Python 生命周期。若 AI 根据 Alpha A 创建 B，可在 `SimulationSpec.note` 中留下人类可读说明，但 note 不参与 execution identity。
 
-## 假设、反证与 trial accounting
+## Evidence truth
 
-每个实验只回答一个可证伪问题，并记录 hypothesis、expression、settings、预期失败模式和结果。先区分平台事实、回测观察、经济解释和未验证假设。
+- 默认使用 live BRAIN response，并返回 `source=LIVE`、`fetched_at` 和 freshness 信息。
+- cache 只是可重建的 metadata convenience；stale 或缺失 cache 不能升级 UNKNOWN、制造 PASS 或覆盖 live response。
+- self-correlation、checks、aggregates 等未确认时必须保留 `UNKNOWN`/`UNAVAILABLE`。
+- execution success 不等于经济机制得到支持；平台结果、研究假设和机制解释必须分开记录在 AI 的上下文中，而非写入 Python 生命周期数据库。
 
-- `BASELINE` 检验最小机制；`CHILD` / `ROBUSTNESS` 每次只改变一个主要变量。
-- 多字段必须有语义关系、比率、差分或状态—信号配对；禁止无机制堆叠。
-- 命中 falsification 时停止该假设，不用窗口、权重、符号或方向扫描掩盖证伪。
-- 同一 hypothesis 的所有参数、窗口、字段替换和结构变体属于同一 experiment family；成功、失败、UNKNOWN 和 PRUNED 都必须计入 trial。
-- 高 Sharpe 不等于机制成立；未经独立证据确认的解释保持 unresolved，不晋升为 supported/contradicted。
+## Simulation 安全
 
-## 指标驱动的优化顺序
+所有真实 Simulation 必须经过 `SimulationGateway`。同一 expression + effective settings 的 active execution 只能有一次 POST；`SUBMIT_UNKNOWN` 永不自动重发；已知 progress URL 只能轮询原任务。任何 operator capability 缺失或无法实时确认时，必须在 POST 前拒绝。
 
-研究轮次严格分离：`factory_100` 是纯 Probe Round，只筛选独立 BASELINE 信号；`targeted_optimization` 是唯一 Optimization Round，只能由正式 `OptimizationDecision` 生成。两者共享唯一 Simulation 执行链，但不共享研究准入或 Probe 的 100-slot diversity budget。
+Alpha submission 是 `MANUAL_ONLY`。颜色 metadata 修改必须是显式、独立、可审计的远端 PATCH，不能隐式提交 Alpha。
 
-先根据 `Sharpe`、`Fitness`、`Returns`、`Turnover`、`Drawdown`、`Margin`、checks、health、yearly evidence 和 correlation 诊断问题，再选择研究动作：
+## Similarity 与选择偏差
 
-- 低 Sharpe：优先审查信号质量、经济机制、年度稳定性、coverage、子 Universe 和语义字段替换，不先调 decay。
-- Sharpe 尚可但换手高：先确认机制速度；只有 Turnover 高于 Fitness 的 0.125 floor 时才考虑 horizon 或适度 smoothing，并检查 Sharpe/Returns 保留。
-- Sharpe 尚可且换手已低：审查 Returns、信息密度和独立互补信息，不继续无意义压换手。
-- 高集中度：先查 coverage、missingness、异常值和多空宽度，再决定 truncation；设置不能隐藏数据缺陷。
-- 单一窗口、年份、Universe 或字段异常突出：视为脆弱性线索，不视为发现。
-- `SELF_CORRELATION` 必须使用平台真实结算；结构相似度和缓存只能做 pre-screen。
+exact duplicate 是执行安全结论；structural similarity、field overlap、correlation 和 quality group 只是给 AI 的 advisory evidence，不自动阻止非 exact candidate。AI 使用历史结果优化时，应明确承认 selection bias，不能把参数扫描包装成新的机制发现。
 
-## 优化 Agent 接口
+## 隐私与状态
 
-优化 Agent 只使用 `research_api` 的 bounded 优化入口：`inspect_optimizer_parents`、`inspect_optimizer_context`、`propose_optimization` 和 `materialize_targeted_batch`。真实只读证据可由 `wqb_agent.optimization_interfaces.ClientOptimizationEvidenceProvider` 聚合 Alpha detail、aggregates、allow-listed PnL recordset 与 self-correlation；PnL 按服务端 schema 名称解析，不假设列位置。该接口不创建第二套 HTTP、state、ledger、trajectory 或 memory owner。
-
-优化只读证据槽位彼此独立，可分别为 `AVAILABLE`、`UNKNOWN` 或 `UNAVAILABLE`；Alpha detail 是确认 Alpha 身份的必要 anchor。可选 endpoint 的明确能力缺失可以降级为 `UNAVAILABLE`，但 AUTH、RATE_LIMIT、transport 和 parent-not-found 等基础设施或身份错误必须保留为异常；correlation 已可达但尚未结算时保持 `UNKNOWN`，不能伪造 PASS/FAIL。
-
-优化 Agent 必须输出经济机制、方向理由、falsification、竞争解释和 information gain。每个 child 最多改变一个主要变量；`VALIDATE` 只用于有界的单变量 robustness，不能冒充新机制。失败和剪枝结果通过既有 `ExperienceMemory` 记账，原始指标仍由 trajectory 保存。
-
-优化选择的事实计数由既有 `TrialLedger` 唯一拥有：每个 finalized `OptimizationDecision`（包括 STOP、REROUTE、被拒绝或剪枝的 CHILD/VALIDATE）最多记一次，重复语义按 parent identity 与决策内容幂等；该非 Simulation 选择事件不改变既有 Simulation lifecycle 或历史 candidate/trial 计数。`ExperienceMemory` 仅是可失败的压缩投影，不能覆盖或删除账本事实。
-
-优化决策使用唯一稳定 semantic identity 贯穿 workflow、proposal provenance、账本和 targeted inbox；同一 active targeted batch 重放为 no-op，不同 active batch 不得静默覆盖，过期 batch 才能在同一 canonical inbox 中替换。真实 proposal 的归属必须由 decision identity 证明，不能从 parent、列表顺序或 proposal 数量猜测。
-
-## 统计、稳健性与停止
-
-- DONE 结果必须结合 headline、checks、health、yearly、PnL（能力已验证时）和 correlation 解释。
-- PSR/DSR/PBO/CSCV 只能使用其所需的真实、时间对齐数据；缺失数据返回 `UNAVAILABLE`，不得用 proxy 冒充。
-- `PROMOTE` 只进入人工审核池；`CONTINUE` 必须能改变下一步判断；机制被证伪、无信息增益或过拟合风险过高时 `STOP`；未知远端状态走 `RECONCILE`。
-
-## Public/private boundary
-
-真实 Alpha、字段 ID/配对、metrics、PnL、trajectory、ExperienceMemory 和研究报告只能本地保存。公共代码、文档、prompt 和 fixture 只允许 synthetic 示例与 evergreen contract；详见 [`PRIVACY.md`](PRIVACY.md)。
+tracked 文档、测试和 fixture 只能使用 synthetic data。真实研究结果、Alpha ID、私有 field、表达式、credentials 和本地研究 state 不得提交。新架构不得新增 round、parent/lineage、settlement、memory、optimizer 或 factory session state；迁移期兼容代码也不得被新 API 扩展为第二套 canonical。

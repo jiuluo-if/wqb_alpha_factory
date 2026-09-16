@@ -1,74 +1,73 @@
-# Alpha Factory
+# WQB Alpha Factory
 
-Alpha Factory 是面向 AI Agents 的 WorldQuant BRAIN 研究仪器。Inner Agent 负责经济假设、ExperimentSpec、OptimizationDecision 与结果解释；Outer Agent 负责状态检查、准入、物化、执行、恢复和交付。Python 负责事实、证据、恢复与安全边界。
+这是一个面向 AI Agent 的 WorldQuant BRAIN 研究工具。Agent 负责研究判断，Python 负责平台事实与远端写入安全，BRAIN 负责 Alpha/Simulation 结果的唯一事实来源。
 
-## 两层研究循环
+## 当前目标架构
 
 ```text
-Inner Research Cycle (research_cursor)
-        ↕ bounded ResearchContext
-Outer Execution Round (round_no)
-        ↓
-proposals.json → Agent.run_proposals → ProposalExecutionWorkflow
-        ↓
-Simulator → WQBClient → Trajectory + TrialLedger + Validation + Settlement
-        ↓
-ResearchQualityAssessment → new research_cursor → next cycle
+AI
+ ↓
+wqb_agent.research_api
+ ↓
+SimulationGateway + ExecutionGuard
+ ↓
+BRAIN Simulation
+ ↓
+RemoteAlphaRepository
+ ↓
+AI 读取真实 evidence 后决定下一次 Simulation
 ```
 
-一个 research cycle 可以对应多个 execution round；`round_no` 仍由现有 `Agent.next_round_no()` 和 canonical owners 决定。`research_cycle_id` 与 `source_research_cursor` 只是 provenance，绝不进入 Simulation fingerprint。
+主要能力：
 
-## 开始
+- Real Simulation：`SimulationSpec`、实时算子能力校验、fingerprint 去重、exactly-once guard、已知 progress URL 恢复。
+- Remote Alpha Data：live Alpha、metrics、checks、aggregates、PnL、self-correlation，以及可重建的短期 metadata cache。
+- Probe Factory：从已验证 field/template 生成可审阅的 `SimulationSpec`，不提交 Simulation、不创建研究状态机。
+- Dedupe / Group / Color：执行去重与研究相似性分离；分组和颜色只消费 remote evidence。
+
+## Agent-facing API
+
+```python
+from wqb_agent.research_api import (
+    SimulationSpec, discover_fields, generate_probes, simulate,
+    simulate_batch, get_alpha_evidence, compare_alphas, group_alphas,
+    preview_alpha_colors,
+)
+
+spec = SimulationSpec(
+    expression="rank(close)", settings={"delay": 1}, fields=("close",)
+)
+result = simulate(spec)
+evidence = get_alpha_evidence(result["alpha_id"])
+```
+
+推荐闭环是：
+
+```text
+discover_fields → generate_probes → AI 审阅 → simulate/simulate_batch
+→ get_alpha_evidence → AI 决定下一次 SimulationSpec
+```
+
+`run_experiment(ExperimentSpec)`、`run-proposals`、旧 round/parent/lineage、Trajectory/TrialLedger 和 Factory control-plane 目前只作为迁移期兼容层，不是新的研究事实来源；新代码不得依赖它们建立第二套流程。
+
+## 本地状态
+
+长期本地状态只允许包括 `.wqb_state/execution_guard.json`、可重建的 `.wqb_state/.alpha_feed_cache/`、外部 credentials 与进程锁。metrics、checks、PnL、aggregates、correlation、validation、reward 和研究结论必须从 BRAIN live API 获取。
+
+## 安全不变量
+
+- POST 前先持久化 `SUBMITTING`；中断后重启只能变成 `SUBMIT_UNKNOWN`，禁止自动重 POST。
+- 已知 `progress_url` 只能轮询同一远端任务。
+- 缺失或过期 evidence 保持 `UNKNOWN`/`UNAVAILABLE`，不能伪装成 PASS。
+- Alpha submission 始终人工完成；颜色 metadata PATCH 是独立且显式授权的操作。
+- tracked tests/docs/fixtures 不得包含真实 Alpha、私有 field、表达式、凭据或研究结果。
+
+## 验证
 
 ```powershell
-pip install -r requirements.txt
-Copy-Item config.example.json config.json
-python main.py suggest
-# 审阅并写入 .wqb_state/proposals.json
-python main.py run-proposals
+python scripts/run_targeted_tests.py --files <changed-files>
+python -m ruff check .
+python scripts/check_repo_privacy.py
 ```
 
-凭据不写入配置。使用完整 `WQB_USERNAME/WQB_PASSWORD`，或显式绝对路径的 `WQB_CREDENTIALS_ENV_FILE`，或 `~/.brain_credentials.txt`。系统不会搜索 cwd/父目录 `.env`，也不会混合半套凭据。
-
-## Public research_api
-
-| 工具 | 模式 | 作用 |
-|---|---|---|
-| `inspect_runtime_context` | READ_ONLY | runtime、cursor、checkpoint、quota、允许动作 |
-| `inspect_research_context` | READ_ONLY | bounded Inner Agent context |
-| `inspect_execution_round` | READ_ONLY | round lifecycle 与质量摘要 |
-| `inspect_research_cycle` | READ_ONLY | cycle 到 execution 的映射 |
-| `inspect_pending_work` | READ_ONLY | inbox、恢复阻塞、SUBMIT_UNKNOWN、下一安全动作 |
-| `inspect_trial_accounting` | READ_ONLY | TrialLedger bounded accounting |
-| `inspect_factory_status` | READ_ONLY | 现有 factory-session projection |
-| `assess_experiment` / `assess_execution_round` / `assess_research_cycle` | READ_ONLY | canonical quality projection |
-| `discover_fields` / `get_operator_reference` | READ_ONLY | BRAIN discovery/capability |
-| `propose_optimization` | LOCAL_MUTATION | 验证 Agent decision，不执行 Simulation |
-| `materialize_targeted_batch` | LOCAL_MUTATION | 校验 cursor 后写入唯一 proposals inbox |
-| `execute_pending_round` / `resume_pending_round` | SIMULATION_WRITE | 只调用 `Agent.run_proposals()` |
-| `reconcile` | READ_ONLY | 只轮询已知 progress URL |
-| Alpha submission | MANUAL_ONLY | 仅用户在 BRAIN 中完成 |
-
-`research_tool_manifest()` 返回上述授权等级与 owner。Inner Agent 不执行 Simulation、不能读 raw state、不能修改 factory session；Outer Agent 也不创造经济 hypothesis 或自动提交 Alpha。
-
-## 质量与安全
-
-`ResearchQualityAssessment` 是无状态 projection，复用既有 metrics/check/validation/statistical/incremental/yearly/correlation/settlement 结果，不重定义阈值，也不提出研究方向。Trial denominator 只来自 TrialLedger；`INCOMPLETE_LEGACY` 保持不可验证。`UNKNOWN`、`SUBMIT_UNKNOWN` 和基础设施失败不会被解释成研究 FAIL。
-
-唯一 Simulation 写链是：
-
-```text
-Agent.run_proposals → ProposalExecutionWorkflow → Simulator → WQBClient
-```
-
-`SUBMIT_UNKNOWN` 永不盲重 POST；已知 progress URL 只读轮询；checkpoint、Trajectory、TrialLedger、ExperienceMemory 各只有一个 owner；不创建 research-cycle sidecar。
-
-## 文档与验证
-
-- [`AGENTS.md`](AGENTS.md)：架构、安全和 owner 契约
-- [`docs/ARCHITECTURE_AGENT.md`](docs/ARCHITECTURE_AGENT.md)：当前对象图与写路径
-- [`docs/RESEARCH_POLICY.md`](docs/RESEARCH_POLICY.md)：研究 cycle 与证据纪律
-- [`docs/STATE_LAYOUT.md`](docs/STATE_LAYOUT.md)：canonical 状态布局
-- [`docs/TESTING.md`](docs/TESTING.md)：本地增量与 CI 质量门
-
-本地先跑 changed-file 映射的 targeted tests；CI 运行 compileall、typed frontier mypy、Ruff、Targeted Fast Lane、whole-repository final gate、offline doctor/audit 和 privacy。所有质量检查必须离线，不触发 live Simulation 或 Alpha submission。
+完整质量门由 CI 执行。真实工作区若 preflight 为 `BLOCKED`，只能进行只读对账/恢复，不得启动新的 Simulation。

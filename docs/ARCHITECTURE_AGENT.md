@@ -1,94 +1,59 @@
-# Current Alpha Factory architecture
+# Remote-First Architecture
 
-本文只描述当前系统，不记录历史 phase、迁移过程、LOC 或 commit 报告。
-
-## 1. Truth hierarchy
-
-1. BRAIN live response 是平台 datasets、fields、operators、Simulation、metrics、checks 与 Alpha metadata 的事实源。
-2. `Trajectory` 是 executed Experiment evidence 的 canonical owner。
-3. `TrialLedger` 是 lifecycle、selection 和 settlement accounting 的 canonical owner。
-4. `CheckpointStore` 是未完成远程任务的 recovery boundary。
-5. `ExperienceMemory`、daily/weekly cache、audit 和 quality/context 都是 bounded projections，不能覆盖 canonical facts。
-
-缺失或未知证据保持 `UNKNOWN`/`UNAVAILABLE`；`SUBMIT_UNKNOWN` 不重 POST；Alpha submission 始终手工完成。
-
-## 2. Two-loop architecture
+## 原则
 
 ```text
-Outer Control / Maintenance Agent
-  ├─ inspect runtime and bounded context
-  ├─ validate cursor and materialize canonical proposals
-  └─ execute/recover Agent.run_proposals when authorized
-       ↓
-Inner Research Agent
-  └─ author hypothesis, ExperimentSpec, OptimizationDecision and falsification
-       ↓
-execution round (round_no)
-  → ProposalExecutionWorkflow → Simulator → WQBClient
-  → Trajectory + TrialLedger + validation + settlement
-  → ResearchQualityAssessment → new research_cursor
+AI owns research reasoning.
+Python owns platform truth and execution safety.
+BRAIN owns Alpha and Simulation evidence.
 ```
 
-`research_cycle_id` 表示一次 Inner decision，`round_no` 表示一次 Outer execution。一个 cycle 可以映射多个 rounds；recovery 仍复用同一个 round。两者不共用 counter。
+Python 不替 AI 选择经济机制、优化参数或解释研究结论，也不把远端结果复制成第二个 canonical research database。
 
-## 3. Owner graph
+## 组件关系
 
 ```text
-AppConfig → AgentRuntimePolicy → RuntimeComponents → AgentWorkflows
-                                                   ├─ SuggestionWorkflow
-                                                   ├─ ProposalExecutionWorkflow
-                                                   ├─ AlphaFeedWorkflow
-                                                   └─ OptimizerWorkflow
+research_api
+ ├─ platform capability / field discovery
+ ├─ SimulationSpec
+ ├─ SimulationGateway
+ │   ├─ ExecutionGuard
+ │   └─ Simulator → WQBClient
+ ├─ RemoteAlphaRepository
+ │   └─ rebuildable remote metadata cache
+ ├─ AlphaFactory → list[SimulationSpec]
+ ├─ dedupe / grouping projections
+ └─ remote color preview/sync
 ```
 
-`research_cursor.py`、`research_quality.py`、`research_context.py` 是无状态纯 projection；`research_api.py` 是唯一 agent-facing facade。它们不创建 Client、Simulator、Trajectory、TrialLedger、Checkpoint 或第二 state model。
+`research_api` 是稳定的 Agent-facing facade。`Agent`、proposal envelope、round、parent/child、lineage、optimizer workflow 和 factory runner 属于迁移期兼容层，不得成为新 API 的依赖。
 
-## 4. Write-path matrix
+## SimulationGateway
 
-| Operation | Owner | Remote write |
-|---|---|---:|
-| discovery/context/quality/cursor | existing readers + pure projections | no |
-| proposal validation/materialization | OptimizerWorkflow + existing proposals inbox | no |
-| Simulation submission/recovery | Agent.run_proposals → ProposalExecutionWorkflow → Simulator → WQBClient | yes |
-| lifecycle/settlement accounting | TrialLedger | no |
-| executed evidence revision | Trajectory | no |
-| factory stop/status | factory-session owner | no |
-| Alpha submission | user/BRAIN | manual |
+Gateway 接受 `SimulationSpec(expression, settings, fields, note, template_id)`。它只做可执行形状校验、实时 operator capability 校验、fingerprint 计算与远端执行编排。
 
-## 5. Identity model
+安全顺序固定为：
 
-- candidate identity：候选生成/拒绝。
-- proposal identity：`proposal_id` lifecycle。
-- execution identity：`submission_fingerprint(canonical expression, complete effective settings)`。
-- Experiment identity：`Experiment.id` 与 Trajectory revision。
-- research cycle identity：`source_research_cursor + sorted decision semantic IDs` 的 opaque digest。
+```text
+fingerprint → reject active duplicate → durable SUBMITTING
+→ exactly one POST → RUNNING + progress_url → poll same URL
+→ get remote Alpha → remove guard only after result is proven
+```
 
-Cycle provenance 可进入 proposal、Experiment、Trajectory、TrialLedger、settlement 与 quality projection，但不能进入 Simulation fingerprint。相同 execution fingerprint 被不同 cycle 引用时不得产生第二次 POST。
+guard 仅允许 execution identity/status、progress URL 和时间戳，可选 remote Alpha ID；不得保存 metrics、checks、PnL、expression、hypothesis、lineage、settlement 或 factory state。
 
-## 6. Cursor and cycle
+## RemoteAlphaRepository
 
-`build_research_cursor()` 从已 settled Experiment ID/settlement ID、TrialLedger history-completeness/effective denominator、未完成 checkpoint identity、active targeted batch digest 和 runtime state 派生 opaque SHA-256。它不包含 expression、Alpha ID、metrics、凭据或时间戳。
+Repository 提供 rolling metadata refresh/list/get/cache status/purge。默认 retention 为 7 天，可配置为 1–90 天。cache 删除后必须能够从 BRAIN 重建，cache 与 live 冲突时 live 优先。
 
-相同 canonical evidence 必须得到相同 cursor；新增 final settlement 改变 cursor；cache/timestamp refresh 不改变 cursor。`INCOMPLETE_LEGACY` 的 denominator 保持 `UNAVAILABLE`。没有 cycle provenance 的 legacy Experiment 可读，但 cycle projection 标记 `LEGACY_RESEARCH_CYCLE_UNVERIFIABLE`。
+证据读取默认标记来源与时间；研究判断只能使用 live evidence，或明确接受带 freshness 的 cache 视图。
 
-## 7. Quality projection
+## Dedupe、分组与颜色
 
-`ResearchQualityAssessment` 只描述 evidence，包含 execution status、finality（`UNRESOLVED`/`PROVISIONAL`/`FINAL`）、completeness、各 evidence dimension、classification、eligibility、TrialLedger denominator、missing evidence 和 blockers。它调用已有 report/metrics/research reducers，不重定义 Sharpe、Fitness、checks 或 validation threshold，也不提出研究方向。
+执行去重只使用 canonical expression + effective settings fingerprint。结构相似、field 相似、correlation 和 quality 只是 advisory projection，不得替代 exact execution identity。
 
-`UNKNOWN`、`SUBMIT_UNKNOWN`、运行中状态和 infrastructure failure 不能被质量 projection 改写为研究 `FAIL`。未完成 validation 不产生 final settlement side effect。
+颜色策略只接收 remote evidence；`dry_run` 不得 PATCH，`overwrite=False` 保留已有颜色，`overwrite=True` 才允许覆盖，每次 PATCH 必须 readback verify。不得创建本地 ownership sidecar。
 
-## 8. Facade boundary
+## 迁移边界
 
-只读入口包括 `inspect_runtime_context`、`inspect_research_context`、`inspect_execution_round`、`inspect_research_cycle`、`inspect_pending_work`、`inspect_trial_accounting`、`inspect_factory_status`、三类 `assess_*`、discovery、operator reference 和 `reconcile`。
-
-受控入口包括 `materialize_targeted_batch`、`execute_pending_round`、`resume_pending_round` 和 `request_factory_stop`。materialization 校验 `expected_research_cursor`，过期上下文返回 `RESEARCH_CONTEXT_STALE` 且不覆盖 inbox；执行入口只能调用 `Agent.run_proposals`。`research_tool_manifest` 声明模式、owner、remote write 和 readiness 要求。
-
-## 9. Recovery and safety invariants
-
-POST 前先固化 identity/checkpoint；未知 POST 结果保持 `SUBMIT_UNKNOWN`；已知 progress URL 只 GET/poll。checkpoint、Trajectory、TrialLedger、ExperienceMemory 和 Alpha feed 各自只有一个 owner。factory session 只保存 bounded control metadata；research cycle、cursor、quality、context 都是 derived projection，不生成 durable sidecar。
-
-Outer 默认 `MAINTENANCE`，`REAL_SIMULATION_RUN=NO`；只有用户明确授权才进入 `RESEARCH_ORCHESTRATION`。Inner 不能执行 Simulation、修改 raw state 或 factory session；Outer 不能创造经济 hypothesis、自动调参或自动 Alpha submission。
-
-## 10. Reading and verification
-
-阅读顺序：根 [`AGENTS.md`](../AGENTS.md) → 本文 → [`research_api.py`](../wqb_agent/research_api.py) → 当前 owner 与直接测试。Local 先执行 explicit targeted mapping；CI 依次执行 compileall、typed frontier、Ruff、Targeted Fast Lane、whole-repository final gate、offline doctor/audit/privacy。
+旧 `proposals.json`、checkpoint、Trajectory、TrialLedger、settlement、ExperienceMemory、OptimizerWorkflow 和 factory session 不得被新 Remote-First API 重新扩展。只有在所有消费者迁移并完成回归验证后，才可删除兼容模块及对应旧测试。
