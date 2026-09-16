@@ -37,21 +37,21 @@ class TestHeartbeatSink(unittest.TestCase):
         now = [0.0]
         events = []
         sink = HeartbeatSink(emit=lambda stage, **meta: events.append({"stage": stage, **meta}), clock=lambda: now[0], interval_sec=10)
-        sink.emit_stage("SIMULATION_SETTLEMENT", done=0)
+        sink.emit_stage("SIMULATION_EXECUTION", done=0)
         now[0] = 20.0
-        self.assertTrue(sink.emit_stage("SIMULATION_SETTLEMENT", done=0, stalled=True))
+        self.assertTrue(sink.emit_stage("SIMULATION_EXECUTION", done=0, stalled=True))
         self.assertEqual(events[-1]["stalled"], True)
 
-    def test_per_item_marker_does_not_bypass_aggregate_throttle(self):
+    def test_elapsed_metadata_does_not_bypass_aggregate_throttle(self):
         now = [0.0]
         events = []
         sink = HeartbeatSink(
             emit=lambda stage, **meta: events.append({"stage": stage, **meta}),
             clock=lambda: now[0], interval_sec=10,
         )
-        sink.emit_stage("SIMULATION_SETTLEMENT", done=1, last_settlement_progress="a")
+        sink.emit_stage("SIMULATION_EXECUTION", done=1, elapsed_sec=1)
         self.assertFalse(
-            sink.emit_stage("SIMULATION_SETTLEMENT", done=1, last_settlement_progress="b")
+            sink.emit_stage("SIMULATION_EXECUTION", done=1, elapsed_sec=2)
         )
         self.assertEqual(len(events), 1)
 

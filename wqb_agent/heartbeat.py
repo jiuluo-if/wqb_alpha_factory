@@ -38,7 +38,7 @@ class HeartbeatSink:
         progress = {
             key: value for key, value in metadata.items()
             if key not in {
-                "elapsed_sec", "last_progress_at", "last_settlement_progress",
+                "elapsed_sec", "last_progress_at",
             }
         }
         stage_changed = stage != self._stage
