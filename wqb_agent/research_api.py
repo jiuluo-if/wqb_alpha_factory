@@ -3,9 +3,10 @@ ROLE: CORE
 AGENT_RELEVANCE: HIGH
 
 PURPOSE:
-Provide the small, stable agent-facing interface over the existing research
-runtime.  This module composes discovery, execution, state, and evaluation;
-it does not implement a second state machine or bypass safety checks.
+Provide the small, stable agent-facing interface for discovery, probe
+generation, safe Simulation execution, remote Alpha evidence, dedupe, and
+metadata tools. It does not implement a research state machine or persist
+canonical research results.
 
 READ WHEN:
 - starting a research task
@@ -14,7 +15,7 @@ READ WHEN:
 
 DO NOT USE FOR:
 - deciding economic hypotheses
-- bypassing proposal validation or reconciliation
+- bypassing SimulationGateway safety or execution reconciliation
 - treating cache or derived output as platform truth
 """
 
