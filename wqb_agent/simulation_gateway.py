@@ -50,6 +50,18 @@ class ExecutionGuard:
         self.state_dir = os.path.abspath(str(state_dir))
         self.path = os.path.join(self.state_dir, "execution_guard.json")
         self._lock = threading.RLock()
+        # A process dying after the durable pre-POST marker cannot establish
+        # whether the remote POST happened.  Promote it before any new call.
+        with self._lock:
+            rows = self._read()
+            changed = False
+            for row in rows:
+                if row.get("status") == "SUBMITTING":
+                    row["status"] = "SUBMIT_UNKNOWN"
+                    row["updated_at"] = time.time()
+                    changed = True
+            if changed:
+                self._write(rows)
 
     @staticmethod
     def fingerprint(expression, settings):

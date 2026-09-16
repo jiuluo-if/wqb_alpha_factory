@@ -98,6 +98,18 @@ class TestSimulationGateway(unittest.TestCase):
             self.assertEqual(resumed["status"], "SUBMIT_UNKNOWN")
             self.assertEqual(second_client.submissions, [])
 
+    def test_restart_promotes_submitting_to_submit_unknown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            spec = SimulationSpec("rank(close)", {"delay": 1})
+            fingerprint = ExecutionGuard.fingerprint(spec.expression, spec.settings)
+            ExecutionGuard(tmp).register(fingerprint, status="SUBMITTING")
+
+            gateway = SimulationGateway(FakeGatewayClient(), state_dir=tmp)
+            result = gateway.simulate(spec)
+
+            self.assertEqual(result["status"], "SUBMIT_UNKNOWN")
+            self.assertEqual(ExecutionGuard(tmp).find(fingerprint)["status"], "SUBMIT_UNKNOWN")
+
     def test_known_progress_url_recovery_only_polls_same_url(self):
         with tempfile.TemporaryDirectory() as tmp:
             guard = ExecutionGuard(tmp)
