@@ -40,9 +40,6 @@ DIRECT_TESTS = {
         "tests/test_alpha_assembly.py",
         "tests/test_factory_assembly_performance.py",
     ),
-    "wqb_agent/alpha_feasibility.py": (
-        "tests/test_alpha_feasibility.py",
-    ),
     "tests/test_architecture_contracts.py": (
         "tests/test_architecture_contracts.py",
     ),

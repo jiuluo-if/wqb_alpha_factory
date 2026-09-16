@@ -11,7 +11,6 @@ import os
 import random
 
 from .alpha_assembly import assemble_factory_realizations, field_mechanism
-from .alpha_feasibility import assess_feasibility as assess_feasibility_projection
 from .alpha_relationships import (
     frequency_bucket,
     frequency_compatibility,
@@ -69,7 +68,6 @@ class AlphaFactory:
             if require_private else AlphaTemplateRegistry(private_catalog=catalog_path)
         )
         self.catalog_path = catalog_path
-        self.last_feasibility = None
         self.last_budget_audit = {}
 
     def recheck_blocker(self, context):
@@ -109,23 +107,6 @@ class AlphaFactory:
             except OSError:
                 continue
         return {"changed": False, "probe": {}}
-
-    def assess_feasibility(self, hypothesis, fields, operator_reference,
-                           *, excluded_expressions=(), probe_id=None,
-                           max_combinations=256):
-        """Run a bounded control-plane feasibility check before assembly."""
-        result = assess_feasibility_projection(
-            hypothesis,
-            fields,
-            self.registry.economic_templates(),
-            self.neutralization,
-            self._relationship_gate,
-            excluded_expressions=excluded_expressions,
-            probe_id=probe_id,
-            max_combinations=max_combinations,
-        )
-        self.last_feasibility = result
-        return result
 
     @staticmethod
     def requested(hypothesis):
