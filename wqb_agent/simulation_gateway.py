@@ -75,7 +75,24 @@ class ExecutionGuard:
         except (OSError, ValueError, TypeError):
             payload = {}
         rows = payload.get("entries", []) if isinstance(payload, dict) else []
-        return [row for row in rows if isinstance(row, dict) and row.get("execution_fingerprint")]
+        normalized = []
+        for row in rows:
+            if not isinstance(row, dict) or not row.get("execution_fingerprint"):
+                continue
+            if row.get("status") not in self.STATUSES:
+                continue
+            item = {
+                "execution_fingerprint": str(row["execution_fingerprint"]),
+                "status": row["status"],
+                "created_at": row.get("created_at"),
+                "updated_at": row.get("updated_at"),
+            }
+            if row.get("progress_url") is not None:
+                item["progress_url"] = str(row["progress_url"])
+            if row.get("remote_alpha_id") is not None:
+                item["remote_alpha_id"] = str(row["remote_alpha_id"])
+            normalized.append(item)
+        return normalized
 
     def _write(self, rows):
         os.makedirs(self.state_dir, exist_ok=True)

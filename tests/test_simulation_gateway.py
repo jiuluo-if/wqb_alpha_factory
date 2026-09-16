@@ -124,6 +124,31 @@ class TestSimulationGateway(unittest.TestCase):
             self.assertEqual(result["status"], "SUBMIT_UNKNOWN")
             self.assertEqual(ExecutionGuard(tmp).find(fingerprint)["status"], "SUBMIT_UNKNOWN")
 
+    def test_execution_guard_strips_research_result_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "execution_guard.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump({"entries": [{
+                    "execution_fingerprint": "fp",
+                    "status": "RUNNING",
+                    "progress_url": "progress",
+                    "created_at": 1,
+                    "updated_at": 2,
+                    "metrics": {"sharpe": 9},
+                    "checks": ["PASS"],
+                    "expression": "rank(close)",
+                    "lineage_id": "private-lineage",
+                }]}, handle)
+
+            entry = ExecutionGuard(tmp).entries()[0]
+
+            self.assertEqual(
+                set(entry),
+                {"execution_fingerprint", "status", "progress_url",
+                 "created_at", "updated_at"},
+            )
+            self.assertNotIn("metrics", entry)
+
     def test_known_progress_url_recovery_only_polls_same_url(self):
         with tempfile.TemporaryDirectory() as tmp:
             guard = ExecutionGuard(tmp)
