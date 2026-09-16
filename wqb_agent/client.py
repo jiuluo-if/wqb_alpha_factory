@@ -922,23 +922,3 @@ class WQBClient:
     def get_self_correlation(self, alpha_id, timeout_sec=20):
         """Fetch the settled SELF_CORRELATION payload through the client API."""
         return self.get_correlation(alpha_id, kind="self", timeout_sec=timeout_sec)
-
-    def run_simulation(self, expression, settings, timeout_sec=1500):
-        """Compatibility-only single simulation helper.
-
-        Production code must use ``research_api.simulate()`` so Gateway,
-        ExecutionGuard and transport safety remain centralized.  This method
-        remains only for older library callers and is not a production path.
-        """
-        # Run one simulation end-to-end and return the alpha payload with the
-        # real platform alpha id attached as payload["alpha_id"]: the raw
-        # GET /alphas/{id} payload does not carry the id at the top level, so
-        # callers could not learn the platform id from the return value (they
-        # had to re-run the simulation just to fetch it). Existing callers
-        # that only read metrics keep working: alpha.get("is") still returns
-        # the metrics block.
-        progress_url = self.submit_simulation(expression, settings)
-        alpha_id = self.poll_progress(progress_url, timeout_sec=timeout_sec)
-        payload = self.get_alpha(alpha_id)
-        payload["alpha_id"] = alpha_id
-        return payload

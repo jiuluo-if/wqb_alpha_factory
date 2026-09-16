@@ -194,18 +194,6 @@ class TestOperatorCapabilityClient(unittest.TestCase):
         self.assertEqual(result["availability"], "AVAILABLE")
 
 
-class TestRunSimulationReturnsAlphaId(unittest.TestCase):
-    """run_simulation must return the real platform alpha id with the payload
-    so callers no longer need to re-run a simulation just to fetch it."""
-
-    def test_payload_carries_real_alpha_id(self):
-        c = make_client()
-        with mock.patch.object(c, "submit_simulation", return_value="/simulations/s1"),              mock.patch.object(c, "poll_progress", return_value="KP73prPz"),              mock.patch.object(c, "get_alpha", return_value={"is": {"sharpe": 2.05}}):
-            payload = c.run_simulation("rank(x)", {})
-        self.assertEqual(payload["alpha_id"], "KP73prPz")
-        self.assertEqual(payload["is"]["sharpe"], 2.05)  # 旧调用方式仍可用
-
-
 class TestPublicReadAdapters(unittest.TestCase):
     def test_progress_snapshot_returns_transport_neutral_payload(self):
         c = make_client()
