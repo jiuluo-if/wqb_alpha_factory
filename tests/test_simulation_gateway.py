@@ -46,6 +46,14 @@ class CapabilityGatewayClient(FakeGatewayClient):
         return {"valid": True, "availability": "AVAILABLE", "operators": ["rank"]}
 
 
+class RemoteHistoryGatewayClient(FakeGatewayClient):
+    def get_all_user_alphas(self, **_kwargs):
+        return [{
+            "id": "alpha-existing", "regular": "rank(close)",
+            "settings": {"delay": 1}, "status": "UNSUBMITTED",
+        }]
+
+
 class TestSimulationGateway(unittest.TestCase):
     def test_public_research_api_simulate_uses_gateway_without_agent_state(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -93,6 +101,16 @@ class TestSimulationGateway(unittest.TestCase):
 
             self.assertEqual(result["status"], "EXACT_DUPLICATE")
             self.assertEqual(result["fingerprint"], fingerprint)
+            self.assertEqual(client.submissions, [])
+
+    def test_recent_remote_exact_fingerprint_is_rejected_without_post(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = RemoteHistoryGatewayClient()
+            result = SimulationGateway(client, state_dir=tmp).simulate(
+                SimulationSpec("rank(close)", {"delay": 1})
+            )
+            self.assertEqual(result["status"], "EXACT_DUPLICATE")
+            self.assertEqual(result["alpha_id"], "alpha-existing")
             self.assertEqual(client.submissions, [])
 
     def test_ambiguous_submit_is_persisted_and_restart_cannot_post_again(self):

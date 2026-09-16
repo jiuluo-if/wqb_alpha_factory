@@ -174,16 +174,44 @@ class SimulationGateway:
 
     def _validate_live_capability(self, spec):
         reader = getattr(self.client, "get_operator_capability", None)
+        if callable(reader):
+            capability = reader()
+            if not isinstance(capability, Mapping) or capability.get("valid") is not True:
+                raise ValueError("OPERATOR_CAPABILITY_UNAVAILABLE")
+            operators = {str(item).casefold() for item in capability.get("operators", ())}
+            requested = set(analyze_expression(spec.expression).operators)
+            missing = sorted(requested - operators)
+            if missing:
+                raise ValueError("OPERATOR_CAPABILITY_UNAVAILABLE: " + ", ".join(missing))
+        field_reader = getattr(self.client, "get_field_capability", None)
+        if spec.fields and callable(field_reader):
+            field_capability = field_reader(list(spec.fields))
+            if not isinstance(field_capability, Mapping) or field_capability.get("valid") is not True:
+                raise ValueError("FIELD_CAPABILITY_UNAVAILABLE")
+            available = {str(item).casefold() for item in field_capability.get("fields", ())}
+            missing_fields = sorted({str(item).casefold() for item in spec.fields} - available)
+            if missing_fields:
+                raise ValueError("FIELD_CAPABILITY_UNAVAILABLE: " + ", ".join(missing_fields))
+
+    def _remote_duplicate(self, spec, fingerprint):
+        reader = getattr(self.client, "get_all_user_alphas", None)
         if not callable(reader):
-            return
-        capability = reader()
-        if not isinstance(capability, Mapping) or capability.get("valid") is not True:
-            raise ValueError("OPERATOR_CAPABILITY_UNAVAILABLE")
-        operators = {str(item).casefold() for item in capability.get("operators", ())}
-        requested = set(analyze_expression(spec.expression).operators)
-        missing = sorted(requested - operators)
-        if missing:
-            raise ValueError("OPERATOR_CAPABILITY_UNAVAILABLE: " + ", ".join(missing))
+            return None
+        try:
+            rows = reader(max_results=1000)
+        except Exception:
+            # Remote duplicate lookup is advisory; transport failure must not
+            # be mistaken for proof that a write is safe or unsafe.
+            return None
+        for row in rows or ():
+            if not isinstance(row, Mapping):
+                continue
+            alpha = row.get("alpha") if isinstance(row.get("alpha"), Mapping) else row
+            expression = alpha.get("regular") or alpha.get("expression")
+            settings = alpha.get("settings") if isinstance(alpha.get("settings"), Mapping) else {}
+            if isinstance(expression, str) and self.guard.fingerprint(expression, settings) == fingerprint:
+                return {"alpha_id": row.get("id") or alpha.get("id"), "source": "LIVE"}
+        return None
 
     def execution_fingerprint(self, spec):
         spec = spec if isinstance(spec, SimulationSpec) else SimulationSpec(**dict(spec))
@@ -200,6 +228,9 @@ class SimulationGateway:
                 return {"status": "SUBMIT_UNKNOWN", "fingerprint": fingerprint,
                         "progress_url": existing.get("progress_url")}
             return {"status": "EXACT_DUPLICATE", "fingerprint": fingerprint}
+        remote = self._remote_duplicate(spec, fingerprint)
+        if remote is not None:
+            return {"status": "EXACT_DUPLICATE", "fingerprint": fingerprint, **remote}
         self.guard.register(fingerprint)
         # Simulator only needs a mutable transport record.  Keeping this
         # record local avoids constructing the legacy research ``Experiment``
