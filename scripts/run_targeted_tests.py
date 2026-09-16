@@ -80,10 +80,6 @@ DIRECT_TESTS = {
         "tests/test_search_policy.py",
         "tests/test_evaluation.py",
     ),
-    "wqb_agent/search_snapshot.py": (
-        "tests/test_search_policy.py",
-        "tests/test_evaluation.py",
-    ),
     "wqb_agent/terminal_evidence.py": (
         "tests/test_simulation_gateway.py",
     ),
@@ -113,7 +109,6 @@ DIRECT_TESTS = {
     ),
     "wqb_agent/search_policy.py": (
         "tests/test_search_policy.py",
-        "tests/test_search_calibration.py",
     ),
     "wqb_agent/alpha_templates/model.py": ("tests/test_alpha_template_catalog.py",),
     "wqb_agent/alpha_templates/loader.py": (
@@ -150,9 +145,7 @@ DIRECT_TESTS = {
         "tests/test_remote_diagnostics.py",
     ),
     "wqb_agent/trial_ledger.py": (
-        "tests/test_incremental_value.py",
         "tests/test_protocol_truth.py",
-        "tests/test_search_calibration.py",
         "tests/test_trial_ledger_io.py",
     ),
     "wqb_agent/research_catalog.py": (
@@ -163,7 +156,6 @@ DIRECT_TESTS = {
     "scripts/check_correlation.py": (),
     "scripts/check_health.py": ("tests/test_research_constraints.py",),
     "scripts/refresh_self_correlation.py": ("tests/test_research_constraints.py",),
-    "scripts/replay_research_yield.py": ("tests/test_research_yield.py",),
     "scripts/research_quality_audit.py": ("tests/test_research_constraints.py",),
     "scripts/validate_integrity.py": ("tests/test_remote_diagnostics.py",),
     "wqb_agent/alpha_pool.py": (),
@@ -178,10 +170,9 @@ DIRECT_TESTS = {
     "wqb_agent/failures.py": ("tests/test_client_refactor.py",),
     "wqb_agent/heartbeat.py": ("tests/test_heartbeat.py",),
     "wqb_agent/identity.py": ("tests/test_semantic_contract_admission.py",),
-    "wqb_agent/incremental_policy.py": ("tests/test_incremental_value.py",),
-    "wqb_agent/incremental_value.py": ("tests/test_incremental_value.py",),
+    "wqb_agent/incremental_policy.py": ("tests/test_evaluation.py",),
     "wqb_agent/metrics.py": ("tests/test_evaluation.py",),
-    "wqb_agent/mutations.py": ("tests/test_research_yield.py",),
+    "wqb_agent/mutations.py": ("tests/test_evaluation.py",),
     "wqb_agent/optimization_decision.py": (),
     "wqb_agent/optimization_interfaces.py": ("tests/test_optimization_interfaces.py",),
     "wqb_agent/simulation_gateway.py": ("tests/test_simulation_gateway.py",),
@@ -192,11 +183,8 @@ DIRECT_TESTS = {
     "wqb_agent/pnl.py": ("tests/test_optimization_interfaces.py",),
     "wqb_agent/research_evidence.py": ("tests/test_research_constraints.py",),
     "wqb_agent/research_guard.py": ("tests/test_research_constraints.py",),
-    "wqb_agent/research_yield.py": ("tests/test_research_yield.py",),
     "wqb_agent/robustness.py": (),
     "wqb_agent/schema.py": ("tests/test_architecture_contracts.py",),
-    "wqb_agent/search_calibration.py": ("tests/test_search_calibration.py",),
-    "wqb_agent/search_outcome.py": ("tests/test_search_policy.py",),
     "wqb_agent/smoke.py": ("tests/test_smoke.py",),
     "wqb_agent/submission.py": (),
     "wqb_agent/validation.py": ("tests/test_evaluation.py",),
