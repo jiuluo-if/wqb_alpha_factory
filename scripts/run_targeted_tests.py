@@ -66,16 +66,13 @@ DIRECT_TESTS = {
     "wqb_agent/alpha_relationships.py": (
         "tests/test_alpha_relationships.py",
         "tests/test_factory_relationship_gate.py",
-        "tests/test_factory_mechanism_selection.py",
     ),
     "wqb_agent/alpha_assembly.py": (
         "tests/test_alpha_assembly.py",
-        "tests/test_factory_mechanism_selection.py",
         "tests/test_factory_assembly_performance.py",
     ),
     "wqb_agent/alpha_feasibility.py": (
         "tests/test_alpha_feasibility.py",
-        "tests/test_factory_feasibility.py",
     ),
     "wqb_agent/runtime_composition.py": (
         "tests/test_runtime_composition.py",
@@ -94,23 +91,12 @@ DIRECT_TESTS = {
         "tests/test_proposal_execution.py",
         "tests/test_proposal_safety.py",
     ),
-    "wqb_agent/factory_quota.py": (
-        "tests/test_factory_quota.py",
-        "tests/test_factory_boundaries.py",
-        "tests/test_research_loop.py",
-    ),
     "wqb_agent/optimization_screening.py": (
         "tests/test_agent_decision_to_proposal.py",
-        "tests/test_factory_provenance_persistence.py",
     ),
     "wqb_agent/validation_proposals.py": (
         "tests/test_agent_decision_to_proposal.py",
         "tests/test_optimization_decision_contract.py",
-    ),
-    "wqb_agent/factory_session.py": (
-        "tests/test_factory_session.py",
-        "tests/test_factory_session_privacy.py",
-        "tests/test_factory_boundaries.py",
     ),
     "wqb_agent/discovery.py": (
         "tests/test_discovery.py",
@@ -163,7 +149,6 @@ DIRECT_TESTS = {
         "tests/test_state.py",
         "tests/test_recovery.py",
         "tests/test_settled_evidence_durability.py",
-        "tests/test_factory_provenance_persistence.py",
     ),
     "wqb_agent/artifacts.py": (
         "tests/test_artifacts.py",
@@ -247,25 +232,7 @@ DIRECT_TESTS = {
         "tests/test_recovery.py",
         "tests/test_runtime_safety.py",
     ),
-    "wqb_agent/factory_runner.py": (
-        "tests/test_factory_boundaries.py",
-        "tests/test_factory_blocker_control.py",
-        "tests/test_factory_feasibility.py",
-        "tests/test_proposal_execution.py",
-        "tests/test_research_loop.py",
-        "tests/test_control_loop_repair.py",
-    ),
-    "wqb_agent/factory_route.py": (
-        "tests/test_factory_route.py",
-        "tests/test_factory_boundaries.py",
-        "tests/test_research_loop.py",
-    ),
-    "wqb_agent/factory_blocker.py": (
-        "tests/test_factory_blocker_control.py",
-        "tests/test_factory_session_privacy.py",
-    ),
     "wqb_agent/weekly_quota.py": (
-        "tests/test_factory_boundaries.py",
     ),
     "wqb_agent/config.py": (
         "tests/test_runtime_config_boundary.py",
@@ -282,7 +249,6 @@ DIRECT_TESTS = {
     ),
     "wqb_agent/proposal_contract.py": (
         "tests/test_factory_batch_contract.py",
-        "tests/test_factory_provenance_persistence.py",
     ),
     "wqb_agent/proposal_schema.py": (
         "tests/test_proposal_contract.py",
@@ -310,16 +276,12 @@ DIRECT_TESTS = {
     ),
     "wqb_agent/alpha_factory.py": (
         "tests/test_factory_batch_contract.py",
-        "tests/test_factory_mechanism_selection.py",
         "tests/test_factory_relationship_gate.py",
         "tests/test_factory_semantic_traits.py",
-        "tests/test_factory_provenance_persistence.py",
-        "tests/test_factory_feasibility.py",
-        "tests/test_research_loop.py",
     ),
+    "wqb_agent/alpha_feed_cache.py": ("tests/test_alpha_feed_workflow.py",),
+    "wqb_agent/daily_cache.py": ("tests/test_alpha_feed_workflow.py",),
     "wqb_agent/diversity.py": (
-        "tests/test_factory_mechanism_selection.py",
-        "tests/test_research_loop.py",
     ),
     "wqb_agent/search_policy.py": (
         "tests/test_search_policy.py",
@@ -383,18 +345,6 @@ DIRECT_TESTS = {
         "tests/test_discovery.py",
         "tests/test_proposal_contract.py",
     ),
-    "wqb_agent/factory_control.py": (
-        "tests/test_factory_blocker_control.py",
-        "tests/test_factory_mechanism_selection.py",
-        "tests/test_factory_session_privacy.py",
-        "tests/test_architecture_contracts.py",
-        "tests/test_structural_repair_chain.py",
-    ),
-    "wqb_agent/factory_probe.py": (
-        "tests/test_factory_mechanism_selection.py",
-        "tests/test_factory_session_privacy.py",
-        "tests/test_architecture_contracts.py",
-    ),
     "wqb_agent/execution_plan.py": ("tests/test_execution_plan.py", "tests/test_proposal_execution.py"),
     "wqb_agent/proposal_inbox.py": ("tests/test_proposal_inbox.py", "tests/test_proposal_execution.py"),
     "scripts/benchmark_local_io.py": ("tests/test_benchmark_harness.py",),
@@ -406,12 +356,10 @@ DIRECT_TESTS = {
     "scripts/validate_integrity.py": ("tests/test_runtime_safety.py",),
     "wqb_agent/alpha_colors.py": ("tests/test_alpha_colors.py",),
     "wqb_agent/alpha_color_workflow.py": ("tests/test_alpha_color_workflow.py",),
-    "wqb_agent/alpha_feed_cache.py": ("tests/test_factory_boundaries.py",),
     "wqb_agent/alpha_pool.py": ("tests/test_submission.py",),
     "wqb_agent/behavior.py": ("tests/test_agent_flow.py",),
     "wqb_agent/cli.py": ("tests/test_cli.py",),
     "wqb_agent/context.py": ("tests/test_agent_context.py",),
-    "wqb_agent/daily_cache.py": ("tests/test_factory_boundaries.py",),
     "wqb_agent/diagnostics.py": ("tests/test_runtime_safety.py",),
     "wqb_agent/evidence.py": ("tests/test_evidence.py",),
     "wqb_agent/evidence_status.py": ("tests/test_evidence.py",),

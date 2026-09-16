@@ -6,7 +6,6 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from wqb_agent.factory_runner import AIFactoryRunner
 from wqb_agent.locking import OwnerBusyError, single_instance_scope
 
 
@@ -106,22 +105,6 @@ class TestSingleInstanceScope(unittest.TestCase):
                 thread.join()
 
             self.assertEqual(result, ["busy"])
-
-    def test_direct_factory_run_is_blocked_before_session_mutation(self):
-        with tempfile.TemporaryDirectory() as state_dir:
-            agent = SimpleNamespace(state_dir=state_dir, alpha_factory=Mock())
-            result = []
-            with single_instance_scope(state_dir, operation="outer"):
-                thread = threading.Thread(
-                    target=lambda: result.append(
-                        AIFactoryRunner(agent, quiet=True).run(duration_sec=0)
-                    )
-                )
-                thread.start()
-                thread.join()
-
-            self.assertEqual(result[0]["status"], "LOCAL_OWNER_BUSY")
-            self.assertFalse((__import__("pathlib").Path(state_dir) / "factory_session.json").exists())
 
     def test_other_process_cannot_enter_state_owner(self):
         context = multiprocessing.get_context("spawn")

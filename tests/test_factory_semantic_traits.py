@@ -26,7 +26,6 @@ from wqb_agent.diversity import (
     select_budget_candidates,
     semantic_mechanism_key,
 )
-from wqb_agent.factory_runner import AIFactoryRunner
 from wqb_agent.proposal_contract import factory_batch_stats, validate_factory_batch
 from wqb_agent.research_guard import parameter_only_change_reason
 from wqb_agent.state import Experiment

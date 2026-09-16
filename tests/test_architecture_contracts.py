@@ -165,7 +165,6 @@ class ArchitectureDependencyContracts(unittest.TestCase):
             "wqb_agent/proposal_admission.py",
             "wqb_agent/optimization_screening.py",
             "wqb_agent/validation_proposals.py",
-            "wqb_agent/factory_blocker.py",
         )
         imports = _package_imports(domain_paths)
         forbidden = {"wqb_agent.agent", "wqb_agent.client", "wqb_agent.simulator"}
@@ -184,7 +183,6 @@ class ArchitectureDependencyContracts(unittest.TestCase):
             "wqb_agent/execution_identity.py",
             "wqb_agent/optimization_screening.py",
             "wqb_agent/validation_proposals.py",
-            "wqb_agent/factory_blocker.py",
         )
         imports = _package_imports(paths)
         for path, dependencies in imports.items():
@@ -238,8 +236,6 @@ class ArchitectureDependencyContracts(unittest.TestCase):
             "wqb_agent/optimizer_selection.py",
             "wqb_agent/client_transport.py",
             "wqb_agent/research_catalog.py",
-            "wqb_agent/factory_control.py",
-            "wqb_agent/factory_probe.py",
             "wqb_agent/execution_plan.py",
             "wqb_agent/proposal_inbox.py",
             "wqb_agent/proposal_schema.py",
@@ -305,22 +301,13 @@ class ArchitectureDependencyContracts(unittest.TestCase):
         self.assertIn("load_packaged_operator_syntax_reference", source)
         self.assertNotIn("importlib.resources", source)
 
-    def test_factory_probe_is_canonical_and_runner_has_no_probe_wrappers(self):
-        runner = (ROOT / "wqb_agent/factory_runner.py").read_text(encoding="utf-8")
-        self.assertNotIn("def _selection_probe(", runner)
-        self.assertNotIn("def _route_set_digest(", runner)
-        self.assertNotIn("def _route_probe_projection(", runner)
-        self.assertNotIn("def _begin_route_episode(", runner)
-        self.assertNotIn("def _finish_route_episode(", runner)
-        self.assertNotIn("def _advance_route_episode(", runner)
-        imports = _imports(ROOT / "wqb_agent/factory_probe.py")
-        self.assertNotIn("wqb_agent.agent", imports)
-        self.assertNotIn("wqb_agent.state", imports)
-
-    def test_factory_runner_uses_bound_checkpoint_owner(self):
-        runner = (ROOT / "wqb_agent/factory_runner.py").read_text(encoding="utf-8")
-        self.assertNotIn("self.agent.checkpoints", runner)
-        self.assertIn("self.checkpoints", runner)
+    def test_legacy_factory_control_plane_is_absent(self):
+        for name in (
+            "factory_runner.py", "factory_session.py", "factory_control.py",
+            "factory_route.py", "factory_blocker.py", "factory_probe.py",
+            "factory_quota.py",
+        ):
+            self.assertFalse((ROOT / "wqb_agent" / name).exists(), name)
 
     def test_proposal_execution_writes_lifecycle_audit_through_context_owner(self):
         source = (ROOT / "wqb_agent/proposal_execution.py").read_text(encoding="utf-8")
