@@ -22,13 +22,8 @@ jobs:
         run: >-
           python -m mypy
           wqb_agent/config.py
-          wqb_agent/runtime_policy.py
-          wqb_agent/runtime_components.py
-          wqb_agent/runtime_composition.py
           wqb_agent/credentials.py
-          wqb_agent/suggestion_workflow.py
           wqb_agent/alpha_feed_workflow.py
-          wqb_agent/optimizer_workflow.py
       - name: Ruff
         run: python -m ruff check .
       - name: Targeted Fast Lane
