@@ -104,7 +104,6 @@ class AlphaFactory:
         primary = normalized[0]
         secondary = normalized[1] if len(normalized) > 1 else None
         tertiary = normalized[2] if len(normalized) > 2 else None
-        ref_input = hypothesis.get("template_ref") or {}
         candidates = []
         seen = set()
         for template in self.registry.select(hypothesis):
@@ -145,39 +144,7 @@ class AlphaFactory:
             if identity in seen:
                 continue
             seen.add(identity)
-            ref = dict(ref_input)
-            ref.setdefault("catalog_id", f"private:{template.template_id}")
-            ref.setdefault("skeleton_fingerprint", template.fingerprint)
-            ref.setdefault("lifecycle", "runnable")
-            ref.setdefault("source", "private_or_synthetic_catalog")
-            ref.setdefault("slot_name", "p")
-            slot_values = {"p": primary, "data_field": primary,
-                           "g": self.neutralization}
-            for slot in ("s", "t"):
-                if values.get(slot):
-                    slot_values[slot] = values[slot]
-            relationship_audit = None
-            if relation is not None:
-                relationship_audit = {
-                    "slot_assignment": {
-                        slot: values[slot]
-                        for slot in template.field_slots
-                        if slot in values and values[slot]
-                    },
-                    "relationship_type": relation["relationship_type"],
-                    "relationship_admission": relation["admission"],
-                    "relationship_reason": list(relation["reasons"]),
-                    "slot_assignment_reason": relation["slot_assignment_reason"],
-                    "frequency_compatibility": relation["frequency_compatibility"],
-                    "symmetric": relation["symmetric"],
-                }
             used_ids = expression_facts["fields"]
-            profile_by_id = {}
-            for profile in normalized_profiles:
-                profile_by_id.setdefault(str(profile.get("id")), profile)
-            # Keep references in slot/input order.  ``extract_fields`` is
-            # intentionally canonical (length-sorted) for parsing, while a
-            # template audit must show which profile filled p/data_field/s/t.
             field_refs = []
             for profile in normalized_profiles:
                 field_id = str(profile.get("id"))
@@ -191,63 +158,8 @@ class AlphaFactory:
                 {
                     "expression": expression,
                     "rationale": template.rationale,
-                    "mutation": f"template:{template.template_id}",
-                    "parent": None,
-                    "fields_used": used_ids,
                     "field_refs": field_refs,
                     "template_id": template.template_id,
-                    "template_mode": template.template_mode,
-                    "template_version": template.version,
-                    "template_fingerprint": template.fingerprint,
-                    "template_structural_fingerprint": template.structural_fingerprint,
-                    "template_mechanism_fingerprint": template.mechanism_fingerprint,
-                    "template_role": template.role,
-                    "template_operator_count": template.operator_count,
-                    "template_field_roles": list(template.field_roles),
-                    "template_field_relationship": template.field_relationship,
-                    "relationship_contract": effective_relationship_contract(template),
-                    "template_novelty_family": template.novelty_family,
-                    "template_allowed_settings_arms": list(template.allowed_settings_arms),
-                    "template_allowed_horizon_profiles": [list(profile) for profile in template.allowed_horizon_profiles],
-                    "template_catalog_source": "private_or_synthetic_catalog",
-                    "template_family": template.family,
-                    "template_stage_path": template.stage_path,
-                    "template_bindings": dict(slot_values),
-                    "template_ref": ref,
-                    "template_slots": slot_values,
-                    "template_branch_of": template.branch_of,
-                    "operator_role": (
-                        template.operator_slots[0].role
-                        if template.operator_slots else None
-                    ),
-                    "operator_role_mapping": (
-                        {template.operator_slots[0].role: next(iter(operator_mapping.values()))}
-                        if template.operator_slots and operator_mapping else {}
-                    ),
-                    "operator_realization_fingerprint": (
-                        template.operator_realization_fingerprint(operator_mapping or {})
-                        if template.operator_slots else None
-                    ),
-                    "operator_capability_fingerprint": (
-                        (operator_capability or {}).get("capability_fingerprint")
-                        if template.operator_slots and isinstance(operator_capability, dict) else None
-                    ),
-                    "relationship_audit": relationship_audit,
-                    "factory_version": "alpha-factory-v1",
-                    "economic_mechanism": self._field_mechanism(
-                        normalized_profiles[0],
-                        self._prepared_traits(normalized_profiles[0], _prepared_facts),
-                        template,
-                        relation,
-                    ),
-                    "direction": template.direction,
-                    "direction_transform": {
-                        "applied": template.direction_transform == "reverse",
-                        "reason": template.economic_mechanism,
-                    },
-                    "expected_horizon": template.expected_horizon,
-                    "falsification": template.falsification,
-                    "self_correlation_impact": template.self_correlation_impact,
                 }
             )
             if len(candidates) >= limit:
@@ -309,14 +221,6 @@ class AlphaFactory:
             return (None, None)
         value = profile.get("id")
         return cls._profile_dataset(profile), str(value) if value is not None else None
-    @classmethod
-    def _prepared_traits(cls, profile, prepared_facts):
-        if prepared_facts is not None:
-            fact = prepared_facts.get(cls._profile_key(profile))
-            if fact is not None:
-                return fact["traits"]
-        return _derive_field_semantic_traits(profile)
-
     @staticmethod
     def _expression_facts(expression, normalized, expression_memo=None):
         if expression_memo is not None and expression in expression_memo:
@@ -549,34 +453,6 @@ class AlphaFactory:
         )
 
 
-    @staticmethod
-    def _field_mechanism(profile, traits, template, relation=None):
-        field_id = str(profile.get("id"))
-        admission = traits.get("semantic_admission", "UNKNOWN")
-        family = template.family
-        if admission != "ALLOW":
-            return (
-                f"字段 {field_id} 的语义准入为 {admission}；"
-                f"当前 profile 只能支持 {family} 的语法审阅，不能证明该字段具备该经济机制。"
-            )
-        fit_reason = {
-            "analyst_revision": "修正值直接承载分析师预期更新",
-            "option_relative": "期权相对字段表达分布位置",
-            "liquidity": "交易活跃度描述参与程度",
-            "volatility": "波动率描述风险状态",
-            "fundamental": "低频基本面水平代表经济规模",
-            "earnings": "盈利字段承载经营预期",
-            "event_count": "事件计数代表注意力强度",
-            "data_quality": "数据质量字段描述可用性风险",
-        }.get(traits.get("concept"), "该字段测量与模板结构相容")
-        mechanism = (
-            f"字段 {field_id} 被识别为 {traits.get('concept')}，测量为 "
-            f"{traits.get('measurement')}，频率为 {traits.get('frequency')}；{fit_reason}。"
-            "该机制仍需用独立样本和平台 checks 证伪。"
-        )
-        if relation and relation.get("labels"):
-            mechanism += f" 槽位关系证据为：{', '.join(relation['labels'])}。"
-        return mechanism
 
 
     def generate_probe_specs(self, hypothesis, fields, operator_reference,
@@ -599,5 +475,3 @@ class AlphaFactory:
             and reference.get("source") == "BRAIN_LIVE_ONLY"
             and isinstance(reference.get("operators"), list)
         )
-
-
