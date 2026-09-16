@@ -46,6 +46,7 @@ from .proposal_contract import (
     validate_targeted_batch,
 )
 from .remote_alpha_repository import RemoteAlphaRepository
+from .remote_colors import preview_remote_colors, sync_remote_colors
 from .research_context import build_research_context, project_cycle
 from .research_cursor import build_research_cursor
 from .research_cursor import research_cycle_id as _research_cycle_id
@@ -546,6 +547,37 @@ def find_alpha_duplicates(alpha_id, *, rows=None, agent=None, client=None,
         for item in repository.list_remote_alphas():
             rows.append(repository.get_remote_alpha_evidence(item["alpha_id"]))
     return find_remote_duplicates(rows, alpha_id)
+
+
+def preview_alpha_colors(alpha_ids=None, *, rows=None, agent=None, client=None,
+                         config=None, state_dir=None, days=None):
+    if rows is None:
+        repository = _remote_repository(
+            agent=agent, client=client, config=config, state_dir=state_dir
+        )
+        ids = alpha_ids or [
+            item["alpha_id"] for item in repository.list_remote_alphas(days=days)
+        ]
+        rows = [repository.get_remote_alpha_evidence(item) for item in ids]
+    return preview_remote_colors(rows)
+
+
+def sync_alpha_colors(alpha_ids=None, *, rows=None, agent=None, client=None,
+                      config=None, state_dir=None, days=None, overwrite=False,
+                      dry_run=False):
+    repository = _remote_repository(
+        agent=agent, client=client, config=config, state_dir=state_dir
+    )
+    if rows is None:
+        ids = alpha_ids or [
+            item["alpha_id"] for item in repository.list_remote_alphas(days=days)
+        ]
+        rows = [repository.get_remote_alpha_evidence(item) for item in ids]
+    return sync_remote_colors(
+        rows, get_alpha=repository.evidence.get_alpha,
+        set_alpha_color=repository.evidence.client.set_alpha_color,
+        overwrite=overwrite, dry_run=dry_run,
+    )
 
 
 def get_experiment(experiment_id, *, state_dir=".wqb_state"):
@@ -1065,7 +1097,8 @@ __all__ = [
     "get_alpha_aggregates", "get_alpha_pnl", "get_alpha_self_correlation",
     "compare_alphas", "refresh_remote_alphas", "list_remote_alphas",
     "remote_cache_status", "purge_remote_cache", "group_alphas",
-    "find_alpha_duplicates", "get_experiment",
+    "find_alpha_duplicates", "preview_alpha_colors", "sync_alpha_colors",
+    "get_experiment",
     "compare_experiments", "search_history", "reconcile",
     "inspect_optimizer_parents", "inspect_optimizer_context",
     "propose_optimization", "materialize_targeted_batch",
