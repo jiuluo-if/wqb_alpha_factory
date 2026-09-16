@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 
-class RemoteSimulationQuota:
-    """Calculate usage without creating a local quota state machine."""
+class SimulationQuota:
+    """Project remote usage without creating a local quota state machine."""
 
     def __init__(self, repository, guard, *, daily_cap=1600, rolling_cap=11200,
                  local_date=None):
@@ -52,3 +52,9 @@ class RemoteSimulationQuota:
             "source": "REMOTE_ALPHA_REPOSITORY+EXECUTION_GUARD",
             "persisted_quota_state": False,
         }
+
+
+# Compatibility name for integrations migrated from the intermediate
+# Remote-First implementation.  The production owner is SimulationQuota;
+# this alias does not retain any factory/session state.
+RemoteSimulationQuota = SimulationQuota

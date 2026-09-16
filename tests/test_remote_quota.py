@@ -2,7 +2,7 @@ import tempfile
 import unittest
 
 from wqb_agent import research_api
-from wqb_agent.remote_quota import RemoteSimulationQuota
+from wqb_agent.remote_quota import SimulationQuota
 from wqb_agent.simulation_gateway import ExecutionGuard
 
 
@@ -19,7 +19,7 @@ class TestRemoteSimulationQuota(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             guard = ExecutionGuard(tmp)
             guard.register("active")
-            quota = RemoteSimulationQuota(
+            quota = SimulationQuota(
                 _Repository([
                     {"alpha_id": "today", "local_date": "2026-09-16"},
                     {"alpha_id": "older", "local_date": "2026-09-10"},

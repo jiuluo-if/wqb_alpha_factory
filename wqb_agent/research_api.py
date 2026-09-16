@@ -41,7 +41,7 @@ from .proposal_contract import (
 )
 from .remote_alpha_repository import RemoteAlphaRepository
 from .remote_colors import preview_remote_colors, sync_remote_colors
-from .remote_quota import RemoteSimulationQuota
+from .remote_quota import SimulationQuota
 from .simulation_gateway import ExecutionGuard, SimulationGateway, SimulationSpec
 
 
@@ -431,7 +431,7 @@ def simulation_quota(*, agent=None, client=None, config=None, state_dir=None):
         factory = normalize_config(_load_config(config)).factory
     else:
         factory = None
-    return RemoteSimulationQuota(
+    return SimulationQuota(
         repository, ExecutionGuard(state_dir or ".wqb_state"),
         daily_cap=factory.daily_simulation_cap if factory else 1600,
         rolling_cap=factory.weekly_simulation_cap if factory else 11200,
