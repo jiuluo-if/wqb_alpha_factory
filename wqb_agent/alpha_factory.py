@@ -730,36 +730,6 @@ class AlphaFactory:
         )
         return [item[1] for item in candidates[:required_count]]
 
-    def screen_optimization_parents(self, parents, *, excluded_expressions=None,
-                                    min_sharpe=0.9, min_fitness=0.6,
-                                    min_turnover=0.01, max_turnover=0.7):
-        from .optimization_screening import screen_optimization_parents
-        return screen_optimization_parents(
-            parents, excluded_expressions=excluded_expressions,
-            min_sharpe=min_sharpe, min_fitness=min_fitness,
-            min_turnover=min_turnover, max_turnover=max_turnover,
-        )
-
-    def optimize_signal_proposals(self, parents, operator_reference,
-                                  max_candidates=4, excluded_expressions=None,
-                                  min_sharpe=0.9, min_fitness=0.6,
-                                  min_turnover=0.01, max_turnover=0.7):
-        from .optimization_screening import build_optimization_proposals
-        return build_optimization_proposals(
-            parents, operator_reference, max_candidates=max_candidates,
-            excluded_expressions=excluded_expressions,
-            min_sharpe=min_sharpe, min_fitness=min_fitness,
-            min_turnover=min_turnover, max_turnover=max_turnover,
-        )
-
-    def validation_proposals(self, requests, operator_reference, *,
-                             max_candidates=4, excluded_expressions=None):
-        from .validation_proposals import build_validation_proposals
-        return build_validation_proposals(
-            requests, operator_reference, max_candidates=max_candidates,
-            excluded_expressions=excluded_expressions,
-        )
-
     def assemble_proposals(self, hypothesis, fields, operator_reference,
                            max_candidates=8, excluded_expressions=None,
                            _prepared_facts=None, _relationship_memo=None,

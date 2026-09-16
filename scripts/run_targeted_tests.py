@@ -54,7 +54,6 @@ DIRECT_TESTS = {
     ),
     "wqb_agent/proposal_admission.py": ("tests/test_execution_identity.py",),
     "wqb_agent/execution_identity.py": ("tests/test_execution_identity.py",),
-    "wqb_agent/optimization_screening.py": (),
     "wqb_agent/validation_proposals.py": (),
     "wqb_agent/discovery.py": ("tests/test_research_api.py",),
     "wqb_agent/field_metadata.py": ("tests/test_research_api.py",),
