@@ -4,6 +4,7 @@ import pathlib
 import unittest
 
 from wqb_agent import research_api
+from wqb_agent.alpha_factory import AlphaFactory
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "wqb_agent"
@@ -28,6 +29,11 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         ]
         for function in public:
             self.assertNotIn("agent", inspect.signature(function).parameters, function.__name__)
+
+    def test_factory_exposes_only_spec_generation(self):
+        factory = AlphaFactory()
+        for name in ("assemble_proposals", "generate_factory_batch", "assess_feasibility"):
+            self.assertFalse(hasattr(factory, name), name)
 
     def test_public_package_exports_remote_first_tools_only(self):
         tree = ast.parse((PACKAGE / "__init__.py").read_text(encoding="utf-8"))
