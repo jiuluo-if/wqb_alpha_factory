@@ -24,7 +24,7 @@ import hashlib
 import json
 import os
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any
 
 from .alpha_factory import AlphaFactory
@@ -127,20 +127,6 @@ def _remote_research_components(*, client, config=None, state_dir=None,
             require_private=True,
         )
     return typed, discovery, factory
-
-
-def inspect_state(*, state_dir=".wqb_state", limit=10) -> dict[str, Any]:
-    """Return a compact view of immutable experiment evidence and workspace files."""
-    trajectory = Trajectory(max_len=max(1, int(limit)), path=os.path.join(state_dir, "trajectory.jsonl"))
-    summary = trajectory.load_summary(max(1, int(limit)))
-    return {
-        "state_dir": os.path.abspath(state_dir),
-        "experiment_count": summary["experiment_count"],
-        "recent_experiments": [row.to_dict() for row in summary["recent_experiments"]],
-        "derived_files": sorted(
-            name for name in os.listdir(state_dir) if name.endswith((".json", ".md"))
-        ) if os.path.isdir(state_dir) else [],
-    }
 
 
 def discover_fields(query, *, agent=None, client=None, config=None, state_dir=None, limit=None):
@@ -589,43 +575,6 @@ def sync_alpha_colors(alpha_ids=None, *, rows=None, agent=None, client=None,
         set_alpha_color=repository.evidence.client.set_alpha_color,
         overwrite=overwrite, dry_run=dry_run,
     )
-
-
-def get_experiment(experiment_id, *, state_dir=".wqb_state"):
-    """Return the latest canonical Agent-facing record for one experiment.
-
-    ``Trajectory.find_row()`` is the owner-side revision merge primitive, so an
-    early DONE snapshot is never surfaced over later ``RESEARCH_SETTLED``
-    evidence and this surface does not re-implement revision merging.
-    """
-    trajectory = Trajectory(path=os.path.join(state_dir, "trajectory.jsonl"))
-    return trajectory.find_row(experiment_id)
-
-
-def compare_experiments(ids: Sequence[str], *, state_dir=".wqb_state") -> dict[str, Any]:
-    """Compare stored experiments with one canonical streaming pass.
-
-    ``Trajectory.find_rows()`` is the owner-side batch merge primitive, so the
-    comparison does not reload and re-scan the append-only file once per id.
-    """
-    trajectory = Trajectory(path=os.path.join(state_dir, "trajectory.jsonl"))
-    found = trajectory.find_rows(ids)
-    records = [found.get(str(item)) for item in ids]
-    records = [record for record in records if record is not None]
-    return {"experiments": records, "missing": [item for item in ids if not any(str(record.get("id")) == str(item) or str(record.get("proposal_id")) == str(item) for record in records)]}
-
-
-def search_history(query, *, state_dir=".wqb_state", limit=20):
-    needle = str(query or "").casefold()
-    matches = []
-    trajectory = Trajectory(path=os.path.join(state_dir, "trajectory.jsonl"))
-    for row in trajectory.iter_canonical_rows():
-        haystack = " ".join(str(row.get(key, "")) for key in ("id", "proposal_id", "hypothesis_id", "expression", "rationale", "status")).casefold()
-        if not needle or needle in haystack:
-            matches.append(row)
-            if len(matches) >= max(1, int(limit)):
-                break
-    return matches
 
 
 def reconcile(progress_url, *, client=None, timeout=60):

@@ -163,7 +163,6 @@ DIRECT_TESTS = {
         "tests/test_state.py",
         "tests/test_recovery.py",
         "tests/test_settled_evidence_durability.py",
-        "tests/test_trajectory_batch_reads.py",
         "tests/test_factory_provenance_persistence.py",
     ),
     "wqb_agent/artifacts.py": (

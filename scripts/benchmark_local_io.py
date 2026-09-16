@@ -9,7 +9,7 @@ cost on representative sizes, not platform latency.
 Usage:
     python scripts/benchmark_local_io.py
     python scripts/benchmark_local_io.py --rows 1000,10000 --repeat 7
-    python scripts/benchmark_local_io.py --workloads trajectory_load,research_api_compare
+    python scripts/benchmark_local_io.py --workloads trajectory_load
     python scripts/benchmark_local_io.py --codecs json,orjson --output research_data/bench.txt
 """
 
@@ -32,11 +32,6 @@ if str(ROOT) not in sys.path:
 
 from wqb_agent import artifacts  # noqa: E402
 from wqb_agent.discovery import FieldDiscovery  # noqa: E402
-from wqb_agent.research_api import (  # noqa: E402
-    compare_experiments,
-    get_experiment,
-    search_history,
-)
 from wqb_agent.state import Experiment, Trajectory  # noqa: E402
 from wqb_agent.trial_ledger import TrialLedger  # noqa: E402
 
@@ -44,9 +39,7 @@ DEFAULT_ROWS = (1000, 10000, 50000)
 DEFAULT_REPEAT = 5
 DEFAULT_CODEC = "json"
 FIND_ROW_BATCH = 32
-COMPARE_BATCH = 16
 WRITE_ROWS = 512
-SEARCH_LIMIT = 20
 
 
 class SkipWorkload(RuntimeError):
@@ -239,36 +232,6 @@ def workload_trajectory_find_completed_expressions(rows, root, codec):
     return run
 
 
-def workload_research_api_get_experiment(rows, root, codec):
-    state_dir = _state_dir(root, rows)
-    targets = _sample_ids(rows, COMPARE_BATCH)
-
-    def run():
-        for target in targets:
-            get_experiment(target, state_dir=state_dir)
-
-    return run
-
-
-def workload_research_api_compare(rows, root, codec):
-    state_dir = _state_dir(root, rows)
-    targets = _sample_ids(rows, COMPARE_BATCH)
-
-    def run():
-        compare_experiments(targets, state_dir=state_dir)
-
-    return run
-
-
-def workload_research_api_search_history(rows, root, codec):
-    state_dir = _state_dir(root, rows)
-
-    def run():
-        search_history("exp00000042", state_dir=state_dir, limit=SEARCH_LIMIT)
-
-    return run
-
-
 def workload_artifacts_iter_jsonl(rows, root, codec):
     path = _trajectory_path(root, rows)
 
@@ -397,9 +360,6 @@ WORKLOADS = {
     "trajectory_find_row_batch": workload_trajectory_find_row_batch,
     "trajectory_contains_ids": workload_trajectory_contains_ids,
     "trajectory_find_completed_expressions": workload_trajectory_find_completed_expressions,
-    "research_api_get_experiment": workload_research_api_get_experiment,
-    "research_api_compare": workload_research_api_compare,
-    "research_api_search_history": workload_research_api_search_history,
     "artifacts_iter_jsonl": workload_artifacts_iter_jsonl,
     "artifacts_write_json_unchanged": workload_artifacts_write_json_unchanged,
     "artifacts_write_jsonl_unchanged": workload_artifacts_write_jsonl_unchanged,

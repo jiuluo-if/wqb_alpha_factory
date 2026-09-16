@@ -163,35 +163,6 @@ class TestResolvedCorrelationFeedsTheNextDecision(unittest.TestCase):
             self.assertEqual(summary["next_action"], "READY_TO_ADVANCE")
 
 
-class TestResearchApiCanonicalReads(unittest.TestCase):
-    """P0-D：一个 experiment identity 只暴露一条 canonical Agent 记录。"""
-
-    def test_settled_revision_wins_in_every_research_api_surface(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "trajectory.jsonl")
-            trajectory = Trajectory(path=path, max_len=64, persist=True)
-            early = Experiment(
-                round=1, hypothesis_id="h1", expression="rank(field_a)",
-                settings={"delay": 1}, fields_used=["field_a"],
-                status="DONE", alpha_id="alpha-1",
-            )
-            trajectory.add(early)
-            settled = dataclasses.replace(
-                early, final_outcome={"evidence_quality": "FINAL"},
-            )
-            trajectory.settle(settled)
-            record = research_api.get_experiment(early.id, state_dir=tmp)
-            self.assertEqual(
-                record.get("final_outcome"), {"evidence_quality": "FINAL"}
-            )
-            rows = research_api.search_history(early.id, state_dir=tmp)
-            self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0].get("final_outcome"), {"evidence_quality": "FINAL"})
-            compared = research_api.compare_experiments([early.id], state_dir=tmp)
-            self.assertEqual(len(compared["experiments"]), 1)
-            self.assertEqual(compared["missing"], [])
-
-
 class TestBoundedValidationStaysBounded(unittest.TestCase):
     """P1-A：VALIDATE 只能取 Python 解析的有界池，旧值必须来自 parent 自身。"""
 
