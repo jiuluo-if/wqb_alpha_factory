@@ -478,42 +478,48 @@ def compare_alphas(alpha_ids, *, agent=None, client=None, config=None):
     ]}
 
 
-def _remote_repository(*, agent=None, client=None, config=None, state_dir=None):
-    client = _remote_client(agent=agent, client=client)
+def _remote_repository(*, agent=None, client=None, config=None, state_dir=None,
+                       require_client=True):
+    if require_client or client is not None or agent is not None:
+        client = _remote_client(agent=agent, client=client)
     raw = _load_config(config) if config is not None else {}
     retention = ((raw.get("remote_cache") or {}).get("retention_days", 7)
                  if isinstance(raw, Mapping) else 7)
     directory = state_dir or getattr(agent, "state_dir", None) or ".wqb_state"
     cache_path = os.path.join(directory, ".alpha_feed_cache", "remote.json")
     return RemoteAlphaRepository(
-        client.get_all_user_alphas, cache_path=cache_path,
-        retention_days=retention, evidence_client=client,
+        client.get_all_user_alphas if client is not None else None,
+        cache_path=cache_path, retention_days=retention, evidence_client=client,
     )
 
 
 def refresh_remote_alphas(*, agent=None, client=None, config=None, state_dir=None,
                           limit=100):
     return _remote_repository(
-        agent=agent, client=client, config=config, state_dir=state_dir
+        agent=agent, client=client, config=config, state_dir=state_dir,
+        require_client=True,
     ).refresh_remote_alphas(limit=limit)
 
 
 def list_remote_alphas(*, agent=None, client=None, config=None, state_dir=None,
                        days=None, status=None):
     return _remote_repository(
-        agent=agent, client=client, config=config, state_dir=state_dir
+        agent=agent, client=client, config=config, state_dir=state_dir,
+        require_client=False,
     ).list_remote_alphas(days=days, status=status)
 
 
 def remote_cache_status(*, agent=None, client=None, config=None, state_dir=None):
     return _remote_repository(
-        agent=agent, client=client, config=config, state_dir=state_dir
+        agent=agent, client=client, config=config, state_dir=state_dir,
+        require_client=False,
     ).cache_status()
 
 
 def purge_remote_cache(*, agent=None, client=None, config=None, state_dir=None):
     return {"removed": _remote_repository(
-        agent=agent, client=client, config=config, state_dir=state_dir
+        agent=agent, client=client, config=config, state_dir=state_dir,
+        require_client=False,
     ).purge_remote_cache()}
 
 

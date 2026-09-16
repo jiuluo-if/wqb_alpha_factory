@@ -39,6 +39,8 @@ class RemoteAlphaRepository:
         )
 
     def refresh_remote_alphas(self, *, limit=100):
+        if self.feed.alpha_reader is None:
+            raise RuntimeError("REMOTE_ALPHA_CLIENT_REQUIRED")
         result = self.feed.refresh(limit=limit)
         return {**result, "retention_days": self.retention_days}
 
