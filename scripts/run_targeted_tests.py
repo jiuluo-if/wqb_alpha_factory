@@ -116,7 +116,6 @@ DIRECT_TESTS = {
     ),
     "scripts/check_correlation.py": (),
     "scripts/check_health.py": (),
-    "scripts/validate_integrity.py": ("tests/test_remote_diagnostics.py",),
     "wqb_agent/alpha_pool.py": (),
     "wqb_agent/behavior.py": (),
     "wqb_agent/cli.py": ("tests/test_cli.py",),
