@@ -2,7 +2,6 @@
 
 import io
 import unittest
-import zipfile
 from unittest.mock import patch
 
 from wqb_agent.alpha_factory import AlphaFactory
@@ -247,12 +246,6 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
         """
         with self.assertRaises(ValueError):
             load_templates(io.StringIO(document))
-
-
-class TestAlphaTemplatePackaging(unittest.TestCase):
-    def test_wheel_contains_template_resource(self):
-        """Packaging smoke is exercised by the release command, not imports."""
-        self.assertTrue(zipfile.is_zipfile)
 
 
 if __name__ == "__main__":

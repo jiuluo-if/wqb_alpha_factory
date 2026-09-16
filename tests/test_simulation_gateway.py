@@ -1,6 +1,8 @@
 import json
 import os
 import tempfile
+import threading
+import time
 import unittest
 
 from wqb_agent import research_api
@@ -42,19 +44,141 @@ class FakeGatewayClient:
 
 
 class CapabilityGatewayClient(FakeGatewayClient):
+    def __init__(self):
+        super().__init__()
+        self.capability_calls = 0
+
     def get_operator_capability(self):
+        self.capability_calls += 1
         return {"valid": True, "availability": "AVAILABLE", "operators": ["rank"]}
 
 
+class UnavailableCapabilityGatewayClient(FakeGatewayClient):
+    def get_operator_capability(self):
+        return None
+
+
 class RemoteHistoryGatewayClient(FakeGatewayClient):
+    def __init__(self):
+        super().__init__()
+        self.history_calls = 0
+
     def get_all_user_alphas(self, **_kwargs):
+        self.history_calls += 1
         return [{
             "id": "alpha-existing", "regular": "rank(close)",
             "settings": {"delay": 1}, "status": "UNSUBMITTED",
         }]
 
 
+class ConcurrentGatewayClient(FakeGatewayClient):
+    def __init__(self):
+        super().__init__()
+        self._active = 0
+        self._active_lock = threading.Lock()
+        self.max_active = 0
+
+    def submit_simulation(self, expression, settings, **kwargs):
+        with self._active_lock:
+            self._active += 1
+            self.max_active = max(self.max_active, self._active)
+        try:
+            time.sleep(0.03)
+            return super().submit_simulation(expression, settings, **kwargs)
+        finally:
+            with self._active_lock:
+                self._active -= 1
+
+
 class TestSimulationGateway(unittest.TestCase):
+    def test_public_batch_uses_bounded_gateway_concurrency(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = ConcurrentGatewayClient()
+            config = {
+                "simulation": {},
+                "runtime": {"max_concurrent_sims": 2},
+            }
+            specs = [
+                SimulationSpec("rank(close)", {"delay": 1}),
+                SimulationSpec("rank(open)", {"delay": 1}),
+                SimulationSpec("rank(high)", {"delay": 1}),
+            ]
+
+            results = research_api.simulate_batch(
+                specs, client=client, config=config, state_dir=tmp
+            )
+
+            self.assertEqual([item["status"] for item in results], ["DONE"] * 3)
+            self.assertEqual(len(client.submissions), 3)
+            self.assertEqual(client.max_active, 2)
+
+    def test_batch_marks_unsubmitted_tail_without_creating_unknown_guard(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeGatewayClient(unknown=True)
+            gateway = SimulationGateway(client, state_dir=tmp, max_concurrent=1)
+            specs = [
+                SimulationSpec("rank(close)", {"delay": 1}),
+                SimulationSpec("rank(open)", {"delay": 1}),
+            ]
+
+            results = gateway.simulate_batch(specs)
+
+            self.assertEqual(results[0]["status"], "SUBMIT_UNKNOWN")
+            self.assertEqual(results[1]["status"], "NOT_DISPATCHED")
+            self.assertEqual(
+                [row["status"] for row in gateway.guard.entries()],
+                ["SUBMIT_UNKNOWN"],
+            )
+
+    def test_batch_reuses_live_capability_and_history_reads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            capability_client = CapabilityGatewayClient()
+            capability_gateway = SimulationGateway(
+                capability_client, state_dir=tmp, max_concurrent=2
+            )
+            capability_gateway.simulate_batch([
+                SimulationSpec("rank(close)", {"delay": 1}),
+                SimulationSpec("rank(open)", {"delay": 1}),
+            ])
+
+            self.assertEqual(capability_client.capability_calls, 1)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            history_client = RemoteHistoryGatewayClient()
+            history_gateway = SimulationGateway(history_client, state_dir=tmp)
+            history_gateway.simulate_batch([
+                SimulationSpec("rank(close)", {"delay": 1}),
+                SimulationSpec("rank(open)", {"delay": 1}),
+            ])
+
+            self.assertEqual(history_client.history_calls, 1)
+
+    def test_batch_rejects_missing_capability_without_registering_prior_items(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = CapabilityGatewayClient()
+            gateway = SimulationGateway(client, state_dir=tmp, max_concurrent=2)
+
+            with self.assertRaisesRegex(ValueError, "OPERATOR_CAPABILITY_UNAVAILABLE"):
+                gateway.simulate_batch([
+                    SimulationSpec("rank(close)", {"delay": 1}),
+                    SimulationSpec("ts_mean(close, 5)", {"delay": 1}),
+                ])
+
+            self.assertEqual(client.submissions, [])
+            self.assertEqual(gateway.guard.entries(), [])
+
+    def test_batch_treats_none_capability_as_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = UnavailableCapabilityGatewayClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+
+            with self.assertRaisesRegex(ValueError, "OPERATOR_CAPABILITY_UNAVAILABLE"):
+                gateway.simulate_batch([
+                    SimulationSpec("rank(close)", {"delay": 1}),
+                ])
+
+            self.assertEqual(client.submissions, [])
+
     def test_public_research_api_simulate_uses_gateway_without_agent_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = FakeGatewayClient()

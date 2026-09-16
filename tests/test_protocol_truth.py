@@ -20,12 +20,25 @@ class TestProtocolTruth(unittest.TestCase):
         self.assertEqual(catalog["aggregates"]["status"], "OFFICIAL")
         self.assertEqual(catalog["operators"]["status"], "COMMUNITY_OBSERVED")
 
-    def test_fixture_validation_is_not_live_verification(self):
+    def test_fixture_and_static_operator_evidence_cannot_claim_availability(self):
         with open(os.path.join(FIXTURES, "aggregates.json"), encoding="utf-8") as handle:
             payload = json.load(handle)
-        result = fixture_capability("aggregates", payload)
-        self.assertEqual(result["status"], CapabilityStatus.FIXTURE_VERIFIED.value)
-        self.assertNotEqual(result["status"], CapabilityStatus.LIVE_VERIFIED.value)
+        aggregate = fixture_capability("aggregates", payload)
+        self.assertEqual(aggregate["status"], CapabilityStatus.FIXTURE_VERIFIED.value)
+        self.assertNotEqual(aggregate["status"], CapabilityStatus.LIVE_VERIFIED.value)
+
+        fixture = fixture_capability("operators", {"operators": [{"name": "rank"}]})
+        self.assertEqual(fixture["status"], "FIXTURE_VERIFIED")
+        self.assertNotEqual(fixture["availability"], "AVAILABLE")
+
+        from wqb_agent.operator_reference import load_operator_syntax_reference
+
+        static = load_operator_syntax_reference(
+            os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                         "docs", "reference", "OPERATORS_CHEATSHEET.md")
+        )
+        self.assertEqual(static["source"], "STATIC_SYNTAX_REFERENCE")
+        self.assertEqual(static["availability"], "UNKNOWN")
 
     def test_retry_after_accepts_seconds_and_invalid_fails_closed(self):
         self.assertEqual(retry_after_seconds({"Retry-After": "2"}), 2.0)
@@ -42,24 +55,15 @@ class TestProtocolTruth(unittest.TestCase):
         self.assertNotEqual(unavailable["availability"], "AVAILABLE")
         self.assertEqual(unavailable["status"], "UNKNOWN")
 
-    def test_fixture_and_static_operator_evidence_cannot_claim_availability(self):
-        fixture = fixture_capability("operators", {"operators": [{"name": "rank"}]})
-        self.assertEqual(fixture["status"], "FIXTURE_VERIFIED")
-        self.assertNotEqual(fixture["availability"], "AVAILABLE")
-
-        from wqb_agent.operator_reference import load_operator_syntax_reference
-
-        static = load_operator_syntax_reference(
-            os.path.join(os.path.dirname(os.path.dirname(__file__)),
-                         "docs", "reference", "OPERATORS_CHEATSHEET.md")
-        )
-        self.assertEqual(static["source"], "STATIC_SYNTAX_REFERENCE")
-        self.assertEqual(static["availability"], "UNKNOWN")
-
-    def test_malformed_live_operator_response_is_not_available(self):
-        result = probe_capability_response("operators", 200, {"operators": ["rank"]})
-        self.assertNotEqual(result["status"], "LIVE_VERIFIED")
-        self.assertNotEqual(result["availability"], "AVAILABLE")
+    def test_malformed_live_operator_responses_are_not_available(self):
+        for payload in (
+            {"operators": ["rank"]},
+            [{"name": "rank"}, {"description": "no name"}],
+        ):
+            with self.subTest(payload=payload):
+                result = probe_capability_response("operators", 200, payload)
+                self.assertNotEqual(result["status"], "LIVE_VERIFIED")
+                self.assertNotEqual(result["availability"], "AVAILABLE")
 
     def test_bare_operator_array_is_a_valid_live_envelope(self):
         # Live BRAIN /operators serves a bare JSON array, not an envelope object.
@@ -70,16 +74,6 @@ class TestProtocolTruth(unittest.TestCase):
         self.assertEqual(result["availability"], "AVAILABLE")
         self.assertEqual(result["operators"], ["rank", "ts_mean"])
         self.assertIn("capability_fingerprint", result)
-
-    def test_bare_operator_array_fixture_shape_is_accepted(self):
-        fixture = fixture_capability("operators", [{"name": "rank"}])
-        self.assertEqual(fixture["status"], "FIXTURE_VERIFIED")
-        self.assertNotEqual(fixture["availability"], "AVAILABLE")
-
-    def test_malformed_bare_operator_array_is_not_available(self):
-        result = probe_capability_response("operators", 200, [{"name": "rank"}, {"description": "no name"}])
-        self.assertNotEqual(result["status"], "LIVE_VERIFIED")
-        self.assertNotEqual(result["availability"], "AVAILABLE")
 
     def test_list_payload_is_rejected_for_non_operator_keys(self):
         result = probe_capability_response("data_sets", 200, [])

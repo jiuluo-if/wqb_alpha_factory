@@ -124,32 +124,26 @@ class TestPollProgressRejectsErrorStatus(unittest.TestCase):
         self.assertIn("2OyvSjcle4UH8LG1cegtJaNS", msg)
         self.assertIn("lookback", msg)
 
-    def test_failed_status_raises_rejected(self):
-        c = make_client()
-        c._local.session = FakeSession([
-            FakeResponse(
-                status_code=200,
-                headers={},
-                payload={"id": "sim-1", "type": "REGULAR", "status": "FAILED",
-                         "message": "boom"},
-            )
-        ])
-        with self.assertRaises(WQBRejectedError):
-            c.poll_progress("/simulations/abc")
-
-    def test_fail_status_raises_rejected(self):
-        c = make_client()
-        c._local.session = FakeSession([
-            FakeResponse(
-                status_code=200,
-                headers={},
-                payload={"id": "sim-2", "type": "REGULAR", "status": "FAIL"},
-            )
-        ])
-        with self.assertRaises(WQBRejectedError) as ctx:
-            c.poll_progress("/simulations/abc")
-        self.assertIn("status=FAIL", str(ctx.exception))
-        self.assertIn("sim-2", str(ctx.exception))
+    def test_failed_status_aliases_raise_rejected(self):
+        for status, sim_id, message in (
+            ("FAILED", "sim-1", "boom"),
+            ("FAIL", "sim-2", ""),
+        ):
+            with self.subTest(status=status):
+                c = make_client()
+                c._local.session = FakeSession([
+                    FakeResponse(
+                        status_code=200,
+                        headers={},
+                        payload={"id": sim_id, "type": "REGULAR", "status": status,
+                                 "message": message},
+                    )
+                ])
+                with self.assertRaises(WQBRejectedError) as ctx:
+                    c.poll_progress("/simulations/abc")
+                self.assertIn(sim_id, str(ctx.exception))
+                if status == "FAIL":
+                    self.assertIn("status=FAIL", str(ctx.exception))
 
     def test_complete_returns_alpha_id(self):
         c = make_client()

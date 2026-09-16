@@ -14,6 +14,10 @@ from .artifacts import atomic_write_json_if_changed
 from .expression import analyze_expression, submission_fingerprint
 from .simulator import Simulator
 
+_CAPABILITY_UNCHECKED = object()
+_CAPABILITY_READER_ABSENT = object()
+_REMOTE_ROWS_UNCHECKED = object()
+
 
 @dataclass(frozen=True)
 class SimulationSpec:
@@ -172,10 +176,17 @@ class SimulationGateway:
         return {"valid": True, "expression": spec.expression,
                 "settings": dict(spec.settings), "operators": list(analysis.operators)}
 
-    def _validate_live_capability(self, spec):
-        reader = getattr(self.client, "get_operator_capability", None)
-        if callable(reader):
-            capability = reader()
+    def _validate_live_capability(
+        self, spec, *, operator_capability=_CAPABILITY_UNCHECKED,
+        field_capability=_CAPABILITY_UNCHECKED,
+    ):
+        if operator_capability is _CAPABILITY_UNCHECKED:
+            reader = getattr(self.client, "get_operator_capability", None)
+            operator_capability = (
+                reader() if callable(reader) else _CAPABILITY_READER_ABSENT
+            )
+        if operator_capability is not _CAPABILITY_READER_ABSENT:
+            capability = operator_capability
             if not isinstance(capability, Mapping) or capability.get("valid") is not True:
                 raise ValueError("OPERATOR_CAPABILITY_UNAVAILABLE")
             operators = {str(item).casefold() for item in capability.get("operators", ())}
@@ -183,9 +194,14 @@ class SimulationGateway:
             missing = sorted(requested - operators)
             if missing:
                 raise ValueError("OPERATOR_CAPABILITY_UNAVAILABLE: " + ", ".join(missing))
-        field_reader = getattr(self.client, "get_field_capability", None)
-        if spec.fields and callable(field_reader):
-            field_capability = field_reader(list(spec.fields))
+        if field_capability is _CAPABILITY_UNCHECKED:
+            field_reader = getattr(self.client, "get_field_capability", None)
+            field_capability = (
+                field_reader(list(spec.fields))
+                if spec.fields and callable(field_reader)
+                else _CAPABILITY_READER_ABSENT
+            )
+        if spec.fields and field_capability is not _CAPABILITY_READER_ABSENT:
             if not isinstance(field_capability, Mapping) or field_capability.get("valid") is not True:
                 raise ValueError("FIELD_CAPABILITY_UNAVAILABLE")
             available = {str(item).casefold() for item in field_capability.get("fields", ())}
@@ -193,20 +209,26 @@ class SimulationGateway:
             if missing_fields:
                 raise ValueError("FIELD_CAPABILITY_UNAVAILABLE: " + ", ".join(missing_fields))
 
-    def _remote_duplicate(self, spec, fingerprint):
-        reader = getattr(self.client, "get_all_user_alphas", None)
-        if not callable(reader):
-            return None
-        try:
-            rows = reader(max_results=1000)
-        except Exception:
-            # Remote duplicate lookup is advisory; transport failure must not
-            # be mistaken for proof that a write is safe or unsafe.
-            return None
+    def _remote_duplicate(
+        self, spec, fingerprint, rows=_REMOTE_ROWS_UNCHECKED
+    ):
+        if rows is _REMOTE_ROWS_UNCHECKED:
+            reader = getattr(self.client, "get_all_user_alphas", None)
+            if not callable(reader):
+                return None
+            try:
+                rows = reader(max_results=1000)
+            except Exception:
+                # Remote duplicate lookup is advisory; transport failure must
+                # not be mistaken for proof that a write is safe or unsafe.
+                return None
         for row in rows or ():
             if not isinstance(row, Mapping):
                 continue
-            alpha = row.get("alpha") if isinstance(row.get("alpha"), Mapping) else row
+            alpha_payload = row.get("alpha")
+            alpha: Mapping[str, Any] = (
+                alpha_payload if isinstance(alpha_payload, Mapping) else row
+            )
             expression = alpha.get("regular") or alpha.get("expression")
             settings = alpha.get("settings") if isinstance(alpha.get("settings"), Mapping) else {}
             if isinstance(expression, str) and self.guard.fingerprint(expression, settings) == fingerprint:
@@ -219,40 +241,145 @@ class SimulationGateway:
         return self.guard.fingerprint(spec.expression, spec.settings)
 
     def simulate(self, spec):
-        spec = spec if isinstance(spec, SimulationSpec) else SimulationSpec(**dict(spec))
-        fingerprint = self.execution_fingerprint(spec)
-        self._validate_live_capability(spec)
-        existing = self.guard.find(fingerprint)
-        if existing is not None:
-            if existing.get("status") == "SUBMIT_UNKNOWN":
-                return {"status": "SUBMIT_UNKNOWN", "fingerprint": fingerprint,
-                        "progress_url": existing.get("progress_url")}
-            return {"status": "EXACT_DUPLICATE", "fingerprint": fingerprint}
-        remote = self._remote_duplicate(spec, fingerprint)
-        if remote is not None:
-            return {"status": "EXACT_DUPLICATE", "fingerprint": fingerprint, **remote}
-        self.guard.register(fingerprint)
-        # Simulator only needs a mutable transport record.  Keeping this
-        # record local is only a transport record; BRAIN owns the result.
-        experiment = SimpleNamespace(
-            id=fingerprint[:16], expression=spec.expression,
-            settings=dict(spec.settings),
-            status="PENDING", alpha_id=None, progress_url=None,
-            error=None, evidence=None, elapsed_sec=0.0,
-            submission_fingerprint=fingerprint,
-        )
+        return self.simulate_batch([spec])[0]
+
+    def simulate_batch(self, specs):
+        """Execute a batch through one bounded Simulator window.
+
+        The batch remains one guarded execution per spec; only dispatch and
+        polling share the existing bounded worker pool.
+        """
+        normalized = [
+            item if isinstance(item, SimulationSpec)
+            else SimulationSpec(**dict(item))
+            for item in (specs or ())
+        ]
+        results: list[dict[str, Any] | None] = [None] * len(normalized)
+        prepared = []
+        seen = set()
+        if normalized:
+            operator_reader = getattr(self.client, "get_operator_capability", None)
+            operator_capability = (
+                operator_reader() if callable(operator_reader)
+                else _CAPABILITY_READER_ABSENT
+            )
+            field_reader = getattr(self.client, "get_field_capability", None)
+            field_capabilities: dict[tuple[str, ...], Any] = {}
+            remote_reader = getattr(self.client, "get_all_user_alphas", None)
+            remote_rows = _REMOTE_ROWS_UNCHECKED
+            if callable(remote_reader):
+                try:
+                    remote_rows = remote_reader(max_results=1000)
+                except Exception:
+                    # Remote history is advisory; continue without a duplicate
+                    # claim when this read is unavailable.
+                    remote_rows = None
+        else:
+            operator_capability = _CAPABILITY_READER_ABSENT
+            field_reader = None
+            field_capabilities = {}
+            remote_rows = ()
+        validated = []
+        for index, spec in enumerate(normalized):
+            fingerprint = self.execution_fingerprint(spec)
+            field_capability = _CAPABILITY_READER_ABSENT
+            if spec.fields and callable(field_reader):
+                field_key = tuple(spec.fields)
+                if field_key not in field_capabilities:
+                    field_capabilities[field_key] = field_reader(list(field_key))
+                field_capability = field_capabilities[field_key]
+            self._validate_live_capability(
+                spec,
+                operator_capability=operator_capability,
+                field_capability=field_capability,
+            )
+            validated.append((index, spec, fingerprint))
+
+        for index, spec, fingerprint in validated:
+            if fingerprint in seen:
+                results[index] = {
+                    "status": "EXACT_DUPLICATE", "fingerprint": fingerprint,
+                }
+                continue
+            seen.add(fingerprint)
+            existing = self.guard.find(fingerprint)
+            if existing is not None:
+                if existing.get("status") == "SUBMIT_UNKNOWN":
+                    results[index] = {
+                        "status": "SUBMIT_UNKNOWN",
+                        "fingerprint": fingerprint,
+                        "progress_url": existing.get("progress_url"),
+                    }
+                else:
+                    results[index] = {
+                        "status": "EXACT_DUPLICATE", "fingerprint": fingerprint,
+                    }
+                continue
+            remote = self._remote_duplicate(spec, fingerprint, rows=remote_rows)
+            if remote is not None:
+                results[index] = {
+                    "status": "EXACT_DUPLICATE",
+                    "fingerprint": fingerprint,
+                    **remote,
+                }
+                continue
+            if not self.guard.register(fingerprint):
+                results[index] = {
+                    "status": "EXACT_DUPLICATE", "fingerprint": fingerprint,
+                }
+                continue
+            # Simulator only needs mutable transport records.  BRAIN owns the
+            # remote result; these records do not become research state.
+            prepared.append((
+                index,
+                fingerprint,
+                SimpleNamespace(
+                    id=fingerprint[:16], expression=spec.expression,
+                    settings=dict(spec.settings),
+                    status="PENDING", alpha_id=None, progress_url=None,
+                    error=None, evidence=None, elapsed_sec=0.0,
+                    submission_fingerprint=fingerprint,
+                ),
+            ))
 
         def on_update(item):
             status = "SUBMIT_UNKNOWN" if item.status == "UNKNOWN" else item.status
             if status in ExecutionGuard.STATUSES:
-                self.guard.update(fingerprint, status=status,
-                                  progress_url=item.progress_url)
+                self.guard.update(
+                    item.submission_fingerprint,
+                    status=status,
+                    progress_url=item.progress_url,
+                )
 
-        completed = self.simulator.run([experiment], on_update=on_update)
-        item = completed[0]
-        if item.status in {"DONE", "FAILED"}:
+        completed = self.simulator.run(
+            [item for _index, _fingerprint, item in prepared],
+            on_update=on_update,
+        )
+        index_by_fingerprint = {
+            fingerprint: index for index, fingerprint, _item in prepared
+        }
+        completed_fingerprints = set()
+        for item in completed:
+            fingerprint = item.submission_fingerprint
+            completed_fingerprints.add(fingerprint)
+            if item.status in {"DONE", "FAILED"}:
+                self.guard.remove(fingerprint)
+            results[index_by_fingerprint[fingerprint]] = self._result(
+                item, fingerprint
+            )
+        for index, fingerprint, _item in prepared:
+            if fingerprint in completed_fingerprints:
+                continue
+            # Simulator may stop dispatch after an ambiguous/auth failure.
+            # These records were never submitted and must not become unknown
+            # remote jobs on the next process restart.
             self.guard.remove(fingerprint)
-        return self._result(item, fingerprint)
+            results[index] = {
+                "status": "NOT_DISPATCHED",
+                "fingerprint": fingerprint,
+                "error": "dispatch paused before submission",
+            }
+        return results
 
     def resume_execution(self, fingerprint):
         row = self.guard.find(str(fingerprint))

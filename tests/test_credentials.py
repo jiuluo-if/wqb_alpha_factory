@@ -50,25 +50,20 @@ class TestCredentialResolver(unittest.TestCase):
                          (" env-user ", " env-password "))
 
     def test_partial_environment_fails_without_home_fallback(self):
-        os.environ["WQB_USERNAME"] = "env-user"
         self.write_home("file-user\nfile-password\n")
 
-        with self.assertRaises(credentials.CredentialError) as ctx:
-            credentials.resolve_credentials(
-                credentials_file=str(self.home_file)
-            )
+        for key, value in (("WQB_USERNAME", "env-user"), ("WQB_PASSWORD", "env-password")):
+            with self.subTest(key=key):
+                os.environ[key] = value
+                with self.assertRaises(credentials.CredentialError) as ctx:
+                    credentials.resolve_credentials(
+                        credentials_file=str(self.home_file)
+                    )
 
-        self.assertIn("Incomplete WQB credentials in environment", str(ctx.exception))
-        self.assertNotIn("env-user", str(ctx.exception))
-        self.assertNotIn("file-password", str(ctx.exception))
-
-    def test_password_only_environment_also_fails(self):
-        os.environ["WQB_PASSWORD"] = "env-password"
-
-        with self.assertRaises(credentials.CredentialError):
-            credentials.resolve_credentials(
-                credentials_file=str(self.home_file)
-            )
+                self.assertIn("Incomplete WQB credentials in environment", str(ctx.exception))
+                self.assertNotIn(value, str(ctx.exception))
+                self.assertNotIn("file-password", str(ctx.exception))
+                os.environ.pop(key)
 
     def test_home_file_is_stripped_and_used_when_environment_absent(self):
         self.write_home("  file-user  \n  file-password  \n")

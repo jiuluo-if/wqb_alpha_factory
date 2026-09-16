@@ -11,11 +11,86 @@ from wqb_agent.research_api import (
     get_capabilities,
     get_operator_reference,
     inspect_template,
+    list_datafields,
+    list_datasets,
     list_templates,
 )
 
 
 class TestResearchApi(unittest.TestCase):
+    def test_list_datasets_exposes_live_scope(self):
+        client = SimpleNamespace(
+            instrument_type="EQUITY",
+            region="GLB",
+            universe="TOPDIV300",
+            delay=1,
+            get_datasets=lambda: [{"id": "analyst69"}],
+        )
+
+        result = list_datasets(client=client)
+
+        self.assertEqual(result["source"], "LIVE")
+        self.assertEqual(result["scope"]["region"], "GLB")
+        self.assertEqual(result["scope"]["universe"], "TOPDIV300")
+        self.assertEqual(result["datasets"], [{"id": "analyst69"}])
+
+    def test_list_datafields_is_bounded_and_preserves_count(self):
+        calls = []
+
+        def get_datafields(dataset_id, **kwargs):
+            calls.append((dataset_id, kwargs))
+            return ([{"id": "field_a", "type": "MATRIX"}], 1)
+
+        client = SimpleNamespace(
+            instrument_type="EQUITY",
+            region="GLB",
+            universe="TOPDIV300",
+            delay=1,
+            get_datafields=get_datafields,
+        )
+
+        result = list_datafields(
+            "analyst69", client=client, limit=10, offset=20, field_type="MATRIX"
+        )
+
+        self.assertEqual(result["source"], "LIVE")
+        self.assertEqual(result["dataset_id"], "analyst69")
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["fields"], [{"id": "field_a", "type": "MATRIX"}])
+        self.assertEqual(
+            calls,
+            [(
+                "analyst69",
+                {"limit": 10, "offset": 20, "field_type": "MATRIX"},
+            )],
+        )
+        with self.assertRaisesRegex(ValueError, "between 1 and 50"):
+            list_datafields("analyst69", client=client, limit=51)
+
+    def test_list_datafields_accepts_normalized_config(self):
+        calls = []
+
+        def get_datafields(dataset_id, **kwargs):
+            calls.append((dataset_id, kwargs))
+            return ([], 0)
+
+        client = SimpleNamespace(
+            instrument_type="EQUITY",
+            region="GLB",
+            universe="TOPDIV300",
+            delay=1,
+            get_datafields=get_datafields,
+        )
+        from wqb_agent.config import normalize_config
+
+        list_datafields(
+            "analyst69",
+            client=client,
+            config=normalize_config({"runtime": {"pagination_limit": 7}}),
+        )
+
+        self.assertEqual(calls[0][1]["limit"], 7)
+
     def test_remote_first_tool_surface_has_capabilities_and_templates(self):
         capabilities = get_capabilities(client=SimpleNamespace(
             get_operator_capability=lambda: {

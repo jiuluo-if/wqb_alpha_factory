@@ -120,6 +120,74 @@ def discover_fields(query, *, client=None, config=None, state_dir=None, limit=No
     }
 
 
+def _client_scope(client):
+    return {
+        "instrumentType": getattr(client, "instrument_type", "EQUITY"),
+        "region": getattr(client, "region", "USA"),
+        "universe": getattr(client, "universe", "TOP3000"),
+        "delay": getattr(client, "delay", 1),
+    }
+
+
+def list_datasets(*, client=None, config=None):
+    """List live datasets for the client's instrument scope."""
+    client = _remote_client(client=client)
+    reader = getattr(client, "get_datasets", None)
+    if not callable(reader):
+        raise RuntimeError("LIVE_DATASET_CAPABILITY_REQUIRED")
+    return {
+        "source": "LIVE",
+        "scope": _client_scope(client),
+        "datasets": list(reader() or ()),
+    }
+
+
+def list_datafields(
+    dataset_id, *, client=None, config=None, limit=None, offset=0,
+    field_type=None,
+):
+    """Read one bounded live datafield page without an unbounded retry loop."""
+    normalized_id = str(dataset_id or "").strip()
+    if not normalized_id:
+        raise ValueError("dataset_id must be non-empty")
+    if isinstance(config, AppConfig):
+        typed = config
+    elif config is not None:
+        typed = normalize_config(_load_config(config))
+    else:
+        typed = None
+    default_limit = typed.runtime.pagination_limit if typed is not None else 50
+    try:
+        page_limit = default_limit if limit is None else int(limit)
+        page_offset = int(offset)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("limit and offset must be integers") from exc
+    if page_limit < 1 or page_limit > 50:
+        raise ValueError("limit must be between 1 and 50")
+    if page_offset < 0:
+        raise ValueError("offset must be non-negative")
+    client = _remote_client(client=client)
+    reader = getattr(client, "get_datafields", None)
+    if not callable(reader):
+        raise RuntimeError("LIVE_DATAFIELD_CAPABILITY_REQUIRED")
+    fields, count = reader(
+        normalized_id,
+        limit=page_limit,
+        offset=page_offset,
+        field_type=field_type,
+    )
+    return {
+        "source": "LIVE",
+        "scope": _client_scope(client),
+        "dataset_id": normalized_id,
+        "field_type": field_type,
+        "limit": page_limit,
+        "offset": page_offset,
+        "count": count,
+        "fields": list(fields or ()),
+    }
+
+
 def generate_probes(query=None, *, template_ids=None, count=100, seed=None,
                     fields=None, client=None, config=None, state_dir=None):
     """Generate reviewable ``SimulationSpec`` probes without an inbox write."""
@@ -263,11 +331,11 @@ def simulate(spec, *, client=None, config=None, state_dir=None):
 
 
 def simulate_batch(specs, *, client=None, config=None, state_dir=None):
-    """Execute a bounded batch while applying exact dedupe per item."""
+    """Execute a bounded batch through the Gateway's concurrency window."""
     gateway = _simulation_gateway(
         client=client, config=config, state_dir=state_dir
     )
-    return [gateway.simulate(item) for item in (specs or ())]
+    return gateway.simulate_batch(specs)
 
 
 def get_pending_executions(*, state_dir=".wqb_state"):
@@ -517,6 +585,8 @@ def sync_alpha_colors(alpha_ids=None, *, rows=None, client=None,
 def research_tool_manifest():
     return [
         {"name": "get_capabilities", "mode": "READ_ONLY", "owner": "BRAIN"},
+        {"name": "list_datasets", "mode": "READ_ONLY", "owner": "BRAIN"},
+        {"name": "list_datafields", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "discover_fields", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "get_operators", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "list_templates", "mode": "READ_ONLY", "owner": "AlphaFactory"},
@@ -541,7 +611,7 @@ def research_tool_manifest():
 
 
 __all__ = [
-    "SimulationSpec", "discover_fields",
+    "SimulationSpec", "list_datasets", "list_datafields", "discover_fields",
     "generate_probes",
     "get_capabilities", "get_operators", "get_operator_reference", "get_operator_syntax_reference",
     "list_templates", "inspect_template",
