@@ -72,8 +72,6 @@ DIRECT_TESTS = {
         "tests/test_simulation_gateway.py",
     ),
     "wqb_agent/simulator.py": ("tests/test_simulation_gateway.py",),
-    "wqb_agent/weekly_quota.py": (
-    ),
     "wqb_agent/search_evidence.py": (
         "tests/test_validation_statistics.py",
     ),
