@@ -48,7 +48,7 @@ discover_fields → generate_probes → AI 审阅 → simulate/simulate_batch
 → get_alpha_evidence → AI 决定下一次 SimulationSpec
 ```
 
-`run_experiment(SimulationSpec)` 是 `simulate(SimulationSpec)` 的兼容别名。旧 `run-proposals`、round/parent/lineage、Trajectory/TrialLedger 和 Factory control-plane 已退出正式入口；新代码不得依赖它们。
+`simulate(SimulationSpec)` 是唯一公开 Simulation 入口。旧 `run-proposals`、round/parent/lineage、Trajectory/TrialLedger 和 Factory control-plane 已退出正式入口；新代码不得依赖它们。
 
 ## 本地状态
 

@@ -1,5 +1,4 @@
 import json
-import os
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -14,8 +13,6 @@ from wqb_agent.research_api import (
     get_operator_reference,
     inspect_template,
     list_templates,
-    reconcile,
-    run_experiment,
 )
 
 
@@ -66,31 +63,6 @@ class _ProbeAgent(_FakeAgent):
             "status": "LIVE_VERIFIED", "availability": "AVAILABLE",
             "source": "BRAIN_LIVE_ONLY", "operators": ["rank"],
         }
-
-
-class _FakeClient:
-    def __init__(self):
-        self.urls = []
-
-    def get_progress_snapshot(self, url, timeout=60):
-        self.urls.append((url, timeout))
-        return {"url": url, "status": "RUNNING"}
-
-
-class _RemoteFirstClient:
-    def __init__(self):
-        self.submissions = []
-
-    def submit_simulation(self, expression, settings, **kwargs):
-        self.submissions.append((expression, settings, kwargs))
-        return "progress-remote-first"
-
-    def poll_progress(self, progress_url, **kwargs):
-        self.polled = progress_url
-        return "alpha-remote-first"
-
-    def get_alpha(self, alpha_id):
-        return {"id": alpha_id, "is": {"sharpe": 1.2}}
 
 
 class TestResearchApi(unittest.TestCase):
@@ -149,26 +121,6 @@ class TestResearchApi(unittest.TestCase):
             discovery.discover.return_value = [{"id": "close", "type": "MATRIX"}]
             result = generate_probes(client=client, count=1)
         self.assertEqual(result, [SimulationSpec("rank(close)")])
-
-    def test_run_experiment_simulation_spec_uses_remote_first_gateway(self):
-        with tempfile.TemporaryDirectory() as directory:
-            client = _RemoteFirstClient()
-            result = run_experiment(
-                SimulationSpec("rank(close)", {"delay": 1}),
-                client=client,
-                state_dir=directory,
-            )
-            self.assertEqual(result["status"], "DONE")
-            self.assertEqual(result["alpha_id"], "alpha-remote-first")
-            self.assertEqual(len(client.submissions), 1)
-            self.assertFalse(os.path.exists(os.path.join(directory, "trajectory.jsonl")))
-            self.assertFalse(os.path.exists(os.path.join(directory, "trial_ledger.jsonl")))
-
-    def test_reconcile_only_polls_the_known_url(self):
-        client = _FakeClient()
-        result = reconcile("https://brain.example/progress/1", client=client, timeout=12)
-        self.assertEqual(result["status"], "RUNNING")
-        self.assertEqual(client.urls, [("https://brain.example/progress/1", 12)])
 
     def test_operator_reference_requires_a_live_client(self):
         with self.assertRaises(RuntimeError):

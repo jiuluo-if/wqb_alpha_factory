@@ -231,14 +231,6 @@ def inspect_template(template_id, *, catalog_path=None, require_private=False):
     return template.catalog_entry()
 
 
-def run_experiment(spec, *, agent=None, client=None, config=None, state_dir=None, context=None):
-    """Execute only the stable Remote-First ``SimulationSpec`` contract."""
-    if not isinstance(spec, SimulationSpec):
-        raise TypeError("run_experiment requires SimulationSpec")
-    return simulate(spec, agent=agent, client=client, config=config,
-                    state_dir=state_dir)
-
-
 def _simulation_gateway(*, agent=None, client=None, config=None, state_dir=None):
     """Build the Remote-First gateway without constructing the research Agent."""
     if client is None and agent is not None:
@@ -533,17 +525,6 @@ def sync_alpha_colors(alpha_ids=None, *, rows=None, agent=None, client=None,
     )
 
 
-def reconcile(progress_url, *, client=None, timeout=60):
-    """Poll one known remote job; never submit a replacement write."""
-    if not isinstance(progress_url, str) or not progress_url.strip():
-        raise ValueError("progress_url must be a non-empty known remote URL")
-    if client is None:
-        from .client import WQBClient
-
-        client = WQBClient()
-    return client.get_progress_snapshot(progress_url, timeout=timeout)
-
-
 def research_tool_manifest():
     return [
         {"name": "get_capabilities", "mode": "READ_ONLY", "owner": "BRAIN"},
@@ -575,7 +556,7 @@ __all__ = [
     "generate_probes",
     "get_capabilities", "get_operators", "get_operator_reference", "get_operator_syntax_reference",
     "list_templates", "inspect_template",
-    "run_experiment", "validate_simulation_spec", "execution_fingerprint",
+    "validate_simulation_spec", "execution_fingerprint",
     "simulate", "simulate_batch", "get_pending_executions", "resume_execution",
     "reconcile_execution",
     "get_alpha", "get_alpha_evidence", "get_alpha_metrics",
