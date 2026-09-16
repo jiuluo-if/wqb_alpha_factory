@@ -38,10 +38,8 @@ from .client import (
     WQBSubmitUnknownError,
     WQBTimeoutError,
 )
-from .experiment import UNKNOWN_STATUSES
-from .metrics import check_health as _check_health
-from .metrics import extract_metrics as _extract_metrics
-from .yearly import build_yearly_evidence
+
+UNKNOWN_STATUSES = frozenset({"SUBMIT_UNKNOWN", "UNKNOWN"})
 
 
 class Simulator:
@@ -247,34 +245,11 @@ class Simulator:
                         )
                     payload = self.client.get_alpha(alpha_id)
                     experiment.alpha_id = alpha_id
-                    experiment.metrics = _extract_metrics(payload)
-                    aggregates = getattr(self.client, "get_aggregates", None)
-                    if callable(aggregates):
-                        try:
-                            experiment.yearly_evidence = build_yearly_evidence(
-                                aggregates(alpha_id),
-                                min_sharpe=self.yearly_policy.get("min_sharpe", 0.0),
-                                min_fitness=self.yearly_policy.get("min_fitness", 0.0),
-                                max_turnover=self.yearly_policy.get("max_turnover"),
-                                min_years=self.yearly_policy.get("min_years", 1),
-                            )
-                        except Exception as exc:
-                            # Annual evidence is read-only advisory evidence;
-                            # its outage must not turn a completed Simulation
-                            # into UNKNOWN or trigger a second POST.
-                            experiment.yearly_evidence = {
-                                "status": "UNKNOWN",
-                                "source": "BRAIN /alphas/{id}/aggregates",
-                                "years": [],
-                                "stable": None,
-                                "reason": f"aggregates unavailable: {type(exc).__name__}",
-                            }
+                    # The canonical result is the live BRAIN payload.  The
+                    # simulator does not derive or persist local research
+                    # metrics, yearly summaries, or eligibility decisions.
+                    experiment.evidence = payload
                     experiment.status = "DONE"
-                    try:
-                        health = _check_health(payload)
-                        experiment.health = health
-                    except Exception:
-                        experiment.health = None
                     persist()
                     return experiment
                 except (WQBNotFoundError, WQBRejectedError) as exc:

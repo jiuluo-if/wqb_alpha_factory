@@ -14,6 +14,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -30,7 +31,6 @@ from wqb_agent.client import (
     WQBTimeoutError,
 )
 from wqb_agent.discovery import FieldDiscovery
-from wqb_agent.experiment import Experiment
 from wqb_agent.failures import FailureKind, classify_error, classify_experiment
 
 
@@ -395,7 +395,7 @@ class TestClassifiedExceptions(unittest.TestCase):
                 self.assertEqual(expected_type.kind, expected_kind)
 
     def test_classify_experiment_new_names(self):
-        exp = Experiment(1, "h", "rank(x)", {}, ["x"])
+        exp = SimpleNamespace(status="FAILED", error=None)
         exp.status = "FAILED"
         exp.error = "WQBRejectedError: Simulation rejected (422)"
         self.assertEqual(classify_experiment(exp), FailureKind.SYNTAX)

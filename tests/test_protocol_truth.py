@@ -2,7 +2,6 @@ import json
 import os
 import unittest
 
-from wqb_agent.experiment import Experiment
 from wqb_agent.protocol import (
     CapabilityStatus,
     endpoint_catalog,
@@ -10,7 +9,6 @@ from wqb_agent.protocol import (
     probe_capability_response,
     retry_after_seconds,
 )
-from wqb_agent.simulator import Simulator
 from wqb_agent.yearly import build_yearly_evidence
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "brain")
@@ -105,28 +103,3 @@ class TestYearlyEvidence(unittest.TestCase):
         self.assertEqual(evidence["status"], "UNKNOWN")
         self.assertIsNone(evidence["stable"])
 
-    def test_simulator_consumes_aggregates_after_alpha_completion(self):
-        with open(os.path.join(FIXTURES, "aggregates.json"), encoding="utf-8") as handle:
-            aggregates = json.load(handle)
-
-        class Client:
-            def submit_simulation(self, expression, settings, idempotency_key=None):
-                return "/simulations/fixture"
-
-            def poll_progress(self, progress_url, timeout_sec=0, progress_callback=None):
-                return "alpha-fixture-1"
-
-            def get_alpha(self, alpha_id):
-                return {"is": {"sharpe": 1.2, "fitness": 0.8, "checks": []}}
-
-            def get_aggregates(self, alpha_id):
-                return aggregates
-
-        exp = Experiment(1, "h1", "rank(signal)", {}, ["signal"])
-        exp.submission_fingerprint = "fp"
-        Simulator(Client(), max_concurrent=1, replace_attempts=1,
-                  yearly_policy={"min_sharpe": 0.9, "min_fitness": 0.5,
-                                 "max_turnover": 0.7}).run([exp])
-        self.assertEqual(exp.status, "DONE")
-        self.assertEqual(exp.yearly_evidence["status"], "VERIFIED")
-        self.assertTrue(exp.yearly_evidence["stable"])

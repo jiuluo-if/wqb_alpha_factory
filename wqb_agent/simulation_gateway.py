@@ -281,6 +281,6 @@ class SimulationGateway:
             "status": item.status, "fingerprint": fingerprint,
             "alpha_id": getattr(item, "alpha_id", None),
             "progress_url": getattr(item, "progress_url", None),
-            "evidence": getattr(item, "metrics", None),
+            "evidence": getattr(item, "evidence", None),
             "error": getattr(item, "error", None),
         }

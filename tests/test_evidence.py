@@ -16,7 +16,6 @@ from wqb_agent.evidence import (
     refresh_self_correlation_cache,
     save_evidence_cache,
 )
-from wqb_agent.experiment import Experiment
 
 
 def _metrics_with_pending_self_corr(sharpe=2.0, fitness=1.5, turnover=0.18):
