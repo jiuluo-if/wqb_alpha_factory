@@ -26,7 +26,7 @@ research_api
  └─ remote color preview/sync
 ```
 
-`research_api` 是稳定的 Agent-facing facade。`Agent`、proposal envelope、round、parent/child、lineage、optimizer workflow 和 factory runner 属于迁移期兼容层，不得成为新 API 的依赖。
+`research_api` 是唯一稳定的 Agent-facing facade。旧 Agent、proposal envelope、round、parent/child、lineage、optimizer workflow 和 factory runner 不属于新 API；新代码不得依赖它们。
 
 ## SimulationGateway
 
@@ -54,6 +54,8 @@ Repository 提供 rolling metadata refresh/list/get/cache status/purge。默认 
 
 颜色策略只接收 remote evidence；`dry_run` 不得 PATCH，`overwrite=False` 保留已有颜色，`overwrite=True` 才允许覆盖，每次 PATCH 必须 readback verify。不得创建本地 ownership sidecar。
 
-## 迁移边界
+## 退役边界
 
-旧 `proposals.json`、checkpoint、Trajectory、TrialLedger、settlement、ExperienceMemory、OptimizerWorkflow 和 factory session 不得被新 Remote-First API 重新扩展。只有在所有消费者迁移并完成回归验证后，才可删除兼容模块及对应旧测试。
+旧 `proposals.json`、checkpoint、Trajectory、TrialLedger、settlement、ExperienceMemory、
+OptimizerWorkflow 和 factory session 不是 Remote-First 状态模型。它们只能作为待删除的
+兼容遗留物存在；新代码不得读取、写入或用其恢复 BRAIN evidence。

@@ -38,7 +38,7 @@ Trajectory / TrialLedger / ExperienceMemory
 proposals inbox / factory session / optimizer state
 ```
 
-迁移期旧文件可能仍被兼容代码读取；新代码不得向其中写入结果，也不得依赖其恢复 BRAIN evidence。
+旧文件仅作为待删除的兼容遗留物存在；新代码不得读取、写入或依赖其恢复 BRAIN evidence。
 
 ## 隐私与恢复
 

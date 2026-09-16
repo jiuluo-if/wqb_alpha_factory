@@ -14,22 +14,10 @@ trajectory, ExperienceMemory, PnL, reports, plans, findings and generated
 exports are local-only. Keep them under ignored `.wqb_state/`, `research_data/`,
 `reports/` or `.planning/` paths owned by the existing runtime.
 
-The durable `.wqb_state/factory_session.json` is stricter than a general local
-research file: it is a bounded control-plane envelope. It may retain session,
-quota, retry, route counters, blocker taxonomy/counts and session-bound opaque
-route set digests, but never raw expressions, field/Alpha/template/dataset IDs,
-research questions, mechanisms, lineage/arm identity, metrics, checks, PnL or
-arbitrary exception messages. `factory status` and `factory run` use the same
-bounded projection.
-
-Projection is a persistence copy, not an in-place normalization of the running
-orchestrator. Runtime-generated session status/action values use a closed,
-declared vocabulary; an undeclared new transition fails closed before the next
-Simulation write instead of being silently rewritten to `UNKNOWN`. Legacy
-unknown values remain readable for inspection, while new durable writes require
-declared bounded tokens. Recovery markers such as `RUN_PROPOSALS`,
-`RECOVER_PROPOSALS`, `RECOVER_CHECKPOINT_ERROR`, `SUGGEST` and their error states
-round-trip through the same canonical JSON envelope.
+The retired `.wqb_state/factory_session.json`, proposals inbox and research
+history files are not part of the new local model and must not be created by new
+code. Only `execution_guard.json`, rebuildable remote metadata cache, external
+credentials references and process locks are allowed for the Remote-First path.
 
 ## Documentation and commit hygiene
 
