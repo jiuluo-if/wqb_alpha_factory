@@ -31,7 +31,6 @@ DIRECT_TESTS = {
     ),
     "wqb_agent/protocol.py": ("tests/test_protocol_truth.py",),
     "wqb_agent/query_errors.py": ("tests/test_client_refactor.py",),
-    "wqb_agent/alpha_feed_workflow.py": (),
     "wqb_agent/research_planning.py": ("tests/test_research_planning.py",),
     "wqb_agent/evidence_projection.py": ("tests/test_evidence_projection.py",),
     "wqb_agent/pre_correlation.py": ("tests/test_evidence_projection.py",),
@@ -84,7 +83,6 @@ DIRECT_TESTS = {
         "tests/test_research_api.py",
     ),
     "wqb_agent/alpha_feed_cache.py": (),
-    "wqb_agent/daily_cache.py": (),
     "wqb_agent/diversity.py": (
     ),
     "wqb_agent/alpha_templates/model.py": ("tests/test_alpha_template_catalog.py",),

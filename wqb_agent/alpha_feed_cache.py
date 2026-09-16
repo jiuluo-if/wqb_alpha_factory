@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import os
 from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from .artifacts import atomic_write_json_if_changed
-from .daily_cache import NEW_YORK
+
+NEW_YORK = ZoneInfo("America/New_York")
 
 SCHEMA_VERSION = 1
 WEEKLY_SIMULATION_CAP = 7 * 1600
