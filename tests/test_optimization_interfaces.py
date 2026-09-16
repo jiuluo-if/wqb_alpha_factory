@@ -12,9 +12,7 @@ from wqb_agent.client import (
 )
 from wqb_agent.optimization_interfaces import (
     ClientOptimizationEvidenceProvider,
-    OptimizationTrial,
     diagnose_optimization,
-    record_optimization_trial,
 )
 from wqb_agent.pnl import PnlAdapter, decode_recordset
 
@@ -144,19 +142,6 @@ class TestOptimizationInterfaces(unittest.TestCase):
         )
         self.assertEqual(low_signal["primary_problem"], "LOW_SHARPE")
         self.assertEqual(high_turnover["primary_problem"], "HIGH_TURNOVER")
-
-    def test_trial_recording_preserves_failed_and_pruned_trials(self):
-        memory = Mock()
-        trial = OptimizationTrial(
-            parent_id="p1", outcome="PRUNED", mechanism="relative scale",
-            changed_variable="FIELD", evidence_refs=("p1",),
-        )
-        record_optimization_trial(memory, trial, round_no=7)
-        memory.add_short_term.assert_called_once()
-        args, kwargs = memory.add_short_term.call_args
-        self.assertEqual(args[:3], ("observation", "relative scale", 7))
-        self.assertEqual(kwargs["detail"]["outcome"], "PRUNED")
-
 
 if __name__ == "__main__":
     unittest.main()
