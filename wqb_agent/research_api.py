@@ -306,6 +306,13 @@ def get_capabilities(*, agent=None, client=None, config=None) -> dict[str, Any]:
     }
 
 
+def get_operators(*, agent=None, client=None, config=None) -> list[str]:
+    """Return only the live verified operator names."""
+    return list(get_operator_reference(
+        agent=agent, client=client, config=config
+    ).get("operators") or [])
+
+
 def list_templates(*, catalog_path=None, require_private=False):
     """List validated template metadata without constructing research state."""
     registry = (
@@ -582,7 +589,13 @@ def _remote_repository(*, agent=None, client=None, config=None, state_dir=None,
 
 
 def refresh_remote_alphas(*, agent=None, client=None, config=None, state_dir=None,
-                          limit=100):
+    limit=100, days=None):
+    if days is not None:
+        if isinstance(config, AppConfig):
+            if int(days) != config.remote_cache.retention_days:
+                raise ValueError("days must equal the configured retention window")
+        elif int(days) < 1 or int(days) > 90:
+            raise ValueError("days must be within 1-90")
     return _remote_repository(
         agent=agent, client=client, config=config, state_dir=state_dir,
         require_client=True,
@@ -671,6 +684,15 @@ def find_alpha_duplicates(alpha_id, *, rows=None, agent=None, client=None,
         for item in repository.list_remote_alphas():
             rows.append(repository.get_remote_alpha_evidence(item["alpha_id"]))
     return find_remote_duplicates(rows, alpha_id)
+
+
+def find_duplicate_alphas(alpha_id, *, rows=None, agent=None, client=None,
+                          config=None, state_dir=None):
+    """Public name for exact execution duplicate lookup."""
+    return find_alpha_duplicates(
+        alpha_id, rows=rows, agent=agent, client=client,
+        config=config, state_dir=state_dir,
+    )
 
 
 def find_similar_alphas(expression_or_alpha_id, *, rows=None, agent=None,
@@ -1227,7 +1249,7 @@ def research_tool_manifest():
 __all__ = [
     "ExperimentSpec", "SimulationSpec", "inspect_state", "discover_fields",
     "generate_probes",
-    "get_capabilities", "get_operator_reference", "get_operator_syntax_reference",
+    "get_capabilities", "get_operators", "get_operator_reference", "get_operator_syntax_reference",
     "list_templates", "inspect_template",
     "run_experiment", "validate_simulation_spec", "execution_fingerprint",
     "simulate", "simulate_batch", "get_pending_executions", "resume_execution",
@@ -1237,7 +1259,8 @@ __all__ = [
     "compare_alphas", "refresh_remote_alphas", "list_remote_alphas",
     "get_remote_alpha", "get_remote_alpha_evidence", "remote_cache_status",
     "purge_remote_cache", "simulation_quota", "group_alphas",
-    "find_alpha_duplicates", "find_similar_alphas", "preview_alpha_colors", "sync_alpha_colors",
+    "find_alpha_duplicates", "find_duplicate_alphas", "find_similar_alphas",
+    "preview_alpha_colors", "sync_alpha_colors",
     "get_experiment",
     "compare_experiments", "search_history", "reconcile",
     "inspect_optimizer_parents", "inspect_optimizer_context",
