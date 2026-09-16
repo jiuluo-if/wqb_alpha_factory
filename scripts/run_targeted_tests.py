@@ -140,7 +140,6 @@ DIRECT_TESTS = {
     "wqb_agent/failures.py": ("tests/test_client_refactor.py",),
     "wqb_agent/heartbeat.py": ("tests/test_heartbeat.py",),
     "wqb_agent/identity.py": ("tests/test_semantic_contract_admission.py",),
-    "wqb_agent/incremental_policy.py": ("tests/test_evaluation.py",),
     "wqb_agent/metrics.py": ("tests/test_evaluation.py",),
     "wqb_agent/mutations.py": ("tests/test_evaluation.py",),
     "wqb_agent/optimization_interfaces.py": ("tests/test_optimization_interfaces.py",),

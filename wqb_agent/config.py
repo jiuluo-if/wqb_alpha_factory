@@ -6,8 +6,6 @@ import copy
 import math
 from dataclasses import dataclass, field, replace
 
-from .incremental_policy import IncrementalValuePolicy
-
 _MEMORY_DEFAULTS = {
     "max_lessons": 20,
     "max_avoid": 30,
@@ -50,13 +48,6 @@ _QUALITY_DEFAULTS = {
 
 
 @dataclass(frozen=True)
-class IncrementalValueConfig:
-    mode: str = "required_when_available"
-    max_abs_correlation: float = 0.7
-    min_overlap: int = 60
-
-
-@dataclass(frozen=True)
 class ValidationConfig:
     yearly_min_years: int = 2
 
@@ -64,12 +55,6 @@ class ValidationConfig:
 @dataclass(frozen=True)
 class StatisticalConfig:
     mode: str = "required_when_available"
-
-
-@dataclass(frozen=True)
-class RobustnessConfig:
-    min_sharpe_retention: float = 0.7
-    min_fitness_retention: float = 0.6
 
 
 @dataclass(frozen=True)
@@ -119,7 +104,6 @@ class AgentRuntimeConfig:
     memory: dict = field(default_factory=lambda: dict(_MEMORY_DEFAULTS))
     quality: dict = field(default_factory=lambda: dict(_QUALITY_DEFAULTS))
     statistical_policy: dict = field(default_factory=dict)
-    robustness_policy: dict = field(default_factory=dict)
     yearly_policy: dict = field(default_factory=lambda: {"min_years": 2})
 
 @dataclass(frozen=True)
@@ -151,10 +135,8 @@ class AppConfig:
     search: SearchConfig = field(default_factory=SearchConfig)
     research_allocation: ResearchAllocation = field(default_factory=ResearchAllocation)
     factory: FactoryConfig = field(default_factory=FactoryConfig)
-    incremental_value: IncrementalValueConfig = field(default_factory=IncrementalValueConfig)
     validation: ValidationConfig = field(default_factory=ValidationConfig)
     statistical: StatisticalConfig = field(default_factory=StatisticalConfig)
-    robustness: RobustnessConfig = field(default_factory=RobustnessConfig)
     simulation_config: SimulationConfig = field(default_factory=SimulationConfig)
     remote_cache: RemoteCacheConfig = field(default_factory=RemoteCacheConfig)
     runtime: AgentRuntimeConfig = field(default_factory=AgentRuntimeConfig)
@@ -325,23 +307,6 @@ def parse_config(raw):
         remote_cache_raw.get("retention_days", 7),
         key="config.remote_cache.retention_days", minimum=1, maximum=90,
     ))
-    incremental = dict(agent.get("incremental_value") or {})
-    incremental_max_correlation = _finite_float(
-        incremental.get("max_abs_correlation", 0.7),
-        key="config.agent.incremental_value.max_abs_correlation",
-        minimum=0.0,
-        maximum=1.0,
-    )
-    incremental_min_overlap = _int_in_range(
-        incremental.get("min_overlap", 60),
-        key="config.agent.incremental_value.min_overlap",
-        minimum=1,
-    )
-    policy = IncrementalValuePolicy(
-        mode=incremental.get("mode", "required_when_available"),
-        max_abs_correlation=incremental_max_correlation,
-        min_overlap=incremental_min_overlap,
-    )
     search_raw = dict(agent.get("search_policy") or {})
     research_raw = dict(agent.get("research_allocation") or {})
     search_max = _int_in_range(
@@ -459,7 +424,6 @@ def parse_config(raw):
     )
     research_allocation_raw = dict(agent.get("research_allocation") or {})
     statistical_policy = dict(agent.get("statistical_policy") or {})
-    robustness_policy = dict(agent.get("robustness_policy") or {})
     yearly_policy = dict(agent.get("yearly_policy") or {})
     yearly_policy["min_years"] = _int_in_range(
         yearly_policy.get("min_years", 2),
@@ -475,23 +439,6 @@ def parse_config(raw):
                 minimum=0.0,
                 maximum=1.0,
             )
-    robustness_policy = {
-        "min_sharpe_retention": 0.7,
-        "min_fitness_retention": 0.6,
-        "max_turnover_multiple": 1.5,
-        "max_drawdown_multiple": 1.5,
-        "require_checks_passed": True,
-        **robustness_policy,
-    }
-    for key in (
-        "min_sharpe_retention", "min_fitness_retention",
-        "max_turnover_multiple", "max_drawdown_multiple",
-    ):
-        robustness_policy[key] = _finite_float(
-            robustness_policy[key],
-            key=f"config.agent.robustness_policy.{key}",
-            minimum=0.0,
-        )
     runtime = AgentRuntimeConfig(
         state_dir=str(agent.get("state_dir", ".wqb_state")),
         alpha_template_catalog=(
@@ -602,22 +549,14 @@ def parse_config(raw):
         memory=copy.deepcopy(memory),
         quality=copy.deepcopy(quality),
         statistical_policy=copy.deepcopy(statistical_policy),
-        robustness_policy=copy.deepcopy(robustness_policy),
         yearly_policy=copy.deepcopy(yearly_policy),
     )
     return AppConfig(
         search=search,
         research_allocation=allocation,
         factory=factory,
-        incremental_value=IncrementalValueConfig(
-            policy.mode, policy.max_abs_correlation, policy.min_overlap
-        ),
         validation=ValidationConfig(yearly_policy["min_years"]),
         statistical=StatisticalConfig(str((agent.get("statistical_policy") or {}).get("mode", "required_when_available"))),
-        robustness=RobustnessConfig(
-            robustness_policy["min_sharpe_retention"],
-            robustness_policy["min_fitness_retention"],
-        ),
         simulation_config=SimulationConfig({
             "neutralization": "SUBINDUSTRY",
             **copy.deepcopy(raw.get("simulation", {})),
