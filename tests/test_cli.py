@@ -257,15 +257,18 @@ class TestCliRuntimeSafety(unittest.TestCase):
         ) as release, patch(
             "wqb_agent.WQBClient"
         ) as client_class, patch(
-            "wqb_agent.alpha_colors.load_color_candidates",
-            return_value=[object()],
-        ) as load_candidates, patch(
-            "wqb_agent.alpha_color_workflow.AlphaColorWorkflow"
-        ) as workflow_class, patch(
             "wqb_agent.Agent",
             side_effect=AssertionError("sync-colors 不应构造 Agent"),
-        ):
-            workflow_class.return_value.sync.return_value = changes
+        ), patch(
+            "wqb_agent.research_api.refresh_remote_alphas",
+            return_value={"submitted_count": 1},
+        ) as refresh, patch(
+            "wqb_agent.research_api.list_remote_alphas",
+            return_value=[{"alpha_id": "a1"}],
+        ) as listed, patch(
+            "wqb_agent.research_api.sync_alpha_colors",
+            return_value=changes,
+        ) as sync:
             with contextlib.redirect_stdout(io.StringIO()) as output:
                 main_entry.main([
                     "--config", "config.example.json",
@@ -278,14 +281,9 @@ class TestCliRuntimeSafety(unittest.TestCase):
         )
         release.assert_called_once_with("lock")
         client = client_class.return_value
-        workflow_class.assert_called_once_with(
-            get_alpha=client.get_alpha,
-            set_alpha_color=client.set_alpha_color,
-        )
-        load_candidates.assert_called_once_with("tests/fixtures")
-        workflow_class.return_value.sync.assert_called_once_with(
-            load_candidates.return_value, dry_run=True
-        )
+        refresh.assert_called_once()
+        listed.assert_called_once()
+        sync.assert_called_once()
         payload = json.loads(output.getvalue())
         self.assertTrue(payload["dry_run"])
         self.assertFalse(payload["network_write"])
@@ -298,14 +296,11 @@ class TestCliRuntimeSafety(unittest.TestCase):
         ) as release, patch(
             "wqb_agent.WQBClient"
         ), patch(
-            "wqb_agent.alpha_colors.load_color_candidates",
-            return_value=[],
-        ), patch(
-            "wqb_agent.alpha_color_workflow.AlphaColorWorkflow"
-        ) as workflow_class:
-            workflow_class.return_value.sync.side_effect = ValueError(
+            "wqb_agent.research_api.refresh_remote_alphas",
+            side_effect=ValueError(
                 "color readback mismatch"
-            )
+            ),
+        ):
             with contextlib.redirect_stdout(io.StringIO()) as output:
                 with self.assertRaises(SystemExit) as raised:
                     main_entry.main([

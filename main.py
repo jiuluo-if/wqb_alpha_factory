@@ -98,9 +98,7 @@ def main(argv=None):
         return
 
     if command_key == ("alpha", "sync-colors"):
-        from wqb_agent import WQBClient
-        from wqb_agent.alpha_color_workflow import AlphaColorWorkflow
-        from wqb_agent.alpha_colors import load_color_candidates
+        from wqb_agent import WQBClient, research_api
 
         state_dir = typed_config.runtime.state_dir
         lock_path = acquire_single_instance_lock(
@@ -110,12 +108,16 @@ def main(argv=None):
             sys.exit(1)
         try:
             client = WQBClient()
-            candidates = load_color_candidates(state_dir)
-            workflow = AlphaColorWorkflow(
-                get_alpha=client.get_alpha,
-                set_alpha_color=client.set_alpha_color,
+            research_api.refresh_remote_alphas(
+                client=client, config=typed_config, state_dir=state_dir,
             )
-            changes = workflow.sync(candidates, dry_run=command.dry_run)
+            candidates = research_api.list_remote_alphas(
+                config=typed_config, state_dir=state_dir,
+            )
+            changes = research_api.sync_alpha_colors(
+                client=client, config=typed_config, state_dir=state_dir,
+                dry_run=command.dry_run,
+            )
             print(json.dumps({
                 "dry_run": command.dry_run,
                 "candidate_count": len(candidates),
