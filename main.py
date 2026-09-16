@@ -137,7 +137,7 @@ def main(argv=None):
             release_single_instance_lock(lock_path)
         return
 
-    from wqb_agent import Agent, WQBClient
+    from wqb_agent import WQBClient, research_api
 
     try:
         client = WQBClient()
@@ -145,10 +145,14 @@ def main(argv=None):
         print(f"Credentials error: {exc}")
         sys.exit(1)
 
-    agent = Agent(client, typed_config)
     if command_key == ("research", "suggest"):
-        # suggest 只做字段检索、不模拟，不占模拟实例锁
-        agent.run_suggestion_round()
+        # Suggestion is a read-only discovery projection; it does not build
+        # the retired Agent runtime or emit a local proposals artifact.
+        result = research_api.discover_fields(
+            "", client=client, config=typed_config,
+            state_dir=typed_config.runtime.state_dir,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
         return
     if command_key == ("alpha", "sync-feed"):
         feed_lock = acquire_single_instance_lock(
@@ -157,7 +161,11 @@ def main(argv=None):
         if feed_lock is None:
             sys.exit(1)
         try:
-            snapshot = agent.refresh_remote_alpha_feed(limit=100)
+            snapshot = research_api.refresh_remote_alphas(
+                client=client, config=typed_config,
+                state_dir=typed_config.runtime.state_dir,
+                limit=100,
+            )
             print(json.dumps({
                 **snapshot,
                 "network_write": False,

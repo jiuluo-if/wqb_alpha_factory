@@ -217,8 +217,6 @@ class TestCliRuntimeSafety(unittest.TestCase):
 
     def test_local_readonly_commands_do_not_construct_client(self):
         for argv in (
-            ["--config", "config.example.json", "factory", "status"],
-            ["--config", "config.example.json", "factory", "stop"],
             ["--config", "config.example.json", "state", "doctor"],
             ["--config", "config.example.json", "state", "audit"],
             ["--config", "config.example.json", "state", "preflight"],
@@ -236,30 +234,20 @@ class TestCliRuntimeSafety(unittest.TestCase):
 
     def test_suggest_does_not_acquire_simulation_owner_lock(self):
         with patch("main.acquire_single_instance_lock") as acquire:
-            with patch("wqb_agent.WQBClient"), patch("wqb_agent.Agent") as agent:
+            with patch("wqb_agent.WQBClient"), patch(
+                "wqb_agent.research_api.discover_fields",
+                return_value={"fields": []},
+            ) as discover:
                 with patch.object(main_entry, "load_config", return_value={
                     "simulation": {}, "agent": {}
                 }), patch("sys.argv", ["main.py", "suggest"]):
-                    agent.return_value.run_suggestion_round.return_value = None
                     with contextlib.redirect_stdout(io.StringIO()):
                         try:
                             main_entry.main()
                         except SystemExit as exc:
                             self.assertNotEqual(exc.code, 2)
             acquire.assert_not_called()
-
-    def test_run_proposals_is_rejected_without_constructing_legacy_runtime(self):
-        with patch.object(main_entry, "acquire_single_instance_lock") as acquire, \
-                patch("wqb_agent.WQBClient") as client_class, \
-                patch("wqb_agent.Agent") as agent_class:
-            with self.assertRaises(SystemExit) as raised:
-                main_entry.main([
-                    "--config", "config.example.json", "run-proposals", "custom.json"
-                ])
-        self.assertEqual(raised.exception.code, 2)
-        acquire.assert_not_called()
-        client_class.assert_not_called()
-        agent_class.assert_not_called()
+            discover.assert_called_once()
 
     def test_audit_and_preflight_semantic_blocks_exit_two(self):
         with patch.object(
