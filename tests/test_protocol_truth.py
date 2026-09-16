@@ -47,7 +47,7 @@ class TestProtocolTruth(unittest.TestCase):
         self.assertEqual(fixture["status"], "FIXTURE_VERIFIED")
         self.assertNotEqual(fixture["availability"], "AVAILABLE")
 
-        from wqb_agent.proposal_contract import load_operator_syntax_reference
+        from wqb_agent.operator_reference import load_operator_syntax_reference
 
         static = load_operator_syntax_reference(
             os.path.join(os.path.dirname(os.path.dirname(__file__)),

@@ -66,6 +66,7 @@ DIRECT_TESTS = {
         "tests/test_remote_diagnostics.py",
     ),
     "wqb_agent/proposal_contract.py": (),
+    "wqb_agent/operator_reference.py": ("tests/test_protocol_truth.py",),
     "wqb_agent/alpha_factory.py": (
         "tests/test_research_api.py",
     ),

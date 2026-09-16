@@ -34,7 +34,7 @@ from .alpha_grouping import (
 from .alpha_templates import AlphaTemplateRegistry
 from .config import AppConfig, normalize_config
 from .discovery import FieldDiscovery
-from .proposal_contract import (
+from .operator_reference import (
     load_operator_syntax_reference,
     load_packaged_operator_syntax_reference,
 )
