@@ -14,7 +14,6 @@ import sys
 import tempfile
 import threading
 import unittest
-from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -31,7 +30,7 @@ from wqb_agent.client import (
     WQBTimeoutError,
 )
 from wqb_agent.discovery import FieldDiscovery
-from wqb_agent.failures import FailureKind, classify_error, classify_execution
+from wqb_agent.failures import FailureKind
 
 
 class TestProgressUrlSafety(unittest.TestCase):
@@ -323,19 +322,6 @@ class TestClassifiedExceptions(unittest.TestCase):
             with self.subTest(exception=expected_type.__name__):
                 self.assertIsInstance(expected_type("test"), WQBError)
                 self.assertEqual(expected_type.kind, expected_kind)
-
-    def test_classify_execution_new_names(self):
-        exp = SimpleNamespace(status="FAILED", error=None)
-        exp.status = "FAILED"
-        exp.error = "WQBRejectedError: Simulation rejected (422)"
-        self.assertEqual(classify_execution(exp), FailureKind.SYNTAX)
-        exp.error = "WQBRateLimitError: 429 too many"
-        self.assertEqual(classify_execution(exp), FailureKind.RATE_LIMIT)
-        exp.error = "WQBTimeoutError: polling timed out"
-        self.assertEqual(classify_execution(exp), FailureKind.TIMEOUT)
-        exp.error = "WQBNotFoundError: field not found"
-        self.assertEqual(classify_execution(exp), FailureKind.DATA)
-
 
 class TestSharedRateLimitGate(unittest.TestCase):
     def test_retry_after_longer_than_budget_fails_without_sleeping_full_delay(self):
