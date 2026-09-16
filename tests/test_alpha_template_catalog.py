@@ -91,12 +91,12 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
             candidates = factory.generate({"template_ids": ["probe-group"]}, fields, count=1)
         self.assertEqual(len(candidates), 1)
         self.assertEqual(gate.call_args.args[0], fields)
-        self.assertEqual(set(candidates[0]["fields_used"]), {"primary", "secondary"})
+        self.assertEqual(set(candidates[0].fields), {"primary", "secondary"})
         self.assertEqual(
-            [item["id"] for item in candidates[0]["field_refs"]],
+            list(candidates[0].fields),
             ["primary", "secondary"],
         )
-        self.assertEqual(candidates[0]["template_slots"]["g"], factory.neutralization)
+        self.assertEqual(candidates[0].template_id, "probe-group")
     def test_legacy_concrete_defaults_and_renders_through_owner(self):
         template = AlphaTemplateRegistry().get("toy_control_rank")
         self.assertEqual(template.template_mode, "CONCRETE")

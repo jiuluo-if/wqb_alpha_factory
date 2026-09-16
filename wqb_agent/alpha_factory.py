@@ -138,7 +138,7 @@ class AlphaFactory:
             or hypothesis.get("template_ref")
         )
 
-    def generate(self, hypothesis, fields, count=6, *, operator_mapping=None,
+    def _generate_records(self, hypothesis, fields, count=6, *, operator_mapping=None,
                  operator_capability=None, _prepared_facts=None,
                  _relationship_memo=None, _expression_memo=None):
         """Fill a bounded template set from verified field slots.
@@ -326,6 +326,32 @@ class AlphaFactory:
             if len(candidates) >= limit:
                 break
         return candidates
+
+    def generate(self, hypothesis, fields, count=6, *, operator_mapping=None,
+                 operator_capability=None):
+        """Return pure executable SimulationSpec values.
+
+        Candidate metadata stays private to the template implementation; the
+        public factory surface does not expose proposal envelopes or research
+        state fields.
+        """
+        from .simulation_gateway import SimulationSpec
+
+        records = self._generate_records(
+            hypothesis, fields, count=count,
+            operator_mapping=operator_mapping,
+            operator_capability=operator_capability,
+        )
+        return [SimulationSpec(
+            expression=item["expression"],
+            settings=item.get("settings") or {},
+            fields=tuple(
+                ref.get("id") for ref in item.get("field_refs", ())
+                if isinstance(ref, dict) and ref.get("id")
+            ),
+            note=item.get("rationale"),
+            template_id=item.get("template_id"),
+        ) for item in records]
 
     def catalog(self):
         return self.registry.catalog()
@@ -862,7 +888,7 @@ class AlphaFactory:
                 generated = []
                 selected_mapping = None
                 for mapping in mappings:
-                    generated = self.generate(
+                    generated = self._generate_records(
                         dict(hypothesis, template_ids=[template_id]),
                         slot_profiles,
                         count=1,
@@ -1103,20 +1129,11 @@ class AlphaFactory:
                              target=100, excluded_expressions=None, seed=None,
                              research_context=None, max_pending_per_arm=1):
         """Generate reviewable executable specs without a proposal envelope."""
-        from .simulation_gateway import SimulationSpec
-
         del excluded_expressions, seed, research_context, max_pending_per_arm
-        candidates = self.generate(
+        return self.generate(
             hypothesis, fields, count=target,
             operator_capability=operator_reference,
         )
-        return [SimulationSpec(
-            expression=item["expression"],
-            settings=item.get("settings") or {},
-            fields=tuple(item.get("fields") or ()),
-            note=item.get("note"),
-            template_id=item.get("template_id"),
-        ) for item in candidates if isinstance(item, dict)]
 
     @staticmethod
     def _live_operator_capability(reference):
