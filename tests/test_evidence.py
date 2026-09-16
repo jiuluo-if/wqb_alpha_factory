@@ -1,4 +1,4 @@
-"""证据缓存侧车（evidence_cache.json）与 Reflector 叠加判定的回归测试。"""
+"""证据缓存侧车（evidence_cache.json）的回归测试。"""
 import os
 import sys
 import tempfile
@@ -16,7 +16,6 @@ from wqb_agent.evidence import (
     refresh_self_correlation_cache,
     save_evidence_cache,
 )
-from wqb_agent.reflection import Reflector
 from wqb_agent.state import Experiment
 
 
@@ -362,39 +361,6 @@ class TestEvidenceCacheIO(unittest.TestCase):
             )
             self.assertEqual(count, 0)
             self.assertFalse(os.path.exists(os.path.join(tmp, "evidence_cache.json")))
-
-
-class TestReflectorOverlayClassify(unittest.TestCase):
-    def _reflector_with_cache(self, entry):
-        from wqb_agent.memory import ExperienceMemory
-        reflector = Reflector(ExperienceMemory())
-        reflector.evidence_cache = {"Xg771xOa": entry}
-        return reflector
-
-    def _exp(self, alpha_id):
-        exp = Experiment(1, "h", "rank(x)", {}, ["x"])
-        exp.status = "DONE"
-        exp.alpha_id = alpha_id
-        exp.metrics = _metrics_with_pending_self_corr(
-            sharpe=2.0, fitness=1.5, turnover=0.18)
-        return exp
-
-    def test_settled_cache_upgrades_verdict_out_of_reconcile(self):
-        reflector = self._reflector_with_cache(_cached_entry(True))
-        verdict = reflector._classify(self._exp("Xg771xOa"))
-        self.assertNotEqual(verdict["label"], "RECONCILE")
-
-    def test_failed_self_correlation_still_blocks_promotion(self):
-        reflector = self._reflector_with_cache(_cached_entry(False))
-        verdict = reflector._classify(self._exp("Xg771xOa"))
-        label = verdict["label"]
-        self.assertIn(label, {"FAIL", "SUCCESS", "PROMISING", "SUSPICIOUS_HIGH_SIGNAL"})
-        self.assertNotEqual(label, "RECONCILE")
-
-    def test_unknown_alpha_id_unaffected(self):
-        reflector = self._reflector_with_cache(_cached_entry(True))
-        verdict = reflector._classify(self._exp("other"))
-        self.assertEqual(verdict["label"], "RECONCILE")
 
 
 if __name__ == "__main__":

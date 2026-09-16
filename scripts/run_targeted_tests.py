@@ -84,38 +84,6 @@ DIRECT_TESTS = {
         "tests/test_search_policy.py",
         "tests/test_evaluation.py",
     ),
-    "wqb_agent/memory.py": (
-        "tests/test_memory_tiers.py",
-        "tests/test_replay_idempotency.py",
-    ),
-    "wqb_agent/memory_replay.py": (
-        "tests/test_replay_idempotency.py",
-        "tests/test_architecture_contracts.py",
-    ),
-    "wqb_agent/memory_codec.py": (
-        "tests/test_memory_tiers.py",
-        "tests/test_replay_idempotency.py",
-    ),
-    "wqb_agent/memory_policy.py": (
-        "tests/test_memory_tiers.py",
-        "tests/test_replay_idempotency.py",
-    ),
-    "wqb_agent/memory_projection.py": (
-        "tests/test_memory_tiers.py",
-        "tests/test_replay_idempotency.py",
-        "tests/test_architecture_contracts.py",
-    ),
-    "wqb_agent/reflection.py": (
-        "tests/test_memory_tiers.py",
-        "tests/test_replay_idempotency.py",
-    ),
-    "wqb_agent/reflection_evaluation.py": (
-        "tests/test_memory_tiers.py",
-    ),
-    "wqb_agent/reflection_learning.py": (
-        "tests/test_memory_tiers.py",
-        "tests/test_replay_idempotency.py",
-    ),
     "wqb_agent/terminal_evidence.py": (
         "tests/test_simulation_gateway.py",
     ),
@@ -201,12 +169,11 @@ DIRECT_TESTS = {
     "wqb_agent/alpha_pool.py": (),
     "wqb_agent/behavior.py": (),
     "wqb_agent/cli.py": ("tests/test_cli.py",),
-    "wqb_agent/context.py": ("tests/test_research_api.py",),
     "wqb_agent/diagnostics.py": ("tests/test_remote_diagnostics.py",),
     "wqb_agent/evidence.py": ("tests/test_evidence.py",),
     "wqb_agent/evidence_status.py": ("tests/test_evidence.py",),
     "wqb_agent/experiment.py": ("tests/test_architecture_contracts.py",),
-    "wqb_agent/research_settlement.py": ("tests/test_replay_idempotency.py",),
+    "wqb_agent/research_settlement.py": (),
     "wqb_agent/expression.py": ("tests/test_expression.py",),
     "wqb_agent/failures.py": ("tests/test_client_refactor.py",),
     "wqb_agent/heartbeat.py": ("tests/test_heartbeat.py",),
