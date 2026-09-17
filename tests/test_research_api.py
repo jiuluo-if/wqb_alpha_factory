@@ -265,6 +265,35 @@ class TestResearchApi(unittest.TestCase):
                 delete_template("private_round_trip", catalog_path=catalog)["status"],
                 "DELETED",
             )
+
+    def test_private_catalog_write_keeps_dict_lists_as_toml_inline_tables(self):
+        from wqb_agent.alpha_templates.loader import load_builtin_templates
+        from wqb_agent.research_api import create_template, inspect_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = pathlib.Path("wqb_agent/alpha_templates/catalog/builtin.toml")
+            catalog = pathlib.Path(tmp) / "private.toml"
+            catalog.write_text(
+                source.read_text(encoding="utf-8").replace(
+                    'semantic_contract = "SYNTHETIC_FIXTURE"',
+                    'semantic_contract = "DATA_QUALITY"',
+                ),
+                encoding="utf-8",
+            )
+            template = replace(
+                load_builtin_templates()[0],
+                template_id="private_inline_tables",
+                semantic_contract="DATA_QUALITY",
+                fixed_field_bindings=({"slot": "p", "field_id": "field_a"},),
+            )
+            create_template(template, catalog_path=catalog)
+            entry = inspect_template(
+                "private_inline_tables", catalog_path=catalog, require_private=True
+            )
+            self.assertEqual(
+                entry["fixed_field_bindings"],
+                [{"slot": "p", "field_id": "field_a"}],
+            )
     def test_discovery_simulation_and_remote_boundaries_accept_equivalent_configs(self):
         raw = {
             "simulation": {},
