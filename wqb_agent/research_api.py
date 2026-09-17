@@ -486,8 +486,11 @@ def build_simulation_variant(base_spec, template, slot_name, value):
         raise ValueError(f"undeclared numeric slot: {slot_name}")
     if value not in slot.allowed_values:
         raise ValueError(f"value is not allowed for numeric slot: {slot_name}")
+    expression = slot.render(base_spec.expression, value)
+    if expression == base_spec.expression:
+        raise ValueError("numeric variant is a no-op")
     return SimulationSpec(
-        expression=slot.render(base_spec.expression, value),
+        expression=expression,
         settings=dict(base_spec.settings), fields=base_spec.fields,
         note=base_spec.note, template_id=base_spec.template_id,
     )

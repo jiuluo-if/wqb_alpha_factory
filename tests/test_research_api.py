@@ -99,6 +99,8 @@ class TestResearchApi(unittest.TestCase):
                          "rank(add(ts_mean(field_a, 5), ts_mean(field_a, 5)))")
         self.assertEqual(variant.settings, base.settings)
         self.assertEqual(variant.fields, base.fields)
+        with self.assertRaisesRegex(ValueError, "no-op"):
+            build_simulation_variant(base, template, "slow_window", 5)
         with self.assertRaises(ValueError):
             build_simulation_variant(base, template, "slow_window", 66)
 

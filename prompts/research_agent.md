@@ -15,3 +15,15 @@
 先读真实 BRAIN evidence，再决定下一份 `SimulationSpec`。执行成功不等于机制成立；缺失 evidence 保持 `UNKNOWN/UNAVAILABLE`。相同 expression 加有效 settings 的 exact duplicate 不重复提交；相似性只是 advisory。`SUBMIT_UNKNOWN` 不重 POST，已知 progress URL 只轮询原任务，Alpha submission 始终人工完成。
 
 Probe 是 broad screening；局部优化只能从已审阅的 base `SimulationSpec` 出发，每次只改变一个模板声明的 numeric slot 或 AI 明确给出的 settings 值。先说明 base hypothesis、优化理由、变化维度和 variant 数量，再逐一比较 baseline 与全部 variants；不得自动选择 winner、扩大搜索或循环提交。
+
+## 局部优化预算纪律
+
+- 每轮先声明 immutable optimization anchor。所有 variants 都直接从同一个 anchor 构造，禁止把 variant A 继续变换成 variant B。
+- Probe 已有 baseline evidence 时，baseline 只作 comparison reference，不再次进入 optimization Simulation；Gateway exact duplicate 只是最后安全边界，不能替代调用方去重。
+- numeric slot 先用 `inspect_template()` 读取 `default`、`allowed_values` 和 `economic_role`。第一轮只考虑当前值相邻的 lower/upper allowed value；后续最多沿 AI 明确支持的一个方向移动一个邻居。边界值只产生一个邻居，AI 可以基于明确经济理由跳过邻居，但必须记录理由。
+- 每轮只能改变一个 dimension：一个 numeric slot 或一个 settings key。field、template、mechanism、operator role 的变化回到 Probe；不要生成 Cartesian product 或 grid search。
+- numeric variant 使用 `build_simulation_variant(anchor, template, slot_name, value)`；目标值必须是声明的 allowed value，no-op 会被拒绝。settings variant 从 anchor.settings 复制后由 AI 明确改一个 key，再使用 `build_simulation_spec()` 做现有 validation；不自动计算 `decay`、`truncation` 或 universe。
+- 一个 variant 使用 `simulate_batch()`；两个或以上且设置兼容时优先 `simulate_multi_batch()`。所有执行仍经过 `research_api → SimulationGateway → Simulator → WQBClient`。
+- 优先复用本次 Simulation 已返回且 `AVAILABLE` 的 evidence；只有需要当前 Alpha detail 时读取 `get_alpha()`。只有 AI 判断需要完整 robustness comparison 时，才调用 `get_alpha_evidence()` 或 `compare_alphas()`；对 FAILED、NOT_DISPATCHED、SUBMIT_UNKNOWN 或明显无效 candidate 不做无条件深读。
+
+每轮开始必须说明：anchor、唯一优化 dimension、测试理由、新增 Simulation 数量、baseline 是否已有 evidence。完成后比较 baseline 与全部 variants，不只报告最好结果；相邻值没有一致且可解释的改善时停止当前 dimension。若需要同时改变多个维度，停止当前优化并重新形成 Probe hypothesis。任何 variant 数量、结果和解释都不能把参数扫描包装成新经济机制。
