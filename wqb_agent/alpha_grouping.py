@@ -36,6 +36,7 @@ def quality_state(row):
 
 def group_remote_evidence(rows):
     groups = {"execution": {}, "structural": {}, "variant_family": {}, "quality": {}}
+    family_execution_keys = {}
     for row in rows or ():
         if not isinstance(row, Mapping) or not row.get("alpha_id"):
             continue
@@ -49,6 +50,7 @@ def group_remote_evidence(rows):
         item = dict(row)
         item["structural_group_key"] = str(structural)
         item["variant_family_key"] = str(variant_family)
+        family_execution_keys.setdefault(str(variant_family), set()).add(str(execution))
         for key, value in ((
             ("execution", execution), ("structural", structural),
             ("variant_family", variant_family), ("quality", quality_state(row)),
@@ -56,7 +58,9 @@ def group_remote_evidence(rows):
             groups[key].setdefault(str(value), []).append(item)
     for members in groups["variant_family"].values():
         for item in members:
-            item["observed_variant_count"] = len(members)
+            family_key = item["variant_family_key"]
+            item["family_member_count"] = len(members)
+            item["observed_execution_count"] = len(family_execution_keys[family_key])
     for projection in groups.values():
         for members in projection.values():
             members.sort(key=lambda item: str(item.get("alpha_id") or item.get("id") or ""))

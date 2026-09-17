@@ -27,7 +27,7 @@ class TestRemoteColors(unittest.TestCase):
 
         self.assertEqual({entry["desired_color"] for entry in plan}, {"BLUE"})
         self.assertEqual({entry["structural_group_key"] for entry in plan}, {key})
-        self.assertEqual({entry["group_size"] for entry in plan}, {2})
+        self.assertEqual({entry["family_member_count"] for entry in plan}, {2})
 
     def test_numeric_variants_share_family_color_but_keep_strict_keys(self):
         rows = [_row("a", "ts_mean(close, 22)"), _row("b", "ts_mean(close, 66)")]
@@ -46,7 +46,8 @@ class TestRemoteColors(unittest.TestCase):
             structural_fingerprint("ts_mean(close, 22)"),
             structural_fingerprint("ts_mean(close, 66)"),
         )
-        self.assertEqual({entry["observed_variant_count"] for entry in plan}, {2})
+        self.assertEqual({entry["family_member_count"] for entry in plan}, {2})
+        self.assertEqual({entry["observed_execution_count"] for entry in plan}, {2})
 
     def test_unassigned_families_never_receive_automatic_collision_colors(self):
         rows = [_row("a", "rank(close)"), _row("b", "scale(close)")]
@@ -55,6 +56,16 @@ class TestRemoteColors(unittest.TestCase):
 
         self.assertEqual({entry["desired_color"] for entry in plan}, {None})
         self.assertEqual({entry["action"] for entry in plan}, {"UNASSIGNED"})
+
+    def test_safety_constant_families_do_not_share_color_assignment(self):
+        rows = [_row("a", "divide(close, 0.001)"), _row("b", "divide(close, 0.01)")]
+        key = variant_family_fingerprint("divide(close, 0.001)")
+
+        plan = preview_remote_colors(rows, assignments={key: "BLUE"})
+
+        self.assertEqual(
+            {entry["desired_color"] for entry in plan}, {None, "BLUE"}
+        )
 
     def test_different_families_use_their_explicit_distinct_colors(self):
         rows = [_row("a", "rank(close)"), _row("b", "scale(close)")]
@@ -89,9 +100,10 @@ class TestRemoteColors(unittest.TestCase):
         self.assertEqual(
             set(plan[0]),
             {
-                "alpha_id", "structural_group_key", "group_size", "quality_state",
+                "alpha_id", "structural_group_key", "quality_state",
                 "existing_color_state", "expected_old_color", "desired_color", "action",
-                "existing_colors", "variant_family_key", "observed_variant_count",
+                "existing_colors", "variant_family_key", "family_member_count",
+                "observed_execution_count",
             },
         )
         with self.assertRaises(TypeError):

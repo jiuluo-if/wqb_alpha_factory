@@ -11,7 +11,7 @@ from wqb_agent.expression import (
 
 
 class TestExpressionAnalysis(unittest.TestCase):
-    def test_variant_family_abstracts_numbers_but_preserves_operator_topology(self):
+    def test_variant_family_abstracts_declared_horizon_literals_only(self):
         base = "ts_mean(close, 22)"
         numeric_variant = "ts_mean(close, 66)"
         field_variant = "ts_mean(volume, 22)"
@@ -22,6 +22,24 @@ class TestExpressionAnalysis(unittest.TestCase):
         self.assertEqual(variant_family_fingerprint(base), variant_family_fingerprint(field_variant))
         self.assertNotEqual(variant_family_fingerprint(base), variant_family_fingerprint(operator_variant))
         self.assertEqual(expression_identity_keys(base)[1], variant_family_fingerprint(base))
+
+    def test_variant_family_preserves_fixed_and_unknown_numeric_literals(self):
+        self.assertNotEqual(
+            variant_family_fingerprint("divide(close, 0.001)"),
+            variant_family_fingerprint("divide(close, 0.01)"),
+        )
+        self.assertNotEqual(
+            variant_family_fingerprint("trade_when(close, 0.2, volume)"),
+            variant_family_fingerprint("trade_when(close, 0.8, volume)"),
+        )
+        self.assertNotEqual(
+            variant_family_fingerprint("power(close, 5)"),
+            variant_family_fingerprint("power(close, 22)"),
+        )
+        self.assertNotEqual(
+            variant_family_fingerprint("kth_element(close, 1, 2)"),
+            variant_family_fingerprint("kth_element(close, 2, 2)"),
+        )
 
     def test_settings_are_not_in_variant_family_but_remain_in_execution_identity(self):
         expression = "rank(close)"

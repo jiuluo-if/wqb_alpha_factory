@@ -5,6 +5,8 @@ import json
 import re
 from dataclasses import dataclass
 
+from ..expression import HORIZON_LATTICE  # noqa: F401  # re-export template contract
+
 NUMBER_TOKEN_RE = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)(?![\w.])")
 OPERATOR_OCCURRENCE_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 OPERATOR_PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}\s*\(")
@@ -13,8 +15,6 @@ FASTEXPR_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 ECONOMIC_FIELD_SLOTS = ("p", "data_field", "s", "t")
 CONTROL_BINDING_SLOTS = ("g",)
 PRIMARY_FIELD_SLOT_ALIASES = frozenset({"p", "data_field"})
-
-HORIZON_LATTICE = (5, 22, 66, 120, 255)
 
 FIXED_NUMERICS = {
     "0.001": ("SAFETY_CONSTANT", "divide epsilon；固定数值稳定性常量"),

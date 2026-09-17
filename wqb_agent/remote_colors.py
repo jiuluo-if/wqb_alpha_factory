@@ -83,8 +83,8 @@ def preview_remote_colors(rows, assignments=None, *, overwrite=False):
                 "alpha_id": str(row["alpha_id"]),
                 "structural_group_key": row["structural_group_key"],
                 "variant_family_key": family_key,
-                "observed_variant_count": len(members),
-                "group_size": len(members),
+                "family_member_count": row["family_member_count"],
+                "observed_execution_count": row["observed_execution_count"],
                 "quality_state": group_quality,
                 "existing_color_state": existing_color_state,
                 "expected_old_color": old_color,
@@ -100,7 +100,7 @@ def _plan_entry(entry):
         raise TypeError("sync_alpha_colors requires an exact preview plan")
     required = {
         "alpha_id", "structural_group_key", "variant_family_key",
-        "observed_variant_count", "group_size", "quality_state",
+        "family_member_count", "observed_execution_count", "quality_state",
         "existing_color_state", "expected_old_color", "desired_color", "action",
         "existing_colors",
     }

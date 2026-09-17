@@ -26,9 +26,7 @@ _NON_FIELD_IDENTIFIERS = {
 
 
 _SPACE_RE = re.compile(r"\s+")
-_NUMBER_RE = re.compile(
-    r"(?<![A-Za-z0-9_.])(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?![A-Za-z0-9_.])"
-)
+HORIZON_LATTICE = (5, 22, 66, 120, 255)
 
 
 @dataclass(frozen=True)
@@ -85,17 +83,50 @@ def expression_field_identifiers(analysis):
     )
 
 
+def _abstract_horizon_literals(skeleton):
+    """Abstract only a known time-series operator's final horizon argument."""
+    replacements = []
+    for match in _OPERATOR_RE.finditer(skeleton):
+        if not match.group(1).lower().startswith("ts_"):
+            continue
+        opening = match.end() - 1
+        depth = 0
+        last_comma = opening
+        closing = None
+        for index in range(opening, len(skeleton)):
+            char = skeleton[index]
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    closing = index
+                    break
+            elif char == "," and depth == 1:
+                last_comma = index
+        if closing is None or last_comma == opening:
+            continue
+        start, end = last_comma + 1, closing
+        literal = skeleton[start:end]
+        if literal.isdigit() and int(literal) in HORIZON_LATTICE:
+            replacements.append((start, end))
+    result = skeleton
+    for start, end in reversed(replacements):
+        result = result[:start] + "HORIZON" + result[end:]
+    return result
+
+
 def canonical_expression(expression):
     """Normalize only syntax-insensitive whitespace/case for identity keys."""
     return _SPACE_RE.sub("", str(expression or "")).lower()
 
 
 def expression_identity_keys(expression):
-    """Return strict and numeric-abstracted advisory expression keys.
+    """Return strict and conservative horizon-abstracted advisory keys.
 
     Both keys preserve operator topology and abstract field identifiers.  The
-    second key additionally replaces numeric literals with ``NUMBER``; it is
-    a variant-family hint, not semantic or execution equivalence.
+    second key additionally replaces only known time-series horizon literals;
+    it is a variant-family hint, not semantic or execution equivalence.
     """
     analysis = analyze_expression(expression)
     operators = set(analysis.operators)
@@ -103,7 +134,7 @@ def expression_identity_keys(expression):
         lambda match: match.group(0) if match.group(0).casefold() in operators else "FIELD",
         analysis.canonical,
     )
-    family_skeleton = _NUMBER_RE.sub("NUMBER", skeleton)
+    family_skeleton = _abstract_horizon_literals(skeleton)
     return (
         hashlib.sha256(skeleton.encode("utf-8")).hexdigest(),
         hashlib.sha256(family_skeleton.encode("utf-8")).hexdigest(),
@@ -113,8 +144,8 @@ def expression_identity_keys(expression):
 def variant_family_fingerprint(expression):
     """Return an advisory operator-topology family key.
 
-    Numeric literals are deliberately abstracted.  This must never replace
-    ``submission_fingerprint`` for duplicate or write-safety decisions.
+    Only declared horizon-shaped literals are abstracted.  This must never
+    replace ``submission_fingerprint`` for duplicate or write-safety decisions.
     """
     return expression_identity_keys(expression)[1]
 

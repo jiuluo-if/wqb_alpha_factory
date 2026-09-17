@@ -40,10 +40,11 @@ class TestAlphaGrouping(unittest.TestCase):
         self.assertEqual(structural_fingerprint("rank(close)"),
                          structural_fingerprint("rank(volume)"))
 
-    def test_grouping_exposes_variant_family_and_observed_count(self):
+    def test_grouping_exposes_member_and_observed_execution_counts(self):
         rows = [
             {"alpha_id": "a", "alpha": {"regular": "ts_mean(close, 22)"}, "settings": {}},
             {"alpha_id": "b", "alpha": {"regular": "ts_mean(close, 66)"}, "settings": {}},
+            {"alpha_id": "c", "alpha": {"regular": "ts_mean(close, 22)"}, "settings": {}},
         ]
 
         groups = group_remote_evidence(rows)
@@ -51,8 +52,10 @@ class TestAlphaGrouping(unittest.TestCase):
         self.assertEqual(len(groups["structural"]), 2)
         self.assertEqual(len(groups["variant_family"]), 1)
         family = next(iter(groups["variant_family"].values()))
-        self.assertEqual(len(family), 2)
-        self.assertEqual({item["observed_variant_count"] for item in family}, {2})
+        self.assertEqual(len(family), 3)
+        self.assertEqual({item["family_member_count"] for item in family}, {3})
+        self.assertEqual({item["observed_execution_count"] for item in family}, {2})
+        self.assertNotIn("observed_variant_count", family[0])
 
     def test_settings_variation_stays_in_family_but_not_execution_group(self):
         rows = [
@@ -64,6 +67,21 @@ class TestAlphaGrouping(unittest.TestCase):
 
         self.assertEqual(len(groups["execution"]), 2)
         self.assertEqual(len(groups["variant_family"]), 1)
+        family = next(iter(groups["variant_family"].values()))
+        self.assertEqual({item["family_member_count"] for item in family}, {2})
+        self.assertEqual({item["observed_execution_count"] for item in family}, {2})
+
+    def test_numeric_constants_and_thresholds_remain_separate_families(self):
+        rows = [
+            {"alpha_id": "epsilon-a", "alpha": {"regular": "divide(close, 0.001)"}, "settings": {}},
+            {"alpha_id": "epsilon-b", "alpha": {"regular": "divide(close, 0.01)"}, "settings": {}},
+            {"alpha_id": "threshold-a", "alpha": {"regular": "trade_when(close, 0.2, volume)"}, "settings": {}},
+            {"alpha_id": "threshold-b", "alpha": {"regular": "trade_when(close, 0.8, volume)"}, "settings": {}},
+        ]
+
+        groups = group_remote_evidence(rows)
+
+        self.assertEqual(len(groups["variant_family"]), 4)
 
     def test_similarity_prioritizes_exact_then_strict_then_variant_family(self):
         rows = [
