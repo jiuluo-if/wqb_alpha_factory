@@ -1,7 +1,7 @@
 import unittest
 from unittest import mock
 
-from wqb_agent.alpha_grouping import structural_fingerprint
+from wqb_agent.alpha_grouping import structural_fingerprint, variant_family_fingerprint
 from wqb_agent.remote_colors import preview_remote_colors, sync_remote_colors
 
 
@@ -19,9 +19,9 @@ def _row(alpha_id, expression, color=None, *, failed=False, status="DONE"):
 
 
 class TestRemoteColors(unittest.TestCase):
-    def test_structural_similarity_requires_explicit_assignment(self):
+    def test_structural_similarity_shares_explicit_family_assignment(self):
         rows = [_row("a", "rank(close)"), _row("b", "rank(volume)")]
-        key = structural_fingerprint("rank(close)")
+        key = variant_family_fingerprint("rank(close)")
 
         plan = preview_remote_colors(rows, assignments={key: "BLUE"})
 
@@ -29,9 +29,49 @@ class TestRemoteColors(unittest.TestCase):
         self.assertEqual({entry["structural_group_key"] for entry in plan}, {key})
         self.assertEqual({entry["group_size"] for entry in plan}, {2})
 
+    def test_numeric_variants_share_family_color_but_keep_strict_keys(self):
+        rows = [_row("a", "ts_mean(close, 22)"), _row("b", "ts_mean(close, 66)")]
+        family_key = variant_family_fingerprint("ts_mean(close, 22)")
+
+        plan = preview_remote_colors(rows, assignments={family_key: "BLUE"})
+
+        self.assertEqual({entry["variant_family_key"] for entry in plan}, {family_key})
+        self.assertEqual({entry["desired_color"] for entry in plan}, {"BLUE"})
+        self.assertEqual(
+            {entry["structural_group_key"] for entry in plan},
+            {structural_fingerprint("ts_mean(close, 22)"),
+             structural_fingerprint("ts_mean(close, 66)")},
+        )
+        self.assertNotEqual(
+            structural_fingerprint("ts_mean(close, 22)"),
+            structural_fingerprint("ts_mean(close, 66)"),
+        )
+        self.assertEqual({entry["observed_variant_count"] for entry in plan}, {2})
+
+    def test_unassigned_families_never_receive_automatic_collision_colors(self):
+        rows = [_row("a", "rank(close)"), _row("b", "scale(close)")]
+
+        plan = preview_remote_colors(rows)
+
+        self.assertEqual({entry["desired_color"] for entry in plan}, {None})
+        self.assertEqual({entry["action"] for entry in plan}, {"UNASSIGNED"})
+
+    def test_different_families_use_their_explicit_distinct_colors(self):
+        rows = [_row("a", "rank(close)"), _row("b", "scale(close)")]
+        assignments = {
+            variant_family_fingerprint("rank(close)"): "BLUE",
+            variant_family_fingerprint("scale(close)"): "GREEN",
+        }
+
+        plan = preview_remote_colors(rows, assignments=assignments)
+
+        self.assertEqual(
+            {entry["desired_color"] for entry in plan}, {"BLUE", "GREEN"}
+        )
+
     def test_quality_is_text_only_and_does_not_change_assignment(self):
         row = _row("a", "rank(close)", failed=True)
-        key = structural_fingerprint("rank(close)")
+        key = variant_family_fingerprint("rank(close)")
 
         plan = preview_remote_colors([row], assignments={key: "PURPLE"})
 
@@ -39,7 +79,7 @@ class TestRemoteColors(unittest.TestCase):
         self.assertEqual(plan[0]["quality_state"], "FAILED_CHECK")
 
     def test_preview_entries_are_immutable_and_have_review_fields(self):
-        key = structural_fingerprint("rank(close)")
+        key = variant_family_fingerprint("rank(close)")
         plan = preview_remote_colors(
             [_row("a", "rank(close)", color="BLUE")],
             assignments={key: "GREEN"},
@@ -51,7 +91,7 @@ class TestRemoteColors(unittest.TestCase):
             {
                 "alpha_id", "structural_group_key", "group_size", "quality_state",
                 "existing_color_state", "expected_old_color", "desired_color", "action",
-                "existing_colors",
+                "existing_colors", "variant_family_key", "observed_variant_count",
             },
         )
         with self.assertRaises(TypeError):
@@ -59,7 +99,7 @@ class TestRemoteColors(unittest.TestCase):
 
     def test_unassigned_groups_are_preserved_without_hash_color(self):
         rows = [_row("a", "rank(close)"), _row("b", "scale(close)")]
-        key = structural_fingerprint("rank(close)")
+        key = variant_family_fingerprint("rank(close)")
 
         plan = preview_remote_colors(rows, assignments={key: "BLUE"})
 
@@ -73,21 +113,21 @@ class TestRemoteColors(unittest.TestCase):
                        "log(close)", "abs(close)", "sign(close)"]
         rows = [_row(str(index), expression) for index, expression in enumerate(expressions)]
         assignments = {
-            structural_fingerprint(expression): "BLUE" for expression in expressions
+            variant_family_fingerprint(expression): "BLUE" for expression in expressions
         }
 
         with self.assertRaisesRegex(ValueError, "MAX_ACTIVE_COLOR_GROUPS"):
             preview_remote_colors(rows, assignments=assignments)
 
     def test_assignment_outside_snapshot_fails_closed(self):
-        with self.assertRaisesRegex(ValueError, "UNKNOWN_STRUCTURAL_GROUP"):
+        with self.assertRaisesRegex(ValueError, "UNKNOWN_VARIANT_FAMILY"):
             preview_remote_colors(
                 [_row("a", "rank(close)")], assignments={"missing": "BLUE"}
             )
 
     def test_mixed_existing_colors_are_visible_in_review_plan(self):
         rows = [_row("a", "rank(close)", "BLUE"), _row("b", "rank(volume)", "GREEN")]
-        key = structural_fingerprint("rank(close)")
+        key = variant_family_fingerprint("rank(close)")
 
         plan = preview_remote_colors(rows, assignments={key: "PURPLE"})
 
@@ -96,7 +136,7 @@ class TestRemoteColors(unittest.TestCase):
         self.assertEqual(plan[0]["quality_state"], "DONE")
 
     def test_sync_consumes_exact_plan_and_does_not_reclassify_quality(self):
-        key = structural_fingerprint("rank(close)")
+        key = variant_family_fingerprint("rank(close)")
         plan = preview_remote_colors(
             [_row("a", "rank(close)", "BLUE")], assignments={key: "GREEN"}
         )
@@ -114,7 +154,7 @@ class TestRemoteColors(unittest.TestCase):
         self.assertEqual(patched, [(('a', 'GREEN'), {"verify": True})])
 
     def test_stale_plan_never_patches_even_with_overwrite(self):
-        key = structural_fingerprint("rank(close)")
+        key = variant_family_fingerprint("rank(close)")
         plan = preview_remote_colors(
             [_row("a", "rank(close)", "BLUE")], assignments={key: "GREEN"}
         )
@@ -133,7 +173,7 @@ class TestRemoteColors(unittest.TestCase):
         self.assertEqual(patched, [])
 
     def test_noop_preserve_and_explicit_overwrite_actions(self):
-        key = structural_fingerprint("rank(close)")
+        key = variant_family_fingerprint("rank(close)")
         noop = preview_remote_colors(
             [_row("a", "rank(close)", "GREEN")], assignments={key: "GREEN"}
         )
@@ -155,7 +195,7 @@ class TestRemoteColors(unittest.TestCase):
         setter.assert_not_called()
 
     def test_readback_mismatch_fails_closed(self):
-        key = structural_fingerprint("rank(close)")
+        key = variant_family_fingerprint("rank(close)")
         plan = preview_remote_colors(
             [_row("a", "rank(close)", "BLUE")], assignments={key: "GREEN"}
         )

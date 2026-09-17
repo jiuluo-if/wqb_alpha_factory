@@ -1,4 +1,4 @@
-"""Structural color plans and explicitly authorized remote metadata updates.
+"""Variant-family color plans and explicitly authorized remote metadata updates.
 
 Colors are a human-facing projection of structural groups. They are never
 derived from quality metrics and never act as a research decision or winner
@@ -26,7 +26,7 @@ def _normalize_assignments(assignments):
     if assignments is None:
         return {}
     if not isinstance(assignments, Mapping):
-        raise TypeError("assignments must be a mapping of structural group to color")
+        raise TypeError("assignments must be a mapping of variant family to color")
     if len(assignments) > MAX_ACTIVE_COLOR_GROUPS:
         raise ValueError(f"MAX_ACTIVE_COLOR_GROUPS={MAX_ACTIVE_COLOR_GROUPS}")
     normalized = {}
@@ -34,7 +34,7 @@ def _normalize_assignments(assignments):
         key = str(group_key).strip()
         desired = _normalize_color(color)
         if not key:
-            raise ValueError("structural_group_key must be non-empty")
+            raise ValueError("variant_family_key must be non-empty")
         if desired not in ALPHA_COLOR_VALUES:
             raise ValueError(
                 f"unsupported Alpha color {color!r}; expected one of "
@@ -60,14 +60,14 @@ def _plan_action(old_color, desired_color, *, overwrite):
 
 
 def preview_remote_colors(rows, assignments=None, *, overwrite=False):
-    """Build an immutable, reviewable plan from one remote evidence snapshot."""
+    """Build an immutable family-color plan from one evidence snapshot."""
     normalized_assignments = _normalize_assignments(assignments)
     groups = group_remote_evidence(rows)
-    unknown_groups = set(normalized_assignments) - set(groups["structural"])
+    unknown_groups = set(normalized_assignments) - set(groups["variant_family"])
     if unknown_groups:
-        raise ValueError("UNKNOWN_STRUCTURAL_GROUP")
+        raise ValueError("UNKNOWN_VARIANT_FAMILY")
     result = []
-    for structural_key, members in sorted(groups["structural"].items()):
+    for family_key, members in sorted(groups["variant_family"].items()):
         existing_colors = tuple(sorted({color for color in (_row_color(row) for row in members) if color}))
         qualities = {quality_state(row) for row in members}
         group_quality = next(iter(qualities), "UNKNOWN") if len(qualities) == 1 else "MIXED_QUALITY"
@@ -76,12 +76,14 @@ def preview_remote_colors(rows, assignments=None, *, overwrite=False):
             else "UNIFORM_EXISTING_COLOR" if existing_colors
             else "NO_EXISTING_COLOR"
         )
-        desired = normalized_assignments.get(structural_key)
+        desired = normalized_assignments.get(family_key)
         for row in sorted(members, key=lambda item: str(item.get("alpha_id"))):
             old_color = _row_color(row)
             result.append(MappingProxyType({
                 "alpha_id": str(row["alpha_id"]),
-                "structural_group_key": structural_key,
+                "structural_group_key": row["structural_group_key"],
+                "variant_family_key": family_key,
+                "observed_variant_count": len(members),
                 "group_size": len(members),
                 "quality_state": group_quality,
                 "existing_color_state": existing_color_state,
@@ -97,7 +99,8 @@ def _plan_entry(entry):
     if not isinstance(entry, Mapping):
         raise TypeError("sync_alpha_colors requires an exact preview plan")
     required = {
-        "alpha_id", "structural_group_key", "group_size", "quality_state",
+        "alpha_id", "structural_group_key", "variant_family_key",
+        "observed_variant_count", "group_size", "quality_state",
         "existing_color_state", "expected_old_color", "desired_color", "action",
         "existing_colors",
     }

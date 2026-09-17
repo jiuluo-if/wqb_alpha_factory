@@ -1,9 +1,40 @@
 import unittest
 
-from wqb_agent.expression import ExpressionAnalysis, analyze_expression
+from wqb_agent.alpha_grouping import structural_fingerprint
+from wqb_agent.expression import (
+    ExpressionAnalysis,
+    analyze_expression,
+    expression_identity_keys,
+    submission_fingerprint,
+    variant_family_fingerprint,
+)
 
 
 class TestExpressionAnalysis(unittest.TestCase):
+    def test_variant_family_abstracts_numbers_but_preserves_operator_topology(self):
+        base = "ts_mean(close, 22)"
+        numeric_variant = "ts_mean(close, 66)"
+        field_variant = "ts_mean(volume, 22)"
+        operator_variant = "ts_delta(close, 22)"
+
+        self.assertNotEqual(structural_fingerprint(base), structural_fingerprint(numeric_variant))
+        self.assertEqual(variant_family_fingerprint(base), variant_family_fingerprint(numeric_variant))
+        self.assertEqual(variant_family_fingerprint(base), variant_family_fingerprint(field_variant))
+        self.assertNotEqual(variant_family_fingerprint(base), variant_family_fingerprint(operator_variant))
+        self.assertEqual(expression_identity_keys(base)[1], variant_family_fingerprint(base))
+
+    def test_settings_are_not_in_variant_family_but_remain_in_execution_identity(self):
+        expression = "rank(close)"
+
+        self.assertEqual(
+            variant_family_fingerprint(expression),
+            variant_family_fingerprint(expression),
+        )
+        self.assertNotEqual(
+            submission_fingerprint(expression, {"decay": 4}),
+            submission_fingerprint(expression, {"decay": 6}),
+        )
+
     def test_analysis_is_deterministic_and_extracts_only_known_fields(self):
         result = analyze_expression(
             "rank(ts_delta(returns_5d, 5)) + rank(close)",

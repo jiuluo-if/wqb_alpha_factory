@@ -17,8 +17,8 @@
 ## Alpha 结构分组与颜色 metadata
 
 - 颜色只用于人类阅读的结构标签，不是质量、排序、winner 或机制证据。质量只保留 `DONE`、`FAILED_CHECK`、`UNKNOWN` 等文本状态；不得用 Sharpe、fitness、turnover、相关性或阈值自动推导颜色。
-- 对同一份远端 evidence snapshot，先调用 `group_alphas()`；结构相似性由 `structural_group_key` 表达，exact execution fingerprint 仍只用于重复执行识别。不得创建第二份缓存或本地颜色状态。
-- AI 明确选择当前轮最多 5 个 structural group，并提交 `structural_group_key -> BLUE/GREEN/PURPLE/RED/YELLOW` 的显式 assignment。未分配组保持现状；相同颜色、混合现有颜色都必须在 review plan 中显式可见，不得 hash 或自动碰撞处理。
+- 对同一份远端 evidence snapshot，先调用 `group_alphas()`；同时区分 exact execution identity、`structural_group_key` 和 `variant_family_key`。variant family 只表示 operator topology 相同且 numeric literal 被抽象后的 advisory family，不是语义等价；不得创建第二份缓存或本地颜色状态。
+- AI 明确选择当前轮最多 5 个 variant family，并提交 `variant_family_key -> BLUE/GREEN/PURPLE/RED/YELLOW` 的显式 assignment。review plan 仍必须显示每个 Alpha 的 `structural_group_key` 和 `observed_variant_count`；未分配 family 保持现状，相同颜色、混合现有颜色都必须显式可见，不得 hash 或自动碰撞处理。
 - 严格按 `snapshot → group/quality inspection → preview_alpha_colors(assignments=...) → 人工 review → sync_alpha_colors(exact_plan=...) → readback` 执行。同步只消费该 immutable plan；远端当前颜色与 `expected_old_color` 不一致时为 `STALE_PLAN`，必须重新 preview，`overwrite=True` 也不能跳过 stale gate。
 - 默认保留已有颜色；只有明确批准的 `overwrite=True` 才能 recolor，且每次只允许已有 metadata PATCH/readback，不得触发 Simulation、Alpha submission 或第二条 POST 路径。每轮记录新增 Simulation 数量；颜色 assignment 数量为 0 不得包装成机制证据。
 
@@ -30,6 +30,7 @@ Probe 是 broad screening；局部优化只能从已审阅的 base `SimulationSp
 - Probe 已有 baseline evidence 时，baseline 只作 comparison reference，不再次进入 optimization Simulation；Gateway exact duplicate 只是最后安全边界，不能替代调用方去重。
 - numeric slot 先用 `inspect_template()` 读取 `default`、`allowed_values` 和 `economic_role`。第一轮只考虑当前值相邻的 lower/upper allowed value；后续最多沿 AI 明确支持的一个方向移动一个邻居。边界值只产生一个邻居，AI 可以基于明确经济理由跳过邻居，但必须记录理由。
 - 每轮只能改变一个 dimension：一个 numeric slot 或一个 settings key。field、template、mechanism、operator role 的变化回到 Probe；不要生成 Cartesian product 或 grid search。
+- numeric 与 settings variants 原则上留在同一 variant family；operator topology 变化必须拆成不同 family。family 内多个参数点必须一起解释，不能只挑最高 Sharpe 的一个包装成独立机制。
 - numeric variant 使用 `build_simulation_variant(anchor, template, slot_name, value)`；目标值必须是声明的 allowed value，no-op 会被拒绝。settings variant 从 anchor.settings 复制后由 AI 明确改一个 key，再使用 `build_simulation_spec()` 做现有 validation；不自动计算 `decay`、`truncation` 或 universe。
 - 一个 variant 使用 `simulate_batch()`；两个或以上且设置兼容时优先 `simulate_multi_batch()`。所有执行仍经过 `research_api → SimulationGateway → Simulator → WQBClient`。
 - 优先复用本次 Simulation 已返回且 `AVAILABLE` 的 evidence；只有需要当前 Alpha detail 时读取 `get_alpha()`。只有 AI 判断需要完整 robustness comparison 时，才调用 `get_alpha_evidence()` 或 `compare_alphas()`；对 FAILED、NOT_DISPATCHED、SUBMIT_UNKNOWN 或明显无效 candidate 不做无条件深读。

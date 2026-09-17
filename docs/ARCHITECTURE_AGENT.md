@@ -44,6 +44,6 @@ Repository 读取 BRAIN Alpha 与 evidence，并维护可删除、可重建的�
 
 ## Factory、去重与颜色
 
-AlphaFactory 是纯候选生成器，输出 `SimulationSpec`，不提交、不写研究数据库、不运行长时控制循环。精确去重使用 canonical expression 加完整 effective settings；结构相似和相关性仅作为 AI 的 advisory evidence。颜色先复用同一份 remote evidence snapshot 的 structural group，再由 AI 显式给出最多 5 个 `structural_group_key ->` 既有 palette 颜色的 assignment；preview plan 必须经 review，sync 只消费该 exact plan，并在 PATCH 前重新读取颜色，stale 时 fail closed。质量状态只作为文本证据，颜色不表示质量或 winner；`overwrite` 和 readback verify 明确控制 metadata PATCH。
+AlphaFactory 是纯候选生成器，输出 `SimulationSpec`，不提交、不写研究数据库、不运行长时控制循环。精确去重使用 canonical expression 加完整 effective settings；严格 structural 与 variant family 仅作为 AI 的 advisory evidence。variant family 由 expression 的 operator topology 和 numeric abstraction 得到，不表示 semantic equivalence。颜色先复用同一份 remote evidence snapshot 的 `variant_family_key`，再由 AI 显式给出最多 5 个 family 到既有 palette 颜色的 assignment；preview plan 必须同时保留 strict structural key 和 observed variant count，经 review 后 sync 只消费该 exact plan，并在 PATCH 前重新读取颜色，stale 时 fail closed。质量状态只作为文本证据，颜色不表示质量或 winner；`overwrite` 和 readback verify 明确控制 metadata PATCH。
 
 Alpha submission 永远是人工操作，credentials、真实 Alpha 和私有字段不得进入 tracked 文件。

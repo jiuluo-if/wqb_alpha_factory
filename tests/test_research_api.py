@@ -6,6 +6,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest import mock
 
+from wqb_agent.alpha_grouping import variant_family_fingerprint
 from wqb_agent.config import normalize_config
 from wqb_agent.research_api import (
     SimulationSpec,
@@ -96,6 +97,10 @@ class TestResearchApi(unittest.TestCase):
         variant = build_simulation_variant(base, template, "slow_window", 22)
         self.assertEqual(variant.expression,
                          "rank(add(ts_mean(field_a, 5), ts_mean(field_a, 22)))")
+        self.assertEqual(
+            variant_family_fingerprint(base.expression),
+            variant_family_fingerprint(variant.expression),
+        )
         self.assertEqual(base.expression,
                          "rank(add(ts_mean(field_a, 5), ts_mean(field_a, 5)))")
         self.assertEqual(variant.settings, base.settings)

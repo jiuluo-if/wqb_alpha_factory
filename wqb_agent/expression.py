@@ -26,6 +26,9 @@ _NON_FIELD_IDENTIFIERS = {
 
 
 _SPACE_RE = re.compile(r"\s+")
+_NUMBER_RE = re.compile(
+    r"(?<![A-Za-z0-9_.])(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?![A-Za-z0-9_.])"
+)
 
 
 @dataclass(frozen=True)
@@ -85,6 +88,35 @@ def expression_field_identifiers(analysis):
 def canonical_expression(expression):
     """Normalize only syntax-insensitive whitespace/case for identity keys."""
     return _SPACE_RE.sub("", str(expression or "")).lower()
+
+
+def expression_identity_keys(expression):
+    """Return strict and numeric-abstracted advisory expression keys.
+
+    Both keys preserve operator topology and abstract field identifiers.  The
+    second key additionally replaces numeric literals with ``NUMBER``; it is
+    a variant-family hint, not semantic or execution equivalence.
+    """
+    analysis = analyze_expression(expression)
+    operators = set(analysis.operators)
+    skeleton = _IDENTIFIER_RE.sub(
+        lambda match: match.group(0) if match.group(0).casefold() in operators else "FIELD",
+        analysis.canonical,
+    )
+    family_skeleton = _NUMBER_RE.sub("NUMBER", skeleton)
+    return (
+        hashlib.sha256(skeleton.encode("utf-8")).hexdigest(),
+        hashlib.sha256(family_skeleton.encode("utf-8")).hexdigest(),
+    )
+
+
+def variant_family_fingerprint(expression):
+    """Return an advisory operator-topology family key.
+
+    Numeric literals are deliberately abstracted.  This must never replace
+    ``submission_fingerprint`` for duplicate or write-safety decisions.
+    """
+    return expression_identity_keys(expression)[1]
 
 
 def submission_fingerprint(expression, settings):

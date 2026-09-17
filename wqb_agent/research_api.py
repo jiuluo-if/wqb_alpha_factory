@@ -956,7 +956,7 @@ def find_duplicate_alphas(alpha_id, *, rows=None, client=None,
 
 def find_similar_alphas(expression_or_alpha_id, *, rows=None,
                         client=None, config=None, state_dir=None, days=None):
-    """Return advisory remote exact/structural matches; never blocks a POST."""
+    """Return advisory remote exact/strict/family matches; never blocks a POST."""
     if rows is None:
         repository = _remote_repository(
             client=client, config=config, state_dir=state_dir
