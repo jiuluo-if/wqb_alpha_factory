@@ -382,18 +382,18 @@ class WQBClient:
         while True:
             remaining = max(0.0, rate_limit_budget_sec - (time.monotonic() - start))
             if not self._wait_rate_limit_gate(max_wait=remaining):
-                raise WQBRateLimitError(
-                    f"{context} rate-limit budget exhausted while waiting for shared gate."
-                )
+                error = f"{context} rate-limit budget exhausted while waiting for shared gate."
+                raise (WQBSubmitUnknownError(error) if ambiguous_write
+                       else WQBRateLimitError(error))
             self._ensure_auth()
             # Authentication may itself encounter a 429 and extend the
             # client-wide gate.  Confirm again immediately before transport;
             # Simulation POSTs must not cross that second TOCTOU window.
             remaining = max(0.0, rate_limit_budget_sec - (time.monotonic() - start))
             if not self._wait_rate_limit_gate(max_wait=remaining):
-                raise WQBRateLimitError(
-                    f"{context} rate-limit budget exhausted before transport."
-                )
+                error = f"{context} rate-limit budget exhausted before transport."
+                raise (WQBSubmitUnknownError(error) if ambiguous_write
+                       else WQBRateLimitError(error))
             try:
                 resp = self._session().request(
                     method, url, params=params, json=json, headers=headers, timeout=timeout
@@ -435,9 +435,9 @@ class WQBClient:
                 continue
             if resp.status_code == 429:
                 if not retry_rate_limit:
-                    raise WQBRateLimitError(
-                        f"{context} received 429; POST acceptance is not contractually known."
-                    )
+                    error = f"{context} received 429; POST acceptance is not contractually known."
+                    raise (WQBSubmitUnknownError(error) if ambiguous_write
+                           else WQBRateLimitError(error))
                 elapsed = time.monotonic() - start
                 remaining = max(0.0, rate_limit_budget_sec - elapsed)
                 retry_delay = self._retry_after_seconds(resp)
@@ -658,6 +658,7 @@ class WQBClient:
             accepted=(201, 200),
             context=f"submit simulation {expression[:60]}",
             ambiguous_write=True,
+            retry_rate_limit=False,
             headers=headers,
         )
         location = resp.headers.get("Location")
@@ -700,6 +701,7 @@ class WQBClient:
                 raise ValueError("Multi-Simulation child expression must be non-empty")
             child.setdefault("type", "REGULAR")
             payload.append(child)
+        self._wait_submission_slot()
         headers = {"X-Idempotency-Key": idempotency_key} if idempotency_key else None
         resp = self._request(
             "POST",
@@ -708,6 +710,7 @@ class WQBClient:
             accepted=(201, 200),
             context="submit multi simulation",
             ambiguous_write=True,
+            retry_rate_limit=False,
             headers=headers,
         )
         location = resp.headers.get("Location")

@@ -10,6 +10,23 @@ from wqb_agent import artifacts
 
 
 class TestAtomicArtifactDurability(unittest.TestCase):
+    @unittest.skipUnless(os.name == "posix", "POSIX permission contract")
+    def test_private_artifact_is_owner_only_under_permissive_umask(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "private.json")
+            with mock.patch.object(artifacts.os, "umask", return_value=0o000):
+                artifacts.atomic_write_json_if_changed(path, {"secret": True}, private=True)
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission contract")
+    def test_private_atomic_update_preserves_existing_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "private.json")
+            artifacts.atomic_write_json_if_changed(path, {"version": 1}, private=True)
+            os.chmod(path, 0o640)
+            artifacts.atomic_write_json_if_changed(path, {"version": 2}, private=True)
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o640)
+
     def test_atomic_replace_fsyncs_parent_after_replace_and_cleans_temp(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "state.json")

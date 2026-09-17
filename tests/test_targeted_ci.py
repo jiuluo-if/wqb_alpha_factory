@@ -35,6 +35,7 @@ class TargetedCiSelectionTests(unittest.TestCase):
 
         self.assertEqual(inventory["unmapped_production_files"], set())
         self.assertEqual(inventory["mapped_missing_tests"], set())
+        self.assertEqual(inventory["stale_mapping_keys"], set())
         self.assertEqual(inventory["duplicate_keys"], False)
 
     def test_mapping_inventory_reports_every_active_test_route(self):

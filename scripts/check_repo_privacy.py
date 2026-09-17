@@ -123,14 +123,17 @@ class Finding:
 
 
 def repo_root(start: Path | None = None) -> Path:
+    # The default must be independent of the caller's cwd.  This also keeps
+    # CLI default-root and explicit-root scans on the same repository.
+    working_directory = start or Path(__file__).resolve().parents[1]
     result = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
-        cwd=str(start) if start else None,
+        cwd=str(working_directory),
         capture_output=True,
         text=True,
         check=True,
     )
-    return Path(result.stdout.strip())
+    return Path(result.stdout.strip()).resolve()
 
 
 def tracked_files(root: Path) -> list[str]:

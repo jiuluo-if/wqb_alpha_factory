@@ -2,8 +2,8 @@
 
 import json
 import os
-import threading
-import time
+import stat
+import tempfile
 
 
 def _without_keys(value, ignored):
@@ -27,7 +27,7 @@ def _read_json(path):
 
 def atomic_write_json_if_changed(path, payload, *, ignored_keys=(),
                                  indent=2, ensure_ascii=False,
-                                 sort_keys=False):
+                                 sort_keys=False, private=False):
     """Persist JSON with stable comparison and collision-safe temp files.
 
     ``ignored_keys`` is for volatile bookkeeping such as ``updated_at``.  A
@@ -42,22 +42,36 @@ def atomic_write_json_if_changed(path, payload, *, ignored_keys=(),
     serialized = json.dumps(
         payload, indent=indent, ensure_ascii=ensure_ascii, sort_keys=sort_keys
     ) + "\n"
-    return _atomic_replace(path, serialized.encode("utf-8"))
+    return _atomic_replace(path, serialized.encode("utf-8"), private=private)
 
 
-def _atomic_replace(path, content):
+def _atomic_replace(path, content, *, private=False):
     parent = os.path.dirname(os.path.abspath(path))
-    os.makedirs(parent, exist_ok=True)
-    token = f"{os.getpid()}.{threading.get_ident()}.{time.time_ns()}"
-    tmp = f"{path}.tmp.{token}"
+    if private and os.name == "posix":
+        os.makedirs(parent, mode=0o700, exist_ok=True)
+    else:
+        os.makedirs(parent, exist_ok=True)
+    existing_mode = None
+    if private and os.name == "posix":
+        try:
+            existing_mode = stat.S_IMODE(os.stat(path).st_mode)
+        except FileNotFoundError:
+            pass
+    fd, tmp = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.",
+                                suffix=".tmp", dir=parent)
     try:
-        with open(tmp, "wb") as handle:
+        if private and os.name == "posix":
+            os.fchmod(fd, existing_mode if existing_mode is not None else 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            fd = None
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp, path)
         _fsync_parent_directory(path)
     finally:
+        if fd is not None:
+            os.close(fd)
         try:
             os.unlink(tmp)
         except FileNotFoundError:

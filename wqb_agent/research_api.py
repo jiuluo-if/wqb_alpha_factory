@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import tomllib
 from collections.abc import Mapping
 from typing import Any
 
@@ -32,7 +33,16 @@ from .alpha_grouping import (
     find_remote_similar,
     group_remote_evidence,
 )
-from .alpha_templates import AlphaTemplateRegistry
+from .alpha_semantics import derive_field_semantic_traits
+from .alpha_templates import (
+    AlphaTemplate,
+    AlphaTemplateRegistry,
+    TemplateNumericSlot,
+    TemplateOperatorSlot,
+    resolve_private_catalog_path,
+    validate_template_contract,
+)
+from .artifacts import _atomic_replace
 from .config import AppConfig, normalize_config
 from .discovery import FieldDiscovery
 from .operator_reference import (
@@ -59,12 +69,23 @@ def _load_config(config: Mapping[str, Any] | str | None) -> dict[str, Any]:
     return dict(config)
 
 
+def _normalized_config(config=None) -> AppConfig:
+    """Normalize every public facade config boundary exactly once."""
+    if config is None:
+        return normalize_config(_load_config(None))
+    return normalize_config(config)
+
+
+def _state_directory(config: AppConfig, state_dir=None) -> str:
+    return state_dir or config.runtime.state_dir
+
+
 def _remote_research_components(*, client, config=None, state_dir=None,
                                 include_factory=False):
     """Build only rebuildable components for public discovery/probe tools."""
-    typed = normalize_config(_load_config(config))
+    typed = _normalized_config(config)
     runtime = typed.runtime
-    directory = state_dir or runtime.state_dir
+    directory = _state_directory(typed, state_dir)
     selection = runtime.field_selection
     discovery = FieldDiscovery(
         client,
@@ -114,6 +135,9 @@ def discover_fields(query, *, client=None, config=None, state_dir=None, limit=No
         target_count=limit or default_limit,
     )
     return {
+        "source": "BRAIN_LIVE_ONLY",
+        "status": "AVAILABLE",
+        "evidence_status": "AVAILABLE" if fields else "UNAVAILABLE",
         "fields": fields,
         "field_source": discovery.source_provenance(),
         "query": hypothesis,
@@ -137,6 +161,8 @@ def list_datasets(*, client=None, config=None):
         raise RuntimeError("LIVE_DATASET_CAPABILITY_REQUIRED")
     return {
         "source": "LIVE",
+        "status": "AVAILABLE",
+        "evidence_status": "AVAILABLE",
         "scope": _client_scope(client),
         "datasets": list(reader() or ()),
     }
@@ -150,13 +176,8 @@ def list_datafields(
     normalized_id = str(dataset_id or "").strip()
     if not normalized_id:
         raise ValueError("dataset_id must be non-empty")
-    if isinstance(config, AppConfig):
-        typed = config
-    elif config is not None:
-        typed = normalize_config(_load_config(config))
-    else:
-        typed = None
-    default_limit = typed.runtime.pagination_limit if typed is not None else 50
+    typed = _normalized_config(config)
+    default_limit = typed.runtime.pagination_limit
     try:
         page_limit = default_limit if limit is None else int(limit)
         page_offset = int(offset)
@@ -237,7 +258,7 @@ def list_all_datafields(
     }
 
 
-def generate_probes(query=None, *, template_ids=None, count=100, seed=None,
+def generate_probes(query=None, *, template_ids=None, count=None,
                     fields=None, client=None, config=None, state_dir=None):
     """Generate reviewable ``SimulationSpec`` probes without an inbox write."""
     if client is None:
@@ -249,7 +270,7 @@ def generate_probes(query=None, *, template_ids=None, count=100, seed=None,
     )
     reference = get_operator_reference(client=client, config=config)
     try:
-        target = int(count)
+        target = (_typed.factory.default_probe_count if count is None else int(count))
     except (TypeError, ValueError) as exc:
         raise ValueError("count 必须是整数") from exc
     if target < 0:
@@ -268,12 +289,13 @@ def generate_probes(query=None, *, template_ids=None, count=100, seed=None,
     requested_templates = list(template_ids or [])
     hypothesis["template_ids"] = requested_templates
     fields = fields if fields is not None else discovery.discover(
-        hypothesis, target_count=target
+        hypothesis, target_count=_typed.runtime.fields_per_discovery
     )
     if callable(reference):
         reference = reference()
     return factory.generate_probe_specs(
-        hypothesis, fields, reference, target=target, seed=seed,
+        hypothesis, fields, reference, target=target,
+        simulation_settings=_typed.simulation_config.settings,
     )
 
 
@@ -309,6 +331,8 @@ def get_capabilities(*, client=None, config=None) -> dict[str, Any]:
     reference = get_operator_reference(client=client, config=config)
     return {
         "source": "BRAIN_LIVE_ONLY",
+        "status": reference.get("status", "UNKNOWN"),
+        "evidence_status": "AVAILABLE" if reference.get("operators") else "UNAVAILABLE",
         "operators": list(reference.get("operators") or []),
         "operator_capability": reference,
     }
@@ -327,7 +351,11 @@ def list_templates(*, catalog_path=None, require_private=False):
         AlphaTemplateRegistry.from_private(catalog_path)
         if require_private else AlphaTemplateRegistry(private_catalog=catalog_path)
     )
-    return registry.catalog()
+    rows = registry.catalog()
+    if require_private:
+        for row in rows:
+            row["source"] = "private_catalog"
+    return rows
 
 
 def inspect_template(template_id, *, catalog_path=None, require_private=False):
@@ -338,7 +366,288 @@ def inspect_template(template_id, *, catalog_path=None, require_private=False):
     template = registry.get(str(template_id))
     if template is None:
         raise KeyError(f"template not found: {template_id}")
-    return template.catalog_entry()
+    entry = template.catalog_entry()
+    if require_private:
+        entry["source"] = "private_catalog"
+    return entry
+
+
+def classify_fields(fields):
+    """Return conservative, derived field type/dataset/semantic classifications."""
+    rows = []
+    for field in fields or ():
+        if not isinstance(field, Mapping):
+            continue
+        traits = derive_field_semantic_traits(field)
+        dataset = field.get("dataset") or field.get("dataset_id")
+        if isinstance(dataset, Mapping):
+            dataset = dataset.get("id") or dataset.get("name")
+        rows.append({
+            "id": str(field.get("id") or ""),
+            "type": str(field.get("type") or "UNKNOWN").upper(),
+            "dataset": str(dataset or "UNKNOWN"),
+            "economic_meaning": traits.get("direction_meaning", "unknown"),
+            "availability": (
+                "AVAILABLE" if traits.get("metadata_semantics") == "AVAILABLE"
+                else "UNKNOWN"
+            ),
+            "semantic_status": traits.get("status", "UNKNOWN"),
+            "semantic_evidence": traits,
+        })
+    return {
+        "source": "DERIVED_METADATA",
+        "status": "CLASSIFIED",
+        "evidence_status": "INCONCLUSIVE" if rows else "UNAVAILABLE",
+        "fields": rows,
+    }
+
+
+def get_simulation_config(*, config=None):
+    """Return normalized simulation defaults without performing a remote write."""
+    typed = _normalized_config(config)
+    return {
+        "source": "CONFIG",
+        "status": "CONFIGURED",
+        "evidence_status": "NOT_APPLICABLE",
+        "settings": dict(typed.simulation_config.settings),
+        "runtime": {
+            "max_concurrent_sims": typed.runtime.max_concurrent_sims,
+            "poll_timeout_sec": typed.runtime.poll_timeout_sec,
+        },
+    }
+
+
+def validate_simulation_settings(settings, *, client=None, config=None):
+    """Validate bounded Simulation settings before Gateway construction."""
+    errors = []
+    if not isinstance(settings, Mapping):
+        return {
+            "valid": False, "status": "INVALID", "source": "LOCAL_SCHEMA",
+            "evidence_status": "UNAVAILABLE", "settings": {},
+            "errors": ["settings must be an object"],
+        }
+    normalized = dict(settings)
+    for key in ("region", "universe", "instrumentType", "neutralization"):
+        if key in normalized and (not isinstance(normalized[key], str) or not normalized[key].strip()):
+            errors.append(f"{key} must be a non-empty string")
+    for key in ("delay", "decay"):
+        if key not in normalized:
+            continue
+        value = normalized[key]
+        if isinstance(value, bool) or not isinstance(value, int) or value < (0 if key == "delay" else 1):
+            errors.append(f"{key} must be a valid non-negative integer")
+        elif key == "delay" and value not in {0, 1}:
+            errors.append("delay must be 0 or 1")
+        elif key == "decay" and value > 252:
+            errors.append("decay must be between 1 and 252")
+    fields = normalized.get("fields")
+    if fields is not None and (
+        not isinstance(fields, (list, tuple))
+        or not fields
+        or any(not isinstance(item, (str, int)) or not str(item).strip() for item in fields)
+    ):
+        errors.append("fields must be a non-empty list when provided")
+    if client is not None:
+        for key, attr in (("region", "region"), ("universe", "universe"), ("instrumentType", "instrument_type")):
+            expected = getattr(client, attr, None)
+            if key in normalized and expected is not None and str(normalized[key]) != str(expected):
+                errors.append(f"{key} does not match client scope")
+    return {
+        "valid": not errors, "status": "VALID" if not errors else "INVALID",
+        "source": "LOCAL_SCHEMA", "evidence_status": "INCONCLUSIVE",
+        "settings": normalized, "errors": errors,
+    }
+
+
+def build_simulation_spec(expression, *, settings=None, fields=(), note=None, template_id=None,
+                          client=None, config=None):
+    """Build a validated, non-submitting SimulationSpec."""
+    result = validate_simulation_settings(settings or {}, client=client, config=config)
+    if not result["valid"]:
+        raise ValueError("invalid simulation settings: " + "; ".join(result["errors"]))
+    effective_settings = dict(result["settings"])
+    effective_settings.pop("fields", None)
+    return SimulationSpec(
+        expression=expression, settings=effective_settings, fields=tuple(fields or ()),
+        note=note, template_id=template_id,
+    )
+
+
+def build_simulation_variant(base_spec, template, slot_name, value):
+    """Return one bounded numeric variant without mutating or submitting."""
+    if not isinstance(base_spec, SimulationSpec):
+        base_spec = SimulationSpec(**dict(base_spec))
+    template = _coerce_template(template)
+    if base_spec.template_id != template.template_id:
+        raise ValueError("template_id does not match base SimulationSpec")
+    slot = next((item for item in template.numeric_slots
+                 if item.name == str(slot_name)), None)
+    if slot is None:
+        raise ValueError(f"undeclared numeric slot: {slot_name}")
+    if value not in slot.allowed_values:
+        raise ValueError(f"value is not allowed for numeric slot: {slot_name}")
+    expression = slot.render(base_spec.expression, value)
+    if expression == base_spec.expression:
+        raise ValueError("numeric variant is a no-op")
+    return SimulationSpec(
+        expression=expression,
+        settings=dict(base_spec.settings), fields=base_spec.fields,
+        note=base_spec.note, template_id=base_spec.template_id,
+    )
+
+
+def validate_template(template):
+    """Validate one template object without reading or writing a catalog."""
+    try:
+        template = _coerce_template(template)
+    except (TypeError, ValueError) as exc:
+        return {"ok": False, "errors": [str(exc)]}
+    report = validate_template_contract(template)
+    return {
+        **report,
+        "source": "DERIVED_TEMPLATE",
+        "status": "VALID" if report["ok"] else "INVALID",
+        "evidence_status": "INCONCLUSIVE",
+    }
+
+
+def _coerce_template(template):
+    if isinstance(template, AlphaTemplate):
+        return template
+    if not isinstance(template, Mapping):
+        raise TypeError("template must be AlphaTemplate or mapping")
+    values = dict(template)
+    values["template_id"] = values.pop("template_id", values.pop("id", None))
+    numeric = []
+    for item in values.pop("numeric_slots", ()) or ():
+        numeric.append(item if isinstance(item, TemplateNumericSlot)
+                      else TemplateNumericSlot(**dict(item)))
+    operators = []
+    for item in values.pop("operator_slots", ()) or ():
+        operators.append(item if isinstance(item, TemplateOperatorSlot)
+                         else TemplateOperatorSlot(**dict(item)))
+    values["numeric_slots"] = tuple(numeric)
+    values["operator_slots"] = tuple(operators)
+    return AlphaTemplate(**values)
+
+
+def _private_catalog_document(catalog_path):
+    if catalog_path is None:
+        raise ValueError("private catalog path must be explicit")
+    path = resolve_private_catalog_path(catalog_path)
+    with path.open("rb") as handle:
+        return path, tomllib.load(handle)
+
+
+def _template_raw(template):
+    template = _coerce_template(template)
+    raw = {
+        "id": template.template_id, "version": template.version,
+        "kind": template.kind, "family": template.family,
+        "expression": template.expression, "required_slots": list(template.required_slots),
+        "economic_mechanism": template.economic_mechanism, "direction": template.direction,
+        "direction_transform": template.direction_transform,
+        "expected_horizon": template.expected_horizon, "falsification": template.falsification,
+        "self_correlation_impact": template.self_correlation_impact,
+        "tags": list(template.tags), "selection_groups": list(template.selection_groups),
+        "selection_order": template.selection_order, "role": template.role,
+        "field_roles": list(template.field_roles), "fixed_field_bindings": list(template.fixed_field_bindings),
+        "allowed_field_families": list(template.allowed_field_families),
+        "field_relationship": template.field_relationship,
+        "relationship_contract": template.relationship_contract,
+        "semantic_contract": template.semantic_contract,
+        "direction_reason": template.direction_reason,
+        "allowed_horizon_profiles": [list(item) for item in template.allowed_horizon_profiles],
+        "allowed_settings_arms": list(template.allowed_settings_arms),
+        "mechanism_tags": list(template.mechanism_tags), "novelty_family": template.novelty_family,
+        "template_mode": template.template_mode,
+    }
+    raw["numeric_slots"] = [{
+        "name": slot.name, "kind": slot.kind, "default": slot.default,
+        "allowed_values": list(slot.allowed_values), "economic_role": slot.economic_role,
+        "token": slot.token, "occurrence": slot.occurrence,
+    } for slot in template.numeric_slots]
+    raw["operator_slots"] = [{
+        "name": slot.name, "role": slot.role, "placeholder": slot.placeholder,
+        "baseline_operator": slot.baseline_operator,
+        "allowed_operators": list(slot.allowed_operators), "semantic_contract": slot.semantic_contract,
+    } for slot in template.operator_slots]
+    return raw
+
+
+def _toml_value(value):
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _render_private_catalog(raw_templates):
+    lines = []
+    for raw in raw_templates:
+        lines.append("[[templates]]")
+        nested = {"numeric_slots", "operator_slots"}
+        for key, value in raw.items():
+            if key not in nested:
+                lines.append(f"{key} = {_toml_value(value)}")
+        for key in ("numeric_slots", "operator_slots"):
+            for item in raw.get(key, ()):
+                lines.append("")
+                lines.append(f"[[templates.{key}]]")
+                for item_key, item_value in item.items():
+                    lines.append(f"{item_key} = {_toml_value(item_value)}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _write_private_catalog(path, document):
+    raw_templates = list(document.get("templates") or [])
+    _atomic_replace(str(path), _render_private_catalog(raw_templates).encode("utf-8"),
+                    private=True)
+
+
+def create_template(template, *, catalog_path=None):
+    path, document = _private_catalog_document(catalog_path)
+    candidate = _template_raw(template)
+    if str(candidate.get("semantic_contract", "UNDECLARED")).upper() == "SYNTHETIC_FIXTURE":
+        raise ValueError("SYNTHETIC_SEMANTIC_CONTRACT_PRIVATE")
+    registry = AlphaTemplateRegistry.from_private(path)
+    if registry.get(candidate["id"]) is not None:
+        raise ValueError(f"duplicate template_id: {candidate['id']}")
+    candidate_template = _coerce_template(candidate)
+    report = validate_template(candidate_template)
+    if not report.get("ok"):
+        raise ValueError("invalid template: " + ", ".join(report["errors"]))
+    document["templates"].append(candidate)
+    _write_private_catalog(path, document)
+    return inspect_template(candidate["id"], catalog_path=path, require_private=True)
+
+
+def update_template(template_id, template, *, catalog_path=None):
+    path, document = _private_catalog_document(catalog_path)
+    candidate = _template_raw(template)
+    if str(template_id) != candidate["id"]:
+        raise ValueError("template_id must match template.id")
+    if str(candidate.get("semantic_contract", "UNDECLARED")).upper() == "SYNTHETIC_FIXTURE":
+        raise ValueError("SYNTHETIC_SEMANTIC_CONTRACT_PRIVATE")
+    report = validate_template(candidate)
+    if not report.get("ok"):
+        raise ValueError("invalid template: " + ", ".join(report["errors"]))
+    rows = document.get("templates") or []
+    for index, row in enumerate(rows):
+        if str(row.get("id")) == str(template_id):
+            rows[index] = candidate
+            _write_private_catalog(path, document)
+            return inspect_template(template_id, catalog_path=path, require_private=True)
+    raise KeyError(f"template not found: {template_id}")
+
+
+def delete_template(template_id, *, catalog_path=None):
+    path, document = _private_catalog_document(catalog_path)
+    rows = document.get("templates") or []
+    kept = [row for row in rows if str(row.get("id")) != str(template_id)]
+    if len(kept) == len(rows):
+        raise KeyError(f"template not found: {template_id}")
+    document["templates"] = kept
+    _write_private_catalog(path, document)
+    return {"template_id": str(template_id), "status": "DELETED", "source": "PRIVATE_CATALOG"}
 
 
 def _simulation_gateway(*, client=None, config=None, state_dir=None):
@@ -346,8 +655,9 @@ def _simulation_gateway(*, client=None, config=None, state_dir=None):
     if client is None:
         from .client import WQBClient
         client = WQBClient()
-    directory = state_dir or ".wqb_state"
-    runtime = normalize_config(_load_config(config)).runtime
+    typed = _normalized_config(config)
+    directory = _state_directory(typed, state_dir)
+    runtime = typed.runtime
     max_concurrent = runtime.max_concurrent_sims
     poll_timeout = runtime.poll_timeout_sec
     return SimulationGateway(
@@ -362,7 +672,11 @@ def validate_simulation_spec(spec, *, client=None, config=None,
     gateway = _simulation_gateway(
         client=client, config=config, state_dir=state_dir
     )
-    return gateway.validate_simulation_spec(spec)
+    result = gateway.validate_simulation_spec(spec)
+    return {
+        **result, "source": "SimulationGateway", "status": "VALID",
+        "evidence_status": "INCONCLUSIVE",
+    }
 
 
 def execution_fingerprint(spec, *, client=None, config=None,
@@ -424,24 +738,30 @@ def get_simulation_modes() -> dict[str, dict[str, Any]]:
         "single": {
             "name": "Single Simulation",
             "available": True,
+            "status": "AVAILABLE",
+            "evidence_status": "INCONCLUSIVE",
             "max_concurrent": 10,
         },
         "multi": {
             "name": "Multi-Simulation",
             "available": True,
+            "status": "AVAILABLE",
+            "evidence_status": "INCONCLUSIVE",
             "children_per_job": 10,
             "max_concurrent_jobs": 8,
         },
         "region_agnostic": {
             "name": "Region-Agnostic Simulation",
             "available": False,
+            "status": "UNAVAILABLE",
+            "evidence_status": "UNAVAILABLE",
             "reason": "NO_VERIFIED_WRITE_CONTRACT",
         },
     }
 
 
 def get_pending_executions(*, state_dir=".wqb_state"):
-    return {"entries": ExecutionGuard(state_dir).entries()}
+    return {"entries": ExecutionGuard(state_dir, reconcile=False).entries()}
 
 
 def resume_execution(fingerprint, *, client=None, config=None,
@@ -510,7 +830,8 @@ def get_alpha_self_correlation(alpha_id, *, client=None, config=None):
 
 
 def compare_alphas(alpha_ids, *, client=None, config=None):
-    return {"source": "LIVE", "alphas": [
+    return {"source": "LIVE", "status": "AVAILABLE", "evidence_status": "AVAILABLE",
+            "alphas": [
         get_alpha_evidence(item, client=client, config=config)
         for item in (alpha_ids or ())
     ]}
@@ -520,13 +841,9 @@ def _remote_repository(*, client=None, config=None, state_dir=None,
                        require_client=True):
     if require_client or client is not None:
         client = _remote_client(client=client)
-    if isinstance(config, AppConfig):
-        retention = config.remote_cache.retention_days
-    elif config is not None:
-        retention = normalize_config(_load_config(config)).remote_cache.retention_days
-    else:
-        retention = 7
-    directory = state_dir or ".wqb_state"
+    typed = _normalized_config(config)
+    retention = typed.remote_cache.retention_days
+    directory = _state_directory(typed, state_dir)
     cache_path = os.path.join(directory, ".alpha_feed_cache", "remote.json")
     return RemoteAlphaRepository(
         client.get_all_user_alphas if client is not None else None,
@@ -537,10 +854,10 @@ def _remote_repository(*, client=None, config=None, state_dir=None,
 def refresh_remote_alphas(*, client=None, config=None, state_dir=None,
     limit=100, days=None):
     if days is not None:
-        if isinstance(config, AppConfig):
-            if int(days) != config.remote_cache.retention_days:
-                raise ValueError("days must equal the configured retention window")
-        elif int(days) < 1 or int(days) > 90:
+        typed = _normalized_config(config)
+        if int(days) != typed.remote_cache.retention_days:
+            raise ValueError("days must equal the configured retention window")
+        if int(days) < 1 or int(days) > 90:
             raise ValueError("days must be within 1-90")
     return _remote_repository(
         client=client, config=config, state_dir=state_dir,
@@ -576,16 +893,12 @@ def simulation_quota(*, client=None, config=None, state_dir=None):
         client=client, config=config, state_dir=state_dir,
         require_client=False,
     )
-    if isinstance(config, AppConfig):
-        quota = config.quota
-    elif config is not None:
-        quota = normalize_config(_load_config(config)).quota
-    else:
-        quota = None
+    quota = _normalized_config(config).quota
+    typed = _normalized_config(config)
     return SimulationQuota(
-        repository, ExecutionGuard(state_dir or ".wqb_state"),
-        daily_cap=quota.daily if quota else 1600,
-        rolling_cap=quota.rolling_limit if quota else 11200,
+        repository, ExecutionGuard(_state_directory(typed, state_dir), reconcile=False),
+        daily_cap=quota.daily,
+        rolling_cap=quota.rolling_limit,
     ).snapshot()
 
 
@@ -643,7 +956,7 @@ def find_duplicate_alphas(alpha_id, *, rows=None, client=None,
 
 def find_similar_alphas(expression_or_alpha_id, *, rows=None,
                         client=None, config=None, state_dir=None, days=None):
-    """Return advisory remote exact/structural matches; never blocks a POST."""
+    """Return advisory remote exact/strict/family matches; never blocks a POST."""
     if rows is None:
         repository = _remote_repository(
             client=client, config=config, state_dir=state_dir
@@ -653,8 +966,9 @@ def find_similar_alphas(expression_or_alpha_id, *, rows=None,
     return find_remote_similar(rows, expression_or_alpha_id)
 
 
-def preview_alpha_colors(alpha_ids=None, *, rows=None, client=None,
-                         config=None, state_dir=None, days=None):
+def preview_alpha_colors(alpha_ids=None, *, rows=None, assignments=None,
+                         client=None, config=None, state_dir=None, days=None,
+                         overwrite=False):
     if rows is None:
         repository = _remote_repository(
             client=client, config=config, state_dir=state_dir
@@ -663,22 +977,22 @@ def preview_alpha_colors(alpha_ids=None, *, rows=None, client=None,
             item["alpha_id"] for item in repository.list_remote_alphas(days=days)
         ]
         rows = [repository.get_remote_alpha_evidence(item) for item in ids]
-    return preview_remote_colors(rows)
+    return preview_remote_colors(rows, assignments=assignments, overwrite=overwrite)
 
 
-def sync_alpha_colors(alpha_ids=None, *, rows=None, client=None,
-                      config=None, state_dir=None, days=None, overwrite=False,
-                      dry_run=False):
+def sync_alpha_colors(plan=None, *, exact_plan=None, client=None, config=None,
+                      state_dir=None, overwrite=False, dry_run=False):
+    """Apply a previously reviewed color preview plan only."""
+    if plan is not None and exact_plan is not None:
+        raise TypeError("provide only one of plan or exact_plan")
+    plan = exact_plan if exact_plan is not None else plan
+    if plan is None:
+        raise ValueError("EXACT_COLOR_PLAN_REQUIRED")
     repository = _remote_repository(
         client=client, config=config, state_dir=state_dir
     )
-    if rows is None:
-        ids = alpha_ids or [
-            item["alpha_id"] for item in repository.list_remote_alphas(days=days)
-        ]
-        rows = [repository.get_remote_alpha_evidence(item) for item in ids]
     return sync_remote_colors(
-        rows, get_alpha=repository.evidence.get_alpha,
+        plan, get_alpha=repository.evidence.get_alpha,
         set_alpha_color=repository.evidence.client.set_alpha_color,
         overwrite=overwrite, dry_run=dry_run,
     )
@@ -694,6 +1008,15 @@ def research_tool_manifest():
         {"name": "get_operators", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "list_templates", "mode": "READ_ONLY", "owner": "AlphaFactory"},
         {"name": "inspect_template", "mode": "READ_ONLY", "owner": "AlphaFactory"},
+        {"name": "create_template", "mode": "PRIVATE_CATALOG_WRITE", "owner": "AlphaFactory"},
+        {"name": "update_template", "mode": "PRIVATE_CATALOG_WRITE", "owner": "AlphaFactory"},
+        {"name": "delete_template", "mode": "PRIVATE_CATALOG_WRITE", "owner": "AlphaFactory"},
+        {"name": "validate_template", "mode": "PURE", "owner": "AlphaFactory"},
+        {"name": "classify_fields", "mode": "PURE", "owner": "field_metadata"},
+        {"name": "get_simulation_config", "mode": "READ_ONLY", "owner": "config"},
+        {"name": "validate_simulation_settings", "mode": "PURE", "owner": "SimulationGateway"},
+        {"name": "build_simulation_spec", "mode": "PURE", "owner": "SimulationGateway"},
+        {"name": "build_simulation_variant", "mode": "PURE", "owner": "SimulationGateway"},
         {"name": "generate_probes", "mode": "PURE", "owner": "AlphaFactory"},
         {"name": "validate_simulation_spec", "mode": "READ_ONLY", "owner": "SimulationGateway"},
         {"name": "simulate", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
@@ -723,6 +1046,9 @@ __all__ = [
     "generate_probes",
     "get_capabilities", "get_operators", "get_operator_reference", "get_operator_syntax_reference",
     "list_templates", "inspect_template",
+    "create_template", "update_template", "delete_template", "validate_template",
+    "classify_fields", "get_simulation_config", "validate_simulation_settings",
+    "build_simulation_spec", "build_simulation_variant",
     "validate_simulation_spec", "execution_fingerprint",
     "simulate", "simulate_single", "simulate_batch", "simulate_single_batch",
     "simulate_multi_batch", "get_simulation_modes",

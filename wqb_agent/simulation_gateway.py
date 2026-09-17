@@ -12,6 +12,7 @@ from typing import Any
 
 from .artifacts import atomic_write_json_if_changed
 from .expression import analyze_expression, submission_fingerprint
+from .locking import single_instance_scope
 from .simulator import Simulator
 
 _CAPABILITY_UNCHECKED = object()
@@ -50,12 +51,15 @@ class ExecutionGuard:
 
     STATUSES = frozenset({"SUBMITTING", "RUNNING", "SUBMIT_UNKNOWN"})
 
-    def __init__(self, state_dir):
+    def __init__(self, state_dir, *, reconcile=True):
         self.state_dir = os.path.abspath(str(state_dir))
         self.path = os.path.join(self.state_dir, "execution_guard.json")
         self._lock = threading.RLock()
-        # A process dying after the durable pre-POST marker cannot establish
-        # whether the remote POST happened.  Promote it before any new call.
+        if reconcile:
+            self.reconcile()
+
+    def reconcile(self):
+        """Promote interrupted writes only while the state owner is held."""
         with self._lock:
             rows = self._read()
             changed = False
@@ -101,7 +105,8 @@ class ExecutionGuard:
     def _write(self, rows):
         os.makedirs(self.state_dir, exist_ok=True)
         atomic_write_json_if_changed(
-            self.path, {"schema_version": 1, "entries": rows}, sort_keys=True
+            self.path, {"schema_version": 1, "entries": rows}, sort_keys=True,
+            private=True,
         )
 
     def entries(self):
@@ -161,7 +166,10 @@ class SimulationGateway:
     def __init__(self, client, *, state_dir=".wqb_state", max_concurrent=10,
                  poll_timeout_sec=1500, repoll_attempts=3):
         self.client = client
-        self.guard = ExecutionGuard(state_dir)
+        self.state_dir = os.path.abspath(str(state_dir))
+        # Construction must not reconcile a live SUBMITTING marker before the
+        # process owns the whole register -> POST -> outcome transaction.
+        self.guard = ExecutionGuard(self.state_dir, reconcile=False)
         self.simulator = Simulator(
             client, max_concurrent=max_concurrent, poll_timeout_sec=poll_timeout_sec,
             repoll_attempts=repoll_attempts,
@@ -288,6 +296,11 @@ class SimulationGateway:
         return self.simulate_batch([spec])[0]
 
     def simulate_batch(self, specs):
+        with single_instance_scope(self.state_dir, operation="simulation"):
+            self.guard.reconcile()
+            return self._simulate_batch(specs)
+
+    def _simulate_batch(self, specs):
         """Execute a batch through one bounded Simulator window.
 
         The batch remains one guarded execution per spec; only dispatch and
@@ -345,9 +358,6 @@ class SimulationGateway:
 
         def on_update(item):
             status = "SUBMIT_UNKNOWN" if item.status == "UNKNOWN" else item.status
-            if status == "RATE_LIMITED":
-                self.guard.remove(item.submission_fingerprint)
-                return
             if status in ExecutionGuard.STATUSES:
                 self.guard.update(
                     item.submission_fingerprint,
@@ -366,14 +376,6 @@ class SimulationGateway:
         for item in completed:
             fingerprint = item.submission_fingerprint
             completed_fingerprints.add(fingerprint)
-            if item.status == "RATE_LIMITED":
-                self.guard.remove(fingerprint)
-                results[index_by_fingerprint[fingerprint]] = {
-                    "status": "NOT_DISPATCHED",
-                    "fingerprint": fingerprint,
-                    "error": item.error,
-                }
-                continue
             if item.status in {"DONE", "FAILED"}:
                 self.guard.remove(fingerprint)
             results[index_by_fingerprint[fingerprint]] = self._result(
@@ -394,6 +396,16 @@ class SimulationGateway:
         return results
 
     def simulate_multi_batch(
+        self, specs, *, child_batch_size=10, max_concurrent_multi=8
+    ):
+        with single_instance_scope(self.state_dir, operation="multi-simulation"):
+            self.guard.reconcile()
+            return self._simulate_multi_batch(
+                specs, child_batch_size=child_batch_size,
+                max_concurrent_multi=max_concurrent_multi,
+            )
+
+    def _simulate_multi_batch(
         self, specs, *, child_batch_size=10, max_concurrent_multi=8
     ):
         """Execute large probe windows as bounded Multi-Simulation parents."""
@@ -500,9 +512,6 @@ class SimulationGateway:
 
         def on_update(batch):
             status = "SUBMIT_UNKNOWN" if batch.status == "UNKNOWN" else batch.status
-            if status == "RATE_LIMITED":
-                self.guard.remove(batch.submission_fingerprint)
-                return
             if status in ExecutionGuard.STATUSES:
                 self.guard.update(
                     batch.submission_fingerprint,
@@ -520,16 +529,6 @@ class SimulationGateway:
         }
         for batch in completed:
             batch_fingerprint = batch.submission_fingerprint
-            if batch.status == "RATE_LIMITED":
-                self.guard.remove(batch_fingerprint)
-                for child in batch.children:
-                    results[child.index] = {
-                        "status": "NOT_DISPATCHED",
-                        "fingerprint": child.submission_fingerprint,
-                        "batch_fingerprint": batch_fingerprint,
-                        "error": batch.error,
-                    }
-                continue
             if batch.status in {"DONE", "FAILED"}:
                 self.guard.remove(batch_fingerprint)
             for child in batch.children:
@@ -565,6 +564,11 @@ class SimulationGateway:
         return results
 
     def resume_execution(self, fingerprint):
+        with single_instance_scope(self.state_dir, operation="resume-simulation"):
+            self.guard.reconcile()
+            return self._resume_execution(fingerprint)
+
+    def _resume_execution(self, fingerprint):
         row = self.guard.find(str(fingerprint))
         if row is None:
             raise KeyError("execution fingerprint not found")

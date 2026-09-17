@@ -31,8 +31,6 @@ DIRECT_TESTS = {
     ),
     "wqb_agent/protocol.py": ("tests/test_protocol_truth.py",),
     "wqb_agent/query_errors.py": ("tests/test_client_refactor.py",),
-    "wqb_agent/evidence_projection.py": (),
-    "wqb_agent/pre_correlation.py": (),
     "wqb_agent/alpha_semantics.py": ("tests/test_alpha_semantics.py",),
     "wqb_agent/alpha_relationships.py": ("tests/test_alpha_relationships.py",),
     "tests/test_architecture_contracts.py": (
@@ -40,7 +38,7 @@ DIRECT_TESTS = {
     ),
     "wqb_agent/discovery.py": ("tests/test_research_api.py",),
     "wqb_agent/field_metadata.py": ("tests/test_research_api.py",),
-    "wqb_agent/discovery_selection.py": (),
+    "wqb_agent/discovery_selection.py": ("tests/test_discovery_selection.py",),
     "wqb_agent/field_catalog.py": ("tests/test_research_api.py",),
     "wqb_agent/__init__.py": (
         "tests/test_research_api.py",
@@ -55,22 +53,16 @@ DIRECT_TESTS = {
     "wqb_agent/artifacts.py": (
         "tests/test_artifacts.py",
     ),
-    "wqb_agent/validation_statistics.py": (),
-    "wqb_agent/terminal_evidence.py": (
-        "tests/test_simulation_gateway.py",
-    ),
     "wqb_agent/simulator.py": ("tests/test_simulation_gateway.py",),
-    "wqb_agent/search_evidence.py": (),
     "wqb_agent/config.py": ("tests/test_remote_diagnostics.py",),
     "wqb_agent/doctor.py": (
         "tests/test_remote_diagnostics.py",
     ),
-    "wqb_agent/proposal_contract.py": ("tests/test_protocol_truth.py",),
     "wqb_agent/operator_reference.py": ("tests/test_protocol_truth.py",),
     "wqb_agent/alpha_factory.py": (
         "tests/test_research_api.py",
     ),
-    "wqb_agent/alpha_feed_cache.py": (),
+    "wqb_agent/alpha_feed_cache.py": ("tests/test_alpha_feed_cache.py",),
     "wqb_agent/alpha_templates/model.py": ("tests/test_alpha_template_catalog.py",),
     "wqb_agent/alpha_templates/loader.py": (
         "tests/test_alpha_template_catalog.py",
@@ -95,6 +87,8 @@ DIRECT_TESTS = {
     ),
     "wqb_agent/research_api.py": (
         "tests/test_research_api.py",
+        "tests/test_alpha_grouping.py",
+        "tests/test_remote_colors.py",
     ),
     "wqb_agent/remote_quota.py": ("tests/test_remote_quota.py",),
     "wqb_agent/credentials.py": (
@@ -103,10 +97,7 @@ DIRECT_TESTS = {
     ),
     "wqb_agent/cli.py": ("tests/test_cli.py",),
     "wqb_agent/diagnostics.py": ("tests/test_remote_diagnostics.py",),
-    "wqb_agent/evidence.py": (),
     "wqb_agent/evidence_status.py": ("tests/test_protocol_truth.py",),
-    "scripts/check_health.py": (),
-    "scripts/check_correlation.py": (),
     "wqb_agent/failures.py": ("tests/test_client_refactor.py",),
     "wqb_agent/schema.py": (
         "tests/test_client_refactor.py",
@@ -114,19 +105,15 @@ DIRECT_TESTS = {
     ),
     "wqb_agent/expression.py": ("tests/test_expression.py",),
     "wqb_agent/heartbeat.py": ("tests/test_heartbeat.py",),
-    "wqb_agent/metrics.py": (),
-    "wqb_agent/mutations.py": (),
     "wqb_agent/remote_evidence.py": ("tests/test_remote_evidence.py",),
-    "wqb_agent/optimization_interfaces.py": ("tests/test_remote_evidence.py",),
     "wqb_agent/simulation_gateway.py": ("tests/test_simulation_gateway.py",),
     "wqb_agent/remote_alpha_repository.py": ("tests/test_remote_alpha_repository.py",),
     "wqb_agent/alpha_grouping.py": ("tests/test_alpha_grouping.py",),
-    "wqb_agent/alpha_colors.py": ("tests/test_remote_colors.py",),
     "wqb_agent/remote_colors.py": ("tests/test_remote_colors.py",),
-    "wqb_agent/pnl.py": (),
     "wqb_agent/smoke.py": ("tests/test_smoke.py",),
-    "wqb_agent/submission.py": (),
-    "wqb_agent/yearly.py": (),
+    "tests/test_semantic_contract_admission.py": (
+        "tests/test_semantic_contract_admission.py",
+    ),
 }
 
 FRONTEND_CONFIG_FILES = {
@@ -173,6 +160,10 @@ def mapping_inventory() -> dict[str, object]:
     mapped_tests = {
         test for tests in DIRECT_TESTS.values() for test in tests
     } | set(FRONTEND_CONFIG_TESTS)
+    stale_mapping_keys = {
+        key for key in DIRECT_TESTS
+        if not (ROOT / key).is_file()
+    }
     duplicate_keys = len(DIRECT_TESTS) != len(set(DIRECT_TESTS))
     production = _active_production_files()
     mapped_production = production & DIRECT_TESTS.keys()
@@ -183,6 +174,7 @@ def mapping_inventory() -> dict[str, object]:
         "mapped_missing_tests": mapped_tests - actual_tests,
         "unreachable_tests": actual_tests - mapped_tests,
         "duplicate_keys": duplicate_keys,
+        "stale_mapping_keys": stale_mapping_keys,
         "mapping_entries": len(DIRECT_TESTS),
     }
 
@@ -192,6 +184,11 @@ def validate_mapping_integrity() -> dict[str, object]:
     inventory = mapping_inventory()
     if inventory["duplicate_keys"]:
         raise TargetSelectionError("DIRECT_TESTS contains duplicate normalized keys")
+    stale = sorted(inventory["stale_mapping_keys"])
+    if stale:
+        raise TargetSelectionError(
+            "DIRECT_TESTS contains missing production path(s): " + ", ".join(stale)
+        )
     missing = sorted(inventory["mapped_missing_tests"])
     if missing:
         raise TargetSelectionError("Mapped targeted test file(s) do not exist: " + ", ".join(missing))

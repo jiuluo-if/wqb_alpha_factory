@@ -2,25 +2,27 @@
 
 from __future__ import annotations
 
-import hashlib
-import re
 from collections.abc import Mapping
 
-from .expression import analyze_expression, submission_fingerprint
+from .expression import expression_identity_keys, submission_fingerprint
 
 
 def structural_fingerprint(expression):
-    analysis = analyze_expression(expression)
-    operators = set(analysis.operators)
-    skeleton = re.sub(
-        r"\b[A-Za-z_][A-Za-z0-9_]*\b",
-        lambda match: match.group(0) if match.group(0).casefold() in operators else "FIELD",
-        analysis.canonical,
-    )
-    return hashlib.sha256(skeleton.encode("utf-8")).hexdigest()
+    return expression_identity_keys(expression)[0]
 
 
-def _quality(row):
+def variant_family_fingerprint(expression):
+    """Return an advisory family key; never use it for execution safety."""
+    return expression_identity_keys(expression)[1]
+
+
+def _expression(row):
+    alpha = row.get("alpha") if isinstance(row.get("alpha"), Mapping) else {}
+    return alpha.get("regular") or row.get("expression")
+
+
+def quality_state(row):
+    """Return textual evidence state without ranking or selecting an Alpha."""
     alpha = row.get("alpha") if isinstance(row.get("alpha"), Mapping) else {}
     metrics = alpha.get("is") if isinstance(alpha.get("is"), Mapping) else {}
     checks = metrics.get("checks")
@@ -33,20 +35,35 @@ def _quality(row):
 
 
 def group_remote_evidence(rows):
-    groups = {"execution": {}, "structural": {}, "quality": {}}
+    groups = {"execution": {}, "structural": {}, "variant_family": {}, "quality": {}}
+    family_execution_keys = {}
     for row in rows or ():
         if not isinstance(row, Mapping) or not row.get("alpha_id"):
             continue
-        alpha = row.get("alpha") if isinstance(row.get("alpha"), Mapping) else {}
-        expression = alpha.get("regular") or row.get("expression")
+        expression = _expression(row)
         if not isinstance(expression, str) or not expression.strip():
             continue
         settings = row.get("settings") if isinstance(row.get("settings"), Mapping) else {}
         execution = row.get("execution_fingerprint") or submission_fingerprint(expression, settings)
-        structural = row.get("structural_fingerprint") or structural_fingerprint(expression)
+        derived_structural, variant_family = expression_identity_keys(expression)
+        structural = row.get("structural_fingerprint") or derived_structural
         item = dict(row)
-        for key, value in (("execution", execution), ("structural", structural), ("quality", _quality(row))):
+        item["structural_group_key"] = str(structural)
+        item["variant_family_key"] = str(variant_family)
+        family_execution_keys.setdefault(str(variant_family), set()).add(str(execution))
+        for key, value in ((
+            ("execution", execution), ("structural", structural),
+            ("variant_family", variant_family), ("quality", quality_state(row)),
+        )):
             groups[key].setdefault(str(value), []).append(item)
+    for members in groups["variant_family"].values():
+        for item in members:
+            family_key = item["variant_family_key"]
+            item["family_member_count"] = len(members)
+            item["observed_execution_count"] = len(family_execution_keys[family_key])
+    for projection in groups.values():
+        for members in projection.values():
+            members.sort(key=lambda item: str(item.get("alpha_id") or item.get("id") or ""))
     return groups
 
 
@@ -59,14 +76,13 @@ def find_remote_duplicates(rows, alpha_id):
 
 
 def find_remote_similar(rows, expression_or_alpha_id):
-    """Return advisory exact/structural matches from remote evidence only."""
+    """Return advisory exact/strict/family matches from remote evidence only."""
     rows = [row for row in (rows or ()) if isinstance(row, Mapping)]
     target = None
     target_id = None
     for row in rows:
         row_id = str(row.get("alpha_id") or row.get("id") or "")
-        alpha = row.get("alpha") if isinstance(row.get("alpha"), Mapping) else {}
-        expression = alpha.get("regular") or row.get("expression")
+        expression = _expression(row)
         if str(expression_or_alpha_id) == row_id:
             target = expression
             target_id = row_id
@@ -79,29 +95,28 @@ def find_remote_similar(rows, expression_or_alpha_id):
         target, next((row.get("settings") for row in rows
                       if str(row.get("alpha_id") or row.get("id") or "") == target_id), {})
     ) if target_id else None
-    target_structural = structural_fingerprint(target)
-    exact = []
-    structural = []
-    for row in rows:
-        row_id = str(row.get("alpha_id") or row.get("id") or "")
-        if target_id and row_id == target_id:
-            continue
-        alpha = row.get("alpha") if isinstance(row.get("alpha"), Mapping) else {}
-        expression = alpha.get("regular") or row.get("expression")
-        if not isinstance(expression, str) or not expression.strip():
-            continue
-        item = dict(row)
-        if not target_id and expression.strip() == target.strip():
-            continue
-        fingerprint = row.get("execution_fingerprint") or submission_fingerprint(
-            expression, row.get("settings") if isinstance(row.get("settings"), Mapping) else {}
-        )
-        if target_exec and fingerprint == target_exec:
-            exact.append(item)
-        elif structural_fingerprint(expression) == target_structural:
-            structural.append(item)
+    target_structural, target_family = expression_identity_keys(target)
+    groups = group_remote_evidence(rows)
+
+    def without_target(items):
+        result = []
+        for item in items:
+            item_id = str(item.get("alpha_id") or item.get("id") or "")
+            expression = _expression(item)
+            if target_id and item_id == target_id:
+                continue
+            if not target_id and expression == target:
+                continue
+            result.append(item)
+        return result
+
+    exact = without_target(groups["execution"].get(target_exec, ())) if target_exec else []
+    structural = without_target(groups["structural"].get(target_structural, ()))
+    family = without_target(groups["variant_family"].get(target_family, ()))
     if exact:
         return {"kind": "EXACT", "matches": exact}
     if structural:
         return {"kind": "STRUCTURALLY_SIMILAR", "matches": structural}
+    if family:
+        return {"kind": "VARIANT_FAMILY", "matches": family}
     return {"kind": "UNKNOWN", "matches": []}

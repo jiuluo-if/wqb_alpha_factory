@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import copy
+import json
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
+from os import PathLike
 
 _FIELD_SELECTION_DEFAULTS = {
     "mode": "semantic_random",
@@ -16,7 +19,6 @@ _FIELD_SELECTION_DEFAULTS = {
     "dataset_sampling": "stratified",
     "dataset_pool": [],
     "min_datasets": 1,
-    "min_cross_dataset_pairs": 0,
     "persist_catalog": False,
 }
 @dataclass(frozen=True)
@@ -145,11 +147,6 @@ def _resolve_field_selection(runtime):
         field_selection["min_datasets"],
         key="config.runtime.field_selection.min_datasets",
         minimum=1,
-    )
-    field_selection["min_cross_dataset_pairs"] = _int_in_range(
-        field_selection["min_cross_dataset_pairs"],
-        key="config.runtime.field_selection.min_cross_dataset_pairs",
-        minimum=0,
     )
     raw_pool = field_selection.get("dataset_pool") or []
     if isinstance(raw_pool, (str, int)):
@@ -289,7 +286,12 @@ def normalize_config(config):
     """Normalize the one supported external config boundary."""
     if isinstance(config, AppConfig):
         return config
-    return parse_config(config)
+    if isinstance(config, (str, PathLike)):
+        with open(config, encoding="utf-8-sig") as handle:
+            config = json.load(handle)
+    if isinstance(config, Mapping):
+        return parse_config(dict(config))
+    raise TypeError("config 必须是 AppConfig、配置对象或配置文件路径")
 
 
 def apply_cli_overrides(

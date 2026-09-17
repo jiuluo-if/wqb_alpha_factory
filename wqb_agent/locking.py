@@ -100,11 +100,11 @@ def _write_owner_metadata(lock_path, operation):
         "hostname": socket.gethostname(),
         "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "operation": operation,
-    })
+    }, private=True)
 
 
 def _acquire_owner(state_dir, operation, *, metadata):
-    os.makedirs(state_dir, exist_ok=True)
+    os.makedirs(state_dir, mode=0o700, exist_ok=True)
     lock_path = _normalized_lock_path(state_dir)
     guard = _path_guard(lock_path)
     thread_id = threading.get_ident()

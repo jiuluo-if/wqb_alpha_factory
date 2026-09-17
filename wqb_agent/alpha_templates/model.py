@@ -5,6 +5,8 @@ import json
 import re
 from dataclasses import dataclass
 
+from ..expression import HORIZON_LATTICE  # noqa: F401  # re-export template contract
+
 NUMBER_TOKEN_RE = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)(?![\w.])")
 OPERATOR_OCCURRENCE_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 OPERATOR_PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}\s*\(")
@@ -13,8 +15,6 @@ FASTEXPR_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 ECONOMIC_FIELD_SLOTS = ("p", "data_field", "s", "t")
 CONTROL_BINDING_SLOTS = ("g",)
 PRIMARY_FIELD_SLOT_ALIASES = frozenset({"p", "data_field"})
-
-HORIZON_LATTICE = (5, 22, 66, 120, 255)
 
 FIXED_NUMERICS = {
     "0.001": ("SAFETY_CONSTANT", "divide epsilon；固定数值稳定性常量"),
@@ -313,6 +313,13 @@ class AlphaTemplate:
             "direction_reason": self.direction_reason,
             "allowed_horizon_profiles": [list(v) if isinstance(v, tuple) else v for v in self.allowed_horizon_profiles],
             "allowed_settings_arms": list(self.allowed_settings_arms),
+            "numeric_slots": [
+                {"name": slot.name, "kind": slot.kind, "default": slot.default,
+                 "allowed_values": list(slot.allowed_values),
+                 "economic_role": slot.economic_role, "token": slot.token,
+                 "occurrence": slot.occurrence}
+                for slot in self.numeric_slots
+            ],
             "mechanism_tags": list(self.mechanism_tags),
             "novelty_family": self.novelty_family,
             "template_mode": self.template_mode,

@@ -21,8 +21,8 @@ typed frontier mypy
 python -m ruff check .
 python scripts/run_targeted_tests.py --base-sha <CI base SHA>
 python -m unittest discover -s tests
-python main.py --state-dir tests/fixtures diagnostics doctor
-python main.py --state-dir tests/fixtures diagnostics audit
+python main.py --state-dir tests/fixtures diagnostics doctor --offline
+python main.py --state-dir tests/fixtures diagnostics audit --offline
 python scripts/check_repo_privacy.py
 ```
 
@@ -30,4 +30,6 @@ Targeted Fast Lane 与 whole-repository final gate 是不同层次：前者验�
 
 ## Contract focus
 
-必须持续覆盖：唯一 Simulation 写链、ExecutionGuard exactly-once、`SUBMIT_UNKNOWN` 不重 POST、known progress URL 只读轮询、远端 evidence 缺失保持 UNKNOWN、live/cache 优先级、颜色 PATCH readback、facade authorization 与 privacy。
+必须持续覆盖：唯一 Simulation 写链、ExecutionGuard exactly-once、`SUBMIT_UNKNOWN` 不重 POST、known progress URL 只读轮询、远端 evidence 缺失保持 UNKNOWN、live/cache 优先级、execution/strict structural/variant-family 三层 identity、显式 family 颜色 plan、颜色 PATCH readback、stale plan 不写入、facade authorization 与 privacy。
+
+颜色和 family CI 使用 synthetic evidence 和 mock setter；质量字段只能作为文本状态，不能自动产生颜色。`family_member_count` 只代表当前 evidence snapshot/window 的可见成员数，`observed_execution_count` 只代表其中不同 execution fingerprint 的可观察下界，二者都不代表完整 trial count。每个生产 Python 模块必须在 `scripts/run_targeted_tests.py` 的 `DIRECT_TESTS` 中有显式路由；映射不存在或过期都 fail closed。

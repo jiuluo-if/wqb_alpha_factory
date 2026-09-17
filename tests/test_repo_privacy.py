@@ -7,8 +7,10 @@ itself never contains a literal private path.
 """
 
 import importlib.util
+import json
 import pathlib
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -61,6 +63,28 @@ class TestRepositoryPrivacyGuard(unittest.TestCase):
             [],
             "tracked files must not expose machine paths or private research artifacts",
         )
+
+    def test_default_root_matches_explicit_root_from_arbitrary_cwd(self):
+        script = ROOT / "scripts" / "check_repo_privacy.py"
+        with tempfile.TemporaryDirectory() as cwd:
+            chinese_cwd = pathlib.Path(cwd) / "中文路径"
+            chinese_cwd.mkdir()
+            default = subprocess.run(
+                [sys.executable, str(script), "--json"],
+                cwd=chinese_cwd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            explicit = subprocess.run(
+                [sys.executable, str(script), "--json", "--root", str(ROOT)],
+                cwd=chinese_cwd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(default.returncode, explicit.returncode)
+        self.assertEqual(json.loads(default.stdout), json.loads(explicit.stdout))
 
     def test_large_tracked_text_is_scanned_instead_of_skipped(self):
         root = self._synthetic_root()

@@ -6,6 +6,7 @@ an Alpha and a field bundle supplies the slots for a SimulationSpec.
 """
 
 import itertools
+from collections import deque
 
 from .alpha_relationships import (
     frequency_bucket,
@@ -108,73 +109,93 @@ class AlphaFactory:
             )
         if not normalized:
             return []
-        primary = normalized[0]
-        secondary = normalized[1] if len(normalized) > 1 else None
-        tertiary = normalized[2] if len(normalized) > 2 else None
+        relationship_memo = _relationship_memo if _relationship_memo is not None else {}
+        expression_memo = _expression_memo if _expression_memo is not None else {}
+        iterators = deque(
+            self._iter_template_records(
+                template, normalized_profiles, normalized,
+                operator_mapping=operator_mapping,
+                operator_capability=operator_capability,
+                relationship_memo=relationship_memo,
+                expression_memo=expression_memo,
+            )
+            for template in self.registry.select(hypothesis)
+        )
         candidates = []
         seen = set()
-        for template in self.registry.select(hypothesis):
-            if (template.template_mode == "PARTIAL_OPERATOR"
-                    and (operator_mapping is None
-                         or not self._operator_mappings(template, operator_capability))):
-                continue
-            values = {
-                "p": primary,
-                "data_field": primary,
-                "s": secondary,
-                "t": tertiary,
-                "g": self.neutralization,
-            }
-            if any(
-                slot in template.field_slots and not values.get(slot)
-                for slot in template.field_slots
-            ):
-                continue
-            slot_profiles = list(normalized_profiles[:template.economic_field_count])
-            if template.economic_field_count > 1:
-                relation = self._relationship_gate_cached(
-                    slot_profiles, template,
-                    _relationship_memo if _relationship_memo is not None else {},
-                )
-                if relation["admission"] != "ALLOW":
+        while iterators and len(candidates) < limit:
+            iterator = iterators.popleft()
+            while True:
+                try:
+                    record = next(iterator)
+                except StopIteration:
+                    break
+                identity = record["identity"]
+                if identity in seen:
                     continue
-            else:
-                relation = None
-            try:
-                expression = template.render(values, operator_mapping)
-            except (KeyError, ValueError):
-                continue
-            expression_facts = self._expression_facts(
-                expression, normalized, _expression_memo
-            )
-            identity = expression_facts["identity"]
-            if identity in seen:
-                continue
-            seen.add(identity)
-            used_ids = expression_facts["fields"]
-            field_refs = []
-            for profile in normalized_profiles:
-                field_id = str(profile.get("id"))
-                if field_id not in used_ids:
-                    continue
-                field_refs.append({
-                    "id": field_id,
-                    "dataset": profile.get("dataset"),
-                })
-            candidates.append(
-                {
-                    "expression": expression,
-                    "rationale": template.economic_mechanism,
-                    "field_refs": field_refs,
-                    "template_id": template.template_id,
-                }
-            )
-            if len(candidates) >= limit:
+                seen.add(identity)
+                candidates.append(record["candidate"])
+                iterators.append(iterator)
                 break
         return candidates
 
+    def _iter_template_records(self, template, normalized_profiles, normalized, *,
+                               operator_mapping=None, operator_capability=None,
+                               relationship_memo=None, expression_memo=None):
+        """Yield valid records for one template without materializing its space."""
+        relationship_memo = relationship_memo if relationship_memo is not None else {}
+        expression_memo = expression_memo if expression_memo is not None else {}
+        mappings = ([operator_mapping] if operator_mapping is not None
+                    else self._operator_mappings(template, operator_capability))
+        if not mappings or template.economic_field_count > len(normalized):
+            return
+        for bundle in self._field_bundles(normalized_profiles, template.economic_field_count):
+            slot_profiles = list(bundle)
+            if template.economic_field_count == 1:
+                semantic = self._template_semantic_compatibility(
+                    template, slot_profiles[0]
+                )
+                if semantic["admission"] != "ALLOW":
+                    continue
+            else:
+                relation = self._relationship_gate_cached(
+                    slot_profiles, template, relationship_memo,
+                )
+                if relation["admission"] != "ALLOW":
+                    continue
+            values = {"g": self.neutralization}
+            for slot, profile in zip(template.field_slots, slot_profiles):
+                values[slot] = str(profile.get("id"))
+            if "p" in template.field_slots:
+                values["data_field"] = values["p"]
+            elif "data_field" in template.field_slots:
+                values["p"] = values["data_field"]
+            for mapping in mappings:
+                try:
+                    expression = template.render(values, mapping)
+                except (KeyError, ValueError):
+                    continue
+                expression_facts = self._expression_facts(
+                    expression, normalized, expression_memo,
+                )
+                used_ids = expression_facts["fields"]
+                field_refs = [
+                    {"id": str(profile.get("id")), "dataset": profile.get("dataset")}
+                    for profile in normalized_profiles
+                    if str(profile.get("id")) in used_ids
+                ]
+                yield {
+                    "identity": expression_facts["identity"],
+                    "candidate": {
+                        "expression": expression,
+                        "rationale": template.economic_mechanism,
+                        "field_refs": field_refs,
+                        "template_id": template.template_id,
+                    },
+                }
+
     def generate(self, hypothesis, fields, count=6, *, operator_mapping=None,
-                 operator_capability=None):
+                 operator_capability=None, settings=None):
         """Return pure executable SimulationSpec values.
 
         Candidate metadata stays private to the template implementation; the
@@ -190,7 +211,7 @@ class AlphaFactory:
         )
         return [SimulationSpec(
             expression=item["expression"],
-            settings=item.get("settings") or {},
+            settings=dict(settings or item.get("settings") or {}),
             fields=tuple(
                 ref.get("id") for ref in item.get("field_refs", ())
                 if isinstance(ref, dict) and ref.get("id")
@@ -228,6 +249,23 @@ class AlphaFactory:
             return (None, None)
         value = profile.get("id")
         return cls._profile_dataset(profile), str(value) if value is not None else None
+
+    @staticmethod
+    def _field_bundles(profiles, width):
+        """Yield ordered, coverage-first bundles without materializing pairs."""
+        if width == 1:
+            for profile in profiles:
+                yield (profile,)
+            return
+        total = len(profiles)
+        seen = set()
+        for gap in range(1, total):
+            for start in range(total):
+                indexes = tuple((start + gap * offset) % total for offset in range(width))
+                if len(set(indexes)) != width or indexes in seen:
+                    continue
+                seen.add(indexes)
+                yield tuple(profiles[index] for index in indexes)
     @staticmethod
     def _expression_facts(expression, normalized, expression_memo=None):
         if expression_memo is not None and expression in expression_memo:
@@ -463,13 +501,12 @@ class AlphaFactory:
 
 
     def generate_probe_specs(self, hypothesis, fields, operator_reference,
-                             target=100, excluded_expressions=None, seed=None,
-                             research_context=None, max_pending_per_arm=1):
+                             target=100, simulation_settings=None):
         """Generate reviewable executable specs without a proposal envelope."""
-        del excluded_expressions, seed, research_context, max_pending_per_arm
         return self.generate(
             hypothesis, fields, count=target,
             operator_capability=operator_reference,
+            settings=simulation_settings,
         )
 
     @staticmethod

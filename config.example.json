@@ -33,7 +33,6 @@
       "dataset_sampling": "stratified",
       "dataset_pool": [],
       "min_datasets": 1,
-      "min_cross_dataset_pairs": 0,
       "persist_catalog": false
     }
   },

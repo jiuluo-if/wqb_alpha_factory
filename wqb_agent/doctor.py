@@ -17,7 +17,7 @@ def run_doctor(raw_config, *, offline=True):
     """
     parsed = normalize_config(raw_config)
     state_dir = os.path.abspath(parsed.runtime.state_dir)
-    guard = ExecutionGuard(state_dir)
+    guard = ExecutionGuard(state_dir, reconcile=False)
     cache_path = os.path.join(state_dir, ".alpha_feed_cache", "remote.json")
     cache = RemoteAlphaCache(
         cache_path,
