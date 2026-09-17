@@ -190,6 +190,7 @@ class TestOperatorCapabilityClient(unittest.TestCase):
     def test_multi_submission_posts_an_array_with_one_idempotency_key(self):
         c = make_client()
         response = FakeResponse(201, headers={"Location": "/multi/1"})
+        c._wait_submission_slot = mock.Mock()
         with mock.patch.object(c, "_request", return_value=response) as request:
             result = c.submit_multi_simulation([
                 {"expression": "rank(a)", "settings": {"delay": 1}},
@@ -207,6 +208,7 @@ class TestOperatorCapabilityClient(unittest.TestCase):
             {"X-Idempotency-Key": "multi-fingerprint"},
         )
         self.assertNotEqual(request.call_args.kwargs.get("retry_rate_limit"), False)
+        c._wait_submission_slot.assert_called_once_with()
 
     def test_multi_progress_resolves_child_simulations_without_a_new_post(self):
         c = make_client()

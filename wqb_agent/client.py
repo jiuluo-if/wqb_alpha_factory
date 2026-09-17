@@ -700,6 +700,7 @@ class WQBClient:
                 raise ValueError("Multi-Simulation child expression must be non-empty")
             child.setdefault("type", "REGULAR")
             payload.append(child)
+        self._wait_submission_slot()
         headers = {"X-Idempotency-Key": idempotency_key} if idempotency_key else None
         resp = self._request(
             "POST",
