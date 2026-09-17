@@ -18,6 +18,7 @@ FASTEXPR_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 ECONOMIC_FIELD_SLOTS = ("p", "data_field", "s", "t")
 CONTROL_BINDING_SLOTS = ("g",)
 PRIMARY_FIELD_SLOT_ALIASES = frozenset({"p", "data_field"})
+DIRECTION_TRANSFORMS = frozenset({"identity", "reverse"})
 
 FIXED_NUMERICS = {
     "0.001": ("SAFETY_CONSTANT", "divide epsilon；固定数值稳定性常量"),
@@ -232,7 +233,16 @@ class AlphaTemplate:
             "expression": self.expression,
             "required_slots": self.required_slots,
             "horizon_slots": tuple(slot.name for slot in self.numeric_slots),
+            "direction_transform": self.direction_transform,
         })
+
+    def _apply_direction_transform(self, expression):
+        transform = self.direction_transform
+        if transform == "identity":
+            return expression
+        if transform == "reverse":
+            return f"reverse({expression})"
+        raise ValueError("INVALID_DIRECTION_TRANSFORM")
 
     def render(self, bindings, operator_mapping=None):
         """Render one concrete expression through the sole template owner."""
@@ -249,7 +259,7 @@ class AlphaTemplate:
             expression = expression.replace(slot.placeholder, chosen)
             if OPERATOR_PLACEHOLDER_RE.search(expression):
                 raise ValueError("unresolved operator placeholder")
-        return expression.format(**values)
+        return self._apply_direction_transform(expression.format(**values))
 
     def operator_realization_fingerprint(self, operator_mapping):
         if self.template_mode != "PARTIAL_OPERATOR" or len(self.operator_slots) != 1:

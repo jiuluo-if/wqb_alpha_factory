@@ -7,6 +7,7 @@ import tomllib
 from pathlib import Path
 
 from .model import (
+    DIRECTION_TRANSFORMS,
     FASTEXPR_IDENTIFIER_RE,
     FIXED_NUMERICS,
     HORIZON_LATTICE,
@@ -123,6 +124,10 @@ def _parse(document, *, strict_schema=False):
         direction = _text(raw["direction"], "direction")
         if direction not in _DIRECTIONS:
             raise ValueError(f"{template_id}: invalid direction {direction}")
+        direction_transform = raw["direction_transform"]
+        if (not isinstance(direction_transform, str)
+                or direction_transform not in DIRECTION_TRANSFORMS):
+            raise ValueError(f"{template_id}: INVALID_DIRECTION_TRANSFORM")
         numeric_slots = tuple(_slot(item, template_id) for item in raw.get("numeric_slots", []))
         template_mode = str(raw.get("template_mode", "CONCRETE")).upper()
         if template_mode not in {"CONCRETE", "PARTIAL_OPERATOR"}:
@@ -161,7 +166,7 @@ def _parse(document, *, strict_schema=False):
             required_slots=tuple(required_slots),
             economic_mechanism=_text(raw["economic_mechanism"], "economic_mechanism"),
             direction=direction,
-            direction_transform=raw["direction_transform"],
+            direction_transform=direction_transform,
             expected_horizon=_text(raw["expected_horizon"], "expected_horizon"),
             falsification=_text(raw["falsification"], "falsification"),
             self_correlation_impact=raw["self_correlation_impact"],
