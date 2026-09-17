@@ -374,6 +374,45 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
         self.assertEqual(template.direction, "long")
         self.assertEqual(template.catalog_entry()["direction"], "long")
 
+    def test_role_operator_occurrence_boundaries_remain_distinct(self):
+        control_expressions = (
+            "rank({p})",
+            "rank(add({p}))",
+            "rank(add(scale({p})))",
+        )
+        for expression in control_expressions:
+            report = validate_template_contract(
+                self._control_template("control-boundary", expression)
+            )
+            self.assertTrue(report["ok"], report["errors"])
+        control_too_complex = validate_template_contract(
+            self._control_template("control-too-complex", "rank(add(scale(zscore({p}))))")
+        )
+        self.assertIn("CONTROL_OPERATOR_COUNT", control_too_complex["errors"])
+
+        def probe(expression):
+            return AlphaTemplate(
+                "probe-boundary", family="synthetic", expression=expression,
+                required_slots=("p", "s"), role="PROBE_ALPHA",
+                semantic_contract="SYNTHETIC_FIXTURE", economic_mechanism="synthetic",
+                field_relationship="paired fields", direction_reason="synthetic",
+                expected_horizon="short-term", falsification="synthetic",
+            )
+
+        probe_expressions = (
+            "rank(subtract(ts_mean({p}, 5), ts_mean({s}, 5)))",
+            "normalize(rank(subtract(ts_mean({p}, 5), ts_mean({s}, 5))))",
+            "scale(normalize(rank(subtract(ts_mean({p}, 5), ts_mean({s}, 5)))))",
+        )
+        for expression in probe_expressions:
+            report = validate_template_contract(probe(expression))
+            self.assertTrue(report["ok"], report["errors"])
+        probe_too_complex = validate_template_contract(
+            probe("multiply(scale(normalize(rank(subtract(ts_mean({p}, 5), "
+                  "ts_mean({s}, 5))))), {p})")
+        )
+        self.assertIn("PROBE_OPERATOR_COUNT", probe_too_complex["errors"])
+
     def test_explicit_reverse_transform_changes_bound_expression(self):
         template = self._control_template("synthetic-reversal", "rank({p})")
         template = AlphaTemplate(

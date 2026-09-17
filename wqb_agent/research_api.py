@@ -45,6 +45,11 @@ from .alpha_templates import (
 from .artifacts import _atomic_replace
 from .config import AppConfig, normalize_config
 from .discovery import FieldDiscovery
+from .expression import (
+    canonical_expression,
+    operator_occurrence_count,
+    operator_occurrence_signature,
+)
 from .operator_reference import (
     load_operator_syntax_reference,
     load_packaged_operator_syntax_reference,
@@ -460,8 +465,16 @@ def validate_simulation_settings(settings, *, client=None, config=None):
 
 
 def build_simulation_spec(expression, *, settings=None, fields=(), note=None, template_id=None,
-                          client=None, config=None):
+                          client=None, config=None, anchor_spec=None):
     """Build a validated, non-submitting SimulationSpec."""
+    if anchor_spec is not None:
+        if not isinstance(anchor_spec, SimulationSpec):
+            anchor_spec = SimulationSpec(**dict(anchor_spec))
+        if (template_id is not None and anchor_spec.template_id is not None
+                and template_id != anchor_spec.template_id):
+            raise ValueError("NEW_PROBE_REQUIRED: template changed during optimization")
+        if canonical_expression(expression) != canonical_expression(anchor_spec.expression):
+            raise ValueError("NEW_PROBE_REQUIRED: settings variant changed expression")
     result = validate_simulation_settings(settings or {}, client=client, config=config)
     if not result["valid"]:
         raise ValueError("invalid simulation settings: " + "; ".join(result["errors"]))
@@ -473,6 +486,17 @@ def build_simulation_spec(expression, *, settings=None, fields=(), note=None, te
     )
 
 
+def _optimization_operator_signatures(template):
+    expressions = [template.expression]
+    if template.template_mode == "PARTIAL_OPERATOR":
+        slot = template.operator_slots[0]
+        expressions = [template.expression.replace(slot.placeholder, operator)
+                       for operator in slot.allowed_operators]
+    if template.direction_transform == "reverse":
+        expressions = [f"reverse({expression})" for expression in expressions]
+    return {operator_occurrence_signature(expression) for expression in expressions}
+
+
 def build_simulation_variant(base_spec, template, slot_name, value):
     """Return one bounded numeric variant without mutating or submitting."""
     if not isinstance(base_spec, SimulationSpec):
@@ -480,6 +504,13 @@ def build_simulation_variant(base_spec, template, slot_name, value):
     template = _coerce_template(template)
     if base_spec.template_id != template.template_id:
         raise ValueError("template_id does not match base SimulationSpec")
+    bounds = {"CONTROL_ALPHA": (1, 3), "PROBE_ALPHA": (4, 6)}.get(template.role)
+    anchor_count = operator_occurrence_count(base_spec.expression)
+    if bounds is None or not bounds[0] <= anchor_count <= bounds[1]:
+        raise ValueError("INVALID_OPTIMIZATION_ANCHOR")
+    anchor_signature = operator_occurrence_signature(base_spec.expression)
+    if anchor_signature not in _optimization_operator_signatures(template):
+        raise ValueError("NEW_PROBE_REQUIRED: operator topology changed")
     slot = next((item for item in template.numeric_slots
                  if item.name == str(slot_name)), None)
     if slot is None:
@@ -489,6 +520,10 @@ def build_simulation_variant(base_spec, template, slot_name, value):
     expression = slot.render(base_spec.expression, value)
     if expression == base_spec.expression:
         raise ValueError("numeric variant is a no-op")
+    if operator_occurrence_count(expression) != anchor_count:
+        raise ValueError("NEW_PROBE_REQUIRED: operator occurrence count changed")
+    if operator_occurrence_signature(expression) != anchor_signature:
+        raise ValueError("NEW_PROBE_REQUIRED: operator topology changed")
     return SimulationSpec(
         expression=expression,
         settings=dict(base_spec.settings), fields=base_spec.fields,

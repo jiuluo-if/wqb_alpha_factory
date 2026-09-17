@@ -5,7 +5,10 @@ import json
 import re
 from dataclasses import dataclass
 
-from ..expression import HORIZON_LATTICE  # noqa: F401  # re-export template contract
+from ..expression import (  # noqa: F401  # re-export template contract
+    HORIZON_LATTICE,
+    operator_occurrence_count,
+)
 
 NUMBER_TOKEN_RE = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)(?![\w.])")
 OPERATOR_OCCURRENCE_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
@@ -198,8 +201,7 @@ class AlphaTemplate:
 
     @property
     def operator_count(self):
-        return (len(OPERATOR_OCCURRENCE_RE.findall(self.expression))
-                + len(OPERATOR_PLACEHOLDER_RE.findall(self.expression)))
+        return operator_occurrence_count(self.expression)
 
     @property
     def operator_names(self):
