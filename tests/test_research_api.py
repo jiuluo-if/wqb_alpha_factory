@@ -2,6 +2,7 @@ import json
 import pathlib
 import tempfile
 import unittest
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest import mock
 
@@ -25,6 +26,114 @@ from wqb_agent.research_api import (
 
 
 class TestResearchApi(unittest.TestCase):
+    def test_field_classification_exposes_type_dataset_and_semantics(self):
+        from wqb_agent.research_api import classify_fields
+
+        result = classify_fields([{
+            "id": "close", "type": "MATRIX", "dataset": "prices",
+            "description": "daily close price",
+        }])
+
+        self.assertEqual(result["source"], "DERIVED_METADATA")
+        self.assertEqual(result["fields"][0]["type"], "MATRIX")
+        self.assertEqual(result["fields"][0]["dataset"], "prices")
+        self.assertEqual(result["fields"][0]["economic_meaning"], "market_level")
+        self.assertEqual(result["fields"][0]["availability"], "AVAILABLE")
+
+        vector = classify_fields([{
+            "id": "embedding", "type": "VECTOR", "dataset": {"id": "alt"},
+            "description": "daily sentiment vector",
+        }])["fields"][0]
+        self.assertEqual(vector["type"], "VECTOR")
+        self.assertEqual(vector["dataset"], "alt")
+
+    def test_simulation_helpers_validate_and_build_without_remote_write(self):
+        from wqb_agent.research_api import (
+            build_simulation_spec,
+            get_simulation_config,
+            validate_simulation_settings,
+        )
+
+        config = get_simulation_config()
+        self.assertEqual(config["source"], "CONFIG")
+        self.assertIn("neutralization", config["settings"])
+        valid = validate_simulation_settings({
+            "region": "USA", "universe": "TOP3000", "delay": 1,
+            "decay": 6, "neutralization": "SUBINDUSTRY",
+            "fields": ["close"],
+        })
+        self.assertTrue(valid["valid"])
+        self.assertEqual(valid["status"], "VALID")
+        with self.assertRaises(ValueError):
+            build_simulation_spec("rank(close)", settings={"delay": 2})
+        spec = build_simulation_spec(
+            "rank(close)", settings=valid["settings"], fields=["close"]
+        )
+        self.assertEqual(spec.expression, "rank(close)")
+
+    def test_suggest_next_specs_is_candidate_only(self):
+        from wqb_agent.research_api import suggest_next_specs
+
+        result = suggest_next_specs(
+            {"status": "DONE", "evidence_status": "AVAILABLE"},
+            "test persistence",
+            {"decay": [5, 6]},
+        )
+        self.assertEqual(result["status"], "CANDIDATES_ONLY")
+        self.assertEqual(result["source"], "AI_PROPOSAL")
+        self.assertFalse(result["simulated"])
+        self.assertEqual(len(result["candidates"]), 2)
+
+    def test_template_crud_requires_explicit_private_catalog(self):
+        from wqb_agent.research_api import (
+            create_template,
+            delete_template,
+            inspect_template,
+            update_template,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = pathlib.Path(tmp) / "private.toml"
+            with self.assertRaises(FileNotFoundError):
+                create_template({}, catalog_path=missing)
+            with self.assertRaises(FileNotFoundError):
+                delete_template("x", catalog_path=missing)
+
+    def test_private_template_crud_round_trip_is_persistent(self):
+        from wqb_agent.alpha_templates.loader import load_builtin_templates
+        from wqb_agent.research_api import (
+            create_template,
+            delete_template,
+            update_template,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = pathlib.Path("wqb_agent/alpha_templates/catalog/builtin.toml")
+            catalog = pathlib.Path(tmp) / "private.toml"
+            catalog.write_text(
+                source.read_text(encoding="utf-8").replace(
+                    'semantic_contract = "SYNTHETIC_FIXTURE"',
+                    'semantic_contract = "DATA_QUALITY"',
+                ),
+                encoding="utf-8",
+            )
+            template = replace(
+                load_builtin_templates()[0],
+                template_id="private_round_trip",
+                semantic_contract="DATA_QUALITY",
+            )
+            created = create_template(template, catalog_path=catalog)
+            self.assertEqual(created["template_id"], "private_round_trip")
+            self.assertEqual(created["source"], "private_catalog")
+            updated = replace(template, version="2")
+            self.assertEqual(
+                update_template("private_round_trip", updated, catalog_path=catalog)["version"],
+                "2",
+            )
+            self.assertEqual(
+                delete_template("private_round_trip", catalog_path=catalog)["status"],
+                "DELETED",
+            )
     def test_discovery_simulation_and_remote_boundaries_accept_equivalent_configs(self):
         raw = {
             "simulation": {},

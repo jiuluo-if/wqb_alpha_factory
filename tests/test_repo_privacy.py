@@ -67,16 +67,18 @@ class TestRepositoryPrivacyGuard(unittest.TestCase):
     def test_default_root_matches_explicit_root_from_arbitrary_cwd(self):
         script = ROOT / "scripts" / "check_repo_privacy.py"
         with tempfile.TemporaryDirectory() as cwd:
+            chinese_cwd = pathlib.Path(cwd) / "中文路径"
+            chinese_cwd.mkdir()
             default = subprocess.run(
                 [sys.executable, str(script), "--json"],
-                cwd=cwd,
+                cwd=chinese_cwd,
                 capture_output=True,
                 text=True,
                 check=False,
             )
             explicit = subprocess.run(
                 [sys.executable, str(script), "--json", "--root", str(ROOT)],
-                cwd=cwd,
+                cwd=chinese_cwd,
                 capture_output=True,
                 text=True,
                 check=False,
