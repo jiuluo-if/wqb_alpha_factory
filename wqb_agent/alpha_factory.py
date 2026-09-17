@@ -6,6 +6,7 @@ an Alpha and a field bundle supplies the slots for a SimulationSpec.
 """
 
 import itertools
+from collections import deque
 
 from .alpha_relationships import (
     frequency_bucket,
@@ -108,71 +109,90 @@ class AlphaFactory:
             )
         if not normalized:
             return []
+        relationship_memo = _relationship_memo if _relationship_memo is not None else {}
+        expression_memo = _expression_memo if _expression_memo is not None else {}
+        iterators = deque(
+            self._iter_template_records(
+                template, normalized_profiles, normalized,
+                operator_mapping=operator_mapping,
+                operator_capability=operator_capability,
+                relationship_memo=relationship_memo,
+                expression_memo=expression_memo,
+            )
+            for template in self.registry.select(hypothesis)
+        )
         candidates = []
         seen = set()
-        for template in self.registry.select(hypothesis):
-            mappings = ([operator_mapping] if operator_mapping is not None
-                        else self._operator_mappings(template, operator_capability))
-            if not mappings:
-                continue
-            width = template.economic_field_count
-            if width > len(normalized):
-                continue
-            for bundle in self._field_bundles(normalized_profiles, width):
-                slot_profiles = list(bundle)
-                if width == 1:
-                    semantic = self._template_semantic_compatibility(
-                        template, slot_profiles[0]
-                    )
-                    if semantic["admission"] != "ALLOW":
-                        continue
-                else:
-                    relation = self._relationship_gate_cached(
-                        slot_profiles, template,
-                        _relationship_memo if _relationship_memo is not None else {},
-                    )
-                    if relation["admission"] != "ALLOW":
-                        continue
-                values = {"g": self.neutralization}
-                for slot, profile in zip(template.field_slots, slot_profiles):
-                    values[slot] = str(profile.get("id"))
-                if "p" in template.field_slots:
-                    values["data_field"] = values["p"]
-                elif "data_field" in template.field_slots:
-                    values["p"] = values["data_field"]
-                for mapping in mappings:
-                    try:
-                        expression = template.render(values, mapping)
-                    except (KeyError, ValueError):
-                        continue
-                    expression_facts = self._expression_facts(
-                        expression, normalized, _expression_memo
-                    )
-                    identity = expression_facts["identity"]
-                    if identity in seen:
-                        continue
-                    seen.add(identity)
-                    used_ids = expression_facts["fields"]
-                    field_refs = []
-                    for profile in normalized_profiles:
-                        field_id = str(profile.get("id"))
-                        if field_id not in used_ids:
-                            continue
-                        field_refs.append({
-                            "id": field_id,
-                            "dataset": profile.get("dataset"),
-                        })
-                    candidates.append(
-                        {
-                            "expression": expression,
-                            "rationale": template.economic_mechanism,
-                            "field_refs": field_refs,
-                            "template_id": template.template_id,
-                        }
-                    )
-                    if len(candidates) >= limit:
-                        return candidates
+        while iterators and len(candidates) < limit:
+            iterator = iterators.popleft()
+            while True:
+                try:
+                    record = next(iterator)
+                except StopIteration:
+                    break
+                identity = record["identity"]
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                candidates.append(record["candidate"])
+                iterators.append(iterator)
+                break
         return candidates
+
+    def _iter_template_records(self, template, normalized_profiles, normalized, *,
+                               operator_mapping=None, operator_capability=None,
+                               relationship_memo=None, expression_memo=None):
+        """Yield valid records for one template without materializing its space."""
+        relationship_memo = relationship_memo if relationship_memo is not None else {}
+        expression_memo = expression_memo if expression_memo is not None else {}
+        mappings = ([operator_mapping] if operator_mapping is not None
+                    else self._operator_mappings(template, operator_capability))
+        if not mappings or template.economic_field_count > len(normalized):
+            return
+        for bundle in self._field_bundles(normalized_profiles, template.economic_field_count):
+            slot_profiles = list(bundle)
+            if template.economic_field_count == 1:
+                semantic = self._template_semantic_compatibility(
+                    template, slot_profiles[0]
+                )
+                if semantic["admission"] != "ALLOW":
+                    continue
+            else:
+                relation = self._relationship_gate_cached(
+                    slot_profiles, template, relationship_memo,
+                )
+                if relation["admission"] != "ALLOW":
+                    continue
+            values = {"g": self.neutralization}
+            for slot, profile in zip(template.field_slots, slot_profiles):
+                values[slot] = str(profile.get("id"))
+            if "p" in template.field_slots:
+                values["data_field"] = values["p"]
+            elif "data_field" in template.field_slots:
+                values["p"] = values["data_field"]
+            for mapping in mappings:
+                try:
+                    expression = template.render(values, mapping)
+                except (KeyError, ValueError):
+                    continue
+                expression_facts = self._expression_facts(
+                    expression, normalized, expression_memo,
+                )
+                used_ids = expression_facts["fields"]
+                field_refs = [
+                    {"id": str(profile.get("id")), "dataset": profile.get("dataset")}
+                    for profile in normalized_profiles
+                    if str(profile.get("id")) in used_ids
+                ]
+                yield {
+                    "identity": expression_facts["identity"],
+                    "candidate": {
+                        "expression": expression,
+                        "rationale": template.economic_mechanism,
+                        "field_refs": field_refs,
+                        "template_id": template.template_id,
+                    },
+                }
 
     def generate(self, hypothesis, fields, count=6, *, operator_mapping=None,
                  operator_capability=None, settings=None):

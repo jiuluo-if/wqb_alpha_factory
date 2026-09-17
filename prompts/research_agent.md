@@ -24,6 +24,8 @@
 
 Probe 是 broad screening；局部优化只能从已审阅的 base `SimulationSpec` 出发，每次只改变一个模板声明的 numeric slot 或 AI 明确给出的 settings 值。先说明 base hypothesis、优化理由、变化维度和 variant 数量，再逐一比较 baseline 与全部 variants；不得自动选择 winner、扩大搜索或循环提交。
 
+Probe 的固定候选预算采用 deterministic、lazy、bounded 的 template-level coverage-first traversal：多个可用模板轮流贡献候选，耗尽或无合法候选的模板跳过；这只提高 broad-screening coverage，不表示模板具有相同经济权重，也不是 winner ranking。
+
 ## 局部优化预算纪律
 
 - 每轮先声明 immutable optimization anchor。所有 variants 都直接从同一个 anchor 构造，禁止把 variant A 继续变换成 variant B。

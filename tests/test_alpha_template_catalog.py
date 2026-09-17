@@ -15,6 +15,21 @@ from wqb_agent.alpha_templates.validation import validate_template_contract
 
 
 class TestAlphaTemplateCatalog(unittest.TestCase):
+    @staticmethod
+    def _control_template(template_id, expression):
+        return AlphaTemplate(
+            template_id, family="synthetic", expression=expression,
+            required_slots=("p",), role="CONTROL_ALPHA",
+            semantic_contract="SYNTHETIC_FIXTURE",
+            economic_mechanism=f"synthetic {template_id}",
+            field_relationship="single field", direction_reason="synthetic",
+            expected_horizon="short-term", falsification="synthetic falsification",
+        )
+
+    @staticmethod
+    def _factory_templates(*templates):
+        return AlphaFactory(registry=AlphaTemplateRegistry(list(templates)))
+
     def test_catalog_entry_exposes_numeric_slot_metadata(self):
         template = next(item for item in load_templates(io.StringIO(_partial_document()))
                         if item.template_id == "toy_sync_corr_operator")
@@ -42,6 +57,142 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
         self.assertEqual(len(specs), 8)
         self.assertEqual([spec.fields[0] for spec in specs],
                          [f"field_{index}" for index in range(8)])
+
+    def test_factory_round_robins_templates_for_small_budget(self):
+        factory = self._factory_templates(
+            self._control_template("template-a", "rank({p})"),
+            self._control_template("template-b", "scale({p})"),
+            self._control_template("template-c", "zscore({p})"),
+        )
+        fields = [{"id": f"field_{index}"} for index in range(6)]
+
+        specs = factory.generate(
+            {"template_ids": ["template-a", "template-b", "template-c"]},
+            fields, count=3,
+        )
+
+        self.assertEqual([spec.template_id for spec in specs],
+                         ["template-a", "template-b", "template-c"])
+        self.assertEqual([spec.fields for spec in specs],
+                         [("field_0",), ("field_0",), ("field_0",)])
+
+    def test_factory_continues_round_robin_across_multiple_rounds(self):
+        factory = self._factory_templates(
+            self._control_template("template-a", "rank({p})"),
+            self._control_template("template-b", "scale({p})"),
+            self._control_template("template-c", "zscore({p})"),
+        )
+        fields = [{"id": f"field_{index}"} for index in range(6)]
+
+        specs = factory.generate(
+            {"template_ids": ["template-a", "template-b", "template-c"]},
+            fields, count=7,
+        )
+
+        self.assertEqual([spec.template_id for spec in specs],
+                         ["template-a", "template-b", "template-c",
+                          "template-a", "template-b", "template-c",
+                          "template-a"])
+
+    def test_factory_single_template_preserves_candidate_order(self):
+        factory = self._factory_templates(
+            self._control_template("template-a", "rank({p})"),
+        )
+        fields = [{"id": f"field_{index}"} for index in range(4)]
+
+        specs = factory.generate({"template_ids": ["template-a"]}, fields, count=3)
+
+        self.assertEqual([spec.fields for spec in specs],
+                         [("field_0",), ("field_1",), ("field_2",)])
+
+    def test_exhausted_template_does_not_block_remaining_templates(self):
+        exhausted = AlphaTemplate(
+            "template-exhausted", family="synthetic", expression="rank({p})",
+            required_slots=("p",), role="CONTROL_ALPHA",
+            semantic_contract="DATA_QUALITY",
+            economic_mechanism="synthetic quality", field_relationship="single field",
+            direction_reason="synthetic", expected_horizon="short-term",
+            falsification="synthetic falsification",
+        )
+        factory = self._factory_templates(
+            exhausted,
+            self._control_template("template-b", "scale({p})"),
+            self._control_template("template-c", "zscore({p})"),
+        )
+        fields = [
+            {"id": "price_field", "description": "closing price", "frequency": "daily"},
+            {"id": "volume_field", "description": "traded volume", "frequency": "daily"},
+        ]
+
+        specs = factory.generate(
+            {"template_ids": ["template-exhausted", "template-b", "template-c"]},
+            fields, count=3,
+        )
+
+        self.assertEqual([spec.template_id for spec in specs],
+                         ["template-b", "template-c", "template-b"])
+
+    def test_cross_template_duplicates_do_not_consume_budget(self):
+        factory = self._factory_templates(
+            self._control_template("template-a", "rank({p})"),
+            self._control_template("template-b", "rank({p})"),
+            self._control_template("template-c", "scale({p})"),
+        )
+        fields = [{"id": f"field_{index}"} for index in range(4)]
+
+        specs = factory.generate(
+            {"template_ids": ["template-a", "template-b", "template-c"]},
+            fields, count=3,
+        )
+
+        self.assertEqual(len(specs), 3)
+        self.assertEqual([spec.template_id for spec in specs],
+                         ["template-a", "template-b", "template-c"])
+        self.assertEqual([spec.expression for spec in specs],
+                         ["rank(field_0)", "rank(field_1)", "scale(field_0)"])
+
+    def test_template_round_robin_is_deterministic_and_bounded(self):
+        factory = self._factory_templates(
+            self._control_template("template-a", "rank({p})"),
+            self._control_template("template-b", "scale({p})"),
+            self._control_template("template-c", "zscore({p})"),
+        )
+        fields = [{"id": f"field_{index}"} for index in range(20)]
+        hypothesis = {"template_ids": ["template-a", "template-b", "template-c"]}
+
+        first = factory.generate(hypothesis, fields, count=2)
+        second = factory.generate(hypothesis, fields, count=2)
+
+        self.assertEqual(
+            [(item.template_id, item.expression) for item in first],
+            [(item.template_id, item.expression) for item in second],
+        )
+        self.assertEqual([item.template_id for item in first],
+                         ["template-a", "template-b"])
+
+    def test_probe_budget_does_not_consume_unneeded_template_iterators(self):
+        class TrackingFactory(AlphaFactory):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.started_templates = []
+
+            def _iter_template_records(self, template, *args, **kwargs):
+                self.started_templates.append(template.template_id)
+                yield from super()._iter_template_records(template, *args, **kwargs)
+
+        factory = TrackingFactory(registry=AlphaTemplateRegistry([
+            self._control_template("template-a", "rank({p})"),
+            self._control_template("template-b", "scale({p})"),
+            self._control_template("template-c", "zscore({p})"),
+        ]))
+        fields = [{"id": f"field_{index}"} for index in range(20)]
+
+        factory.generate(
+            {"template_ids": ["template-a", "template-b", "template-c"]},
+            fields, count=2,
+        )
+
+        self.assertEqual(factory.started_templates, ["template-a", "template-b"])
 
     def test_unary_semantic_contract_admits_only_compatible_fields(self):
         template = AlphaTemplate(
@@ -76,6 +227,30 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
         self.assertEqual(len(specs), 2)
         self.assertNotEqual(specs[0].expression, specs[1].expression)
         self.assertTrue(any("ts_covariance" in spec.expression for spec in specs))
+
+    def test_partial_operator_mappings_share_one_template_round(self):
+        branch = next(item for item in load_templates(io.StringIO(_partial_document()))
+                       if item.template_id == "toy_sync_corr_operator")
+        control = self._control_template("template-control", "rank({p})")
+        factory = AlphaFactory(registry=AlphaTemplateRegistry([branch, control]))
+        fields = [{"id": "field_a"}, {"id": "field_b"}]
+        relation = {"admission": "ALLOW", "reasons": [], "frequency_compatibility": {}}
+        reference = {
+            "status": "LIVE_VERIFIED", "availability": "AVAILABLE",
+            "source": "BRAIN_LIVE_ONLY", "operators": ["ts_corr", "ts_covariance"],
+        }
+
+        with patch.object(factory, "_relationship_gate", return_value=relation):
+            specs = factory.generate(
+                {"template_ids": [branch.template_id, "template-control"]},
+                fields, count=3, operator_capability=reference,
+            )
+
+        self.assertEqual([spec.template_id for spec in specs],
+                         [branch.template_id, "template-control", branch.template_id])
+        self.assertIn("ts_corr", specs[0].expression)
+        self.assertEqual(specs[1].expression, "rank(field_a)")
+        self.assertIn("ts_covariance", specs[2].expression)
 
     def test_required_slots_are_distinguished_from_economic_field_slots(self):
         template = AlphaTemplate(
