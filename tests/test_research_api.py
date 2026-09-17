@@ -78,10 +78,12 @@ class TestResearchApi(unittest.TestCase):
         from wqb_agent.research_api import build_simulation_variant
 
         template = AlphaTemplate(
-            "numeric-test", expression="rank(add(ts_mean({p}, 5), ts_mean({p}, 5)))",
-            required_slots=("p",), role="CONTROL_ALPHA",
+            "numeric-test", expression=(
+                "scale(normalize(rank(subtract(ts_mean({p}, 5), "
+                "ts_mean({s}, 5))))"
+            ), required_slots=("p", "s"), role="PROBE_ALPHA",
             semantic_contract="SYNTHETIC_FIXTURE",
-            economic_mechanism="synthetic control", field_relationship="single field",
+            economic_mechanism="synthetic probe", field_relationship="paired fields",
             direction_reason="synthetic", expected_horizon="short-term",
             falsification="synthetic falsification",
             numeric_slots=(TemplateNumericSlot(
@@ -91,24 +93,127 @@ class TestResearchApi(unittest.TestCase):
             ),),
         )
         base = SimulationSpec(
-            "rank(add(ts_mean(field_a, 5), ts_mean(field_a, 5)))",
-            settings={"delay": 1}, fields=("field_a",), template_id="numeric-test",
+            "scale(normalize(rank(subtract(ts_mean(field_a, 5), "
+            "ts_mean(field_b, 5)))))",
+            settings={"delay": 1}, fields=("field_a", "field_b"), template_id="numeric-test",
         )
         variant = build_simulation_variant(base, template, "slow_window", 22)
         self.assertEqual(variant.expression,
-                         "rank(add(ts_mean(field_a, 5), ts_mean(field_a, 22)))")
+                         "scale(normalize(rank(subtract(ts_mean(field_a, 5), "
+                         "ts_mean(field_b, 22)))))")
         self.assertEqual(
             variant_family_fingerprint(base.expression),
             variant_family_fingerprint(variant.expression),
         )
         self.assertEqual(base.expression,
-                         "rank(add(ts_mean(field_a, 5), ts_mean(field_a, 5)))")
+                         "scale(normalize(rank(subtract(ts_mean(field_a, 5), "
+                         "ts_mean(field_b, 5)))))")
         self.assertEqual(variant.settings, base.settings)
         self.assertEqual(variant.fields, base.fields)
         with self.assertRaisesRegex(ValueError, "no-op"):
             build_simulation_variant(base, template, "slow_window", 5)
         with self.assertRaises(ValueError):
             build_simulation_variant(base, template, "slow_window", 66)
+
+    def test_numeric_variant_rejects_anchor_over_role_operator_ceiling(self):
+        from wqb_agent.alpha_templates import AlphaTemplate, TemplateNumericSlot
+        from wqb_agent.research_api import build_simulation_variant
+
+        template = AlphaTemplate(
+            "too-complex-control", expression="rank(add(ts_mean({p}, 5), ts_mean({p}, 5)))",
+            required_slots=("p",), role="CONTROL_ALPHA",
+            semantic_contract="SYNTHETIC_FIXTURE", economic_mechanism="synthetic",
+            field_relationship="single field", direction_reason="synthetic",
+            expected_horizon="short-term", falsification="synthetic",
+            numeric_slots=(TemplateNumericSlot(
+                name="window", kind="RESEARCH_HORIZON", default=5,
+                allowed_values=(5, 22), economic_role="synthetic", token="5", occurrence=1,
+            ),),
+        )
+        base = SimulationSpec(
+            "rank(add(ts_mean(field_a, 5), ts_mean(field_a, 5)))",
+            settings={}, fields=("field_a",), template_id=template.template_id,
+        )
+        with self.assertRaisesRegex(ValueError, "INVALID_OPTIMIZATION_ANCHOR"):
+            build_simulation_variant(base, template, "window", 22)
+
+    def test_numeric_variant_rejects_operator_topology_change(self):
+        from wqb_agent.alpha_templates import (
+            AlphaTemplate,
+            TemplateNumericSlot,
+            TemplateOperatorSlot,
+        )
+        from wqb_agent.research_api import build_simulation_variant
+
+        template = AlphaTemplate(
+            "partial-optimization", expression="rank({relation}(ts_mean({p}, 5), ts_mean({s}, 5)))",
+            required_slots=("p", "s"), role="PROBE_ALPHA", template_mode="PARTIAL_OPERATOR",
+            operator_slots=(TemplateOperatorSlot(
+                name="relation", role="relation", placeholder="{relation}",
+                baseline_operator="ts_corr", allowed_operators=("ts_corr", "ts_covariance"),
+                semantic_contract="synthetic",
+            ),), semantic_contract="SYNTHETIC_FIXTURE", economic_mechanism="synthetic",
+            field_relationship="paired fields", direction_reason="synthetic",
+            expected_horizon="short-term", falsification="synthetic",
+            numeric_slots=(TemplateNumericSlot(
+                name="window", kind="RESEARCH_HORIZON", default=5,
+                allowed_values=(5, 22), economic_role="synthetic", token="5", occurrence=0,
+            ),),
+        )
+        base = SimulationSpec(
+            "rank(ts_delta(ts_mean(field_a, 5), ts_mean(field_b, 5)))",
+            settings={}, fields=("field_a", "field_b"), template_id=template.template_id,
+        )
+        with self.assertRaisesRegex(ValueError, "NEW_PROBE_REQUIRED"):
+            build_simulation_variant(base, template, "window", 22)
+
+    def test_partial_operator_anchor_realization_is_frozen_but_allowed(self):
+        from wqb_agent.alpha_templates import (
+            AlphaTemplate,
+            TemplateNumericSlot,
+            TemplateOperatorSlot,
+        )
+        from wqb_agent.research_api import build_simulation_variant
+
+        template = AlphaTemplate(
+            "partial-allowed", expression="rank({relation}(ts_mean({p}, 5), ts_mean({s}, 5)))",
+            required_slots=("p", "s"), role="PROBE_ALPHA", template_mode="PARTIAL_OPERATOR",
+            operator_slots=(TemplateOperatorSlot(
+                name="relation", role="relation", placeholder="{relation}",
+                baseline_operator="ts_corr", allowed_operators=("ts_corr", "ts_covariance"),
+                semantic_contract="synthetic",
+            ),), semantic_contract="SYNTHETIC_FIXTURE", economic_mechanism="synthetic",
+            field_relationship="paired fields", direction_reason="synthetic",
+            expected_horizon="short-term", falsification="synthetic",
+            numeric_slots=(TemplateNumericSlot(
+                name="window", kind="RESEARCH_HORIZON", default=5,
+                allowed_values=(5, 22), economic_role="synthetic", token="5", occurrence=0,
+            ),),
+        )
+        base = SimulationSpec(
+            "rank(ts_covariance(ts_mean(field_a, 5), ts_mean(field_b, 5)))",
+            settings={}, fields=("field_a", "field_b"), template_id=template.template_id,
+        )
+        variant = build_simulation_variant(base, template, "window", 22)
+        self.assertEqual(
+            variant.expression,
+            "rank(ts_covariance(ts_mean(field_a, 22), ts_mean(field_b, 5)))",
+        )
+
+    def test_settings_variant_requires_anchor_expression(self):
+        from wqb_agent.research_api import build_simulation_spec
+
+        anchor = SimulationSpec("rank(field_a)", settings={"decay": 4}, template_id="synthetic")
+        variant = build_simulation_spec(
+            " RANK( field_a ) ", settings={"decay": 6}, template_id="synthetic",
+            anchor_spec=anchor,
+        )
+        self.assertEqual(variant.expression.replace(" ", "").lower(), "rank(field_a)")
+        with self.assertRaisesRegex(ValueError, "NEW_PROBE_REQUIRED"):
+            build_simulation_spec(
+                "normalize(rank(field_a))", settings={"decay": 6},
+                template_id="synthetic", anchor_spec=anchor,
+            )
 
     def test_template_crud_requires_explicit_private_catalog(self):
         from wqb_agent.research_api import (

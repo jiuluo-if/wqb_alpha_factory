@@ -29,11 +29,12 @@ Probe 的固定候选预算采用 deterministic、lazy、bounded 的 template-le
 ## 局部优化预算纪律
 
 - 每轮先声明 immutable optimization anchor。所有 variants 都直接从同一个 anchor 构造，禁止把 variant A 继续变换成 variant B。
+- Local optimization 不得增加、减少或替换 operator topology。CONTROL anchor 必须保持 1–3 个 operator occurrences，PROBE anchor 必须保持 4–6 个；6 是 PROBE hard ceiling，不是建议值；所有 numeric/settings variants 的 operator occurrence count 必须与 immutable anchor 完全一致。若需要新增、删除或替换 operator，停止当前 optimization，并重新形成 Probe hypothesis。不得为了提高 Sharpe 在强字段 lineage 上逐轮叠加 normalize/rank/zscore/add/multiply/trade_when 等结构。
 - Probe 已有 baseline evidence 时，baseline 只作 comparison reference，不再次进入 optimization Simulation；Gateway exact duplicate 只是最后安全边界，不能替代调用方去重。
 - numeric slot 先用 `inspect_template()` 读取 `default`、`allowed_values` 和 `economic_role`。第一轮只考虑当前值相邻的 lower/upper allowed value；后续最多沿 AI 明确支持的一个方向移动一个邻居。边界值只产生一个邻居，AI 可以基于明确经济理由跳过邻居，但必须记录理由。
 - 每轮只能改变一个 dimension：一个 numeric slot 或一个 settings key。field、template、mechanism、operator role 的变化回到 Probe；不要生成 Cartesian product 或 grid search。
 - 当前研究 horizon 的 numeric variants 与 settings variants 原则上留在同一 variant family；operator topology 变化必须拆成不同 family。family 内多个参数点必须一起解释，不能只挑最高 Sharpe 的一个包装成独立机制。不要把 `observed_execution_count` 当作完整 search history 或 total trial count，也不要据此实现 DSR/PBO。
-- numeric variant 使用 `build_simulation_variant(anchor, template, slot_name, value)`；目标值必须是声明的 allowed value，no-op 会被拒绝。settings variant 从 anchor.settings 复制后由 AI 明确改一个 key，再使用 `build_simulation_spec()` 做现有 validation；不自动计算 `decay`、`truncation` 或 universe。
+- numeric variant 使用 `build_simulation_variant(anchor, template, slot_name, value)`；目标值必须是声明的 allowed value，no-op 会被拒绝，且 anchor/operator topology 不得改变。settings variant 从 anchor.settings 复制后由 AI 明确改一个 key，再使用 `build_simulation_spec(anchor_spec=anchor)` 做现有 validation；expression 必须保持 byte-for-byte 或 canonical-equivalent，不自动计算 `decay`、`truncation` 或 universe。
 - 一个 variant 使用 `simulate_batch()`；两个或以上且设置兼容时优先 `simulate_multi_batch()`。所有执行仍经过 `research_api → SimulationGateway → Simulator → WQBClient`。
 - 优先复用本次 Simulation 已返回且 `AVAILABLE` 的 evidence；只有需要当前 Alpha detail 时读取 `get_alpha()`。只有 AI 判断需要完整 robustness comparison 时，才调用 `get_alpha_evidence()` 或 `compare_alphas()`；对 FAILED、NOT_DISPATCHED、SUBMIT_UNKNOWN 或明显无效 candidate 不做无条件深读。
 

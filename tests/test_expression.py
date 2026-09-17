@@ -5,12 +5,22 @@ from wqb_agent.expression import (
     ExpressionAnalysis,
     analyze_expression,
     expression_identity_keys,
+    operator_occurrence_count,
+    operator_occurrence_signature,
     submission_fingerprint,
     variant_family_fingerprint,
 )
 
 
 class TestExpressionAnalysis(unittest.TestCase):
+    def test_operator_occurrence_count_preserves_repeated_calls(self):
+        expression = "rank(subtract(ts_zscore(x, 22), ts_zscore(y, 22)))"
+        self.assertEqual(operator_occurrence_count(expression), 4)
+        self.assertEqual(
+            operator_occurrence_signature(expression),
+            ("rank", "subtract", "ts_zscore", "ts_zscore"),
+        )
+
     def test_variant_family_abstracts_declared_horizon_literals_only(self):
         base = "ts_mean(close, 22)"
         numeric_variant = "ts_mean(close, 66)"
