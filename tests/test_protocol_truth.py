@@ -40,6 +40,38 @@ class TestProtocolTruth(unittest.TestCase):
         self.assertEqual(static["source"], "STATIC_SYNTAX_REFERENCE")
         self.assertEqual(static["availability"], "UNKNOWN")
 
+    def test_static_operator_reference_covers_pasted_operator_catalog(self):
+        from wqb_agent.operator_reference import load_operator_syntax_reference
+
+        expected = {
+            "abs", "add", "and", "bucket", "days_from_last_change", "densify",
+            "divide", "group_backfill", "group_cartesian_product", "group_extra",
+            "group_mean", "group_neutralize", "group_rank", "group_scale",
+            "group_zscore", "hump", "if_else", "inst_pnl", "inverse", "is_nan",
+            "kth_element", "last_diff_value", "log", "max", "min", "multiply",
+            "normalize", "not", "or", "power", "quantile", "rank",
+            "regression_proj", "reverse", "scale", "sigmoid", "sign", "signed_power",
+            "sqrt", "subtract", "tanh", "trade_when", "ts_arg_max", "ts_arg_min",
+            "ts_av_diff", "ts_backfill", "ts_corr", "ts_count_nans", "ts_covariance",
+            "ts_decay_linear", "ts_delay", "ts_delta", "ts_entropy", "ts_mean",
+            "ts_min_diff", "ts_min_max_cps", "ts_min_max_diff", "ts_product",
+            "ts_quantile", "ts_rank", "ts_regression", "ts_scale", "ts_skewness",
+            "ts_std_dev", "ts_step", "ts_sum", "ts_target_tvr_decay", "ts_zscore",
+            "vec_avg", "vec_count", "vec_max", "vec_min", "vec_range", "vec_stddev",
+            "vec_sum", "vector_neut", "vector_proj", "winsorize", "zscore",
+        }
+        root = os.path.dirname(os.path.dirname(__file__))
+        packaged = load_operator_syntax_reference(
+            os.path.join(root, "wqb_agent", "reference", "OPERATORS_CHEATSHEET.md")
+        )
+        documented = load_operator_syntax_reference(
+            os.path.join(root, "docs", "reference", "OPERATORS_CHEATSHEET.md")
+        )
+        self.assertEqual(set(packaged["operators"]), expected)
+        self.assertEqual(packaged["operators"], documented["operators"])
+        self.assertEqual(packaged["source"], "STATIC_SYNTAX_REFERENCE")
+        self.assertEqual(packaged["availability"], "UNKNOWN")
+
     def test_retry_after_accepts_seconds_and_invalid_fails_closed(self):
         self.assertEqual(retry_after_seconds({"Retry-After": "2"}), 2.0)
         self.assertEqual(retry_after_seconds({"Retry-After": "bad"}), 5.0)
