@@ -20,7 +20,8 @@ def structural_fingerprint(expression):
     return hashlib.sha256(skeleton.encode("utf-8")).hexdigest()
 
 
-def _quality(row):
+def quality_state(row):
+    """Return textual evidence state without ranking or selecting an Alpha."""
     alpha = row.get("alpha") if isinstance(row.get("alpha"), Mapping) else {}
     metrics = alpha.get("is") if isinstance(alpha.get("is"), Mapping) else {}
     checks = metrics.get("checks")
@@ -45,7 +46,7 @@ def group_remote_evidence(rows):
         execution = row.get("execution_fingerprint") or submission_fingerprint(expression, settings)
         structural = row.get("structural_fingerprint") or structural_fingerprint(expression)
         item = dict(row)
-        for key, value in (("execution", execution), ("structural", structural), ("quality", _quality(row))):
+        for key, value in (("execution", execution), ("structural", structural), ("quality", quality_state(row))):
             groups[key].setdefault(str(value), []).append(item)
     return groups
 

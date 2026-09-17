@@ -14,6 +14,14 @@
 
 先读真实 BRAIN evidence，再决定下一份 `SimulationSpec`。执行成功不等于机制成立；缺失 evidence 保持 `UNKNOWN/UNAVAILABLE`。相同 expression 加有效 settings 的 exact duplicate 不重复提交；相似性只是 advisory。`SUBMIT_UNKNOWN` 不重 POST，已知 progress URL 只轮询原任务，Alpha submission 始终人工完成。
 
+## Alpha 结构分组与颜色 metadata
+
+- 颜色只用于人类阅读的结构标签，不是质量、排序、winner 或机制证据。质量只保留 `DONE`、`FAILED_CHECK`、`UNKNOWN` 等文本状态；不得用 Sharpe、fitness、turnover、相关性或阈值自动推导颜色。
+- 对同一份远端 evidence snapshot，先调用 `group_alphas()`；结构相似性由 `structural_group_key` 表达，exact execution fingerprint 仍只用于重复执行识别。不得创建第二份缓存或本地颜色状态。
+- AI 明确选择当前轮最多 5 个 structural group，并提交 `structural_group_key -> BLUE/GREEN/PURPLE/RED/YELLOW` 的显式 assignment。未分配组保持现状；相同颜色、混合现有颜色都必须在 review plan 中显式可见，不得 hash 或自动碰撞处理。
+- 严格按 `snapshot → group/quality inspection → preview_alpha_colors(assignments=...) → 人工 review → sync_alpha_colors(exact_plan=...) → readback` 执行。同步只消费该 immutable plan；远端当前颜色与 `expected_old_color` 不一致时为 `STALE_PLAN`，必须重新 preview，`overwrite=True` 也不能跳过 stale gate。
+- 默认保留已有颜色；只有明确批准的 `overwrite=True` 才能 recolor，且每次只允许已有 metadata PATCH/readback，不得触发 Simulation、Alpha submission 或第二条 POST 路径。每轮记录新增 Simulation 数量；颜色 assignment 数量为 0 不得包装成机制证据。
+
 Probe 是 broad screening；局部优化只能从已审阅的 base `SimulationSpec` 出发，每次只改变一个模板声明的 numeric slot 或 AI 明确给出的 settings 值。先说明 base hypothesis、优化理由、变化维度和 variant 数量，再逐一比较 baseline 与全部 variants；不得自动选择 winner、扩大搜索或循环提交。
 
 ## 局部优化预算纪律

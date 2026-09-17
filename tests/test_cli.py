@@ -25,8 +25,9 @@ class TestCanonicalCliGrammar(unittest.TestCase):
             self.assert_command(["diagnostics", action, "--offline"],
                                 domain="diagnostics", action=action, offline=True)
         self.assert_command(["smoke"], domain="smoke", action="readonly")
-        self.assert_command(["alpha", "sync-colors", "--dry-run"],
-                            domain="alpha", action="sync-colors", dry_run=True)
+        self.assert_command(["alpha", "sync-colors", "--dry-run", "--plan", "plan.json"],
+                            domain="alpha", action="sync-colors", dry_run=True,
+                            color_plan="plan.json")
         self.assert_command(["alpha", "sync-feed"], domain="alpha", action="sync-feed")
 
     def test_global_options_are_canonical_fields(self):
@@ -50,6 +51,12 @@ class TestCanonicalCliGrammar(unittest.TestCase):
                     parse_cli(argv)
             self.assertEqual(raised.exception.code, 2)
 
+    def test_color_sync_requires_reviewed_plan(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as raised:
+                parse_cli(["alpha", "sync-colors", "--dry-run"])
+        self.assertEqual(raised.exception.code, 2)
+
 
 class TestCliRuntimeSafety(unittest.TestCase):
     def test_sync_colors_is_independent_remote_metadata_write(self):
@@ -57,15 +64,15 @@ class TestCliRuntimeSafety(unittest.TestCase):
         with patch.object(main_entry, "acquire_single_instance_lock", return_value="lock") as acquire, \
                 patch.object(main_entry, "release_single_instance_lock") as release, \
                 patch("wqb_agent.WQBClient"), \
-                patch("wqb_agent.research_api.refresh_remote_alphas", return_value={}), \
-                patch("wqb_agent.research_api.list_remote_alphas", return_value=[{"alpha_id": "a1"}]), \
+                patch.object(main_entry, "load_color_plan", return_value=[{"alpha_id": "a1"}]), \
                 patch("wqb_agent.research_api.sync_alpha_colors", return_value=changes) as sync:
             with contextlib.redirect_stdout(io.StringIO()) as output:
                 main_entry.main(["--config", "config.example.json", "--state-dir", "tests/fixtures",
-                                 "alpha", "sync-colors", "--dry-run"])
+                                 "alpha", "sync-colors", "--dry-run", "--plan", "plan.json"])
         acquire.assert_called_once_with("tests/fixtures", operation="sync-alpha-colors")
         release.assert_called_once_with("lock")
         sync.assert_called_once()
+        self.assertEqual(sync.call_args.kwargs["exact_plan"], [{"alpha_id": "a1"}])
         payload = json.loads(output.getvalue())
         self.assertTrue(payload["dry_run"])
         self.assertFalse(payload["network_write"])

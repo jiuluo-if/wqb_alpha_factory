@@ -15,6 +15,6 @@ discover fields/operators → generate/review SimulationSpec → simulate
 
 相同 expression 与 effective settings 是执行级 exact duplicate；结构相似、字段重合、相关性和质量分组只是 advisory evidence，不自动阻止非 exact candidate。AI 使用历史结果时应意识到 selection bias，不能把参数扫描包装成新机制。
 
-所有 Simulation 经过 `research_api → SimulationGateway → Simulator → WQBClient`。`SUBMIT_UNKNOWN` 不得自动重 POST，已知 progress URL 只能轮询原任务。Alpha submission 始终 `MANUAL_ONLY`，颜色 metadata PATCH 与 submission 分离。
+所有 Simulation 经过 `research_api → SimulationGateway → Simulator → WQBClient`。`SUBMIT_UNKNOWN` 不得自动重 POST，已知 progress URL 只能轮询原任务。Alpha submission 始终 `MANUAL_ONLY`，颜色 metadata PATCH 与 submission 分离；颜色只能由同一远端 evidence snapshot 的 structural group 经 AI 显式 assignment 产生，且同步必须消费 review 后的 exact plan 并通过 stale/readback 检查。
 
 tracked 文档、测试和 fixtures 只能使用 synthetic 数据；真实 Alpha、私有字段、研究表达式、credentials 和本地运行数据不得提交。

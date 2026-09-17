@@ -19,6 +19,7 @@ from wqb_agent.research_api import (
     list_all_datafields,
     list_datafields,
     list_datasets,
+    list_remote_alphas,
     list_templates,
     simulate_multi_batch,
     simulate_single,
@@ -177,6 +178,17 @@ class TestResearchApi(unittest.TestCase):
                 instrument_type="EQUITY", region="GLB", universe="TOP3000", delay=1,
                 get_datafields=lambda _dataset_id, **kwargs: ([], 0),
             )
+            with mock.patch("wqb_agent.research_api.FieldDiscovery") as discovery_type:
+                discovery_type.return_value.discover.return_value = [{"id": "close"}]
+                discovery_type.return_value.source_provenance.return_value = {"kind": "synthetic"}
+                for config in forms:
+                    discovery_type.reset_mock()
+                    result = discover_fields("reversal", client=client, config=config,
+                                            state_dir=tmp)
+                    self.assertEqual(result["fields"], [{"id": "close"}])
+                    self.assertEqual(
+                        discovery_type.call_args.kwargs["pagination_limit"], 7
+                    )
             for config in forms:
                 result = list_datafields("analyst69", client=client, config=config)
                 self.assertEqual(result["limit"], 7)
@@ -196,12 +208,15 @@ class TestResearchApi(unittest.TestCase):
                 for config in forms:
                     repo_type.reset_mock()
                     repo_type.return_value.cache_status.return_value = {"retention_days": 3}
+                    repo_type.return_value.list_remote_alphas.return_value = [{"alpha_id": "a"}]
                     from wqb_agent.research_api import remote_cache_status
                     result = remote_cache_status(config=config, state_dir=tmp)
                     self.assertEqual(result["retention_days"], 3)
                     self.assertEqual(
                         repo_type.call_args.kwargs["retention_days"], 3
                     )
+                    listed = list_remote_alphas(config=config, state_dir=tmp)
+                    self.assertEqual(listed, [{"alpha_id": "a"}])
     def test_simulation_modes_keep_single_and_multi_explicit(self):
         modes = get_simulation_modes()
 

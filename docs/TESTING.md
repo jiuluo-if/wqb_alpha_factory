@@ -30,4 +30,6 @@ Targeted Fast Lane 与 whole-repository final gate 是不同层次：前者验�
 
 ## Contract focus
 
-必须持续覆盖：唯一 Simulation 写链、ExecutionGuard exactly-once、`SUBMIT_UNKNOWN` 不重 POST、known progress URL 只读轮询、远端 evidence 缺失保持 UNKNOWN、live/cache 优先级、颜色 PATCH readback、facade authorization 与 privacy。
+必须持续覆盖：唯一 Simulation 写链、ExecutionGuard exactly-once、`SUBMIT_UNKNOWN` 不重 POST、known progress URL 只读轮询、远端 evidence 缺失保持 UNKNOWN、live/cache 优先级、结构分组与显式颜色 plan、颜色 PATCH readback、stale plan 不写入、facade authorization 与 privacy。
+
+颜色 CI 使用 synthetic evidence 和 mock setter；质量字段只能作为文本状态，不能自动产生颜色。每个生产 Python 模块必须在 `scripts/run_targeted_tests.py` 的 `DIRECT_TESTS` 中有显式路由；映射不存在或过期都 fail closed。

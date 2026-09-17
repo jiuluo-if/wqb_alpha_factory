@@ -966,8 +966,9 @@ def find_similar_alphas(expression_or_alpha_id, *, rows=None,
     return find_remote_similar(rows, expression_or_alpha_id)
 
 
-def preview_alpha_colors(alpha_ids=None, *, rows=None, client=None,
-                         config=None, state_dir=None, days=None):
+def preview_alpha_colors(alpha_ids=None, *, rows=None, assignments=None,
+                         client=None, config=None, state_dir=None, days=None,
+                         overwrite=False):
     if rows is None:
         repository = _remote_repository(
             client=client, config=config, state_dir=state_dir
@@ -976,22 +977,22 @@ def preview_alpha_colors(alpha_ids=None, *, rows=None, client=None,
             item["alpha_id"] for item in repository.list_remote_alphas(days=days)
         ]
         rows = [repository.get_remote_alpha_evidence(item) for item in ids]
-    return preview_remote_colors(rows)
+    return preview_remote_colors(rows, assignments=assignments, overwrite=overwrite)
 
 
-def sync_alpha_colors(alpha_ids=None, *, rows=None, client=None,
-                      config=None, state_dir=None, days=None, overwrite=False,
-                      dry_run=False):
+def sync_alpha_colors(plan=None, *, exact_plan=None, client=None, config=None,
+                      state_dir=None, overwrite=False, dry_run=False):
+    """Apply a previously reviewed color preview plan only."""
+    if plan is not None and exact_plan is not None:
+        raise TypeError("provide only one of plan or exact_plan")
+    plan = exact_plan if exact_plan is not None else plan
+    if plan is None:
+        raise ValueError("EXACT_COLOR_PLAN_REQUIRED")
     repository = _remote_repository(
         client=client, config=config, state_dir=state_dir
     )
-    if rows is None:
-        ids = alpha_ids or [
-            item["alpha_id"] for item in repository.list_remote_alphas(days=days)
-        ]
-        rows = [repository.get_remote_alpha_evidence(item) for item in ids]
     return sync_remote_colors(
-        rows, get_alpha=repository.evidence.get_alpha,
+        plan, get_alpha=repository.evidence.get_alpha,
         set_alpha_color=repository.evidence.client.set_alpha_color,
         overwrite=overwrite, dry_run=dry_run,
     )

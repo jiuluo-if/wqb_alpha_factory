@@ -17,6 +17,19 @@ def load_config(path):
         sys.exit(1)
 
 
+def load_color_plan(path):
+    try:
+        with open(path, encoding="utf-8-sig") as handle:
+            plan = json.load(handle)
+    except (OSError, ValueError) as exc:
+        print(f"Color plan '{path}' is unreadable or not valid JSON: {exc}")
+        sys.exit(1)
+    if not isinstance(plan, list):
+        print(f"Color plan '{path}' must contain a JSON array")
+        sys.exit(1)
+    return plan
+
+
 def main(argv=None):
     command = parse_cli(argv)
     command_key = (command.domain, command.action)
@@ -87,19 +100,15 @@ def main(argv=None):
             sys.exit(1)
         try:
             client = WQBClient()
-            research_api.refresh_remote_alphas(
-                client=client, config=typed_config, state_dir=state_dir,
-            )
-            candidates = research_api.list_remote_alphas(
-                config=typed_config, state_dir=state_dir,
-            )
+            plan = load_color_plan(command.color_plan)
             changes = research_api.sync_alpha_colors(
-                client=client, config=typed_config, state_dir=state_dir,
+                exact_plan=plan, client=client, config=typed_config,
+                state_dir=state_dir,
                 dry_run=command.dry_run,
             )
             print(json.dumps({
                 "dry_run": command.dry_run,
-                "candidate_count": len(candidates),
+                "candidate_count": len(plan),
                 "change_count": len(changes),
                 "network_write": not command.dry_run,
                 "changes": changes,

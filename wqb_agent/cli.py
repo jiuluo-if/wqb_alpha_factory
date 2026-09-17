@@ -21,6 +21,7 @@ class CLICommand:
     task: str = "general"
     dry_run: bool = False
     offline: bool = False
+    color_plan: str | None = None
 
 
 def _set_command(parser, domain, action):
@@ -89,6 +90,12 @@ def build_parser():
         action="store_true",
         help="仅预览，不发送 PATCH",
     )
+    sync_colors.add_argument(
+        "--plan",
+        required=True,
+        dest="color_plan",
+        help="已人工 review 的 preview_alpha_colors JSON plan",
+    )
     _set_command(sync_colors, "alpha", "sync-colors")
     sync_feed = alpha_commands.add_parser(
         "sync-feed", help="只读拉取当周 Alpha 元数据"
@@ -114,4 +121,5 @@ def parse_cli(argv: Sequence[str] | None = None) -> CLICommand:
         task=getattr(namespace, "task", "general"),
         dry_run=getattr(namespace, "dry_run", False),
         offline=getattr(namespace, "offline", False),
+        color_plan=getattr(namespace, "color_plan", None),
     )

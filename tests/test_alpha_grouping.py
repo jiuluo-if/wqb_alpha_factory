@@ -28,6 +28,16 @@ class TestAlphaGrouping(unittest.TestCase):
         ])
         self.assertEqual(len(result["execution"]), 1)
 
+    def test_public_color_preview_requires_explicit_structural_assignment(self):
+        key = structural_fingerprint("rank(close)")
+        plan = research_api.preview_alpha_colors(
+            rows=[{"alpha_id": "a", "alpha": {"regular": "rank(close)"}}],
+            assignments={key: "BLUE"},
+        )
+        self.assertEqual(plan[0]["desired_color"], "BLUE")
+        with self.assertRaisesRegex(ValueError, "EXACT_COLOR_PLAN_REQUIRED"):
+            research_api.sync_alpha_colors()
+
 
 if __name__ == "__main__":
     unittest.main()
