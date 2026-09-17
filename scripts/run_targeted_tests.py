@@ -40,7 +40,7 @@ DIRECT_TESTS = {
     ),
     "wqb_agent/discovery.py": ("tests/test_research_api.py",),
     "wqb_agent/field_metadata.py": ("tests/test_research_api.py",),
-    "wqb_agent/discovery_selection.py": (),
+    "wqb_agent/discovery_selection.py": ("tests/test_discovery_selection.py",),
     "wqb_agent/field_catalog.py": ("tests/test_research_api.py",),
     "wqb_agent/__init__.py": (
         "tests/test_research_api.py",
@@ -70,7 +70,7 @@ DIRECT_TESTS = {
     "wqb_agent/alpha_factory.py": (
         "tests/test_research_api.py",
     ),
-    "wqb_agent/alpha_feed_cache.py": (),
+    "wqb_agent/alpha_feed_cache.py": ("tests/test_alpha_feed_cache.py",),
     "wqb_agent/alpha_templates/model.py": ("tests/test_alpha_template_catalog.py",),
     "wqb_agent/alpha_templates/loader.py": (
         "tests/test_alpha_template_catalog.py",
@@ -127,6 +127,9 @@ DIRECT_TESTS = {
     "wqb_agent/smoke.py": ("tests/test_smoke.py",),
     "wqb_agent/submission.py": (),
     "wqb_agent/yearly.py": (),
+    "tests/test_semantic_contract_admission.py": (
+        "tests/test_semantic_contract_admission.py",
+    ),
 }
 
 FRONTEND_CONFIG_FILES = {

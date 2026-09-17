@@ -21,8 +21,8 @@ typed frontier mypy
 python -m ruff check .
 python scripts/run_targeted_tests.py --base-sha <CI base SHA>
 python -m unittest discover -s tests
-python main.py --state-dir tests/fixtures diagnostics doctor
-python main.py --state-dir tests/fixtures diagnostics audit
+python main.py --state-dir tests/fixtures diagnostics doctor --offline
+python main.py --state-dir tests/fixtures diagnostics audit --offline
 python scripts/check_repo_privacy.py
 ```
 

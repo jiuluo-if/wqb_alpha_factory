@@ -59,12 +59,23 @@ def _load_config(config: Mapping[str, Any] | str | None) -> dict[str, Any]:
     return dict(config)
 
 
+def _normalized_config(config=None) -> AppConfig:
+    """Normalize every public facade config boundary exactly once."""
+    if config is None:
+        return normalize_config(_load_config(None))
+    return normalize_config(config)
+
+
+def _state_directory(config: AppConfig, state_dir=None) -> str:
+    return state_dir or config.runtime.state_dir
+
+
 def _remote_research_components(*, client, config=None, state_dir=None,
                                 include_factory=False):
     """Build only rebuildable components for public discovery/probe tools."""
-    typed = normalize_config(_load_config(config))
+    typed = _normalized_config(config)
     runtime = typed.runtime
-    directory = state_dir or runtime.state_dir
+    directory = _state_directory(typed, state_dir)
     selection = runtime.field_selection
     discovery = FieldDiscovery(
         client,
@@ -150,13 +161,8 @@ def list_datafields(
     normalized_id = str(dataset_id or "").strip()
     if not normalized_id:
         raise ValueError("dataset_id must be non-empty")
-    if isinstance(config, AppConfig):
-        typed = config
-    elif config is not None:
-        typed = normalize_config(_load_config(config))
-    else:
-        typed = None
-    default_limit = typed.runtime.pagination_limit if typed is not None else 50
+    typed = _normalized_config(config)
+    default_limit = typed.runtime.pagination_limit
     try:
         page_limit = default_limit if limit is None else int(limit)
         page_offset = int(offset)
@@ -346,8 +352,9 @@ def _simulation_gateway(*, client=None, config=None, state_dir=None):
     if client is None:
         from .client import WQBClient
         client = WQBClient()
-    directory = state_dir or ".wqb_state"
-    runtime = normalize_config(_load_config(config)).runtime
+    typed = _normalized_config(config)
+    directory = _state_directory(typed, state_dir)
+    runtime = typed.runtime
     max_concurrent = runtime.max_concurrent_sims
     poll_timeout = runtime.poll_timeout_sec
     return SimulationGateway(
@@ -520,13 +527,9 @@ def _remote_repository(*, client=None, config=None, state_dir=None,
                        require_client=True):
     if require_client or client is not None:
         client = _remote_client(client=client)
-    if isinstance(config, AppConfig):
-        retention = config.remote_cache.retention_days
-    elif config is not None:
-        retention = normalize_config(_load_config(config)).remote_cache.retention_days
-    else:
-        retention = 7
-    directory = state_dir or ".wqb_state"
+    typed = _normalized_config(config)
+    retention = typed.remote_cache.retention_days
+    directory = _state_directory(typed, state_dir)
     cache_path = os.path.join(directory, ".alpha_feed_cache", "remote.json")
     return RemoteAlphaRepository(
         client.get_all_user_alphas if client is not None else None,
@@ -537,10 +540,10 @@ def _remote_repository(*, client=None, config=None, state_dir=None,
 def refresh_remote_alphas(*, client=None, config=None, state_dir=None,
     limit=100, days=None):
     if days is not None:
-        if isinstance(config, AppConfig):
-            if int(days) != config.remote_cache.retention_days:
-                raise ValueError("days must equal the configured retention window")
-        elif int(days) < 1 or int(days) > 90:
+        typed = _normalized_config(config)
+        if int(days) != typed.remote_cache.retention_days:
+            raise ValueError("days must equal the configured retention window")
+        if int(days) < 1 or int(days) > 90:
             raise ValueError("days must be within 1-90")
     return _remote_repository(
         client=client, config=config, state_dir=state_dir,
@@ -576,16 +579,12 @@ def simulation_quota(*, client=None, config=None, state_dir=None):
         client=client, config=config, state_dir=state_dir,
         require_client=False,
     )
-    if isinstance(config, AppConfig):
-        quota = config.quota
-    elif config is not None:
-        quota = normalize_config(_load_config(config)).quota
-    else:
-        quota = None
+    quota = _normalized_config(config).quota
+    typed = _normalized_config(config)
     return SimulationQuota(
-        repository, ExecutionGuard(state_dir or ".wqb_state"),
-        daily_cap=quota.daily if quota else 1600,
-        rolling_cap=quota.rolling_limit if quota else 11200,
+        repository, ExecutionGuard(_state_directory(typed, state_dir)),
+        daily_cap=quota.daily,
+        rolling_cap=quota.rolling_limit,
     ).snapshot()
 
 

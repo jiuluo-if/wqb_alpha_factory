@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import copy
+import json
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
+from os import PathLike
 
 _FIELD_SELECTION_DEFAULTS = {
     "mode": "semantic_random",
@@ -289,7 +292,12 @@ def normalize_config(config):
     """Normalize the one supported external config boundary."""
     if isinstance(config, AppConfig):
         return config
-    return parse_config(config)
+    if isinstance(config, (str, PathLike)):
+        with open(config, encoding="utf-8-sig") as handle:
+            config = json.load(handle)
+    if isinstance(config, Mapping):
+        return parse_config(dict(config))
+    raise TypeError("config 必须是 AppConfig、配置对象或配置文件路径")
 
 
 def apply_cli_overrides(
