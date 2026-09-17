@@ -218,12 +218,11 @@ class Simulator:
                         persist()
                         break
                     except WQBRateLimitError as exc:
-                        # The client has already received a server-side 429,
-                        # which rejects the request before acceptance.  Do not
-                        # retain a false unknown guard; stop this window so a
-                        # later caller can retry after the rate limit clears.
+                        # A Simulation POST has no verified server-side
+                        # rejection contract.  A 429 is therefore ambiguous
+                        # after transport and must never trigger a replacement.
                         experiment.error = f"{type(exc).__name__}: {exc}"
-                        experiment.status = "RATE_LIMITED"
+                        experiment.status = "SUBMIT_UNKNOWN"
                         persist()
                         return experiment
                     except WQBSubmitUnknownError as exc:
@@ -424,7 +423,7 @@ class Simulator:
             return batch
         except WQBRateLimitError as exc:
             batch.error = f"{type(exc).__name__}: {exc}"
-            batch.status = "RATE_LIMITED"
+            batch.status = "SUBMIT_UNKNOWN"
             persist()
             return batch
         except WQBError as exc:

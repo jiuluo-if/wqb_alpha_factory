@@ -26,7 +26,7 @@ def _raw_guard_entries(path):
 def audit_execution_surface(state_dir):
     """Audit only the local ExecutionGuard and rebuildable remote cache."""
     directory = os.path.abspath(str(state_dir))
-    guard = ExecutionGuard(directory)
+    guard = ExecutionGuard(directory, reconcile=False)
     raw_rows, errors = _raw_guard_entries(guard.path)
     fingerprints = [str(row.get("execution_fingerprint")) for row in raw_rows
                     if row.get("execution_fingerprint")]

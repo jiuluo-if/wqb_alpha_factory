@@ -1,4 +1,5 @@
 import json
+import multiprocessing
 import os
 import tempfile
 import threading
@@ -7,6 +8,7 @@ import unittest
 
 from wqb_agent import research_api
 from wqb_agent.client import WQBRateLimitError, WQBSubmitUnknownError
+from wqb_agent.locking import OwnerBusyError
 from wqb_agent.remote_evidence import RemoteAlphaEvidenceProvider
 from wqb_agent.simulation_gateway import (
     ExecutionGuard,
@@ -41,6 +43,32 @@ class FakeGatewayClient:
 
     def get_self_correlation(self, alpha_id):
         return {"alpha_id": alpha_id, "status": "AVAILABLE", "value": 0.1}
+
+
+class ProcessSimulationClient(FakeGatewayClient):
+    def __init__(self, post_log, ready, release):
+        super().__init__()
+        self.post_log = post_log
+        self.ready = ready
+        self.release = release
+
+    def submit_simulation(self, expression, settings, **kwargs):
+        with open(self.post_log, "a", encoding="utf-8") as handle:
+            handle.write("post\n")
+        self.ready.set()
+        self.release.wait(10)
+        return "progress-1"
+
+
+def _run_process_simulation(state_dir, post_log, ready, release, result_queue):
+    client = ProcessSimulationClient(post_log, ready, release)
+    try:
+        result = SimulationGateway(client, state_dir=state_dir).simulate(
+            SimulationSpec("rank(close)", {"delay": 1})
+        )
+        result_queue.put(result["status"])
+    except OwnerBusyError:
+        result_queue.put("OWNER_BUSY")
 
 
 class CapabilityGatewayClient(FakeGatewayClient):
@@ -133,6 +161,34 @@ class RateLimitedMultiGatewayClient(MultiGatewayClient):
 
 
 class TestSimulationGateway(unittest.TestCase):
+    def test_independent_processes_allow_at_most_one_simulation_post(self):
+        context = multiprocessing.get_context("spawn")
+        with tempfile.TemporaryDirectory() as tmp:
+            post_log = os.path.join(tmp, "posts.log")
+            ready = context.Event()
+            release = context.Event()
+            result_queue = context.Queue()
+            first = context.Process(
+                target=_run_process_simulation,
+                args=(tmp, post_log, ready, release, result_queue),
+            )
+            second = context.Process(
+                target=_run_process_simulation,
+                args=(tmp, post_log, ready, release, result_queue),
+            )
+            first.start()
+            self.assertTrue(ready.wait(10))
+            second.start()
+            second.join(10)
+            release.set()
+            first.join(10)
+            self.assertFalse(first.is_alive())
+            self.assertFalse(second.is_alive())
+            self.assertEqual(sorted([result_queue.get(timeout=2) for _ in range(2)]),
+                             ["DONE", "OWNER_BUSY"])
+            with open(post_log, encoding="utf-8") as handle:
+                self.assertEqual(handle.read().splitlines(), ["post"])
+
     def test_public_batch_uses_bounded_gateway_concurrency(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = ConcurrentGatewayClient()
@@ -221,7 +277,7 @@ class TestSimulationGateway(unittest.TestCase):
             )
             self.assertEqual(second_client.multi_submissions, [])
 
-    def test_multi_rate_limit_is_not_recorded_as_unknown_submission(self):
+    def test_multi_rate_limit_is_ambiguous_and_never_reposted(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = RateLimitedMultiGatewayClient()
             gateway = SimulationGateway(client, state_dir=tmp)
@@ -234,9 +290,16 @@ class TestSimulationGateway(unittest.TestCase):
 
             self.assertEqual(
                 [item["status"] for item in results],
-                ["NOT_DISPATCHED", "NOT_DISPATCHED"],
+                ["SUBMIT_UNKNOWN", "SUBMIT_UNKNOWN"],
             )
-            self.assertEqual(gateway.guard.entries(), [])
+            self.assertEqual(len(gateway.guard.entries()), 1)
+            resumed = SimulationGateway(MultiGatewayClient(), state_dir=tmp)
+            resumed_results = resumed.simulate_multi_batch(specs)
+            self.assertEqual(
+                [item["status"] for item in resumed_results],
+                ["SUBMIT_UNKNOWN", "SUBMIT_UNKNOWN"],
+            )
+            self.assertEqual(resumed.client.multi_submissions, [])
 
     def test_batch_marks_unsubmitted_tail_without_creating_unknown_guard(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -349,7 +412,7 @@ class TestSimulationGateway(unittest.TestCase):
 
             result = gateway.simulate(spec)
 
-            self.assertEqual(result["status"], "EXACT_DUPLICATE")
+            self.assertEqual(result["status"], "SUBMIT_UNKNOWN")
             self.assertEqual(result["fingerprint"], fingerprint)
             self.assertEqual(client.submissions, [])
 

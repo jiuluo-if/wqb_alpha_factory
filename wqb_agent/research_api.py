@@ -594,7 +594,8 @@ def _render_private_catalog(raw_templates):
 
 def _write_private_catalog(path, document):
     raw_templates = list(document.get("templates") or [])
-    _atomic_replace(str(path), _render_private_catalog(raw_templates).encode("utf-8"))
+    _atomic_replace(str(path), _render_private_catalog(raw_templates).encode("utf-8"),
+                    private=True)
 
 
 def create_template(template, *, catalog_path=None):
@@ -755,7 +756,7 @@ def get_simulation_modes() -> dict[str, dict[str, Any]]:
 
 
 def get_pending_executions(*, state_dir=".wqb_state"):
-    return {"entries": ExecutionGuard(state_dir).entries()}
+    return {"entries": ExecutionGuard(state_dir, reconcile=False).entries()}
 
 
 def resume_execution(fingerprint, *, client=None, config=None,
@@ -890,7 +891,7 @@ def simulation_quota(*, client=None, config=None, state_dir=None):
     quota = _normalized_config(config).quota
     typed = _normalized_config(config)
     return SimulationQuota(
-        repository, ExecutionGuard(_state_directory(typed, state_dir)),
+        repository, ExecutionGuard(_state_directory(typed, state_dir), reconcile=False),
         daily_cap=quota.daily,
         rolling_cap=quota.rolling_limit,
     ).snapshot()

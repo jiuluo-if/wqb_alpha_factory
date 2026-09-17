@@ -16,6 +16,8 @@ import threading
 import unittest
 from unittest import mock
 
+import requests
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from wqb_agent.client import (
@@ -207,7 +209,7 @@ class TestOperatorCapabilityClient(unittest.TestCase):
             request.call_args.kwargs["headers"],
             {"X-Idempotency-Key": "multi-fingerprint"},
         )
-        self.assertNotEqual(request.call_args.kwargs.get("retry_rate_limit"), False)
+        self.assertFalse(request.call_args.kwargs.get("retry_rate_limit"))
         c._wait_submission_slot.assert_called_once_with()
 
     def test_multi_progress_resolves_child_simulations_without_a_new_post(self):
@@ -382,6 +384,26 @@ class TestClassifiedExceptions(unittest.TestCase):
                 self.assertEqual(expected_type.kind, expected_kind)
 
 class TestSharedRateLimitGate(unittest.TestCase):
+    def test_simulation_post_429_is_unknown_without_transport_retry(self):
+        c = make_client()
+        c._local.session = FakeSession([
+            FakeResponse(429, headers={"Retry-After": "60"}),
+        ])
+        with mock.patch.object(c, "_wait_submission_slot"), \
+             mock.patch.object(c, "_register_rate_limit"), \
+             self.assertRaises(WQBSubmitUnknownError):
+            c.submit_simulation("rank(a)", {})
+
+    def test_simulation_post_timeout_is_unknown_and_has_one_transport_call(self):
+        c = make_client()
+        session = mock.Mock()
+        session.request.side_effect = requests.exceptions.Timeout("ambiguous")
+        c._local.session = session
+        with mock.patch.object(c, "_wait_submission_slot"):
+            with self.assertRaises(WQBSubmitUnknownError):
+                c.submit_simulation("rank(a)", {})
+        self.assertEqual(session.request.call_count, 1)
+
     def test_retry_after_longer_than_budget_fails_without_sleeping_full_delay(self):
         c = make_client()
         c._local.session = FakeSession([
