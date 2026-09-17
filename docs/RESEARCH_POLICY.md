@@ -18,3 +18,5 @@ discover fields/operators → generate/review SimulationSpec → simulate
 所有 Simulation 经过 `research_api → SimulationGateway → Simulator → WQBClient`。`SUBMIT_UNKNOWN` 不得自动重 POST，已知 progress URL 只能轮询原任务。Alpha submission 始终 `MANUAL_ONLY`，颜色 metadata PATCH 与 submission 分离；颜色只能由同一远端 evidence snapshot 的 variant family 经 AI 显式 assignment 产生，同时保留 strict structural key，且同步必须消费 review 后的 exact plan 并通过 stale/readback 检查。
 
 tracked 文档、测试和 fixtures 只能使用 synthetic 数据；真实 Alpha、私有字段、研究表达式、credentials 和本地运行数据不得提交。
+
+Template/Probe 的复杂度预算按最终 effective expression 的 operator occurrence 计算，direction transform 等机械 wrapper 计入预算；局部优化必须保持 immutable anchor 的 operator topology，不得通过叠加 operator 扩大表达式。

@@ -8,6 +8,9 @@ from dataclasses import dataclass
 _IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
 _OPERATOR_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 _OPERATOR_PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}\s*\(")
+_REDUNDANT_UNARY_RE = re.compile(
+    r"\b(rank|zscore|normalize|reverse)\s*\(\s*\1\s*\("
+)
 _NON_FIELD_IDENTIFIERS = {
     "abs", "add", "and", "bucket", "densify", "divide", "group_backfill",
     "group_mean", "group_neutralize", "group_rank", "group_scale",
@@ -93,6 +96,11 @@ def operator_occurrence_count(expression):
 def operator_occurrence_signature(expression):
     """Return ordered concrete operator names for topology comparisons."""
     return tuple(value.lower() for value in _OPERATOR_RE.findall(str(expression or "")))
+
+
+def has_redundant_unary_wrapper(expression):
+    """Detect only the explicitly prohibited obvious duplicate unary wrappers."""
+    return bool(_REDUNDANT_UNARY_RE.search(str(expression or "")))
 
 
 def _abstract_horizon_literals(skeleton):

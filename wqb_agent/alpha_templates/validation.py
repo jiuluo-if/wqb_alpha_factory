@@ -1,6 +1,12 @@
 """Pure validation gates for public synthetic and local private templates."""
 
-from .model import FASTEXPR_IDENTIFIER_RE, HORIZON_LATTICE, PRIMARY_FIELD_SLOT_ALIASES
+from ..expression import has_redundant_unary_wrapper, operator_occurrence_count
+from .model import (
+    DIRECTION_TRANSFORMS,
+    FASTEXPR_IDENTIFIER_RE,
+    HORIZON_LATTICE,
+    PRIMARY_FIELD_SLOT_ALIASES,
+)
 
 SETTINGS_ARMS = {
     "BASE", "UNIVERSE_ARM", "DECAY_DOWN", "DECAY_UP",
@@ -127,9 +133,18 @@ def effective_relationship_contract(template):
                or "UNDECLARED").upper()
 
 
-def validate_template_contract(template):
+def validate_template_contract(template, *, production=False):
     """Return an auditable gate report; never infer missing research semantics."""
     errors = []
+    direction_transform = getattr(template, "direction_transform", None)
+    if (not isinstance(direction_transform, str)
+            or direction_transform not in DIRECTION_TRANSFORMS):
+        errors.append("INVALID_DIRECTION_TRANSFORM")
+    if has_redundant_unary_wrapper(template.expression):
+        errors.append("REDUNDANT_OPERATOR_WRAPPER")
+    if direction_transform == "reverse" and has_redundant_unary_wrapper(
+            f"reverse({template.expression})"):
+        errors.append("REDUNDANT_OPERATOR_WRAPPER")
     mode = str(getattr(template, "template_mode", "CONCRETE") or "CONCRETE").upper()
     slots = tuple(getattr(template, "operator_slots", ()) or ())
     if mode not in {"CONCRETE", "PARTIAL_OPERATOR"}:
@@ -147,6 +162,15 @@ def validate_template_contract(template):
                    for name in slots[0].allowed_operators)
         ):
             errors.append("INVALID_OPERATOR_SLOT")
+        elif any(
+            operator_occurrence_count(
+                (template.expression.replace(slots[0].placeholder, operator))
+            ) + (1 if direction_transform == "reverse" else 0)
+            != operator_occurrence_count(template.expression)
+            + (1 if direction_transform == "reverse" else 0)
+            for operator in slots[0].allowed_operators
+        ):
+            errors.append("PARTIAL_OPERATOR_COMPLEXITY")
     role = str(template.role or "")
     contract = str(getattr(template, "relationship_contract", "UNDECLARED")
                    or "UNDECLARED").upper()
@@ -161,6 +185,18 @@ def validate_template_contract(template):
         errors.append("MULTI_FIELD_SINGLE_FIELD_CONTRACT")
     if PRIMARY_FIELD_SLOT_ALIASES.issubset(template.field_slots):
         errors.append("PRIMARY_FIELD_SLOT_ALIAS_CONFLICT")
+    field_roles = tuple(getattr(template, "field_roles", ()) or ())
+    if production and len(field_roles) != template.economic_field_count:
+        errors.append("FIELD_ROLE_COUNT_MISMATCH")
+    if any(not isinstance(role, str) or not role.strip() for role in field_roles):
+        errors.append("INVALID_FIELD_ROLE")
+    if len(template.numeric_slots) > 3:
+        errors.append("NUMERIC_SLOT_LIMIT")
+    if production and template.economic_field_count > 1:
+        if contract == "UNDECLARED":
+            errors.append("RELATIONSHIP_CONTRACT_UNDECLARED")
+        if semantic_contract == "UNDECLARED":
+            errors.append("SEMANTIC_CONTRACT_UNDECLARED")
     if role == "CONTROL_ALPHA":
         if not 1 <= template.operator_count <= 3:
             errors.append("CONTROL_OPERATOR_COUNT")
@@ -169,6 +205,8 @@ def validate_template_contract(template):
     elif role == "PROBE_ALPHA":
         if not 4 <= template.operator_count <= 6:
             errors.append("PROBE_OPERATOR_COUNT")
+            if template.operator_count < 4:
+                errors.append("ROLE_COMPLEXITY_MISMATCH")
         if not 2 <= template.economic_field_count <= 4:
             errors.append("PROBE_ECONOMIC_FIELD_COUNT")
     else:

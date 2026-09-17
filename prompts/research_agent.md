@@ -14,6 +14,10 @@
 
 先读真实 BRAIN evidence，再决定下一份 `SimulationSpec`。执行成功不等于机制成立；缺失 evidence 保持 `UNKNOWN/UNAVAILABLE`。相同 expression 加有效 settings 的 exact duplicate 不重复提交；相似性只是 advisory。`SUBMIT_UNKNOWN` 不重 POST，已知 progress URL 只轮询原任务，Alpha submission 始终人工完成。
 
+每次 Probe 前先明确 `direction`、`direction_reason` 和 `direction_transform`，并确认最终生成的 `SimulationSpec.expression` 与该方向一致。不得根据负 Sharpe 后验反转信号；任何方向修正都必须有 ex-ante economic rationale。
+
+模板先 contract-first 再写 expression；CONTROL 的 effective operator budget 为 1–3，PROBE 为 4–6，6 是 hard ceiling 而非目标。不得为了达到下限或用满预算添加无经济作用的 operator；direction transform 计入 effective complexity。历史超过上限的 Alpha 只能作为 evidence，不能作为 local optimization anchor。
+
 ## Alpha 结构分组与颜色 metadata
 
 - 颜色只用于人类阅读的结构标签，不是质量、排序、winner 或机制证据。质量只保留 `DONE`、`FAILED_CHECK`、`UNKNOWN` 等文本状态；不得用 Sharpe、fitness、turnover、相关性或阈值自动推导颜色。

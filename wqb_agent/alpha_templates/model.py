@@ -200,13 +200,21 @@ class AlphaTemplate:
 
     @property
     def operator_count(self):
+        count = operator_occurrence_count(self.expression)
+        return count + (1 if self.direction_transform == "reverse" else 0)
+
+    @property
+    def raw_operator_count(self):
+        """Internal skeleton count before deterministic mechanical transforms."""
         return operator_occurrence_count(self.expression)
 
     @property
     def operator_names(self):
-        return tuple(OPERATOR_OCCURRENCE_RE.findall(self.expression)) + tuple(
+        names = tuple(OPERATOR_OCCURRENCE_RE.findall(self.expression)) + tuple(
             slot.baseline_operator for slot in self.operator_slots
         )
+        return (("reverse",) + names if self.direction_transform == "reverse"
+                else names)
 
     @property
     def fingerprint(self):
