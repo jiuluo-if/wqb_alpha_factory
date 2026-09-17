@@ -19,7 +19,6 @@ _FIELD_SELECTION_DEFAULTS = {
     "dataset_sampling": "stratified",
     "dataset_pool": [],
     "min_datasets": 1,
-    "min_cross_dataset_pairs": 0,
     "persist_catalog": False,
 }
 @dataclass(frozen=True)
@@ -148,11 +147,6 @@ def _resolve_field_selection(runtime):
         field_selection["min_datasets"],
         key="config.runtime.field_selection.min_datasets",
         minimum=1,
-    )
-    field_selection["min_cross_dataset_pairs"] = _int_in_range(
-        field_selection["min_cross_dataset_pairs"],
-        key="config.runtime.field_selection.min_cross_dataset_pairs",
-        minimum=0,
     )
     raw_pool = field_selection.get("dataset_pool") or []
     if isinstance(raw_pool, (str, int)):

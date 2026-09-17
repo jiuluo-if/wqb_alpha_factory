@@ -258,7 +258,7 @@ def list_all_datafields(
     }
 
 
-def generate_probes(query=None, *, template_ids=None, count=100, seed=None,
+def generate_probes(query=None, *, template_ids=None, count=None,
                     fields=None, client=None, config=None, state_dir=None):
     """Generate reviewable ``SimulationSpec`` probes without an inbox write."""
     if client is None:
@@ -270,7 +270,7 @@ def generate_probes(query=None, *, template_ids=None, count=100, seed=None,
     )
     reference = get_operator_reference(client=client, config=config)
     try:
-        target = int(count)
+        target = (_typed.factory.default_probe_count if count is None else int(count))
     except (TypeError, ValueError) as exc:
         raise ValueError("count 必须是整数") from exc
     if target < 0:
@@ -289,12 +289,13 @@ def generate_probes(query=None, *, template_ids=None, count=100, seed=None,
     requested_templates = list(template_ids or [])
     hypothesis["template_ids"] = requested_templates
     fields = fields if fields is not None else discovery.discover(
-        hypothesis, target_count=target
+        hypothesis, target_count=_typed.runtime.fields_per_discovery
     )
     if callable(reference):
         reference = reference()
     return factory.generate_probe_specs(
-        hypothesis, fields, reference, target=target, seed=seed,
+        hypothesis, fields, reference, target=target,
+        simulation_settings=_typed.simulation_config.settings,
     )
 
 

@@ -15,6 +15,56 @@ from wqb_agent.alpha_templates.validation import validate_template_contract
 
 
 class TestAlphaTemplateCatalog(unittest.TestCase):
+    def test_factory_covers_entire_field_pool_with_bounded_target(self):
+        template = AlphaTemplate(
+            "coverage-control", family="synthetic", expression="rank({p})",
+            required_slots=("p",), role="CONTROL_ALPHA",
+            semantic_contract="SYNTHETIC_FIXTURE",
+            economic_mechanism="synthetic control", field_relationship="single field",
+            direction_reason="synthetic", expected_horizon="short-term",
+            falsification="synthetic falsification",
+        )
+        factory = AlphaFactory(registry=AlphaTemplateRegistry([template]))
+        fields = [{"id": f"field_{index}"} for index in range(12)]
+        specs = factory.generate({"template_ids": ["coverage-control"]}, fields, count=8)
+        self.assertEqual(len(specs), 8)
+        self.assertEqual([spec.fields[0] for spec in specs],
+                         [f"field_{index}" for index in range(8)])
+
+    def test_unary_semantic_contract_admits_only_compatible_fields(self):
+        template = AlphaTemplate(
+            "quality-control", family="synthetic", expression="rank({p})",
+            required_slots=("p",), role="CONTROL_ALPHA",
+            semantic_contract="DATA_QUALITY",
+            economic_mechanism="synthetic quality", field_relationship="single field",
+            direction_reason="synthetic", expected_horizon="short-term",
+            falsification="synthetic falsification",
+        )
+        factory = AlphaFactory(registry=AlphaTemplateRegistry([template]))
+        fields = [
+            {"id": "price_field", "description": "closing price", "frequency": "daily"},
+            {"id": "missing_field", "description": "coverage missing count", "frequency": "daily"},
+        ]
+        specs = factory.generate({"template_ids": ["quality-control"]}, fields, count=2)
+        self.assertEqual([spec.fields for spec in specs], [("missing_field",)])
+
+    def test_partial_operator_generation_uses_live_operator_intersection(self):
+        branch = next(item for item in load_templates(io.StringIO(_partial_document()))
+                       if item.template_id == "toy_sync_corr_operator")
+        factory = AlphaFactory(registry=AlphaTemplateRegistry([branch]))
+        fields = [{"id": "field_a"}, {"id": "field_b"}]
+        relation = {"admission": "ALLOW", "reasons": [], "frequency_compatibility": {}}
+        reference = {
+            "status": "LIVE_VERIFIED", "availability": "AVAILABLE",
+            "source": "BRAIN_LIVE_ONLY", "operators": ["ts_corr", "ts_covariance"],
+        }
+        with patch.object(factory, "_relationship_gate", return_value=relation):
+            specs = factory.generate({"template_ids": [branch.template_id]}, fields,
+                                     count=2, operator_capability=reference)
+        self.assertEqual(len(specs), 2)
+        self.assertNotEqual(specs[0].expression, specs[1].expression)
+        self.assertTrue(any("ts_covariance" in spec.expression for spec in specs))
+
     def test_required_slots_are_distinguished_from_economic_field_slots(self):
         template = AlphaTemplate(
             "slot-semantics", family="synthetic", expression="rank({p})",

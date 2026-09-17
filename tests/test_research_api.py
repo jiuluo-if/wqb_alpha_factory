@@ -356,6 +356,53 @@ class TestResearchApi(unittest.TestCase):
             result = generate_probes(client=client, count=1)
         self.assertEqual(result, [SimulationSpec("rank(close)")])
 
+    def test_generate_probes_decouples_discovery_target_and_probe_target(self):
+        config = {
+            "simulation": {"region": "USA", "universe": "TOP3000", "delay": 1,
+                            "decay": 4, "neutralization": "SUBINDUSTRY"},
+            "runtime": {"fields_per_discovery": 5},
+            "factory": {"default_probe_count": 9},
+        }
+        client = SimpleNamespace(get_operator_capability=lambda: {
+            "valid": True, "status": "LIVE_VERIFIED", "availability": "AVAILABLE",
+            "source": "BRAIN_LIVE_ONLY", "operators": ["rank"],
+        })
+        factory = mock.Mock()
+        factory.generate_probe_specs.return_value = []
+        with mock.patch("wqb_agent.research_api.FieldDiscovery") as discovery_type, \
+                mock.patch("wqb_agent.research_api.AlphaFactory", return_value=factory):
+            discovery_type.return_value.discover.return_value = [{"id": "field_a"}]
+            generate_probes("query", count=2, client=client, config=config)
+        discovery_type.return_value.discover.assert_called_once_with(
+            mock.ANY, target_count=5
+        )
+        factory.generate_probe_specs.assert_called_once()
+        call = factory.generate_probe_specs.call_args
+        self.assertEqual(call.kwargs["target"], 2)
+        self.assertEqual(call.kwargs["simulation_settings"],
+                         config["simulation"])
+
+    def test_generate_probes_uses_factory_default_when_count_is_omitted(self):
+        config = {
+            "simulation": {},
+            "runtime": {"fields_per_discovery": 4},
+            "factory": {"default_probe_count": 3},
+        }
+        client = SimpleNamespace(get_operator_capability=lambda: {
+            "valid": True, "status": "LIVE_VERIFIED", "availability": "AVAILABLE",
+            "source": "BRAIN_LIVE_ONLY", "operators": ["rank"],
+        })
+        factory = mock.Mock()
+        factory.generate_probe_specs.return_value = []
+        with mock.patch("wqb_agent.research_api.FieldDiscovery") as discovery_type, \
+                mock.patch("wqb_agent.research_api.AlphaFactory", return_value=factory):
+            discovery_type.return_value.discover.return_value = []
+            generate_probes(client=client, config=config)
+        self.assertEqual(factory.generate_probe_specs.call_args.kwargs["target"], 3)
+        discovery_type.return_value.discover.assert_called_once_with(
+            mock.ANY, target_count=4
+        )
+
     def test_operator_reference_requires_a_live_client(self):
         with self.assertRaises(RuntimeError):
             get_operator_reference()
