@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from wqb_agent.alpha_factory import AlphaFactory
 from wqb_agent.alpha_templates.loader import load_templates
-from wqb_agent.alpha_templates.model import AlphaTemplate
+from wqb_agent.alpha_templates.model import AlphaTemplate, TemplateNumericSlot
 from wqb_agent.alpha_templates.registry import (
     AlphaTemplateRegistry,
     template_numeric_audit,
@@ -412,6 +412,56 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
                   "ts_mean({s}, 5))))), {p})")
         )
         self.assertIn("PROBE_OPERATOR_COUNT", probe_too_complex["errors"])
+        probe_too_simple = validate_template_contract(probe("rank(add({p}))"))
+        self.assertIn("ROLE_COMPLEXITY_MISMATCH", probe_too_simple["errors"])
+
+    def test_effective_operator_count_includes_direction_transform(self):
+        raw_five = AlphaTemplate(
+            "effective-five", family="synthetic",
+            expression="normalize(rank(subtract(ts_mean({p}, 5), ts_mean({s}, 5))))",
+            required_slots=("p", "s"), role="PROBE_ALPHA",
+            semantic_contract="SYNTHETIC_FIXTURE", economic_mechanism="synthetic",
+            field_relationship="paired fields", direction_reason="synthetic",
+            direction_transform="reverse", expected_horizon="short-term",
+            falsification="synthetic",
+        )
+        self.assertEqual(raw_five.raw_operator_count, 5)
+        self.assertEqual(raw_five.operator_count, 6)
+        self.assertTrue(validate_template_contract(raw_five)["ok"])
+
+        raw_six = AlphaTemplate(
+            "effective-six", family="synthetic",
+            expression="scale(normalize(rank(subtract(ts_mean({p}, 5), ts_mean({s}, 5)))))",
+            required_slots=("p", "s"), role="PROBE_ALPHA",
+            semantic_contract="SYNTHETIC_FIXTURE", economic_mechanism="synthetic",
+            field_relationship="paired fields", direction_reason="synthetic",
+            direction_transform="reverse", expected_horizon="short-term",
+            falsification="synthetic",
+        )
+        self.assertEqual(raw_six.operator_count, 7)
+        self.assertIn("PROBE_OPERATOR_COUNT",
+                      validate_template_contract(raw_six)["errors"])
+
+    def test_production_field_roles_and_numeric_slots_fail_closed(self):
+        template = AlphaTemplate(
+            "bad-production-contract", family="synthetic", expression="rank({p})",
+            required_slots=("p", "s"), role="PROBE_ALPHA",
+            semantic_contract="RELATIONAL_PRIMARY", economic_mechanism="synthetic",
+            field_relationship="paired fields", relationship_contract="CO_MOVEMENT",
+            field_roles=("primary",), direction_reason="synthetic",
+            expected_horizon="short-term", falsification="synthetic",
+            numeric_slots=(TemplateNumericSlot(name=f"n{i}", allowed_values=(5,),
+                                                economic_role="synthetic", token="5")
+                           for i in range(4)),
+        )
+        errors = validate_template_contract(template, production=True)["errors"]
+        self.assertIn("FIELD_ROLE_COUNT_MISMATCH", errors)
+        self.assertIn("NUMERIC_SLOT_LIMIT", errors)
+
+    def test_obvious_redundant_wrappers_fail_closed(self):
+        template = self._control_template("redundant", "rank(rank({p}))")
+        self.assertIn("REDUNDANT_OPERATOR_WRAPPER",
+                      validate_template_contract(template)["errors"])
 
     def test_explicit_reverse_transform_changes_bound_expression(self):
         template = self._control_template("synthetic-reversal", "rank({p})")

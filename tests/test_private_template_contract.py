@@ -26,6 +26,8 @@ field_roles = ["signal", "confirmation"]
 fixed_field_bindings = []
 allowed_field_families = ["TEST"]
 field_relationship = "complementary test signals"
+relationship_contract = "CO_MOVEMENT"
+semantic_contract = "RELATIONAL_PRIMARY"
 direction = "long"
 direction_reason = "test direction"
 direction_transform = "identity"
@@ -74,13 +76,12 @@ class TestPrivateTemplateContract(unittest.TestCase):
             self.assertEqual([item.template_id for item in loaded], ["private-probe"])
             self.assertEqual(AlphaTemplateRegistry(private_catalog=path).get("private-probe").operator_count, 4)
 
-    def test_legacy_multi_field_contract_is_undeclared_and_not_admitted(self):
+    def test_multi_field_private_contract_is_explicit_and_admitted(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "legacy.toml"
             path.write_text(PRIVATE_TOML, encoding="utf-8")
             template = AlphaTemplateRegistry(private_catalog=path).get("private-probe")
-            self.assertEqual(template.relationship_contract, "UNDECLARED")
-            self.assertEqual(template.catalog_entry()["relationship_contract_status"], "LEGACY_UNDECLARED")
+            self.assertEqual(template.relationship_contract, "CO_MOVEMENT")
             profiles = [
                 {"id": "price", "description": "daily close price", "dataset": "d1",
                  "frequency": "daily", "category": "market", "semantic_status": "KNOWN"},
@@ -88,21 +89,8 @@ class TestPrivateTemplateContract(unittest.TestCase):
                  "frequency": "daily", "category": "market", "semantic_status": "KNOWN"},
             ]
             decision = AlphaFactory()._relationship_gate(profiles, template)
-            self.assertNotEqual(decision["admission"], "ALLOW")
-            self.assertIn("RELATIONSHIP_CONTRACT_UNDECLARED", decision["reasons"])
-
-            declared_path = Path(tmp) / "declared.toml"
-            declared_path.write_text(
-                PRIVATE_TOML.replace(
-                    'field_relationship = "complementary test signals"',
-                    'field_relationship = "complementary test signals"\n'
-                    'relationship_contract = "CO_MOVEMENT"',
-                ),
-                encoding="utf-8",
-            )
-            declared = AlphaTemplateRegistry(private_catalog=declared_path).get("private-probe")
             self.assertEqual(
-                AlphaFactory()._relationship_gate(profiles, declared)["admission"],
+                AlphaFactory()._relationship_gate(profiles, template)["admission"],
                 "ALLOW",
             )
 

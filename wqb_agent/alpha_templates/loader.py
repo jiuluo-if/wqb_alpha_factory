@@ -101,7 +101,7 @@ def _parse(document, *, strict_schema=False):
             required = (*required, "role", "field_roles", "allowed_field_families",
                         "field_relationship", "direction_reason",
                         "allowed_horizon_profiles", "allowed_settings_arms",
-                        "mechanism_tags", "novelty_family")
+                        "mechanism_tags", "novelty_family", "semantic_contract")
         missing = [key for key in required if key not in raw]
         if missing:
             raise ValueError(f"template missing required keys: {', '.join(missing)}")
@@ -192,7 +192,7 @@ def _parse(document, *, strict_schema=False):
     result = tuple(templates)
     if strict_schema:
         for template in result:
-            contract = validate_template_contract(template)
+            contract = validate_template_contract(template, production=strict_schema)
             if not contract["ok"]:
                 raise ValueError(
                     f"{template.template_id}: invalid template contract: "
