@@ -15,6 +15,18 @@ from wqb_agent.alpha_templates.validation import validate_template_contract
 
 
 class TestAlphaTemplateCatalog(unittest.TestCase):
+    def test_catalog_entry_exposes_numeric_slot_metadata(self):
+        template = next(item for item in load_templates(io.StringIO(_partial_document()))
+                        if item.template_id == "toy_sync_corr_operator")
+        slot = template.catalog_entry()["numeric_slots"][0]
+        self.assertEqual(
+            {"name", "kind", "default", "allowed_values", "economic_role",
+             "token", "occurrence"},
+            set(slot),
+        )
+        self.assertEqual(slot["name"], "fast")
+        self.assertIn(66, slot["allowed_values"])
+
     def test_factory_covers_entire_field_pool_with_bounded_target(self):
         template = AlphaTemplate(
             "coverage-control", family="synthetic", expression="rank({p})",

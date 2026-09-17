@@ -313,6 +313,13 @@ class AlphaTemplate:
             "direction_reason": self.direction_reason,
             "allowed_horizon_profiles": [list(v) if isinstance(v, tuple) else v for v in self.allowed_horizon_profiles],
             "allowed_settings_arms": list(self.allowed_settings_arms),
+            "numeric_slots": [
+                {"name": slot.name, "kind": slot.kind, "default": slot.default,
+                 "allowed_values": list(slot.allowed_values),
+                 "economic_role": slot.economic_role, "token": slot.token,
+                 "occurrence": slot.occurrence}
+                for slot in self.numeric_slots
+            ],
             "mechanism_tags": list(self.mechanism_tags),
             "novelty_family": self.novelty_family,
             "template_mode": self.template_mode,

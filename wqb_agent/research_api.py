@@ -473,23 +473,24 @@ def build_simulation_spec(expression, *, settings=None, fields=(), note=None, te
     )
 
 
-def suggest_next_specs(evidence, objective, allowed_changes):
-    """Return reviewable candidates only; this function never calls Simulation."""
-    changes = allowed_changes if isinstance(allowed_changes, Mapping) else {}
-    candidates = []
-    for key, values in changes.items():
-        if not isinstance(values, (list, tuple)):
-            values = [values]
-        for value in values:
-            candidates.append({
-                "change": {str(key): value},
-                "reason": f"candidate change for objective: {str(objective or '').strip()}",
-            })
-    return {
-        "source": "AI_PROPOSAL", "status": "CANDIDATES_ONLY",
-        "evidence_status": "AVAILABLE" if evidence else "UNAVAILABLE",
-        "objective": objective, "candidates": candidates, "simulated": False,
-    }
+def build_simulation_variant(base_spec, template, slot_name, value):
+    """Return one bounded numeric variant without mutating or submitting."""
+    if not isinstance(base_spec, SimulationSpec):
+        base_spec = SimulationSpec(**dict(base_spec))
+    template = _coerce_template(template)
+    if base_spec.template_id != template.template_id:
+        raise ValueError("template_id does not match base SimulationSpec")
+    slot = next((item for item in template.numeric_slots
+                 if item.name == str(slot_name)), None)
+    if slot is None:
+        raise ValueError(f"undeclared numeric slot: {slot_name}")
+    if value not in slot.allowed_values:
+        raise ValueError(f"value is not allowed for numeric slot: {slot_name}")
+    return SimulationSpec(
+        expression=slot.render(base_spec.expression, value),
+        settings=dict(base_spec.settings), fields=base_spec.fields,
+        note=base_spec.note, template_id=base_spec.template_id,
+    )
 
 
 def validate_template(template):
@@ -1011,7 +1012,7 @@ def research_tool_manifest():
         {"name": "get_simulation_config", "mode": "READ_ONLY", "owner": "config"},
         {"name": "validate_simulation_settings", "mode": "PURE", "owner": "SimulationGateway"},
         {"name": "build_simulation_spec", "mode": "PURE", "owner": "SimulationGateway"},
-        {"name": "suggest_next_specs", "mode": "PURE", "owner": "AI"},
+        {"name": "build_simulation_variant", "mode": "PURE", "owner": "SimulationGateway"},
         {"name": "generate_probes", "mode": "PURE", "owner": "AlphaFactory"},
         {"name": "validate_simulation_spec", "mode": "READ_ONLY", "owner": "SimulationGateway"},
         {"name": "simulate", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
@@ -1043,7 +1044,7 @@ __all__ = [
     "list_templates", "inspect_template",
     "create_template", "update_template", "delete_template", "validate_template",
     "classify_fields", "get_simulation_config", "validate_simulation_settings",
-    "build_simulation_spec", "suggest_next_specs",
+    "build_simulation_spec", "build_simulation_variant",
     "validate_simulation_spec", "execution_fingerprint",
     "simulate", "simulate_single", "simulate_batch", "simulate_single_batch",
     "simulate_multi_batch", "get_simulation_modes",

@@ -71,18 +71,36 @@ class TestResearchApi(unittest.TestCase):
         )
         self.assertEqual(spec.expression, "rank(close)")
 
-    def test_suggest_next_specs_is_candidate_only(self):
-        from wqb_agent.research_api import suggest_next_specs
+    def test_numeric_variant_changes_only_declared_occurrence_and_copies_base(self):
+        from wqb_agent.alpha_templates import AlphaTemplate, TemplateNumericSlot
+        from wqb_agent.research_api import build_simulation_variant
 
-        result = suggest_next_specs(
-            {"status": "DONE", "evidence_status": "AVAILABLE"},
-            "test persistence",
-            {"decay": [5, 6]},
+        template = AlphaTemplate(
+            "numeric-test", expression="rank(add(ts_mean({p}, 5), ts_mean({p}, 5)))",
+            required_slots=("p",), role="CONTROL_ALPHA",
+            semantic_contract="SYNTHETIC_FIXTURE",
+            economic_mechanism="synthetic control", field_relationship="single field",
+            direction_reason="synthetic", expected_horizon="short-term",
+            falsification="synthetic falsification",
+            numeric_slots=(TemplateNumericSlot(
+                name="slow_window", kind="RESEARCH_HORIZON", default=5,
+                allowed_values=(5, 22), economic_role="slow state", token="5",
+                occurrence=1,
+            ),),
         )
-        self.assertEqual(result["status"], "CANDIDATES_ONLY")
-        self.assertEqual(result["source"], "AI_PROPOSAL")
-        self.assertFalse(result["simulated"])
-        self.assertEqual(len(result["candidates"]), 2)
+        base = SimulationSpec(
+            "rank(add(ts_mean(field_a, 5), ts_mean(field_a, 5)))",
+            settings={"delay": 1}, fields=("field_a",), template_id="numeric-test",
+        )
+        variant = build_simulation_variant(base, template, "slow_window", 22)
+        self.assertEqual(variant.expression,
+                         "rank(add(ts_mean(field_a, 5), ts_mean(field_a, 22)))")
+        self.assertEqual(base.expression,
+                         "rank(add(ts_mean(field_a, 5), ts_mean(field_a, 5)))")
+        self.assertEqual(variant.settings, base.settings)
+        self.assertEqual(variant.fields, base.fields)
+        with self.assertRaises(ValueError):
+            build_simulation_variant(base, template, "slow_window", 66)
 
     def test_template_crud_requires_explicit_private_catalog(self):
         from wqb_agent.research_api import (
@@ -322,8 +340,11 @@ class TestResearchApi(unittest.TestCase):
         self.assertEqual(capabilities["operators"], ["rank"])
         templates = list_templates()
         self.assertTrue(templates)
-        template_id = templates[0]["template_id"]
-        self.assertEqual(inspect_template(template_id)["template_id"], template_id)
+        template = next(item for item in templates if item.get("numeric_slots"))
+        template_id = template["template_id"]
+        inspected = inspect_template(template_id)
+        self.assertEqual(inspected["template_id"], template_id)
+        self.assertEqual(inspected["numeric_slots"], template["numeric_slots"])
 
     def test_similarity_is_advisory_and_does_not_require_local_trajectory(self):
         rows = [
