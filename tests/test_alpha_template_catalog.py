@@ -12,6 +12,7 @@ from wqb_agent.alpha_templates.registry import (
     template_numeric_audit,
 )
 from wqb_agent.alpha_templates.validation import validate_template_contract
+from wqb_agent.expression import analyze_expression
 
 
 class TestAlphaTemplateCatalog(unittest.TestCase):
@@ -372,6 +373,108 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
         template = AlphaTemplateRegistry().get("toy_confirmation")
         self.assertEqual(template.direction, "long")
         self.assertEqual(template.catalog_entry()["direction"], "long")
+
+    def test_explicit_reverse_transform_changes_bound_expression(self):
+        template = self._control_template("synthetic-reversal", "rank({p})")
+        template = AlphaTemplate(
+            template.template_id, family=template.family,
+            expression=template.expression, required_slots=template.required_slots,
+            role=template.role, semantic_contract=template.semantic_contract,
+            economic_mechanism=template.economic_mechanism,
+            field_relationship=template.field_relationship,
+            direction="reversal", direction_reason="synthetic reversal",
+            direction_transform="reverse", expected_horizon=template.expected_horizon,
+            falsification=template.falsification,
+        )
+        self.assertEqual(template.render({"p": "synthetic_field"}),
+                         "reverse(rank(synthetic_field))")
+
+    def test_identity_transform_does_not_infer_from_reversal_direction(self):
+        template = AlphaTemplate(
+            "synthetic-explicit-identity", family="synthetic", expression="rank({p})",
+            required_slots=("p",), role="CONTROL_ALPHA",
+            semantic_contract="SYNTHETIC_FIXTURE", economic_mechanism="synthetic",
+            field_relationship="single field", direction="reversal",
+            direction_reason="expression is already directional",
+            direction_transform="identity", expected_horizon="short-term",
+            falsification="synthetic", self_correlation_impact="unknown",
+        )
+        self.assertEqual(template.render({"p": "synthetic_field"}),
+                         "rank(synthetic_field)")
+
+    def test_transform_is_applied_after_partial_operator_realization_and_binding(self):
+        document = _partial_document().replace(
+            'direction_transform = "identity"', 'direction_transform = "reverse"'
+        )
+        branch = next(item for item in load_templates(io.StringIO(document))
+                      if item.template_id == "toy_sync_corr_operator")
+        rendered = branch.render(
+            {"p": "field_a", "s": "field_b"}, {"relation": "ts_corr"}
+        )
+        self.assertEqual(
+            rendered,
+            "reverse(rank(ts_corr(ts_zscore(field_a, 5), ts_zscore(field_b, 5), 22)))",
+        )
+        self.assertNotIn("{", rendered)
+        self.assertIn("reverse", analyze_expression(rendered).operators)
+
+    def test_unsupported_transform_fails_closed_in_loader_and_validation(self):
+        document = _partial_document().replace(
+            'direction_transform = "identity"', 'direction_transform = "legacy_callback"', 1
+        )
+        with self.assertRaisesRegex(ValueError, "INVALID_DIRECTION_TRANSFORM"):
+            load_templates(io.StringIO(document))
+        shaped = _partial_document().replace(
+            'direction_transform = "identity"',
+            'direction_transform = { kind = "reverse" }', 1,
+        )
+        with self.assertRaisesRegex(ValueError, "INVALID_DIRECTION_TRANSFORM"):
+            load_templates(io.StringIO(shaped))
+        template = self._control_template("unsupported-transform", "rank({p})")
+        invalid = AlphaTemplate(
+            template.template_id, family=template.family, expression=template.expression,
+            required_slots=template.required_slots, role=template.role,
+            semantic_contract=template.semantic_contract,
+            economic_mechanism=template.economic_mechanism,
+            field_relationship=template.field_relationship,
+            direction_reason=template.direction_reason,
+            direction_transform="legacy_callback", expected_horizon=template.expected_horizon,
+            falsification=template.falsification,
+        )
+        report = validate_template_contract(invalid)
+        self.assertFalse(report["ok"])
+        self.assertIn("INVALID_DIRECTION_TRANSFORM", report["errors"])
+
+    def test_direction_transform_is_part_of_structural_identity(self):
+        identity = self._control_template("identity", "rank({p})")
+        reverse = AlphaTemplate(
+            "reverse", family=identity.family, expression=identity.expression,
+            required_slots=identity.required_slots, role=identity.role,
+            semantic_contract=identity.semantic_contract,
+            economic_mechanism=identity.economic_mechanism,
+            field_relationship=identity.field_relationship,
+            direction_reason=identity.direction_reason,
+            direction_transform="reverse", expected_horizon=identity.expected_horizon,
+            falsification=identity.falsification,
+        )
+        self.assertNotEqual(identity.structural_fingerprint,
+                            reverse.structural_fingerprint)
+
+    def test_factory_simulation_spec_contains_final_direction_operator(self):
+        template = AlphaTemplate(
+            "synthetic-spec-reversal", family="synthetic", expression="rank({p})",
+            required_slots=("p",), role="CONTROL_ALPHA",
+            semantic_contract="SYNTHETIC_FIXTURE", economic_mechanism="synthetic",
+            field_relationship="single field", direction="reversal",
+            direction_reason="synthetic ex-ante reason", direction_transform="reverse",
+            expected_horizon="short-term", falsification="synthetic",
+            self_correlation_impact="unknown",
+        )
+        specs = AlphaFactory(registry=AlphaTemplateRegistry([template])).generate(
+            {"template_ids": [template.template_id]}, [{"id": "synthetic_field"}], count=1
+        )
+        self.assertEqual(specs[0].expression, "reverse(rank(synthetic_field))")
+        self.assertIn("reverse", analyze_expression(specs[0].expression).operators)
 
     def test_selection_uses_catalog_groups_and_fails_closed(self):
         registry = AlphaTemplateRegistry()

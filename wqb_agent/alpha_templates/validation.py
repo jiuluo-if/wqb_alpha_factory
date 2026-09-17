@@ -1,6 +1,11 @@
 """Pure validation gates for public synthetic and local private templates."""
 
-from .model import FASTEXPR_IDENTIFIER_RE, HORIZON_LATTICE, PRIMARY_FIELD_SLOT_ALIASES
+from .model import (
+    DIRECTION_TRANSFORMS,
+    FASTEXPR_IDENTIFIER_RE,
+    HORIZON_LATTICE,
+    PRIMARY_FIELD_SLOT_ALIASES,
+)
 
 SETTINGS_ARMS = {
     "BASE", "UNIVERSE_ARM", "DECAY_DOWN", "DECAY_UP",
@@ -130,6 +135,10 @@ def effective_relationship_contract(template):
 def validate_template_contract(template):
     """Return an auditable gate report; never infer missing research semantics."""
     errors = []
+    direction_transform = getattr(template, "direction_transform", None)
+    if (not isinstance(direction_transform, str)
+            or direction_transform not in DIRECTION_TRANSFORMS):
+        errors.append("INVALID_DIRECTION_TRANSFORM")
     mode = str(getattr(template, "template_mode", "CONCRETE") or "CONCRETE").upper()
     slots = tuple(getattr(template, "operator_slots", ()) or ())
     if mode not in {"CONCRETE", "PARTIAL_OPERATOR"}:
