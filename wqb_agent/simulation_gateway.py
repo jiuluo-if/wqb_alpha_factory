@@ -576,16 +576,41 @@ class SimulationGateway:
         if not progress_url:
             return {"status": "SUBMIT_UNKNOWN", "fingerprint": str(fingerprint)}
         try:
-            alpha_id = self.client.poll_progress(progress_url)
-            payload = self.client.get_alpha(alpha_id)
+            # The guard deliberately stores only the durable remote identity
+            # (fingerprint/status/progress URL).  Therefore recovery must
+            # identify a Multi parent from its known progress response rather
+            # than persisting research metadata in the guard.  BRAIN returns
+            # ``children`` for a Multi parent; treating that response as a
+            # Single result raises "finished without alpha id" and strands a
+            # valid remote job in SUBMIT_UNKNOWN.
+            poller = self.client.poll_progress
+            is_multi = False
+            snapshot_reader = getattr(self.client, "get_progress_snapshot", None)
+            if snapshot_reader is not None:
+                snapshot = snapshot_reader(progress_url, timeout=60)
+                payload = snapshot.get("payload") if isinstance(snapshot, Mapping) else None
+                if isinstance(payload, Mapping) and isinstance(payload.get("children"), list):
+                    poller = self.client.poll_multi_progress
+                    is_multi = True
+            alpha_ids = poller(progress_url)
+            if is_multi:
+                if not isinstance(alpha_ids, (list, tuple)) or not alpha_ids:
+                    raise ValueError("Multi-Simulation recovery returned no child alpha ids")
+                payload = [self.client.get_alpha(alpha_id) for alpha_id in alpha_ids]
+                result = {"status": "DONE", "fingerprint": str(fingerprint),
+                          "progress_url": progress_url, "alpha_ids": list(alpha_ids),
+                          "evidence": payload}
+            else:
+                payload = self.client.get_alpha(alpha_ids)
+                result = {"status": "DONE", "fingerprint": str(fingerprint),
+                          "progress_url": progress_url, "alpha_id": alpha_ids,
+                          "evidence": payload}
         except Exception as exc:
             return {"status": row.get("status", "SUBMIT_UNKNOWN"),
                     "fingerprint": str(fingerprint), "error": str(exc),
                     "progress_url": progress_url}
         self.guard.remove(str(fingerprint))
-        return {"status": "DONE", "fingerprint": str(fingerprint),
-                "progress_url": progress_url, "alpha_id": alpha_id,
-                "evidence": payload}
+        return result
 
     @staticmethod
     def _result(item, fingerprint):

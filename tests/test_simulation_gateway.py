@@ -144,8 +144,11 @@ class MultiGatewayClient(FakeGatewayClient):
     def poll_multi_progress(self, progress_url, **kwargs):
         return [
             f"multi-alpha-{progress_url}-{index}"
-            for index in range(self._multi_sizes[progress_url])
+            for index in range(self._multi_sizes.get(progress_url, 2))
         ]
+
+    def get_progress_snapshot(self, progress_url, **kwargs):
+        return {"status_code": 200, "payload": {"children": ["sim-1", "sim-2"]}}
 
 
 class UnknownMultiGatewayClient(MultiGatewayClient):
@@ -494,6 +497,24 @@ class TestSimulationGateway(unittest.TestCase):
             self.assertEqual(result["status"], "DONE")
             self.assertEqual(client.submissions, [])
             self.assertEqual(client.assert_progress_url, "progress-known")
+
+    def test_known_multi_progress_url_recovers_children_without_repost(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = ExecutionGuard(tmp)
+            fingerprint = "multi-fingerprint"
+            guard.register(fingerprint, progress_url="multi-progress-known", status="SUBMIT_UNKNOWN")
+            client = MultiGatewayClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+
+            result = gateway.resume_execution(fingerprint)
+
+            self.assertEqual(result["status"], "DONE")
+            self.assertEqual(result["alpha_ids"], [
+                "multi-alpha-multi-progress-known-0",
+                "multi-alpha-multi-progress-known-1",
+            ])
+            self.assertEqual(client.multi_submissions, [])
+            self.assertEqual(gateway.guard.entries(), [])
 
     def test_public_remote_evidence_is_live_and_explicitly_sourced(self):
         evidence = research_api.get_alpha_evidence("alpha-1", client=FakeGatewayClient())
