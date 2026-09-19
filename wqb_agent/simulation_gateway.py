@@ -585,13 +585,17 @@ class SimulationGateway:
             # valid remote job in SUBMIT_UNKNOWN.
             poller = self.client.poll_progress
             is_multi = False
+            remote_terminal_error = False
             snapshot_reader = getattr(self.client, "get_progress_snapshot", None)
             if snapshot_reader is not None:
                 snapshot = snapshot_reader(progress_url, timeout=60)
                 payload = snapshot.get("payload") if isinstance(snapshot, Mapping) else None
-                if isinstance(payload, Mapping) and isinstance(payload.get("children"), list):
-                    poller = self.client.poll_multi_progress
-                    is_multi = True
+                if isinstance(payload, Mapping):
+                    remote_status = str(payload.get("status", "")).upper()
+                    remote_terminal_error = remote_status in {"ERROR", "FAILED"}
+                    if isinstance(payload.get("children"), list):
+                        poller = self.client.poll_multi_progress
+                        is_multi = True
             alpha_ids = poller(progress_url)
             if is_multi:
                 if not isinstance(alpha_ids, (list, tuple)) or not alpha_ids:
@@ -606,6 +610,10 @@ class SimulationGateway:
                           "progress_url": progress_url, "alpha_id": alpha_ids,
                           "evidence": payload}
         except Exception as exc:
+            if remote_terminal_error:
+                self.guard.remove(str(fingerprint))
+                return {"status": "FAILED", "fingerprint": str(fingerprint),
+                        "error": str(exc), "progress_url": progress_url}
             return {"status": row.get("status", "SUBMIT_UNKNOWN"),
                     "fingerprint": str(fingerprint), "error": str(exc),
                     "progress_url": progress_url}

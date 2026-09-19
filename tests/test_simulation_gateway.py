@@ -7,7 +7,11 @@ import time
 import unittest
 
 from wqb_agent import research_api
-from wqb_agent.client import WQBRateLimitError, WQBSubmitUnknownError
+from wqb_agent.client import (
+    WQBRateLimitError,
+    WQBSimulationError,
+    WQBSubmitUnknownError,
+)
 from wqb_agent.locking import OwnerBusyError
 from wqb_agent.remote_evidence import RemoteAlphaEvidenceProvider
 from wqb_agent.simulation_gateway import (
@@ -161,6 +165,14 @@ class RateLimitedMultiGatewayClient(MultiGatewayClient):
     def submit_multi_simulation(self, payloads, **kwargs):
         self.multi_submissions.append((payloads, kwargs))
         raise WQBRateLimitError("multi request rate limited before acceptance")
+
+
+class RejectedMultiGatewayClient(MultiGatewayClient):
+    def get_progress_snapshot(self, progress_url, **kwargs):
+        return {"status_code": 200, "payload": {"status": "ERROR", "children": []}}
+
+    def poll_multi_progress(self, progress_url, **kwargs):
+        raise WQBSimulationError("Multi-Simulation rejected by platform: status=ERROR")
 
 
 class TestSimulationGateway(unittest.TestCase):
@@ -514,6 +526,19 @@ class TestSimulationGateway(unittest.TestCase):
                 "multi-alpha-multi-progress-known-1",
             ])
             self.assertEqual(client.multi_submissions, [])
+            self.assertEqual(gateway.guard.entries(), [])
+
+    def test_known_multi_error_url_is_terminal_and_clears_guard(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = ExecutionGuard(tmp)
+            fingerprint = "multi-error-fingerprint"
+            guard.register(fingerprint, progress_url="multi-progress-error", status="RUNNING")
+            gateway = SimulationGateway(RejectedMultiGatewayClient(), state_dir=tmp)
+
+            result = gateway.resume_execution(fingerprint)
+
+            self.assertEqual(result["status"], "FAILED")
+            self.assertIn("status=ERROR", result["error"])
             self.assertEqual(gateway.guard.entries(), [])
 
     def test_public_remote_evidence_is_live_and_explicitly_sourced(self):
