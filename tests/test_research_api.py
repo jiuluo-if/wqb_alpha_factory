@@ -334,7 +334,7 @@ class TestResearchApi(unittest.TestCase):
         self.assertEqual(modes["single"]["max_concurrent"], 10)
         self.assertEqual(modes["multi"]["name"], "Multi-Simulation")
         self.assertEqual(modes["multi"]["children_per_job"], 10)
-        self.assertEqual(modes["multi"]["max_concurrent_jobs"], 8)
+        self.assertEqual(modes["multi"]["max_concurrent_jobs"], 2)
         self.assertFalse(modes["region_agnostic"]["available"])
 
     def test_single_alias_and_multi_facade_delegate_to_gateway(self):

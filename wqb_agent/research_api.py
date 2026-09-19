@@ -750,11 +750,11 @@ def simulate_single_batch(specs, *, client=None, config=None, state_dir=None):
 
 def simulate_multi_batch(
     specs, *, client=None, config=None, state_dir=None,
-    child_batch_size=10, max_concurrent_multi=8,
+    child_batch_size=10, max_concurrent_multi=2,
 ):
     """Execute probe windows as Multi-Simulation parents.
 
-    Each parent contains at most ten children and at most eight parent jobs
+    Each parent contains at most ten children and at most two parent jobs
     are dispatched concurrently.  The Gateway remains the only write path.
     """
     gateway = _simulation_gateway(
@@ -783,7 +783,7 @@ def get_simulation_modes() -> dict[str, dict[str, Any]]:
             "status": "AVAILABLE",
             "evidence_status": "INCONCLUSIVE",
             "children_per_job": 10,
-            "max_concurrent_jobs": 8,
+            "max_concurrent_jobs": 2,
         },
         "region_agnostic": {
             "name": "Region-Agnostic Simulation",

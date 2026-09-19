@@ -396,7 +396,7 @@ class SimulationGateway:
         return results
 
     def simulate_multi_batch(
-        self, specs, *, child_batch_size=10, max_concurrent_multi=8
+        self, specs, *, child_batch_size=10, max_concurrent_multi=2
     ):
         with single_instance_scope(self.state_dir, operation="multi-simulation"):
             self.guard.reconcile()
@@ -406,7 +406,7 @@ class SimulationGateway:
             )
 
     def _simulate_multi_batch(
-        self, specs, *, child_batch_size=10, max_concurrent_multi=8
+        self, specs, *, child_batch_size=10, max_concurrent_multi=2
     ):
         """Execute large probe windows as bounded Multi-Simulation parents."""
         if isinstance(child_batch_size, bool) or not isinstance(child_batch_size, int):
