@@ -46,6 +46,8 @@ UNKNOWN_STATUSES = frozenset({"SUBMIT_UNKNOWN", "UNKNOWN"})
 
 
 class Simulator:
+    STATUS_PATH_LIMIT = 8
+
     def __init__(self, client, max_concurrent=10, poll_timeout_sec=1500,
                  repoll_attempts=3, repoll_backoff_sec=60):
         self.client = client
@@ -55,6 +57,34 @@ class Simulator:
         self.repoll_backoff_sec = max(0, repoll_backoff_sec)
         self.stop_dispatch = False
         self.paused_reason = None
+
+    @classmethod
+    def _transition(cls, record, status):
+        record.status = status
+        path = getattr(record, "status_path", None)
+        if isinstance(path, list) and (not path or path[-1] != status):
+            path.append(status)
+            del path[:-cls.STATUS_PATH_LIMIT]
+
+    @staticmethod
+    def _safe_error(batch, exc):
+        text = str(exc or "")
+        for child in getattr(batch, "children", ()):
+            expression = getattr(child, "expression", None)
+            if expression:
+                text = text.replace(str(expression), "<redacted-expression>")
+        return f"{type(exc).__name__}: {text[:500]}"
+
+    @classmethod
+    def _capture_parent_exception(cls, batch, exc):
+        batch.exception_class = type(exc).__name__
+        batch.error = cls._safe_error(batch, exc)
+        batch.failure_kind = getattr(exc, "failure_kind", None) or getattr(exc, "kind", None)
+        batch.http_status = getattr(exc, "status_code", None)
+        batch.failure_scope = "PARENT"
+        diagnostic = getattr(exc, "diagnostic", None)
+        batch.diagnostic = dict(diagnostic) if isinstance(diagnostic, Mapping) else {}
+        batch.remote_status = batch.diagnostic.get("remote_status")
 
     def run(self, executions, on_update=None):
         """Run transient execution records and return live remote outcomes."""
@@ -138,8 +168,11 @@ class Simulator:
                     try:
                         future.result()
                     except Exception as exc:
-                        batch.status = "UNKNOWN"
-                        batch.error = f"UNKNOWN_LOCAL {type(exc).__name__}: {exc}"
+                        self._capture_parent_exception(batch, exc)
+                        self._transition(
+                            batch,
+                            "UNKNOWN" if batch.progress_url else "SUBMIT_UNKNOWN",
+                        )
                     if self._pauses_dispatch(batch):
                         self.stop_dispatch = True
                         self.paused_reason = f"{batch.status}:{batch.id}"
@@ -367,7 +400,7 @@ class Simulator:
 
         try:
             if batch.status in ("SUBMITTING", "SUBMIT_UNKNOWN"):
-                batch.status = "SUBMIT_UNKNOWN"
+                self._transition(batch, "SUBMIT_UNKNOWN")
                 batch.error = batch.error or (
                     "multi submission outcome unknown after interrupted POST"
                 )
@@ -375,10 +408,10 @@ class Simulator:
                 return batch
 
             if batch.progress_url:
-                batch.status = "RUNNING"
+                self._transition(batch, "RUNNING")
                 persist()
             else:
-                batch.status = "SUBMITTING"
+                self._transition(batch, "SUBMITTING")
                 persist()
                 payloads = [
                     {
@@ -397,7 +430,7 @@ class Simulator:
                     if "idempotency_key" not in str(exc):
                         raise
                     batch.progress_url = self.client.submit_multi_simulation(payloads)
-                batch.status = "RUNNING"
+                self._transition(batch, "RUNNING")
                 persist()
 
             outcome = self.client.poll_multi_progress(
@@ -436,15 +469,15 @@ class Simulator:
                     child.evidence = self.client.get_alpha(child.alpha_id)
                 elif child.status not in {"FAILED", "DONE"}:
                     child.status = "UNKNOWN"
-            batch.status = (
+            self._transition(batch, (
                 "DONE" if all(child.status in {"DONE", "FAILED"} for child in batch.children)
                 else "UNKNOWN"
-            )
+            ))
             persist()
             return batch
         except WQBRemoteSimulationError as exc:
-            batch.error = str(exc)
-            batch.status = "FAILED"
+            self._capture_parent_exception(batch, exc)
+            self._transition(batch, "FAILED")
             failure_kind = (
                 "FAILED_REMOTE_TIMEOUT"
                 if exc.diagnostic.get("remote_status") == "TIMEOUT"
@@ -454,44 +487,47 @@ class Simulator:
                 child.status = "FAILED"
                 child.error = batch.error
                 child.failure_kind = failure_kind
+                child.failure_scope = "PARENT"
                 child.remote_status = exc.diagnostic.get("remote_status")
                 child.diagnostic = dict(exc.diagnostic)
             persist()
             return batch
         except WQBRejectedError as exc:
-            batch.error = f"{type(exc).__name__}: {exc}"
-            batch.status = "FAILED"
+            self._capture_parent_exception(batch, exc)
+            self._transition(batch, "FAILED")
             for child in batch.children:
                 child.status = "FAILED"
                 child.error = batch.error
+                child.failure_scope = "PARENT"
             persist()
             return batch
         except WQBAuthError as exc:
-            batch.error = f"{type(exc).__name__}: {exc}"
-            batch.status = "FAILED"
+            self._capture_parent_exception(batch, exc)
+            self._transition(batch, "FAILED")
             for child in batch.children:
                 child.status = "FAILED"
                 child.error = batch.error
+                child.failure_scope = "PARENT"
             persist()
             return batch
         except WQBSubmitUnknownError as exc:
-            batch.error = f"{type(exc).__name__}: {exc}"
-            batch.status = "UNKNOWN" if batch.progress_url else "SUBMIT_UNKNOWN"
+            self._capture_parent_exception(batch, exc)
+            self._transition(batch, "UNKNOWN" if batch.progress_url else "SUBMIT_UNKNOWN")
             persist()
             return batch
         except WQBRateLimitError as exc:
-            batch.error = f"{type(exc).__name__}: {exc}"
-            batch.status = "UNKNOWN" if batch.progress_url else "SUBMIT_UNKNOWN"
+            self._capture_parent_exception(batch, exc)
+            self._transition(batch, "UNKNOWN" if batch.progress_url else "SUBMIT_UNKNOWN")
             persist()
             return batch
         except WQBError as exc:
-            batch.error = f"{type(exc).__name__}: {exc}"
-            batch.status = "UNKNOWN"
+            self._capture_parent_exception(batch, exc)
+            self._transition(batch, "UNKNOWN" if batch.progress_url else "SUBMIT_UNKNOWN")
             persist()
             return batch
         except Exception as exc:
-            batch.error = f"{type(exc).__name__}: {exc}"
-            batch.status = "UNKNOWN"
+            self._capture_parent_exception(batch, exc)
+            self._transition(batch, "UNKNOWN" if batch.progress_url else "SUBMIT_UNKNOWN")
             persist()
             return batch
         finally:

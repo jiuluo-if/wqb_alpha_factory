@@ -20,6 +20,8 @@
 
 Multi-Simulation payload 必须包含 2--10 个 child；单个余数由 `SimulationGateway` 走 Single Simulation。Multi child 数量是 payload contract，不是并发建议。`WAITING`/`SIMULATING` 是 pending，`COMPLETE`/带 alpha 的 `WARNING` 是成功，`CANCELLED`/`ERROR`/`TIMEOUT`/`FAIL` 是远端已知终态；未知 status 返回 `UNKNOWN_REMOTE_STATUS` 并 fail safe。远端 `TIMEOUT` 不等同于本地 polling deadline，后者只保留 known progress URL 做同任务只读对账。
 
+`research_api.simulate_multi_batch()` 保留原有的 `list[child_result]` 形状，但每个实际 Multi child 结果都附带 bounded `parent` projection：parent fingerprint、最终状态、progress URL、child 数量、exception class、failure kind、HTTP status（若 transport 明确知道）、remote status/diagnostic、bounded status path 和 guard action。该 projection 只存在于当前返回值，不写入 `ExecutionGuard`；`SUBMIT_UNKNOWN` 与已知 URL 的 `UNKNOWN` 仍分别保留原有 exactly-once 和同 URL 对账语义。
+
 Simulation 的 `ERROR`/`FAIL` 诊断只保留 bounded 的 remote status、message、property、line、start、end 和 simulation id，不保存完整 private expression。Multi parent 完成后仍逐个确认 child；child 的完成、远端失败和远端超时按 child 保存，不能把 partial completion 压成整个 batch UNKNOWN。
 
 Alpha detail 是完成后的 cheap evidence。recordset 先通过官方 list endpoint discovery，再按 AI 明确选择的名称读取；同一次 evidence collection 共享内存 discovery snapshot，不建立持久 capability cache。recordset decoder 保留官方数值，不重新计算指标或把数据解释为 winner/diversification judgment。activity diversity 是账户覆盖诊断，只读，不参与自动选 Alpha、模板、字段 ranking 或预算。

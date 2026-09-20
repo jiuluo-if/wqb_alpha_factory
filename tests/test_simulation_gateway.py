@@ -9,8 +9,10 @@ import unittest
 from wqb_agent import research_api
 from wqb_agent.client import (
     WQBRateLimitError,
+    WQBRemoteSimulationError,
     WQBSimulationError,
     WQBSubmitUnknownError,
+    WQBTimeoutError,
 )
 from wqb_agent.locking import OwnerBusyError
 from wqb_agent.remote_evidence import RemoteAlphaEvidenceProvider
@@ -172,7 +174,9 @@ class UnknownMultiGatewayClient(MultiGatewayClient):
 class RateLimitedMultiGatewayClient(MultiGatewayClient):
     def submit_multi_simulation(self, payloads, **kwargs):
         self.multi_submissions.append((payloads, kwargs))
-        raise WQBRateLimitError("multi request rate limited before acceptance")
+        raise WQBRateLimitError(
+            "multi request rate limited before acceptance", status_code=429
+        )
 
 
 class NoMultiPermissionClient(MultiGatewayClient):
@@ -194,6 +198,31 @@ class PartialMultiGatewayClient(MultiGatewayClient):
 class KnownParentReadFailureClient(MultiGatewayClient):
     def poll_multi_progress(self, progress_url, **kwargs):
         raise WQBSubmitUnknownError("parent read outcome was temporarily unknown")
+
+
+class KnownParentTimeoutClient(MultiGatewayClient):
+    def poll_multi_progress(self, progress_url, **kwargs):
+        raise WQBTimeoutError("parent polling deadline elapsed")
+
+
+class PrivateMessageMultiGatewayClient(MultiGatewayClient):
+    def poll_multi_progress(self, progress_url, **kwargs):
+        raise WQBSubmitUnknownError(
+            "backend read failed for rank(private_secret_field)"
+        )
+
+
+class RemoteErrorMultiGatewayClient(MultiGatewayClient):
+    def poll_multi_progress(self, progress_url, **kwargs):
+        raise WQBRemoteSimulationError({
+            "remote_status": "ERROR",
+            "message": "invalid regular expression",
+            "simulation_id": "sim-parent-error",
+            "property": "regular",
+            "line": 1,
+            "start": 0,
+            "end": 11,
+        })
 
 
 class RejectedMultiGatewayClient(MultiGatewayClient):
@@ -335,6 +364,120 @@ class TestSimulationGateway(unittest.TestCase):
             self.assertEqual(results[0]["status"], "DONE")
             self.assertEqual(results[1]["failure_kind"], "FAILED_REMOTE")
             self.assertEqual(results[2]["failure_kind"], "FAILED_REMOTE_TIMEOUT")
+            self.assertEqual(results[0]["parent"]["status"], "DONE")
+            self.assertEqual(results[0]["parent"]["guard_action"], "REMOVED_TERMINAL")
+            self.assertEqual(results[0]["parent"]["child_count"], 3)
+
+    def test_multi_parent_remote_error_is_projected_to_every_child(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = RemoteErrorMultiGatewayClient()
+            results = research_api.simulate_multi_batch([
+                SimulationSpec("rank(field_a)", {"delay": 1}),
+                SimulationSpec("rank(field_b)", {"delay": 1}),
+            ], client=client, state_dir=tmp)
+
+            self.assertEqual([item["status"] for item in results], ["FAILED", "FAILED"])
+            parents = [item["parent"] for item in results]
+            self.assertEqual(parents[0], parents[1])
+            self.assertEqual(parents[0]["status"], "FAILED")
+            self.assertEqual(parents[0]["progress_url"], "multi-progress-1")
+            self.assertEqual(parents[0]["child_count"], 2)
+            self.assertEqual(parents[0]["exception_class"], "WQBRemoteSimulationError")
+            self.assertEqual(parents[0]["failure_kind"], "SYNTAX")
+            self.assertEqual(parents[0]["failure_scope"], "PARENT")
+            self.assertEqual(parents[0]["remote_status"], "ERROR")
+            self.assertEqual(parents[0]["diagnostic"]["property"], "regular")
+            self.assertEqual(results[0]["failure_scope"], "PARENT")
+            self.assertEqual(parents[0]["guard_action"], "REMOVED_TERMINAL")
+            self.assertEqual(parents[0]["status_path"], [
+                "PENDING", "SUBMITTING", "RUNNING", "FAILED",
+            ])
+            self.assertEqual(SimulationGateway(client, state_dir=tmp).guard.entries(), [])
+
+    def test_multi_parent_submit_unknown_is_preserved_and_observable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = UnknownMultiGatewayClient()
+            results = research_api.simulate_multi_batch([
+                SimulationSpec("rank(field_a)", {"delay": 1}),
+                SimulationSpec("rank(field_b)", {"delay": 1}),
+            ], client=client, state_dir=tmp)
+
+            parent = results[0]["parent"]
+            self.assertEqual(parent["status"], "SUBMIT_UNKNOWN")
+            self.assertIsNone(parent["progress_url"])
+            self.assertEqual(parent["exception_class"], "WQBSubmitUnknownError")
+            self.assertEqual(parent["guard_action"], "PRESERVED_SUBMIT_UNKNOWN")
+            self.assertEqual(parent["status_path"], [
+                "PENDING", "SUBMITTING", "SUBMIT_UNKNOWN",
+            ])
+            self.assertEqual(len(SimulationGateway(client, state_dir=tmp).guard.entries()), 1)
+
+    def test_multi_parent_known_url_unknown_is_reconcilable_and_observable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = KnownParentReadFailureClient()
+            results = research_api.simulate_multi_batch([
+                SimulationSpec("rank(field_a)", {"delay": 1}),
+                SimulationSpec("rank(field_b)", {"delay": 1}),
+            ], client=client, state_dir=tmp)
+
+            parent = results[0]["parent"]
+            self.assertEqual(parent["status"], "UNKNOWN")
+            self.assertEqual(parent["progress_url"], "multi-progress-1")
+            self.assertEqual(parent["exception_class"], "WQBSubmitUnknownError")
+            self.assertEqual(parent["guard_action"], "PRESERVED_RUNNING")
+            self.assertEqual(parent["status_path"], [
+                "PENDING", "SUBMITTING", "RUNNING", "UNKNOWN",
+            ])
+            self.assertEqual(
+                SimulationGateway(client, state_dir=tmp).guard.entries()[0]["status"],
+                "RUNNING",
+            )
+
+    def test_multi_parent_known_url_timeout_keeps_timeout_kind_and_guard(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = KnownParentTimeoutClient()
+            results = research_api.simulate_multi_batch([
+                SimulationSpec("rank(field_a)", {"delay": 1}),
+                SimulationSpec("rank(field_b)", {"delay": 1}),
+            ], client=client, state_dir=tmp)
+
+            parent = results[0]["parent"]
+            self.assertEqual(parent["status"], "UNKNOWN")
+            self.assertEqual(parent["failure_kind"], "TIMEOUT")
+            self.assertIsNone(parent["http_status"])
+            self.assertEqual(parent["guard_action"], "PRESERVED_RUNNING")
+
+    def test_multi_parent_diagnostic_redacts_child_expression(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = PrivateMessageMultiGatewayClient()
+            results = research_api.simulate_multi_batch([
+                SimulationSpec("rank(private_secret_field)", {"delay": 1}),
+                SimulationSpec("rank(other_private_field)", {"delay": 1}),
+            ], client=client, state_dir=tmp)
+
+            error = results[0]["parent"]["error"]
+            self.assertNotIn("rank(private_secret_field)", error)
+            self.assertNotIn("private_secret_field", error)
+
+    def test_parent_projection_bounds_status_path_and_diagnostic_fields(self):
+        parent = SimulationGateway._parent_projection(
+            fingerprint="parent-1",
+            status="FAILED",
+            progress_url="progress-1",
+            child_count=2,
+            error="x" * 1000,
+            diagnostic={
+                "message": "m" * 1000,
+                "property": "regular",
+                "private_expression": "secret",
+            },
+            status_path=[f"S{index}" for index in range(20)],
+            guard_action="REMOVED_TERMINAL",
+        )
+        self.assertEqual(len(parent["status_path"]), 8)
+        self.assertEqual(len(parent["error"]), 500)
+        self.assertEqual(len(parent["diagnostic"]["message"]), 500)
+        self.assertNotIn("private_expression", parent["diagnostic"])
 
     def test_known_multi_parent_read_failure_is_unknown_not_submit_unknown(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -371,7 +514,31 @@ class TestSimulationGateway(unittest.TestCase):
                 [item["status"] for item in second_results],
                 ["SUBMIT_UNKNOWN", "SUBMIT_UNKNOWN"],
             )
+            self.assertEqual(second_results[0]["parent"]["guard_action"], "EXISTING_GUARD")
             self.assertEqual(second_client.multi_submissions, [])
+
+    def test_multi_parent_not_dispatched_result_explains_removed_guard(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = UnknownMultiGatewayClient()
+            results = SimulationGateway(client, state_dir=tmp).simulate_multi_batch([
+                SimulationSpec("rank(field_a)", {"delay": 1}),
+                SimulationSpec("rank(field_b)", {"delay": 1}),
+                SimulationSpec("rank(field_c)", {"delay": 1}),
+                SimulationSpec("rank(field_d)", {"delay": 1}),
+            ], child_batch_size=2, max_concurrent_multi=1)
+
+            not_dispatched = results[2]
+            self.assertEqual(not_dispatched["status"], "NOT_DISPATCHED")
+            self.assertEqual(not_dispatched["parent"]["status"], "NOT_DISPATCHED")
+            self.assertIsNone(not_dispatched["parent"]["progress_url"])
+            self.assertEqual(
+                not_dispatched["parent"]["guard_action"],
+                "REMOVED_NOT_DISPATCHED",
+            )
+            self.assertEqual(
+                not_dispatched["parent"]["error"],
+                "dispatch paused before submission",
+            )
 
     def test_multi_rate_limit_is_ambiguous_and_never_reposted(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -388,6 +555,8 @@ class TestSimulationGateway(unittest.TestCase):
                 [item["status"] for item in results],
                 ["SUBMIT_UNKNOWN", "SUBMIT_UNKNOWN"],
             )
+            self.assertEqual(results[0]["parent"]["http_status"], 429)
+            self.assertEqual(results[0]["parent"]["exception_class"], "WQBRateLimitError")
             self.assertEqual(len(gateway.guard.entries()), 1)
             resumed = SimulationGateway(MultiGatewayClient(), state_dir=tmp)
             resumed_results = resumed.simulate_multi_batch(specs)

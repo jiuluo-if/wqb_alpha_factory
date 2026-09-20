@@ -81,6 +81,14 @@ class WQBError(Exception):
 
     kind = FailureKind.INFRA
 
+    def __init__(self, message, *, status_code=None):
+        super().__init__(message)
+        self.status_code = (
+            int(status_code)
+            if isinstance(status_code, int) and not isinstance(status_code, bool)
+            else None
+        )
+
 
 class WQBAuthError(WQBError):
     kind = FailureKind.AUTH
@@ -130,6 +138,9 @@ class WQBRemoteSimulationError(WQBRejectedError):
     def __init__(self, diagnostic):
         self.diagnostic = dict(diagnostic or {})
         status = self.diagnostic.get("remote_status", "UNKNOWN")
+        self.failure_kind = (
+            FailureKind.TIMEOUT if status == "TIMEOUT" else self.kind
+        )
         message = self.diagnostic.get("message", "")
         simulation_id = self.diagnostic.get("simulation_id")
         suffix = f" sim_id={simulation_id}" if simulation_id else ""
@@ -262,19 +273,21 @@ class WQBClient:
                 return
             if resp.status_code == 401:
                 raise WQBAuthError(
-                    "Authentication rejected by WorldQuant BRAIN (401)."
+                    "Authentication rejected by WorldQuant BRAIN (401).",
+                    status_code=401,
                 )
             if resp.status_code == 429:
                 if time.monotonic() - rate_limit_start >= 1800:
                     raise WQBRateLimitError(
                         "Authentication rate-limit budget exhausted; "
-                        "server continued returning 429."
+                        "server continued returning 429.", status_code=429,
                     )
                 self._register_rate_limit(resp)
                 continue
             else:
                 raise WQBSimulationError(
-                    f"Authentication failed with status {resp.status_code}."
+                    f"Authentication failed with status {resp.status_code}.",
+                    status_code=resp.status_code,
                 )
 
     def _ensure_auth(self):
@@ -376,16 +389,16 @@ class WQBClient:
         else:
             msg = f"{context}: {text[:300]}"
         if kind == FailureKind.AUTH:
-            return WQBAuthError(msg)
+            return WQBAuthError(msg, status_code=status_code)
         if kind == FailureKind.RATE_LIMIT:
-            return WQBRateLimitError(msg)
+            return WQBRateLimitError(msg, status_code=status_code)
         if kind == FailureKind.SYNTAX:
-            return WQBRejectedError(msg)
+            return WQBRejectedError(msg, status_code=status_code)
         if kind == FailureKind.DATA:
-            return WQBNotFoundError(msg)
+            return WQBNotFoundError(msg, status_code=status_code)
         if kind == FailureKind.TIMEOUT:
-            return WQBTimeoutError(msg)
-        return WQBSimulationError(msg)
+            return WQBTimeoutError(msg, status_code=status_code)
+        return WQBSimulationError(msg, status_code=status_code)
 
     # ---- unified request ----
 
@@ -454,13 +467,16 @@ class WQBClient:
                 self._ensure_auth()
                 transport_attempt += 1
                 if transport_attempt >= self.max_retries:
-                    raise WQBAuthError(f"{context} authentication retries exhausted.")
+                    raise WQBAuthError(
+                        f"{context} authentication retries exhausted.",
+                        status_code=401,
+                    )
                 continue
             if resp.status_code == 429:
                 if not retry_rate_limit:
                     error = f"{context} received 429; POST acceptance is not contractually known."
-                    raise (WQBSubmitUnknownError(error) if ambiguous_write
-                           else WQBRateLimitError(error))
+                    raise (WQBSubmitUnknownError(error, status_code=429) if ambiguous_write
+                           else WQBRateLimitError(error, status_code=429))
                 elapsed = time.monotonic() - start
                 remaining = max(0.0, rate_limit_budget_sec - elapsed)
                 retry_delay = self._retry_after_seconds(resp)
@@ -469,7 +485,8 @@ class WQBClient:
                     raise WQBRateLimitError(
                         f"{context} rate-limit budget exhausted after "
                         f"{int(elapsed)}s; server returned 429 "
-                        f"(retry delay {int(retry_delay)}s exceeds remaining budget)."
+                        f"(retry delay {int(retry_delay)}s exceeds remaining budget).",
+                        status_code=429,
                     )
                 self._register_rate_limit(resp)
                 # Deliberately do not increment transport_attempt: 429 means
@@ -483,7 +500,8 @@ class WQBClient:
             if resp.status_code >= 500:
                 if ambiguous_write:
                     raise WQBSubmitUnknownError(
-                        f"{context} returned HTTP {resp.status_code}; backend acceptance is unknown."
+                        f"{context} returned HTTP {resp.status_code}; backend acceptance is unknown.",
+                        status_code=resp.status_code,
                     )
                 if transport_attempt >= self.max_retries - 1:
                     raise self._classified_exception(
@@ -829,7 +847,7 @@ class WQBClient:
             f"{self.base_url}/simulations",
             json=body,
             accepted=(201, 200),
-            context=f"submit simulation {expression[:60]}",
+            context="submit simulation",
             ambiguous_write=True,
             retry_rate_limit=False,
             headers=headers,
@@ -939,7 +957,8 @@ class WQBClient:
                 auth_attempts += 1
                 if auth_attempts >= auth_limit:
                     raise WQBAuthError(
-                        "Simulation polling authentication retries exhausted."
+                        "Simulation polling authentication retries exhausted.",
+                        status_code=401,
                     )
                 self._set_authenticated(False)
                 continue
@@ -947,7 +966,7 @@ class WQBClient:
                 remaining = max(0.0, timeout_sec - (time.monotonic() - start))
                 retry_delay = self._retry_after_seconds(resp)
                 if remaining <= 0 or retry_delay > remaining:
-                    raise WQBTimeoutError("Simulation polling timed out.")
+                    raise WQBTimeoutError("Simulation polling timed out.", status_code=429)
                 self._register_rate_limit(resp)
                 continue
             if resp.status_code in FAIL_FAST_STATUSES:
@@ -1018,7 +1037,8 @@ class WQBClient:
                 )
             if status_code is not None and status_code >= 500:
                 raise WQBSimulationError(
-                    "Known Multi-Simulation parent returned a server error while reading."
+                    "Known Multi-Simulation parent returned a server error while reading.",
+                    status_code=status_code,
                 )
             payload = snapshot.get("payload")
             if not isinstance(payload, dict):
@@ -1144,7 +1164,10 @@ class WQBClient:
                 break
             auth_attempts += 1
             if auth_attempts >= auth_limit:
-                raise WQBAuthError("Progress snapshot authentication retries exhausted.")
+                raise WQBAuthError(
+                    "Progress snapshot authentication retries exhausted.",
+                    status_code=401,
+                )
             self._set_authenticated(False)
         try:
             payload = resp.json()

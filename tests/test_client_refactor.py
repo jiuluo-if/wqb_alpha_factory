@@ -559,6 +559,15 @@ class TestClassifiedExceptions(unittest.TestCase):
                 self.assertIsInstance(expected_type("test"), WQBError)
                 self.assertEqual(expected_type.kind, expected_kind)
 
+    def test_classified_exception_preserves_structured_http_status(self):
+        error = self.client._classified_exception(429, "rate limited", "x")
+        self.assertEqual(error.status_code, 429)
+        self.assertEqual(WQBRateLimitError("rate limited", status_code=429).status_code, 429)
+
+    def test_remote_simulation_error_exposes_remote_timeout_failure_kind(self):
+        error = WQBRemoteSimulationError({"remote_status": "TIMEOUT"})
+        self.assertEqual(error.failure_kind, FailureKind.TIMEOUT)
+
 class TestSharedRateLimitGate(unittest.TestCase):
     def test_simulation_post_429_is_unknown_without_transport_retry(self):
         c = make_client()
@@ -567,8 +576,9 @@ class TestSharedRateLimitGate(unittest.TestCase):
         ])
         with mock.patch.object(c, "_wait_submission_slot"), \
              mock.patch.object(c, "_register_rate_limit"), \
-             self.assertRaises(WQBSubmitUnknownError):
+             self.assertRaises(WQBSubmitUnknownError) as raised:
             c.submit_simulation("rank(a)", {})
+        self.assertEqual(raised.exception.status_code, 429)
 
     def test_simulation_post_timeout_is_unknown_and_has_one_transport_call(self):
         c = make_client()

@@ -164,6 +164,12 @@ class ExecutionGuard:
 class SimulationGateway:
     """Single public Simulation write path, independent of research state."""
 
+    PARENT_STATUS_PATH_LIMIT = 8
+    PARENT_DIAGNOSTIC_KEYS = frozenset({
+        "remote_status", "message", "simulation_id", "property",
+        "line", "start", "end",
+    })
+
     def __init__(self, client, *, state_dir=".wqb_state", max_concurrent=10,
                  poll_timeout_sec=1500, repoll_attempts=3):
         self.client = client
@@ -184,6 +190,67 @@ class SimulationGateway:
             raise ValueError("expression must contain an identifier")
         return {"valid": True, "expression": spec.expression,
                 "settings": dict(spec.settings), "operators": list(analysis.operators)}
+
+    @classmethod
+    def _parent_projection(
+        cls, *, fingerprint, status, progress_url, child_count,
+        exception_class=None, error=None, failure_kind=None, http_status=None,
+        remote_status=None, diagnostic=None, status_path=(), guard_action=None,
+        failure_scope=None,
+    ):
+        bounded_diagnostic = {}
+        if isinstance(diagnostic, Mapping):
+            for key in cls.PARENT_DIAGNOSTIC_KEYS:
+                if key not in diagnostic or diagnostic[key] is None:
+                    continue
+                value = diagnostic[key]
+                bounded_diagnostic[key] = (
+                    str(value)[:500] if key == "message"
+                    else str(value)[:200] if key in {"property", "simulation_id"}
+                    else value if isinstance(value, (int, float))
+                    and not isinstance(value, bool) else str(value)[:200]
+                )
+        path = [str(item) for item in (status_path or ()) if item]
+        path = path[-cls.PARENT_STATUS_PATH_LIMIT:]
+        if not path and status:
+            path = [str(status)]
+        return {
+            "fingerprint": str(fingerprint),
+            "status": str(status),
+            "progress_url": str(progress_url) if progress_url else None,
+            "child_count": int(child_count),
+            "exception_class": str(exception_class) if exception_class else None,
+            "error": str(error)[:500] if error else None,
+            "failure_kind": str(failure_kind) if failure_kind else None,
+            "http_status": (
+                int(http_status)
+                if isinstance(http_status, int) and not isinstance(http_status, bool)
+                else None
+            ),
+            "remote_status": str(remote_status) if remote_status else None,
+            "diagnostic": bounded_diagnostic,
+            "status_path": path,
+            "guard_action": guard_action,
+            "failure_scope": failure_scope,
+        }
+
+    @classmethod
+    def _parent_from_batch(cls, batch, *, guard_action, status=None, error=None):
+        return cls._parent_projection(
+            fingerprint=batch.submission_fingerprint,
+            status=status or batch.status,
+            progress_url=getattr(batch, "progress_url", None),
+            child_count=len(getattr(batch, "children", ()) or ()),
+            exception_class=getattr(batch, "exception_class", None),
+            error=error if error is not None else getattr(batch, "error", None),
+            failure_kind=getattr(batch, "failure_kind", None),
+            http_status=getattr(batch, "http_status", None),
+            remote_status=getattr(batch, "remote_status", None),
+            diagnostic=getattr(batch, "diagnostic", None),
+            status_path=getattr(batch, "status_path", ()),
+            guard_action=guard_action,
+            failure_scope=getattr(batch, "failure_scope", None),
+        )
 
     def _validate_settings(self, spec, capability):
         settings = spec.settings
@@ -549,20 +616,40 @@ class SimulationGateway:
                         if existing.get("status") == "SUBMIT_UNKNOWN"
                         else "EXACT_DUPLICATE"
                     )
+                    parent = self._parent_projection(
+                        fingerprint=batch_fingerprint,
+                        status=existing.get("status") or status,
+                        progress_url=existing.get("progress_url"),
+                        child_count=len(children),
+                        error="existing execution guard matched",
+                        status_path=[existing.get("status") or status],
+                        guard_action="EXISTING_GUARD",
+                    )
                     for index, _spec, fingerprint in children:
                         results[index] = {
                             "status": status,
                             "fingerprint": fingerprint,
                             "batch_fingerprint": batch_fingerprint,
                             "progress_url": existing.get("progress_url"),
+                            "parent": parent,
                         }
                     continue
                 if not self.guard.register(batch_fingerprint):
+                    parent = self._parent_projection(
+                        fingerprint=batch_fingerprint,
+                        status="EXACT_DUPLICATE",
+                        progress_url=None,
+                        child_count=len(children),
+                        error="existing execution guard matched",
+                        status_path=["EXACT_DUPLICATE"],
+                        guard_action="EXISTING_GUARD",
+                    )
                     for index, _spec, fingerprint in children:
                         results[index] = {
                             "status": "EXACT_DUPLICATE",
                             "fingerprint": fingerprint,
                             "batch_fingerprint": batch_fingerprint,
+                            "parent": parent,
                         }
                     continue
                 child_records = [
@@ -586,8 +673,15 @@ class SimulationGateway:
                         submission_fingerprint=batch_fingerprint,
                         children=child_records,
                         status="PENDING",
+                        status_path=["PENDING"],
                         progress_url=None,
                         error=None,
+                        exception_class=None,
+                        failure_kind=None,
+                        http_status=None,
+                        remote_status=None,
+                        diagnostic={},
+                        failure_scope=None,
                         elapsed_sec=0.0,
                     ),
                 ))
@@ -627,11 +721,21 @@ class SimulationGateway:
             batch_fingerprint = batch.submission_fingerprint
             if batch.status in {"DONE", "FAILED"}:
                 self.guard.remove(batch_fingerprint)
+            guard_action = (
+                "REMOVED_TERMINAL" if batch.status in {"DONE", "FAILED"}
+                else "PRESERVED_RUNNING" if batch.progress_url
+                else "PRESERVED_SUBMIT_UNKNOWN"
+            )
+            parent = self._parent_from_batch(batch, guard_action=guard_action)
             for child in batch.children:
                 if batch.status == "DONE":
                     results[child.index] = self._result(
                         child, child.submission_fingerprint
                     )
+                    results[child.index].update({
+                        "batch_fingerprint": batch_fingerprint,
+                        "parent": parent,
+                    })
                 elif batch.status == "FAILED":
                     results[child.index] = {
                         "status": "FAILED",
@@ -641,6 +745,9 @@ class SimulationGateway:
                         "failure_kind": getattr(child, "failure_kind", "FAILED_REMOTE"),
                         "remote_status": getattr(child, "remote_status", None),
                         "diagnostic": getattr(child, "diagnostic", None),
+                        "failure_scope": getattr(child, "failure_scope", None)
+                        or getattr(batch, "failure_scope", None),
+                        "parent": parent,
                     }
                 else:
                     results[child.index] = {
@@ -651,17 +758,31 @@ class SimulationGateway:
                         "failure_kind": getattr(child, "failure_kind", None),
                         "remote_status": getattr(child, "remote_status", None),
                         "diagnostic": getattr(child, "diagnostic", None),
+                        "failure_scope": getattr(child, "failure_scope", None)
+                        or getattr(batch, "failure_scope", None),
+                        "parent": parent,
                     }
         for batch_fingerprint, batch in batches:
             if batch_fingerprint in completed_fingerprints:
                 continue
             self.guard.remove(batch_fingerprint)
+            parent = self._parent_projection(
+                fingerprint=batch_fingerprint,
+                status="NOT_DISPATCHED",
+                progress_url=None,
+                child_count=len(batch.children),
+                error="dispatch paused before submission",
+                status_path=[*(getattr(batch, "status_path", []) or []), "NOT_DISPATCHED"],
+                guard_action="REMOVED_NOT_DISPATCHED",
+            )
             for child in batch.children:
                 results[child.index] = {
                     "status": "NOT_DISPATCHED",
                     "fingerprint": child.submission_fingerprint,
                     "batch_fingerprint": batch_fingerprint,
                     "error": "dispatch paused before submission",
+                    "failure_scope": "PARENT",
+                    "parent": parent,
                 }
         return results
 
