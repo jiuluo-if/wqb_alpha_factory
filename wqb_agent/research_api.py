@@ -480,8 +480,28 @@ def validate_simulation_settings(settings, *, client=None, config=None, capabili
         for key in capability.get("required_settings", ()):
             if key not in normalized:
                 errors.append(f"missing required setting: {key}")
+        # The capability projection is resolved for the CLIENT's own
+        # instrumentType/region.  When the request targets a different scope
+        # (for example region=ALL for a Region-Agnostic simulation), the
+        # scope-dependent option lists do not apply and must not be used to
+        # reject a setting the platform itself accepts.
+        scope_dependent_applies = True
+        if client is not None:
+            client_region = getattr(client, "region", None)
+            client_type = getattr(client, "instrument_type", None)
+            requested_region = normalized.get("region", client_region)
+            requested_type = normalized.get("instrumentType", client_type)
+            scope_dependent_applies = (
+                (client_region is None or str(requested_region) == str(client_region))
+                and (client_type is None or str(requested_type) == str(client_type))
+            )
         for key, spec in (capability.get("settings") or {}).items():
             if key not in normalized or not isinstance(spec, Mapping):
+                continue
+            if not scope_dependent_applies and key in (
+                    "universe", "delay", "neutralization", "decay",
+                    "truncation", "pasteurization", "unitHandling",
+                    "nanHandling"):
                 continue
             allowed = spec.get("allowed_values")
             if isinstance(allowed, list) and normalized[key] not in allowed:

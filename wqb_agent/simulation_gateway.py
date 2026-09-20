@@ -312,9 +312,27 @@ class SimulationGateway:
             for key in capability.get("required_settings", ()):
                 if key not in settings:
                     errors.append(f"missing required setting: {key}")
+            # The projection was resolved for this client's own
+            # instrumentType/region; a request that targets another scope
+            # (region=ALL for Region-Agnostic) must not be judged by it.
+            client_region = getattr(self.client, "region", None)
+            client_type = getattr(self.client, "instrument_type", None)
+            requested_region = settings.get("region", client_region)
+            requested_type = settings.get("instrumentType", client_type)
+            scope_dependent_applies = (
+                (client_region is None or str(requested_region) == str(client_region))
+                and (client_type is None or str(requested_type) == str(client_type))
+            )
             for key, projection in (capability.get("settings") or {}).items():
                 allowed = projection.get("allowed_values") if isinstance(projection, Mapping) else None
-                if key in settings and isinstance(allowed, list) and settings[key] not in allowed:
+                if key not in settings or not isinstance(allowed, list):
+                    continue
+                if not scope_dependent_applies and key in (
+                        "universe", "delay", "neutralization", "decay",
+                        "truncation", "pasteurization", "unitHandling",
+                        "nanHandling"):
+                    continue
+                if settings[key] not in allowed:
                     errors.append(f"{key} is not allowed by live OPTIONS")
         if errors:
             raise ValueError("invalid simulation settings: " + "; ".join(errors))
