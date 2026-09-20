@@ -21,11 +21,20 @@ _CAPABILITY_READER_ABSENT = object()
 _REMOTE_ROWS_UNCHECKED = object()
 REGULAR_SIMULATION_TYPE = "REGULAR"
 REGION_AGNOSTIC_SIMULATION_TYPE = "REGION_AGNOSTIC"
+SUPPORTED_WRITE_SIMULATION_TYPES = frozenset({REGULAR_SIMULATION_TYPE})
 
 
 def _spec_simulation_type(spec):
     return str(getattr(spec, "simulation_type", REGULAR_SIMULATION_TYPE)
                or REGULAR_SIMULATION_TYPE).upper()
+
+
+def _validate_write_simulation_type(spec):
+    simulation_type = _spec_simulation_type(spec)
+    if simulation_type not in SUPPORTED_WRITE_SIMULATION_TYPES:
+        raise ValueError(
+            "UNSUPPORTED_SIMULATION_TYPE: production writer supports REGULAR only"
+        )
 
 
 def _fingerprint_material(spec):
@@ -51,9 +60,8 @@ class SimulationSpec:
     fields: tuple[str, ...] = field(default_factory=tuple)
     note: str | None = None
     template_id: str | None = None
-    # Live OPTIONS advertises ``type`` choices REGULAR / REGION_AGNOSTIC.
-    # REGULAR stays the default so every existing caller and historical
-    # execution fingerprint is unchanged.
+    # OPTIONS may advertise types beyond the writer contract. REGULAR stays
+    # the default so existing callers and historical fingerprints are stable.
     simulation_type: str = "REGULAR"
 
     def __post_init__(self):
@@ -302,9 +310,6 @@ class SimulationGateway:
             errors.append("visualization must be a boolean")
         for key, attr in (("region", "region"), ("universe", "universe"),
                           ("instrumentType", "instrument_type")):
-            # Region-Agnostic simulation has no client region scope to match.
-            if _spec_simulation_type(spec) != REGULAR_SIMULATION_TYPE:
-                continue
             expected = getattr(self.client, attr, None)
             if key in settings and expected is not None and str(settings[key]) != str(expected):
                 errors.append(f"{key} does not match client scope")
@@ -410,6 +415,12 @@ class SimulationGateway:
         results: list[dict[str, Any] | None] = [None] * len(normalized)
         if not normalized:
             return results, [], ()
+
+        # Platform OPTIONS is capability truth, not proof that this writer
+        # implements every advertised request schema.  Reject before any
+        # ExecutionGuard registration or remote POST.
+        for spec in normalized:
+            _validate_write_simulation_type(spec)
 
         if simulation_capability is _CAPABILITY_UNCHECKED:
             capability_reader = getattr(self.client, "get_simulation_capability", None)

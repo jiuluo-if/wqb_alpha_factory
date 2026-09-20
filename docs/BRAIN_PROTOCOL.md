@@ -16,7 +16,7 @@
 
 `GET /authentication` 只投影当前 live session 的 `authenticated`、`user_id`、`token_expiry` 和 `permissions`，不保存 JWT、cookie 或权限状态。`MULTI_SIMULATION` permission 是 Multi-Simulation 的账户能力前置条件；没有该 permission 时，客户端不得用 POST 探测或静默退化为大量 Single。
 
-`OPTIONS /simulations` 的 `actions.POST` 是 Simulation settings 的平台 truth。客户端只投影 Simulation type choices、实际使用的 settings allowed values/type 和 required fields；未知 vendor 字段忽略。当前 child POST 使用的 Simulation type 是 `REGULAR`（平台还可能声明 `SUPER`）；`MULTI` 不是 Simulation type，而是由 `MULTI_SIMULATION` permission 授权的 dispatch mode。OPTIONS 不可用时只能返回 `UNKNOWN`，并以最低本地 shape 校验继续提供 `LOCAL_ONLY` 结果，不能宣称 live validation 已通过。
+`OPTIONS /simulations` 的 `actions.POST` 是 Simulation settings 的平台 truth。客户端只投影 Simulation type choices、实际使用的 settings allowed values/type 和 required fields；未知 vendor 字段忽略。当前 writer 的唯一支持类型是已经完整建模并验证的 `REGULAR`，即使平台广告 `SUPER` 或 `REGION_AGNOSTIC`，也不能把广告 capability 当作本项目的 write contract；SUPER 只有在独立 `combo`/`selection` request schema 实现并验证后才能进入 production writer。`MULTI` 不是 Simulation type，而是由 `MULTI_SIMULATION` permission 授权的 dispatch mode，当前 Multi child 仍只使用 REGULAR schema。OPTIONS 不可用时只能返回 `UNKNOWN`，并以最低本地 shape 校验继续提供 `LOCAL_ONLY` 结果，不能宣称 live validation 已通过。
 
 Multi-Simulation payload 必须包含 2--10 个 child；单个余数由 `SimulationGateway` 走 Single Simulation。Multi child 数量是 payload contract，不是并发建议。`WAITING`/`SIMULATING` 是 pending，`COMPLETE`/带 alpha 的 `WARNING` 是成功，`CANCELLED`/`ERROR`/`TIMEOUT`/`FAIL` 是远端已知终态；未知 status 返回 `UNKNOWN_REMOTE_STATUS` 并 fail safe。远端 `TIMEOUT` 不等同于本地 polling deadline，后者只保留 known progress URL 做同任务只读对账。
 

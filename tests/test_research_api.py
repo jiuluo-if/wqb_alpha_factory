@@ -356,6 +356,28 @@ class TestResearchApi(unittest.TestCase):
         self.assertEqual(modes["multi"]["max_concurrent_jobs"], 2)
         self.assertFalse(modes["region_agnostic"]["available"])
 
+    def test_platform_advertised_non_regular_type_is_not_writer_available(self):
+        client = SimpleNamespace(
+            get_authentication_status=lambda: {
+                "authenticated": True, "user_id": "user-1",
+                "permissions": ["MULTI_SIMULATION", "REGION_AGNOSTIC"],
+            },
+            get_simulation_capability=lambda: {
+                "status": "AVAILABLE", "capability_status": "AVAILABLE",
+                "source": "BRAIN_LIVE",
+                "simulation_type_choices": [
+                    "REGULAR", "SUPER", "REGION_AGNOSTIC",
+                ],
+                "settings": {}, "required_fields": [], "required_settings": [],
+            },
+        )
+
+        modes = get_simulation_modes(client=client)
+
+        self.assertFalse(modes["region_agnostic"]["available"])
+        self.assertEqual(modes["region_agnostic"]["status"], "UNAVAILABLE")
+        self.assertEqual(modes["region_agnostic"]["reason"], "WRITER_UNSUPPORTED")
+
     def test_multi_mode_requires_live_permission(self):
         client = SimpleNamespace(
             get_authentication_status=lambda: {

@@ -468,6 +468,37 @@ class TestOfficialReadOnlyClientAdapters(unittest.TestCase):
         self.assertFalse(request.call_args.kwargs.get("retry_rate_limit"))
         c._wait_submission_slot.assert_called_once_with()
 
+    def test_single_submission_rejects_unimplemented_type_before_post(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        with mock.patch.object(
+            c, "_request", return_value=FakeResponse(
+                201, headers={"Location": "/sim/1"}
+            )
+        ) as request:
+            with self.assertRaisesRegex(ValueError, "REGULAR"):
+                c.submit_simulation(
+                    "rank(a)", {"delay": 1}, alpha_type="SUPER"
+                )
+        request.assert_not_called()
+        c._wait_submission_slot.assert_not_called()
+
+    def test_multi_submission_rejects_non_regular_child_before_post(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        with mock.patch.object(
+            c, "_request", return_value=FakeResponse(
+                201, headers={"Location": "/multi/1"}
+            )
+        ) as request:
+            with self.assertRaisesRegex(ValueError, "REGULAR"):
+                c.submit_multi_simulation([
+                    {"type": "SUPER", "expression": "rank(a)", "settings": {}},
+                    {"type": "REGULAR", "expression": "rank(b)", "settings": {}},
+                ])
+        request.assert_not_called()
+        c._wait_submission_slot.assert_not_called()
+
     def test_multi_submission_rejects_one_and_eleven_but_accepts_ten(self):
         c = make_client()
         c._wait_submission_slot = mock.Mock()

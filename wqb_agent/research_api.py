@@ -850,25 +850,16 @@ def _simulation_modes_from_capabilities(authentication, simulation_capability):
         multi["reason"] = "CAPABILITY_UNKNOWN"
     elif not authenticated:
         multi["reason"] = "AUTHENTICATION_REQUIRED"
-    region_agnostic_available = (
-        authenticated and options_available
-        and "REGION_AGNOSTIC" in choices
-        and "REGION_AGNOSTIC" in permissions
-    )
     region_agnostic = {
         "name": "Region-Agnostic Simulation",
-        "available": region_agnostic_available,
-        "status": "AVAILABLE" if region_agnostic_available else "UNAVAILABLE",
+        "available": False,
+        "status": "UNAVAILABLE",
         "source": source, "evidence_status": "INCONCLUSIVE",
         "simulation_type": "REGION_AGNOSTIC",
+        "platform_advertised": "REGION_AGNOSTIC" in choices,
+        "writer_supported": False,
+        "reason": "WRITER_UNSUPPORTED",
     }
-    if not region_agnostic_available:
-        if not authenticated:
-            region_agnostic["reason"] = "AUTHENTICATION_REQUIRED"
-        elif not options_available or "REGION_AGNOSTIC" not in choices:
-            region_agnostic["reason"] = "CAPABILITY_UNKNOWN"
-        else:
-            region_agnostic["reason"] = "PERMISSION_UNAVAILABLE"
     return {
         "single": {
             "name": "Single Simulation", "available": single_available,

@@ -804,14 +804,8 @@ class TestSimulationGateway(unittest.TestCase):
         self.assertEqual(provider.get_alpha("alpha-1")["id"], "alpha-1")
 
 
-class RegionAgnosticSimulationTests(unittest.TestCase):
-    """REGION_AGNOSTIC is a live OFFICIAL type choice, never local policy.
-
-    Live ``OPTIONS /simulations`` advertises ``type.choices`` =
-    ['REGULAR','REGION_AGNOSTIC'], so a Region-Agnostic write is a real
-    official request rather than an invented one.  REGULAR must stay the
-    default so previously persisted guard fingerprints keep matching.
-    """
+class SimulationWriteContractTests(unittest.TestCase):
+    """The production writer only admits the independently verified REGULAR schema."""
 
     def test_simulation_type_defaults_to_regular(self):
         spec = SimulationSpec("rank(close)", {"delay": 1})
@@ -840,38 +834,39 @@ class RegionAgnosticSimulationTests(unittest.TestCase):
             ),
         )
 
-    def test_region_agnostic_spec_is_not_client_region_scope_validated(self):
-        client = FakeGatewayClient()
-        client.region = "USA"
-        client.universe = "TOP3000"
-        client.instrument_type = "EQUITY"
-        settings = {"region": "GLB", "universe": "MINVOL1M",
-                    "instrumentType": "EQUITY"}
-        with tempfile.TemporaryDirectory() as state:
-            gateway = SimulationGateway(client, state_dir=state)
-            with self.assertRaises(ValueError):
-                gateway._validate_settings(
-                    SimulationSpec("rank(close)", settings),
-                    {"status": "UNKNOWN"},
-                )
-            # No assertion target: must simply not raise.
-            gateway._validate_settings(
-                SimulationSpec("rank(close)", settings,
-                               simulation_type="REGION_AGNOSTIC"),
-                {"status": "UNKNOWN"},
-            )
+    def test_non_regular_types_are_rejected_before_guard_or_post(self):
+        for simulation_type in ("REGION_AGNOSTIC", "SUPER", "BOGUS"):
+            with self.subTest(simulation_type=simulation_type):
+                client = FakeGatewayClient()
+                with tempfile.TemporaryDirectory() as state:
+                    gateway = SimulationGateway(client, state_dir=state)
+                    with self.assertRaisesRegex(
+                        ValueError, "UNSUPPORTED_SIMULATION_TYPE"
+                    ):
+                        gateway.simulate(SimulationSpec(
+                            "rank(close)", {"delay": 1},
+                            simulation_type=simulation_type,
+                        ))
+                    self.assertEqual(client.submissions, [])
+                    self.assertEqual(gateway.guard.entries(), [])
 
-    def test_region_agnostic_simulation_posts_its_official_type(self):
-        client = FakeGatewayClient()
+    def test_multi_rejects_non_regular_type_before_parent_guard_or_post(self):
+        client = MultiGatewayClient()
         with tempfile.TemporaryDirectory() as state:
             gateway = SimulationGateway(client, state_dir=state)
-            result = gateway.simulate(SimulationSpec(
-                "rank(close)", {"delay": 1},
-                simulation_type="REGION_AGNOSTIC",
-            ))
-        self.assertEqual(result["status"], "DONE")
-        _expression, _settings, kwargs = client.submissions[0]
-        self.assertEqual(kwargs.get("alpha_type"), "REGION_AGNOSTIC")
+            with self.assertRaisesRegex(
+                ValueError, "UNSUPPORTED_SIMULATION_TYPE"
+            ):
+                gateway.simulate_multi_batch([
+                    SimulationSpec(
+                        "rank(field_a)", {"delay": 1},
+                        simulation_type="SUPER",
+                    ),
+                    SimulationSpec("rank(field_b)", {"delay": 1}),
+                ])
+            self.assertEqual(client.multi_submissions, [])
+            self.assertEqual(client.submissions, [])
+            self.assertEqual(gateway.guard.entries(), [])
 
     def test_regular_simulation_still_posts_regular(self):
         client = FakeGatewayClient()

@@ -23,12 +23,14 @@ research_api.simulate_multi_batch
  → BRAIN
 ```
 
-Simulation mode boundaries are explicit: Single Simulation uses a default
-ten-worker window for small optimizations; Multi-Simulation groups at most ten
-children per parent and dispatches at most eight parents concurrently for
-large probes. Region-Agnostic Simulation is a separate capability and is not
-used as a fallback or as part of the Multi window until its write contract is
-verified.
+Simulation mode boundaries are explicit: the production writer currently
+supports only the verified `REGULAR` request schema. Single Simulation uses a
+default ten-worker window for small optimizations; Multi-Simulation groups at
+most ten REGULAR children per parent and dispatches at most eight parents
+concurrently for large probes. Region-Agnostic and SUPER may be platform-
+advertised capabilities, but are not writer-supported modes and are never a
+fallback or part of the Multi window until their independent write contracts
+are implemented and verified.
 
 任何其他模块不得直接提交 Simulation。
 

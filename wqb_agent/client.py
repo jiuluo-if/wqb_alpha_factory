@@ -907,8 +907,10 @@ class WQBClient:
         POST.  The durable caller-side fingerprint supports later read-only
         reconciliation.
         """
+        if str(alpha_type or "").upper() != "REGULAR":
+            raise ValueError("Only the REGULAR Simulation request schema is supported")
         self._wait_submission_slot()
-        body = {"type": alpha_type, "settings": settings, "regular": expression}
+        body = {"type": "REGULAR", "settings": settings, "regular": expression}
         headers = {"X-Idempotency-Key": idempotency_key} if idempotency_key else None
         resp = self._request(
             "POST",
@@ -952,13 +954,17 @@ class WQBClient:
                 child = dict(item)
             else:
                 child = {
-                    "type": "REGULAR",
+                    "type": item.get("type", "REGULAR"),
                     "settings": dict(item.get("settings") or {}),
                     "regular": item.get("expression"),
                 }
+            if str(child.get("type") or "REGULAR").upper() != "REGULAR":
+                raise ValueError(
+                    "Only REGULAR Multi-Simulation children are supported"
+                )
             if not isinstance(child.get("regular"), str) or not child["regular"].strip():
                 raise ValueError("Multi-Simulation child expression must be non-empty")
-            child.setdefault("type", "REGULAR")
+            child["type"] = "REGULAR"
             payload.append(child)
         self._wait_submission_slot()
         headers = {"X-Idempotency-Key": idempotency_key} if idempotency_key else None
