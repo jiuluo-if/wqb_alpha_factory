@@ -4,6 +4,7 @@ import unittest
 
 from wqb_agent.protocol import (
     CapabilityStatus,
+    classify_simulation_status,
     endpoint_catalog,
     fixture_capability,
     probe_capability_response,
@@ -19,6 +20,54 @@ class TestProtocolTruth(unittest.TestCase):
         self.assertEqual(catalog["authentication"]["status"], "OFFICIAL")
         self.assertEqual(catalog["aggregates"]["status"], "OFFICIAL")
         self.assertEqual(catalog["operators"]["status"], "COMMUNITY_OBSERVED")
+
+    def test_official_read_only_endpoint_truth_is_registered(self):
+        catalog = {row["key"]: row for row in endpoint_catalog()}
+        for key, method, path in (
+            ("authentication_status", "GET", "/authentication"),
+            ("simulation_options", "OPTIONS", "/simulations"),
+            ("recordsets", "GET", "/alphas/{id}/recordsets"),
+            ("recordset", "GET", "/alphas/{id}/recordsets/{recordset_name}"),
+            ("activity_diversity", "GET", "/users/{userid}/activities/diversity"),
+        ):
+            with self.subTest(key=key):
+                self.assertEqual(catalog[key]["status"], "OFFICIAL")
+                self.assertEqual(catalog[key]["method"], method)
+                self.assertEqual(catalog[key]["path"], path)
+
+    def test_simulation_status_classifier_uses_remote_truth(self):
+        expected = {
+            "WAITING": "PENDING", "SIMULATING": "PENDING",
+            "COMPLETE": "SUCCESS", "WARNING": "SUCCESS",
+            "CANCELLED": "TERMINAL_FAILURE", "ERROR": "TERMINAL_FAILURE",
+            "TIMEOUT": "TERMINAL_FAILURE", "FAIL": "TERMINAL_FAILURE",
+        }
+        for remote_status, phase in expected.items():
+            payload = {"id": "sim-1", "status": remote_status}
+            if remote_status in {"COMPLETE", "WARNING"}:
+                payload["alpha"] = "alpha-1"
+            with self.subTest(remote_status=remote_status):
+                result = classify_simulation_status(payload)
+                self.assertEqual(result["phase"], phase)
+                self.assertEqual(result["remote_status"], remote_status)
+        self.assertEqual(
+            classify_simulation_status({"status": "VENDOR_LATER"})["phase"],
+            "UNKNOWN",
+        )
+
+    def test_simulation_status_classifier_keeps_bounded_error_location(self):
+        result = classify_simulation_status({
+            "id": "sim-1", "status": "ERROR", "message": "bad syntax",
+            "location": {
+                "property": "regular", "line": 2, "start": 3, "end": 9,
+                "private_expression": "must not escape",
+            },
+        })
+        self.assertEqual(result["diagnostic"], {
+            "remote_status": "ERROR", "message": "bad syntax",
+            "property": "regular", "line": 2, "start": 3, "end": 9,
+            "simulation_id": "sim-1",
+        })
 
     def test_fixture_and_static_operator_evidence_cannot_claim_availability(self):
         with open(os.path.join(FIXTURES, "aggregates.json"), encoding="utf-8") as handle:

@@ -44,16 +44,26 @@ class EndpointTruth:
 ENDPOINT_TRUTH = (
     EndpointTruth("authentication", "POST", "/authentication", CapabilityStatus.OFFICIAL,
                   "HTTP Basic Auth; empty body", "session/auth response", False),
+    EndpointTruth("authentication_status", "GET", "/authentication", CapabilityStatus.OFFICIAL,
+                  "authenticated session", "bounded account capability", True),
     EndpointTruth("data_sets", "GET", "/data-sets", CapabilityStatus.OFFICIAL,
                   "instrumentType, region, delay, universe", "results[]", True),
     EndpointTruth("data_fields", "GET", "/data-fields", CapabilityStatus.OFFICIAL,
                   "dataset.id plus pagination/type", "results[], count", True),
     EndpointTruth("simulations", "POST", "/simulations", CapabilityStatus.OFFICIAL,
                   "type, settings, regular", "Location header", False),
+    EndpointTruth("simulation_options", "OPTIONS", "/simulations", CapabilityStatus.OFFICIAL,
+                  "none", "actions.POST capability projection", True),
     EndpointTruth("simulation_progress", "GET", "/simulations/{id}", CapabilityStatus.OFFICIAL,
                   "known progress URL", "pending/terminal progress object", True),
     EndpointTruth("alphas", "GET", "/alphas/{id}", CapabilityStatus.OFFICIAL,
                   "alpha id", "alpha payload with metrics/checks", True),
+    EndpointTruth("recordsets", "GET", "/alphas/{id}/recordsets", CapabilityStatus.OFFICIAL,
+                  "alpha id", "recordsets[] name/title", True),
+    EndpointTruth("recordset", "GET", "/alphas/{id}/recordsets/{recordset_name}", CapabilityStatus.OFFICIAL,
+                  "alpha id and discovered recordset name", "schema.properties plus records", True),
+    EndpointTruth("activity_diversity", "GET", "/users/{userid}/activities/diversity", CapabilityStatus.OFFICIAL,
+                  "authenticated user id", "bounded region/delay/dataCategory projection", True),
     EndpointTruth("aggregates", "GET", "/alphas/{id}/aggregates", CapabilityStatus.OFFICIAL,
                   "alpha id", "yearlyData aggregate payload", True),
     EndpointTruth("self_correlation", "GET", "/alphas/{id}/correlations/self", CapabilityStatus.OFFICIAL,
@@ -70,6 +80,56 @@ ENDPOINT_TRUTH = (
                   "undocumented", "undocumented", True,
                   "仅 capability probe/fixture，不作为生产依赖"),
 )
+
+
+def _bounded_text(value, limit=500):
+    if value is None:
+        return None
+    return str(value)[:limit]
+
+
+def classify_simulation_status(payload):
+    """Classify one official Simulation progress payload without side effects."""
+    if not isinstance(payload, dict):
+        return {
+            "phase": "UNKNOWN", "remote_status": None, "alpha": None,
+            "children": [], "message": None, "diagnostic": None,
+            "reason": "INVALID_PAYLOAD",
+        }
+    remote_status = str(payload.get("status") or "").strip().upper() or None
+    alpha = payload.get("alpha")
+    children = payload.get("children") if isinstance(payload.get("children"), list) else []
+    message = _bounded_text(payload.get("message"))
+    if remote_status in {"WAITING", "SIMULATING"}:
+        phase = "PENDING"
+    elif remote_status in {"COMPLETE", "WARNING"}:
+        phase = "SUCCESS" if alpha or children else "TERMINAL_FAILURE"
+    elif remote_status in {"CANCELLED", "ERROR", "TIMEOUT", "FAIL", "FAILED"}:
+        phase = "TERMINAL_FAILURE"
+    else:
+        phase = "UNKNOWN"
+    diagnostic = None
+    if phase == "TERMINAL_FAILURE":
+        diagnostic = {"remote_status": remote_status}
+        if message is not None:
+            diagnostic["message"] = message
+        location = payload.get("location")
+        if isinstance(location, dict):
+            for key in ("property", "line", "start", "end"):
+                if key in location and location[key] is not None:
+                    value = location[key]
+                    diagnostic[key] = _bounded_text(value, 200) if key == "property" else value
+        if payload.get("id") is not None:
+            diagnostic["simulation_id"] = _bounded_text(payload.get("id"), 200)
+    result = {
+        "phase": phase, "remote_status": remote_status, "alpha": alpha,
+        "children": children, "message": message, "diagnostic": diagnostic,
+    }
+    if phase == "UNKNOWN":
+        result["reason"] = "UNKNOWN_REMOTE_STATUS" if remote_status else "MISSING_STATUS"
+    elif phase == "TERMINAL_FAILURE" and remote_status in {"COMPLETE", "WARNING"}:
+        result["reason"] = "MISSING_ALPHA_OR_CHILDREN"
+    return result
 
 
 def endpoint_catalog():

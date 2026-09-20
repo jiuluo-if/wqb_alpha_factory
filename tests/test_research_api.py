@@ -14,6 +14,7 @@ from wqb_agent.research_api import (
     find_similar_alphas,
     generate_probes,
     get_capabilities,
+    get_live_preflight,
     get_operator_reference,
     get_simulation_modes,
     inspect_template,
@@ -24,6 +25,7 @@ from wqb_agent.research_api import (
     list_templates,
     simulate_multi_batch,
     simulate_single,
+    validate_simulation_settings,
 )
 
 
@@ -66,8 +68,10 @@ class TestResearchApi(unittest.TestCase):
         })
         self.assertTrue(valid["valid"])
         self.assertEqual(valid["status"], "VALID")
-        with self.assertRaises(ValueError):
-            build_simulation_spec("rank(close)", settings={"delay": 2})
+        self.assertEqual(
+            build_simulation_spec("rank(close)", settings={"delay": 2}).settings["delay"],
+            2,
+        )
         spec = build_simulation_spec(
             "rank(close)", settings=valid["settings"], fields=["close"]
         )
@@ -328,7 +332,18 @@ class TestResearchApi(unittest.TestCase):
                     listed = list_remote_alphas(config=config, state_dir=tmp)
                     self.assertEqual(listed, [{"alpha_id": "a"}])
     def test_simulation_modes_keep_single_and_multi_explicit(self):
-        modes = get_simulation_modes()
+        client = SimpleNamespace(
+            get_authentication_status=lambda: {
+                "authenticated": True, "user_id": "user-1",
+                "permissions": ["MULTI_SIMULATION"],
+            },
+            get_simulation_capability=lambda: {
+                "status": "AVAILABLE", "capability_status": "AVAILABLE",
+                "source": "BRAIN_LIVE", "simulation_type_choices": ["REGULAR", "MULTI"],
+                "settings": {}, "required_fields": [], "required_settings": [],
+            },
+        )
+        modes = get_simulation_modes(client=client)
 
         self.assertEqual(modes["single"]["name"], "Single Simulation")
         self.assertEqual(modes["single"]["max_concurrent"], 10)
@@ -336,6 +351,77 @@ class TestResearchApi(unittest.TestCase):
         self.assertEqual(modes["multi"]["children_per_job"], 10)
         self.assertEqual(modes["multi"]["max_concurrent_jobs"], 2)
         self.assertFalse(modes["region_agnostic"]["available"])
+
+    def test_multi_mode_requires_live_permission(self):
+        client = SimpleNamespace(
+            get_authentication_status=lambda: {
+                "authenticated": True, "user_id": "user-1", "permissions": [],
+            },
+            get_simulation_capability=lambda: {
+                "status": "AVAILABLE", "capability_status": "AVAILABLE",
+                "source": "BRAIN_LIVE", "simulation_type_choices": ["REGULAR", "MULTI"],
+                "settings": {}, "required_fields": [], "required_settings": [],
+            },
+        )
+        modes = get_simulation_modes(client=client)
+        self.assertFalse(modes["multi"]["available"])
+        self.assertEqual(modes["multi"]["reason"], "PERMISSION_UNAVAILABLE")
+        self.assertEqual(modes["multi"]["source"], "BRAIN_LIVE")
+
+    def test_settings_validation_prefers_live_options_and_reports_local_only_fallback(self):
+        client = SimpleNamespace(
+            region="USA", universe="TOP3000", instrument_type="EQUITY",
+            get_simulation_capability=lambda: {
+                "status": "AVAILABLE", "capability_status": "AVAILABLE",
+                "settings": {
+                    "region": {"allowed_values": ["USA"]},
+                    "neutralization": {"allowed_values": ["SUBINDUSTRY"]},
+                },
+                "required_fields": [], "required_settings": ["region"],
+            },
+        )
+        valid = validate_simulation_settings(
+            {"region": "USA", "neutralization": "SUBINDUSTRY", "delay": 3,
+             "truncation": 0.1, "visualization": False}, client=client,
+        )
+        self.assertTrue(valid["valid"])
+        self.assertEqual(valid["validation_source"], "LIVE_OPTIONS")
+        invalid = validate_simulation_settings(
+            {"region": "GLB"}, client=client,
+        )
+        self.assertFalse(invalid["valid"])
+        self.assertIn("region is not allowed", " ".join(invalid["errors"]))
+
+        offline = validate_simulation_settings(
+            {"region": "USA"}, client=SimpleNamespace(
+                region="USA", universe="TOP3000", instrument_type="EQUITY",
+                get_simulation_capability=lambda: {"status": "UNKNOWN"},
+            ),
+        )
+        self.assertTrue(offline["valid"])
+        self.assertEqual(offline["capability_status"], "UNKNOWN")
+        self.assertEqual(offline["validation_source"], "LOCAL_ONLY")
+
+    def test_live_preflight_is_read_only_and_contains_pending_guards(self):
+        client = SimpleNamespace(
+            instrument_type="EQUITY", region="USA", universe="TOP3000", delay=1,
+            get_authentication_status=lambda: {
+                "authenticated": True, "user_id": "user-1",
+                "permissions": ["MULTI_SIMULATION"],
+            },
+            get_simulation_capability=lambda: {
+                "status": "AVAILABLE", "capability_status": "AVAILABLE",
+                "source": "BRAIN_LIVE", "simulation_type_choices": ["REGULAR", "MULTI"],
+                "settings": {}, "required_fields": [], "required_settings": [],
+            },
+            get_all_user_alphas=lambda **_kwargs: [],
+        )
+        result = get_live_preflight(client=client, config={"simulation": {}, "runtime": {}})
+        self.assertFalse(result["network_write"])
+        self.assertEqual(result["authentication"]["user_id"], "user-1")
+        self.assertTrue(result["simulation_modes"]["multi"]["available"])
+        self.assertEqual(result["multi_child_range"], "2..10")
+        self.assertIn("pending_execution_count", result)
 
     def test_single_alias_and_multi_facade_delegate_to_gateway(self):
         spec = SimulationSpec("rank(close)")

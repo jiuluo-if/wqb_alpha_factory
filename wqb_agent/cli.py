@@ -72,6 +72,10 @@ def build_parser():
     )
     _add_offline(audit)
     _set_command(audit, "diagnostics", "audit")
+    platform = diagnostic_commands.add_parser(
+        "platform", help="只读检查账户、Simulation capability 与执行前置条件"
+    )
+    _set_command(platform, "diagnostics", "platform")
 
     smoke = commands.add_parser(
         "smoke", help="执行只读平台 smoke 检查"

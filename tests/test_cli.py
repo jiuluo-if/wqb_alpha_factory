@@ -25,6 +25,7 @@ class TestCanonicalCliGrammar(unittest.TestCase):
             self.assert_command(["diagnostics", action, "--offline"],
                                 domain="diagnostics", action=action, offline=True)
         self.assert_command(["smoke"], domain="smoke", action="readonly")
+        self.assert_command(["diagnostics", "platform"], domain="diagnostics", action="platform")
         self.assert_command(["alpha", "sync-colors", "--dry-run", "--plan", "plan.json"],
                             domain="alpha", action="sync-colors", dry_run=True,
                             color_plan="plan.json")
@@ -109,6 +110,17 @@ class TestCliRuntimeSafety(unittest.TestCase):
                 main_entry.main(["smoke"])
         self.assertEqual(raised.exception.code, 1)
         self.assertEqual(json.loads(output.getvalue())["status"], "UNAVAILABLE")
+
+    def test_platform_diagnostics_is_read_only_preflight(self):
+        with patch.object(main_entry, "load_config", return_value={"simulation": {}, "runtime": {}}), \
+                patch("wqb_agent.WQBClient") as client_type, \
+                patch("wqb_agent.research_api.get_live_preflight", return_value={
+                    "network_write": False, "multi_child_range": "2..10",
+                }) as preflight:
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                main_entry.main(["diagnostics", "platform"])
+        preflight.assert_called_once()
+        self.assertFalse(json.loads(output.getvalue())["network_write"])
 
 
 class TestCliSubprocessIntegration(unittest.TestCase):

@@ -26,6 +26,7 @@ Safety semantics (rolling bounded executor window):
 
 import time
 from collections import deque
+from collections.abc import Mapping
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from typing import Any
 
@@ -35,6 +36,7 @@ from .client import (
     WQBNotFoundError,
     WQBRateLimitError,
     WQBRejectedError,
+    WQBRemoteSimulationError,
     WQBSimulationError,
     WQBSubmitUnknownError,
     WQBTimeoutError,
@@ -285,6 +287,18 @@ class Simulator:
                     experiment.status = "DONE"
                     persist()
                     return experiment
+                except WQBRemoteSimulationError as exc:
+                    experiment.error = str(exc)
+                    experiment.failure_kind = (
+                        "FAILED_REMOTE_TIMEOUT"
+                        if exc.diagnostic.get("remote_status") == "TIMEOUT"
+                        else "FAILED_REMOTE"
+                    )
+                    experiment.remote_status = exc.diagnostic.get("remote_status")
+                    experiment.diagnostic = dict(exc.diagnostic)
+                    experiment.status = "FAILED"
+                    persist()
+                    return experiment
                 except (WQBNotFoundError, WQBRejectedError) as exc:
                     # 404=NOT_FOUND / 400/422/403=REJECTED：平台明确拒绝，
                     # 不触发未知预算占用；标 FAILED 且不暂停派发。
@@ -386,18 +400,62 @@ class Simulator:
                 batch.status = "RUNNING"
                 persist()
 
-            alpha_ids = self.client.poll_multi_progress(
+            outcome = self.client.poll_multi_progress(
                 batch.progress_url, timeout_sec=self.poll_timeout_sec
             )
-            if not isinstance(alpha_ids, (list, tuple)) or len(alpha_ids) != len(batch.children):
+            if isinstance(outcome, Mapping):
+                child_outcomes = outcome.get("children")
+            elif isinstance(outcome, (list, tuple)):
+                child_outcomes = [
+                    {"status": "DONE", "alpha_id": alpha_id}
+                    for alpha_id in outcome
+                ]
+            else:
+                child_outcomes = None
+            if not isinstance(child_outcomes, list) or len(child_outcomes) != len(batch.children):
                 raise WQBSimulationError(
                     "Multi-Simulation returned an incomplete child result set."
                 )
-            for child, alpha_id in zip(batch.children, alpha_ids):
-                child.alpha_id = alpha_id
-                child.evidence = self.client.get_alpha(alpha_id)
-                child.status = "DONE"
-            batch.status = "DONE"
+            for child, child_outcome in zip(batch.children, child_outcomes):
+                if not isinstance(child_outcome, Mapping):
+                    child.status = "UNKNOWN"
+                    child.error = "malformed child outcome"
+                    continue
+                child.status = str(child_outcome.get("status") or "UNKNOWN")
+                child.alpha_id = child_outcome.get("alpha_id")
+                child.error = child_outcome.get("error")
+                child.failure_kind = child_outcome.get("failure_kind")
+                child.remote_status = child_outcome.get("remote_status")
+                child.diagnostic = {
+                    key: child_outcome[key] for key in (
+                        "remote_status", "message", "property", "line", "start",
+                        "end", "simulation_id",
+                    ) if key in child_outcome
+                }
+                if child.status == "DONE" and child.alpha_id:
+                    child.evidence = self.client.get_alpha(child.alpha_id)
+                elif child.status not in {"FAILED", "DONE"}:
+                    child.status = "UNKNOWN"
+            batch.status = (
+                "DONE" if all(child.status in {"DONE", "FAILED"} for child in batch.children)
+                else "UNKNOWN"
+            )
+            persist()
+            return batch
+        except WQBRemoteSimulationError as exc:
+            batch.error = str(exc)
+            batch.status = "FAILED"
+            failure_kind = (
+                "FAILED_REMOTE_TIMEOUT"
+                if exc.diagnostic.get("remote_status") == "TIMEOUT"
+                else "FAILED_REMOTE"
+            )
+            for child in batch.children:
+                child.status = "FAILED"
+                child.error = batch.error
+                child.failure_kind = failure_kind
+                child.remote_status = exc.diagnostic.get("remote_status")
+                child.diagnostic = dict(exc.diagnostic)
             persist()
             return batch
         except WQBRejectedError as exc:
@@ -418,12 +476,12 @@ class Simulator:
             return batch
         except WQBSubmitUnknownError as exc:
             batch.error = f"{type(exc).__name__}: {exc}"
-            batch.status = "SUBMIT_UNKNOWN"
+            batch.status = "UNKNOWN" if batch.progress_url else "SUBMIT_UNKNOWN"
             persist()
             return batch
         except WQBRateLimitError as exc:
             batch.error = f"{type(exc).__name__}: {exc}"
-            batch.status = "SUBMIT_UNKNOWN"
+            batch.status = "UNKNOWN" if batch.progress_url else "SUBMIT_UNKNOWN"
             persist()
             return batch
         except WQBError as exc:

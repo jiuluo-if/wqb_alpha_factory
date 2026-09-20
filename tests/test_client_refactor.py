@@ -27,6 +27,7 @@ from wqb_agent.client import (
     WQBQueryTooBroadError,
     WQBRateLimitError,
     WQBRejectedError,
+    WQBRemoteSimulationError,
     WQBSimulationError,
     WQBSubmitUnknownError,
     WQBTimeoutError,
@@ -167,6 +168,38 @@ class TestPollProgressRejectsErrorStatus(unittest.TestCase):
         with self.assertRaises(WQBSimulationError):
             c.poll_progress("/simulations/abc")
 
+    def test_warning_with_alpha_is_success(self):
+        c = make_client()
+        c._local.session = FakeSession([FakeResponse(
+            status_code=200, payload={
+                "id": "sim-warning", "status": "WARNING", "alpha": "alpha-warning",
+                "message": "non-fatal warning",
+            },
+        )])
+        self.assertEqual(c.poll_progress("/simulations/abc"), "alpha-warning")
+
+    def test_remote_terminal_timeout_is_not_local_poll_timeout(self):
+        c = make_client()
+        c._local.session = FakeSession([FakeResponse(
+            status_code=200, payload={"id": "sim-timeout", "status": "TIMEOUT"},
+        )])
+        with self.assertRaises(WQBRemoteSimulationError) as raised:
+            c.poll_progress("/simulations/abc")
+        self.assertEqual(raised.exception.diagnostic["remote_status"], "TIMEOUT")
+
+    def test_remote_error_keeps_structured_location(self):
+        c = make_client()
+        c._local.session = FakeSession([FakeResponse(
+            status_code=200, payload={
+                "id": "sim-error", "status": "ERROR", "message": "bad field",
+                "location": {"property": "regular", "line": 4, "start": 2, "end": 7},
+            },
+        )])
+        with self.assertRaises(WQBRemoteSimulationError) as raised:
+            c.poll_progress("/simulations/abc")
+        self.assertEqual(raised.exception.diagnostic["property"], "regular")
+        self.assertEqual(raised.exception.diagnostic["line"], 4)
+
     def test_repeated_progress_401_is_bounded(self):
         c = make_client()
         c._local.session = FakeSession([
@@ -188,6 +221,118 @@ class TestOperatorCapabilityClient(unittest.TestCase):
         result = c.get_operator_capability()
         self.assertEqual(result["status"], "LIVE_VERIFIED")
         self.assertEqual(result["availability"], "AVAILABLE")
+
+
+class TestOfficialReadOnlyClientAdapters(unittest.TestCase):
+    def test_authentication_status_projects_account_without_token_or_cookie(self):
+        c = make_client()
+        c._local.session = FakeSession([FakeResponse(
+            200,
+            payload={
+                "status": "authenticated",
+                "user": {"id": "user-1", "email": "private@example.test"},
+                "token": {"expiry": "2099-01-01T00:00:00Z", "value": "jwt"},
+                "permissions": ["MULTI_SIMULATION", "EXTRA_VENDOR_PERMISSION"],
+                "cookie": "session-cookie",
+            },
+        )])
+
+        result = c.get_authentication_status()
+
+        self.assertEqual(result["authenticated"], True)
+        self.assertEqual(result["user_id"], "user-1")
+        self.assertEqual(result["token_expiry"], "2099-01-01T00:00:00Z")
+        self.assertEqual(result["permissions"], [
+            "MULTI_SIMULATION", "EXTRA_VENDOR_PERMISSION",
+        ])
+        self.assertNotIn("token", result)
+        self.assertNotIn("cookie", result)
+        self.assertNotIn("email", result)
+
+    def test_authentication_status_204_is_unauthenticated(self):
+        c = make_client()
+        c._local.session = FakeSession([FakeResponse(204)])
+        result = c.get_authentication_status()
+        self.assertEqual(result["authenticated"], False)
+        self.assertEqual(result["permissions"], [])
+
+    def test_authentication_status_reports_biometric_challenge_without_following_it(self):
+        c = make_client()
+        c._local.session = FakeSession([FakeResponse(
+            401,
+            headers={"WWW-Authenticate": "persona", "Location": "/persona/start"},
+        )])
+        with mock.patch.object(c, "_ensure_auth", side_effect=WQBAuthError("persona")):
+            result = c.get_authentication_status()
+        self.assertFalse(result["authenticated"])
+        self.assertEqual(result["reason"], "BIOMETRIC_AUTH_REQUIRED")
+        self.assertTrue(result["location_available"])
+        self.assertNotIn("cookie", result)
+
+    def test_simulation_options_projects_post_schema_and_ignores_vendor_fields(self):
+        c = make_client()
+        c._local.session = FakeSession([FakeResponse(200, payload={
+            "actions": {"POST": {
+                "properties": {
+                    "type": {"enum": ["REGULAR", "MULTI"]},
+                    "settings": {
+                        "required": ["region", "universe"],
+                        "properties": {
+                            "region": {"enum": ["USA", "GLB"]},
+                            "universe": {"enum": ["TOP3000"]},
+                            "delay": {"type": "integer"},
+                        },
+                    },
+                },
+                "required": ["type", "settings"],
+                "x-vendor-private": {"secret": "ignore"},
+            }},
+            "x-vendor-envelope": "ignore",
+        })])
+
+        result = c.get_simulation_capability()
+
+        self.assertEqual(result["status"], "AVAILABLE")
+        self.assertEqual(result["source"], "BRAIN_LIVE")
+        self.assertEqual(result["simulation_type_choices"], ["REGULAR", "MULTI"])
+        self.assertEqual(result["required_fields"], ["type", "settings"])
+        self.assertEqual(result["settings"]["region"]["allowed_values"], ["USA", "GLB"])
+        self.assertEqual(result["settings"]["universe"]["allowed_values"], ["TOP3000"])
+        self.assertNotIn("x-vendor-private", str(result))
+
+    def test_simulation_options_malformed_response_is_unknown(self):
+        c = make_client()
+        c._local.session = FakeSession([FakeResponse(200, payload={"actions": {}})])
+        result = c.get_simulation_capability()
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(result["capability_status"], "UNKNOWN")
+
+    def test_recordset_discovery_and_read_share_bounded_contract(self):
+        c = make_client()
+        c._local.session = FakeSession([
+            FakeResponse(200, payload={"recordsets": [
+                {"name": "yearly-stats", "title": "Yearly Stats", "x": "ignore"},
+            ]}),
+            FakeResponse(200, payload={
+                "schema": {"properties": {"year": {}, "sharpe": {}}},
+                "records": [[2025, 1.2]],
+            }),
+        ])
+        available = c.list_alpha_recordsets("alpha-1")
+        payload = c.get_recordset("alpha-1", "yearly-stats", available=available)
+        self.assertEqual(available, [{"name": "yearly-stats", "title": "Yearly Stats"}])
+        self.assertEqual(payload["records"], [[2025, 1.2]])
+
+    def test_activity_diversity_is_a_read_only_bounded_payload(self):
+        c = make_client()
+        c._local.session = FakeSession([FakeResponse(200, payload={
+            "region": {"USA": 2}, "delay": {"1": 2},
+            "dataCategory": {"analyst": 2}, "vendor-extra": "ignore",
+        })])
+        result = c.get_activity_diversity("user-1")
+        self.assertEqual(result["region"], {"USA": 2})
+        self.assertEqual(result["delay"], {"1": 2})
+        self.assertNotIn("vendor-extra", result)
 
     def test_multi_submission_posts_an_array_with_one_idempotency_key(self):
         c = make_client()
@@ -212,6 +357,24 @@ class TestOperatorCapabilityClient(unittest.TestCase):
         self.assertFalse(request.call_args.kwargs.get("retry_rate_limit"))
         c._wait_submission_slot.assert_called_once_with()
 
+    def test_multi_submission_rejects_one_and_eleven_but_accepts_ten(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        for size in (1, 11):
+            with self.subTest(size=size):
+                with self.assertRaises(ValueError):
+                    c.submit_multi_simulation([
+                        {"expression": f"rank(f{index})", "settings": {}}
+                        for index in range(size)
+                    ])
+        response = FakeResponse(201, headers={"Location": "/multi/10"})
+        with mock.patch.object(c, "_request", return_value=response) as request:
+            c.submit_multi_simulation([
+                {"expression": f"rank(f{index})", "settings": {}}
+                for index in range(10)
+            ])
+        self.assertEqual(len(request.call_args.kwargs["json"]), 10)
+
     def test_multi_progress_resolves_child_simulations_without_a_new_post(self):
         c = make_client()
         with mock.patch.object(c, "get_progress_snapshot", return_value={
@@ -224,12 +387,25 @@ class TestOperatorCapabilityClient(unittest.TestCase):
         ) as poll:
             result = c.poll_multi_progress(f"{c.base_url}/multi/1")
 
-        self.assertEqual(result, ["alpha-1", "alpha-2"])
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertEqual([item["alpha_id"] for item in result["children"]], ["alpha-1", "alpha-2"])
         self.assertEqual(
             [call.args[0] for call in poll.call_args_list],
             [f"{c.base_url}/simulations/sim-1",
              f"{c.base_url}/simulations/sim-2"],
         )
+
+    def test_multi_progress_does_not_treat_parent_alpha_list_as_child_confirmation(self):
+        c = make_client()
+        with mock.patch.object(c, "get_progress_snapshot", return_value={
+            "status_code": 200,
+            "headers": {},
+            "payload": {"status": "COMPLETE", "alphas": ["alpha-1"]},
+            "retry_after_seconds": 1.0,
+        }), mock.patch.object(c, "poll_progress") as poll:
+            with self.assertRaises(WQBSimulationError):
+                c.poll_multi_progress(f"{c.base_url}/multi/1")
+        poll.assert_not_called()
 
 
 class TestPublicReadAdapters(unittest.TestCase):

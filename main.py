@@ -36,6 +36,7 @@ def main(argv=None):
     readonly_local = command_key in {
         ("diagnostics", "doctor"),
         ("diagnostics", "audit"),
+        ("diagnostics", "platform"),
     }
 
     config = None
@@ -77,6 +78,22 @@ def main(argv=None):
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if not result.get("ok"):
             sys.exit(2)
+        return
+    if command_key == ("diagnostics", "platform"):
+        from wqb_agent import WQBClient, research_api
+        try:
+            client = WQBClient()
+            result = research_api.get_live_preflight(
+                client=client, config=typed_config,
+                state_dir=typed_config.runtime.state_dir,
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        except Exception as exc:
+            print(json.dumps({
+                "network_write": False, "status": "UNAVAILABLE",
+                "reason": str(exc),
+            }, ensure_ascii=False, indent=2))
+            sys.exit(1)
         return
     if command_key == ("smoke", "readonly"):
         from wqb_agent import WQBClient

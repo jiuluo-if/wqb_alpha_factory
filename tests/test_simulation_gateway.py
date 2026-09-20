@@ -48,6 +48,14 @@ class FakeGatewayClient:
     def get_self_correlation(self, alpha_id):
         return {"alpha_id": alpha_id, "status": "AVAILABLE", "value": 0.1}
 
+    def get_authentication_status(self):
+        return {"authenticated": True, "permissions": ["MULTI_SIMULATION"]}
+
+    def get_simulation_capability(self):
+        return {"status": "AVAILABLE", "capability_status": "AVAILABLE",
+                "simulation_type_choices": ["REGULAR", "MULTI"],
+                "settings": {}, "required_fields": [], "required_settings": []}
+
 
 class ProcessSimulationClient(FakeGatewayClient):
     def __init__(self, post_log, ready, release):
@@ -167,6 +175,27 @@ class RateLimitedMultiGatewayClient(MultiGatewayClient):
         raise WQBRateLimitError("multi request rate limited before acceptance")
 
 
+class NoMultiPermissionClient(MultiGatewayClient):
+    def get_authentication_status(self):
+        return {"authenticated": True, "permissions": []}
+
+
+class PartialMultiGatewayClient(MultiGatewayClient):
+    def poll_multi_progress(self, progress_url, **kwargs):
+        return {"status": "SUCCESS", "remote_status": "COMPLETE", "children": [
+            {"status": "DONE", "alpha_id": "alpha-ok"},
+            {"status": "FAILED", "failure_kind": "FAILED_REMOTE", "remote_status": "FAIL",
+             "error": "bad expression"},
+            {"status": "FAILED", "failure_kind": "FAILED_REMOTE_TIMEOUT", "remote_status": "TIMEOUT",
+             "error": "remote timeout"},
+        ]}
+
+
+class KnownParentReadFailureClient(MultiGatewayClient):
+    def poll_multi_progress(self, progress_url, **kwargs):
+        raise WQBSubmitUnknownError("parent read outcome was temporarily unknown")
+
+
 class RejectedMultiGatewayClient(MultiGatewayClient):
     def get_progress_snapshot(self, progress_url, **kwargs):
         return {"status_code": 200, "payload": {"status": "ERROR", "children": []}}
@@ -239,7 +268,7 @@ class TestSimulationGateway(unittest.TestCase):
             self.assertEqual([item["status"] for item in results], ["DONE"] * 11)
             self.assertEqual(client.max_active, 10)
 
-    def test_multi_batch_groups_ten_children_and_bounds_eight_jobs(self):
+    def test_multi_batch_groups_ten_children_and_routes_one_remainder_to_single(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = MultiGatewayClient()
             gateway = SimulationGateway(client, state_dir=tmp)
@@ -255,8 +284,9 @@ class TestSimulationGateway(unittest.TestCase):
             self.assertEqual([item["status"] for item in results], ["DONE"] * 21)
             self.assertEqual(
                 [len(payloads) for payloads, _kwargs in client.multi_submissions],
-                [10, 10, 1],
+                [10, 10],
             )
+            self.assertEqual(len(client.submissions), 1)
             self.assertTrue(all(
                 payload["type"] == "REGULAR"
                 and payload["regular"].startswith("rank(field_")
@@ -265,6 +295,57 @@ class TestSimulationGateway(unittest.TestCase):
             ))
             self.assertEqual(client.max_active_multi, 2)
             self.assertEqual(gateway.guard.entries(), [])
+
+    def test_multi_batch_24_packs_as_ten_ten_four(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = MultiGatewayClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            results = gateway.simulate_multi_batch([
+                SimulationSpec(f"rank(field_{index})", {"delay": 1})
+                for index in range(24)
+            ])
+            self.assertEqual([item["status"] for item in results], ["DONE"] * 24)
+            self.assertEqual(
+                [len(payloads) for payloads, _kwargs in client.multi_submissions],
+                [10, 10, 4],
+            )
+
+    def test_multi_requires_live_permission_before_registering_or_posting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = NoMultiPermissionClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            with self.assertRaisesRegex(ValueError, "PERMISSION_UNAVAILABLE"):
+                gateway.simulate_multi_batch([
+                    SimulationSpec("rank(field_a)", {"delay": 1}),
+                    SimulationSpec("rank(field_b)", {"delay": 1}),
+                ])
+            self.assertEqual(client.multi_submissions, [])
+            self.assertEqual(client.submissions, [])
+            self.assertEqual(gateway.guard.entries(), [])
+
+    def test_multi_partial_child_results_are_preserved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = PartialMultiGatewayClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            results = gateway.simulate_multi_batch([
+                SimulationSpec("rank(field_a)", {"delay": 1}),
+                SimulationSpec("rank(field_b)", {"delay": 1}),
+                SimulationSpec("rank(field_c)", {"delay": 1}),
+            ])
+            self.assertEqual(results[0]["status"], "DONE")
+            self.assertEqual(results[1]["failure_kind"], "FAILED_REMOTE")
+            self.assertEqual(results[2]["failure_kind"], "FAILED_REMOTE_TIMEOUT")
+
+    def test_known_multi_parent_read_failure_is_unknown_not_submit_unknown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = KnownParentReadFailureClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            results = gateway.simulate_multi_batch([
+                SimulationSpec("rank(field_a)", {"delay": 1}),
+                SimulationSpec("rank(field_b)", {"delay": 1}),
+            ])
+            self.assertEqual([item["status"] for item in results], ["UNKNOWN", "UNKNOWN"])
+            self.assertEqual(gateway.guard.entries()[0]["status"], "RUNNING")
 
     def test_multi_unknown_keeps_one_parent_guard_and_never_reposts(self):
         with tempfile.TemporaryDirectory() as tmp:

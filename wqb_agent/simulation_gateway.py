@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import threading
 import time
@@ -184,6 +185,41 @@ class SimulationGateway:
         return {"valid": True, "expression": spec.expression,
                 "settings": dict(spec.settings), "operators": list(analysis.operators)}
 
+    def _validate_settings(self, spec, capability):
+        settings = spec.settings
+        errors = []
+        for key in ("region", "universe", "instrumentType", "neutralization",
+                    "pasteurization", "unitHandling", "nanHandling", "language"):
+            if key in settings and (not isinstance(settings[key], str) or not settings[key].strip()):
+                errors.append(f"{key} must be a non-empty string")
+        delay = settings.get("delay")
+        if delay is not None and (isinstance(delay, bool) or not isinstance(delay, int) or delay < 0):
+            errors.append("delay must be a non-negative integer")
+        for key in ("decay", "truncation"):
+            value = settings.get(key)
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or (key == "decay" and value < 1)
+            ):
+                errors.append(f"{key} must be a finite numeric value")
+        if "visualization" in settings and not isinstance(settings["visualization"], bool):
+            errors.append("visualization must be a boolean")
+        for key, attr in (("region", "region"), ("universe", "universe"),
+                          ("instrumentType", "instrument_type")):
+            expected = getattr(self.client, attr, None)
+            if key in settings and expected is not None and str(settings[key]) != str(expected):
+                errors.append(f"{key} does not match client scope")
+        if isinstance(capability, Mapping) and str(capability.get("status", "")).upper() == "AVAILABLE":
+            for key in capability.get("required_settings", ()):
+                if key not in settings:
+                    errors.append(f"missing required setting: {key}")
+            for key, projection in (capability.get("settings") or {}).items():
+                allowed = projection.get("allowed_values") if isinstance(projection, Mapping) else None
+                if key in settings and isinstance(allowed, list) and settings[key] not in allowed:
+                    errors.append(f"{key} is not allowed by live OPTIONS")
+        if errors:
+            raise ValueError("invalid simulation settings: " + "; ".join(errors))
+
     def _validate_live_capability(
         self, spec, *, operator_capability=_CAPABILITY_UNCHECKED,
         field_capability=_CAPABILITY_UNCHECKED,
@@ -248,7 +284,7 @@ class SimulationGateway:
         self.validate_simulation_spec(spec)
         return self.guard.fingerprint(spec.expression, spec.settings)
 
-    def _preflight_specs(self, specs):
+    def _preflight_specs(self, specs, *, simulation_capability=_CAPABILITY_UNCHECKED):
         normalized = [
             item if isinstance(item, SimulationSpec)
             else SimulationSpec(**dict(item))
@@ -258,6 +294,14 @@ class SimulationGateway:
         if not normalized:
             return results, [], ()
 
+        if simulation_capability is _CAPABILITY_UNCHECKED:
+            capability_reader = getattr(self.client, "get_simulation_capability", None)
+            simulation_capability = _CAPABILITY_READER_ABSENT
+            if callable(capability_reader):
+                try:
+                    simulation_capability = capability_reader()
+                except Exception:
+                    simulation_capability = {"status": "UNKNOWN"}
         operator_reader = getattr(self.client, "get_operator_capability", None)
         operator_capability = (
             operator_reader() if callable(operator_reader)
@@ -277,6 +321,7 @@ class SimulationGateway:
 
         validated = []
         for index, spec in enumerate(normalized):
+            self._validate_settings(spec, simulation_capability)
             fingerprint = self.execution_fingerprint(spec)
             field_capability = _CAPABILITY_READER_ABSENT
             if spec.fields and callable(field_reader):
@@ -357,7 +402,10 @@ class SimulationGateway:
             ))
 
         def on_update(item):
-            status = "SUBMIT_UNKNOWN" if item.status == "UNKNOWN" else item.status
+            status = (
+                "RUNNING" if item.status == "UNKNOWN" and item.progress_url
+                else "SUBMIT_UNKNOWN" if item.status == "UNKNOWN" else item.status
+            )
             if status in ExecutionGuard.STATUSES:
                 self.guard.update(
                     item.submission_fingerprint,
@@ -409,16 +457,46 @@ class SimulationGateway:
         self, specs, *, child_batch_size=10, max_concurrent_multi=2
     ):
         """Execute large probe windows as bounded Multi-Simulation parents."""
+        normalized_specs = [
+            item if isinstance(item, SimulationSpec)
+            else SimulationSpec(**dict(item))
+            for item in (specs or ())
+        ]
+        if len(normalized_specs) == 1:
+            # A one-child remainder is a valid Single request, never a
+            # one-element Multi payload.  The Gateway still owns this split.
+            return self._simulate_batch(normalized_specs)
         if isinstance(child_batch_size, bool) or not isinstance(child_batch_size, int):
             raise TypeError("child_batch_size must be an integer")
-        if child_batch_size < 1 or child_batch_size > 10:
-            raise ValueError("child_batch_size must be between 1 and 10")
+        if child_batch_size < 2 or child_batch_size > 10:
+            raise ValueError("child_batch_size must be between 2 and 10")
         if isinstance(max_concurrent_multi, bool) or not isinstance(max_concurrent_multi, int):
             raise TypeError("max_concurrent_multi must be an integer")
         if max_concurrent_multi < 1 or max_concurrent_multi > 8:
             raise ValueError("max_concurrent_multi must be between 1 and 8")
 
-        results, validated, remote_rows = self._preflight_specs(specs)
+        auth_reader = getattr(self.client, "get_authentication_status", None)
+        if not callable(auth_reader):
+            raise ValueError("PERMISSION_UNAVAILABLE: live authentication capability required")
+        authentication = auth_reader()
+        permissions = {
+            str(item).upper() for item in (authentication or {}).get("permissions", ())
+        }
+        if not (authentication or {}).get("authenticated") or "MULTI_SIMULATION" not in permissions:
+            raise ValueError("PERMISSION_UNAVAILABLE: MULTI_SIMULATION")
+        capability_reader = getattr(self.client, "get_simulation_capability", None)
+        capability = _CAPABILITY_READER_ABSENT
+        if callable(capability_reader):
+            capability = capability_reader()
+            choices = set((capability or {}).get("simulation_type_choices", ()))
+            if str((capability or {}).get("status", "")).upper() != "AVAILABLE" or (
+                choices and "MULTI" not in choices
+            ):
+                raise ValueError("SIMULATION_CAPABILITY_UNAVAILABLE")
+
+        results, validated, remote_rows = self._preflight_specs(
+            normalized_specs, simulation_capability=capability
+        )
         eligible = []
         seen = set()
         for index, spec, fingerprint in validated:
@@ -452,9 +530,13 @@ class SimulationGateway:
                 current_key = key
             grouped[-1].append(row)
 
+        single_remainders = []
         for group in grouped:
             for start in range(0, len(group), child_batch_size):
                 children = group[start:start + child_batch_size]
+                if len(children) == 1:
+                    single_remainders.extend(children)
+                    continue
                 child_fingerprints = [row[2] for row in children]
                 batch_fingerprint = self.guard.fingerprint(
                     "MULTI[" + ",".join(child_fingerprints) + "]",
@@ -510,8 +592,22 @@ class SimulationGateway:
                     ),
                 ))
 
+        # Keep the same Gateway owner for a remainder of one, but use the
+        # Single POST contract instead of inventing an invalid Multi payload.
+        if single_remainders:
+            single_results = self._simulate_batch([
+                spec for _index, spec, _fingerprint in single_remainders
+            ])
+            for (index, _spec, _fingerprint), result in zip(
+                single_remainders, single_results
+            ):
+                results[index] = result
+
         def on_update(batch):
-            status = "SUBMIT_UNKNOWN" if batch.status == "UNKNOWN" else batch.status
+            status = (
+                "RUNNING" if batch.status == "UNKNOWN" and batch.progress_url
+                else "SUBMIT_UNKNOWN" if batch.status == "UNKNOWN" else batch.status
+            )
             if status in ExecutionGuard.STATUSES:
                 self.guard.update(
                     batch.submission_fingerprint,
@@ -542,13 +638,19 @@ class SimulationGateway:
                         "fingerprint": child.submission_fingerprint,
                         "batch_fingerprint": batch_fingerprint,
                         "error": batch.error,
+                        "failure_kind": getattr(child, "failure_kind", "FAILED_REMOTE"),
+                        "remote_status": getattr(child, "remote_status", None),
+                        "diagnostic": getattr(child, "diagnostic", None),
                     }
                 else:
                     results[child.index] = {
-                        "status": "SUBMIT_UNKNOWN",
+                        "status": "UNKNOWN" if batch.progress_url else "SUBMIT_UNKNOWN",
                         "fingerprint": child.submission_fingerprint,
                         "batch_fingerprint": batch_fingerprint,
                         "error": batch.error,
+                        "failure_kind": getattr(child, "failure_kind", None),
+                        "remote_status": getattr(child, "remote_status", None),
+                        "diagnostic": getattr(child, "diagnostic", None),
                     }
         for batch_fingerprint, batch in batches:
             if batch_fingerprint in completed_fingerprints:
@@ -628,4 +730,7 @@ class SimulationGateway:
             "progress_url": getattr(item, "progress_url", None),
             "evidence": getattr(item, "evidence", None),
             "error": getattr(item, "error", None),
+            "failure_kind": getattr(item, "failure_kind", None),
+            "remote_status": getattr(item, "remote_status", None),
+            "diagnostic": getattr(item, "diagnostic", None),
         }

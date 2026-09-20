@@ -35,6 +35,7 @@ import random
 import threading
 import time
 from collections.abc import Mapping
+from urllib.parse import quote
 
 import requests
 
@@ -45,7 +46,11 @@ from .credentials import (
     resolve_credentials,
 )
 from .failures import FailureKind, classify_error
-from .protocol import probe_capability_response, retry_after_seconds
+from .protocol import (
+    classify_simulation_status,
+    probe_capability_response,
+    retry_after_seconds,
+)
 from .query_errors import QueryTooBroadError
 
 BASE_URL = "https://api.worldquantbrain.com"
@@ -55,6 +60,12 @@ CREDENTIALS_FILE = DEFAULT_CREDENTIALS_FILE
 # Status codes that indicate a permanent, non-retryable rejection.
 FAIL_FAST_STATUSES = (400, 403, 404, 422)
 ALPHA_COLOR_VALUES = frozenset({"BLUE", "GREEN", "PURPLE", "RED", "YELLOW"})
+OFFICIAL_RECORDSET_NAMES = frozenset({
+    "yearly-stats", "coverage", "turnover", "pnl", "sharpe",
+    "coverage-by-sector", "coverage-by-industry", "coverage-by-capitalization",
+    "pnl-by-sector", "pnl-by-industry", "pnl-by-capitalization",
+    "sharpe-by-sector", "sharpe-by-industry", "sharpe-by-capitalization",
+})
 
 
 def _finite_nonnegative(value, default):
@@ -111,6 +122,18 @@ class WQBSubmitUnknownError(WQBSimulationError):
     Retrying this exception would create a second simulation and burn budget.
     Callers must persist it as an unresolved submission instead.
     """
+
+
+class WQBRemoteSimulationError(WQBRejectedError):
+    """A known remote terminal Simulation status with bounded diagnostics."""
+
+    def __init__(self, diagnostic):
+        self.diagnostic = dict(diagnostic or {})
+        status = self.diagnostic.get("remote_status", "UNKNOWN")
+        message = self.diagnostic.get("message", "")
+        simulation_id = self.diagnostic.get("simulation_id")
+        suffix = f" sim_id={simulation_id}" if simulation_id else ""
+        super().__init__(f"Remote Simulation terminal status={status}{suffix}: {message}")
 
 
 def load_credentials(username_env="WQB_USERNAME", password_env="WQB_PASSWORD"):
@@ -509,6 +532,156 @@ class WQBClient:
             return capability
         return capability
 
+    @staticmethod
+    def _authentication_projection(payload):
+        if not isinstance(payload, Mapping):
+            return {"authenticated": False, "user_id": None,
+                    "token_expiry": None, "permissions": []}
+        user = payload.get("user")
+        token = payload.get("token")
+        user_id = user.get("id") if isinstance(user, Mapping) else payload.get("user_id")
+        expiry = token.get("expiry") if isinstance(token, Mapping) else payload.get("token_expiry")
+        permissions = payload.get("permissions")
+        if not isinstance(permissions, (list, tuple, set)):
+            permissions = []
+        permissions = [str(item) for item in permissions if isinstance(item, (str, int))]
+        return {
+            "authenticated": str(payload.get("status", "")).lower() == "authenticated"
+            or bool(user_id),
+            "user_id": str(user_id) if user_id is not None else None,
+            "token_expiry": str(expiry) if expiry is not None else None,
+            "permissions": permissions,
+        }
+
+    def get_authentication_status(self):
+        """Read current account capability without exposing session secrets."""
+        try:
+            self._ensure_auth()
+        except WQBAuthError:
+            # Still perform the official GET so a persona challenge can be
+            # reported as a bounded capability result instead of being hidden
+            # behind the legacy POST authentication exception.
+            pass
+        try:
+            resp = self._session().request(
+                "GET", f"{self.base_url}/authentication", timeout=30
+            )
+        except requests.exceptions.RequestException as exc:
+            raise WQBSimulationError(f"GET /authentication failed: {exc}") from exc
+        if resp.status_code == 401:
+            self._set_authenticated(False)
+            challenge = str(resp.headers.get("WWW-Authenticate", "")).lower()
+            return {
+                "authenticated": False, "user_id": None, "token_expiry": None,
+                "permissions": [], "reason": (
+                    "BIOMETRIC_AUTH_REQUIRED" if "persona" in challenge
+                    else "AUTHENTICATION_REQUIRED"
+                ), "location_available": bool(resp.headers.get("Location")),
+            }
+        if resp.status_code == 204:
+            self._set_authenticated(False)
+            return {"authenticated": False, "user_id": None,
+                    "token_expiry": None, "permissions": []}
+        if resp.status_code < 200 or resp.status_code >= 300:
+            raise self._classified_exception(
+                resp.status_code, resp.text, "GET /authentication"
+            )
+        try:
+            payload = resp.json()
+        except (TypeError, ValueError):
+            return {"authenticated": False, "user_id": None,
+                    "token_expiry": None, "permissions": [],
+                    "reason": "MALFORMED_RESPONSE"}
+        return self._authentication_projection(payload)
+
+    @staticmethod
+    def _unknown_capability(reason):
+        return {
+            "status": "UNKNOWN", "capability_status": "UNKNOWN",
+            "source": "BRAIN_LIVE", "reason": reason,
+            "simulation_type_choices": [], "settings": {},
+            "required_fields": [], "required_settings": [],
+        }
+
+    def get_simulation_capability(self):
+        """Read the bounded POST projection advertised by OPTIONS /simulations."""
+        try:
+            resp = self._request(
+                "OPTIONS", f"{self.base_url}/simulations",
+                accepted=(200, 204), context="OPTIONS /simulations",
+            )
+        except WQBError as exc:
+            return self._unknown_capability(type(exc).__name__)
+        if resp.status_code == 204:
+            return self._unknown_capability("EMPTY_RESPONSE")
+        try:
+            payload = resp.json()
+        except (TypeError, ValueError):
+            return self._unknown_capability("MALFORMED_RESPONSE")
+        actions = payload.get("actions") if isinstance(payload, Mapping) else None
+        post = actions.get("POST") if isinstance(actions, Mapping) else None
+        if not isinstance(post, Mapping):
+            return self._unknown_capability("MALFORMED_RESPONSE")
+        properties = post.get("properties")
+        if not isinstance(properties, Mapping):
+            return self._unknown_capability("MALFORMED_RESPONSE")
+        type_property = properties.get("type")
+        settings_property = properties.get("settings")
+        if not isinstance(type_property, Mapping) or not isinstance(settings_property, Mapping):
+            return self._unknown_capability("MALFORMED_RESPONSE")
+        type_choices = type_property.get("enum")
+        if not isinstance(type_choices, list):
+            type_choices = []
+        setting_properties = settings_property.get("properties")
+        if not isinstance(setting_properties, Mapping):
+            return self._unknown_capability("MALFORMED_RESPONSE")
+        settings = {}
+        for name in (
+            "instrumentType", "region", "universe", "delay", "decay",
+            "truncation", "neutralization", "pasteurization", "unitHandling",
+            "nanHandling", "language", "visualization",
+        ):
+            spec = setting_properties.get(name)
+            if not isinstance(spec, Mapping):
+                continue
+            projection = {}
+            if isinstance(spec.get("enum"), list):
+                projection["allowed_values"] = list(spec["enum"])
+            if isinstance(spec.get("type"), str):
+                projection["type"] = spec["type"]
+            if projection:
+                settings[name] = projection
+        required = post.get("required")
+        required_settings = settings_property.get("required")
+        return {
+            "status": "AVAILABLE", "capability_status": "AVAILABLE",
+            "source": "BRAIN_LIVE",
+            "simulation_type_choices": [str(item) for item in type_choices],
+            "settings": settings,
+            "required_fields": [str(item) for item in required] if isinstance(required, list) else [],
+            "required_settings": [str(item) for item in required_settings]
+            if isinstance(required_settings, list) else [],
+        }
+
+    def list_alpha_recordsets(self, alpha_id):
+        """Discover available official recordsets for one Alpha."""
+        resp = self._request(
+            "GET", f"{self.base_url}/alphas/{alpha_id}/recordsets",
+            context=f"GET alpha recordsets {alpha_id}",
+        )
+        payload = resp.json()
+        rows = payload.get("recordsets") if isinstance(payload, Mapping) else None
+        if rows is None and isinstance(payload, Mapping):
+            rows = payload.get("results")
+        if not isinstance(rows, list):
+            raise WQBSimulationError("Alpha recordsets response is malformed.")
+        result = []
+        for row in rows:
+            if not isinstance(row, Mapping) or not isinstance(row.get("name"), str):
+                continue
+            result.append({"name": row["name"], "title": str(row.get("title") or row["name"])})
+        return result
+
     def get_user_alphas(
         self, *, status=None, limit=100, offset=0,
         date_created_after=None, date_created_before=None,
@@ -681,8 +854,8 @@ class WQBClient:
         Simulation; BRAIN receives a JSON array of up to ten regular child
         payloads and returns one parent progress URL.
         """
-        if not isinstance(simulations, (list, tuple)) or not simulations:
-            raise ValueError("Multi-Simulation requires a non-empty sequence")
+        if not isinstance(simulations, (list, tuple)) or len(simulations) < 2:
+            raise ValueError("Multi-Simulation requires between 2 and 10 children")
         if len(simulations) > 10:
             raise ValueError("Multi-Simulation supports at most 10 children")
         payload = []
@@ -789,6 +962,7 @@ class WQBClient:
                 continue
 
             retry_after = resp.headers.get("Retry-After")
+            retry_delay = self._retry_after_seconds(resp) if retry_after is not None else 5.0
             if resp.status_code == 200 and retry_after is None:
                 try:
                     payload = resp.json()
@@ -798,29 +972,21 @@ class WQBClient:
                     raise WQBSimulationError(
                         "Simulation progress returned a non-object JSON payload."
                     )
-                alpha_id = payload.get("alpha")
-                if alpha_id:
-                    return alpha_id
-                # 平台返回明确的终止状态（ERROR/FAILED，带真实 sim id 与
-                # 错误消息，如语法错误）：这是表达式/设置的确定性拒绝，
-                # 不是"结果未知"。按 WQBRejectedError 处理（Simulator 标
-                # FAILED、不暂停派发），并保留平台真实 id，避免被误判为
-                # UNKNOWN 导致整轮派发暂停。
-                status = payload.get("status")
-                # BRAIN uses both ``FAIL`` and ``FAILED`` in terminal
-                # simulation payloads (the former is common for expression
-                # evaluation/runtime rejection).  All are deterministic
-                # terminal outcomes, so do not replacement-retry them.
-                if status in ("ERROR", "FAIL", "FAILED") or payload.get("message"):
-                    sim_id = payload.get("id") or "?"
-                    message = payload.get("message") or resp.text[:300]
-                    raise WQBRejectedError(
-                        f"Simulation rejected by platform: status={status} "
-                        f"sim_id={sim_id} message={message}"
+                classification = classify_simulation_status(payload)
+                if classification["phase"] == "SUCCESS" and classification.get("alpha"):
+                    return classification["alpha"]
+                if classification["phase"] == "TERMINAL_FAILURE":
+                    diagnostic = classification.get("diagnostic") or {
+                        "remote_status": classification.get("remote_status"),
+                        "message": classification.get("message"),
+                    }
+                    raise WQBRemoteSimulationError(diagnostic)
+                if classification["phase"] == "UNKNOWN":
+                    raise WQBSimulationError(
+                        f"UNKNOWN_REMOTE_STATUS: {resp.text[:300]}"
                     )
-                raise WQBSimulationError(
-                    f"Simulation finished without alpha id: {resp.text[:300]}"
-                )
+                # A server can return a pending status without Retry-After;
+                # use the same conservative bounded fallback as the snapshot path.
             remaining = max(0.0, timeout_sec - (time.monotonic() - start))
             if remaining <= 0:
                 raise WQBTimeoutError("Simulation polling timed out.")
@@ -828,11 +994,11 @@ class WQBClient:
                 progress_callback(time.monotonic() - start, polls, resp.status_code)
             # Retry-After may be seconds or an HTTP-date; _retry_after_seconds
             # handles both (a bare float() would crash on the date form).
-            delay = self._retry_after_seconds(resp)
+            delay = retry_delay
             time.sleep(min(delay, 30, remaining))
 
     def poll_multi_progress(self, progress_url, timeout_sec=1500, progress_callback=None):
-        """Poll a Multi-Simulation parent and then its child simulations."""
+        """Poll a Multi parent and preserve child-specific terminal evidence."""
         progress_url = self._normalize_progress_url(progress_url)
         timeout_sec = _finite_nonnegative(timeout_sec, 1500.0)
         start = time.monotonic()
@@ -851,45 +1017,93 @@ class WQBClient:
                     status_code, snapshot.get("text", ""), "poll_multi_progress"
                 )
             if status_code is not None and status_code >= 500:
-                raise WQBSubmitUnknownError(
-                    "Multi-Simulation parent returned a server error; outcome is unknown."
+                raise WQBSimulationError(
+                    "Known Multi-Simulation parent returned a server error while reading."
                 )
             payload = snapshot.get("payload")
             if not isinstance(payload, dict):
                 raise WQBSimulationError(
                     "Multi-Simulation progress returned a non-object JSON payload."
                 )
-            status = payload.get("status")
-            if status in ("ERROR", "FAIL", "FAILED") or payload.get("message"):
-                raise WQBRejectedError(
-                    "Multi-Simulation rejected by platform: "
-                    f"status={status} message={payload.get('message', '')}"
+            classification = classify_simulation_status(payload)
+            if (
+                str(payload.get("status") or "").upper() in {"COMPLETE", "WARNING"}
+                and not classification.get("children")
+                and not classification.get("alpha")
+            ):
+                # A parent-level completion without child identities cannot
+                # establish which children produced Alpha evidence.
+                raise WQBSimulationError(
+                    "Multi-Simulation completed without child identities."
                 )
-            children = payload.get("children")
-            if status in ("COMPLETE", "WARNING") or isinstance(payload.get("alphas"), list):
-                if isinstance(payload.get("alphas"), list):
-                    alpha_ids = [str(item) for item in payload["alphas"] if item]
-                    if alpha_ids:
-                        return alpha_ids
-                if not isinstance(children, list) or not children:
+            if classification["phase"] == "TERMINAL_FAILURE":
+                raise WQBRemoteSimulationError(classification.get("diagnostic") or {})
+            if classification["phase"] == "UNKNOWN":
+                raise WQBSimulationError("UNKNOWN_REMOTE_STATUS in Multi-Simulation parent")
+            if classification["phase"] == "SUCCESS":
+                children = classification.get("children") or []
+                if not children:
                     raise WQBSimulationError(
                         "Multi-Simulation completed without child simulations."
                     )
-                alpha_ids = []
+                child_results = []
                 for child in children:
-                    child_id = child.get("id") if isinstance(child, Mapping) else child
+                    if isinstance(child, Mapping):
+                        child_status = classify_simulation_status(dict(child))
+                        child_id = child.get("id")
+                        if child_status["phase"] == "SUCCESS" and child_status.get("alpha"):
+                            child_results.append({
+                                "status": "DONE", "alpha_id": child_status["alpha"],
+                                "remote_status": child_status["remote_status"],
+                            })
+                            continue
+                        if child_status["phase"] == "TERMINAL_FAILURE":
+                            diagnostic = child_status.get("diagnostic") or {}
+                            child_results.append({
+                                "status": "FAILED",
+                                "failure_kind": (
+                                    "FAILED_REMOTE_TIMEOUT"
+                                    if child_status.get("remote_status") == "TIMEOUT"
+                                    else "FAILED_REMOTE"
+                                ),
+                                **diagnostic,
+                            })
+                            continue
+                    else:
+                        child_id = child
                     if not child_id:
-                        raise WQBSimulationError(
-                            "Multi-Simulation returned a child without an id."
-                        )
+                        child_results.append({
+                            "status": "UNKNOWN", "failure_kind": "UNKNOWN_CHILD_ID",
+                        })
+                        continue
                     child_url = str(child_id)
                     if not child_url.startswith(("http://", "https://", "/")):
                         child_url = f"{self.base_url}/simulations/{child_url}"
-                    alpha_ids.append(self.poll_progress(
-                        child_url, timeout_sec=remaining,
-                        progress_callback=progress_callback,
-                    ))
-                return alpha_ids
+                    try:
+                        child_results.append({
+                            "status": "DONE", "alpha_id": self.poll_progress(
+                                child_url, timeout_sec=remaining,
+                                progress_callback=progress_callback,
+                            ),
+                        })
+                    except WQBRemoteSimulationError as exc:
+                        diagnostic = dict(exc.diagnostic)
+                        remote_status = diagnostic.get("remote_status")
+                        child_results.append({
+                            "status": "FAILED",
+                            "failure_kind": "FAILED_REMOTE_TIMEOUT"
+                            if remote_status == "TIMEOUT" else "FAILED_REMOTE",
+                            **diagnostic,
+                        })
+                    except WQBError as exc:
+                        child_results.append({
+                            "status": "UNKNOWN", "failure_kind": "UNKNOWN_REMOTE_READ",
+                            "error": str(exc),
+                        })
+                return {
+                    "status": "SUCCESS", "remote_status": classification["remote_status"],
+                    "children": child_results,
+                }
             if progress_callback:
                 progress_callback(
                     time.monotonic() - start, polls, status_code
@@ -950,18 +1164,29 @@ class WQBClient:
         )
         return resp.json()
 
-    def get_recordset(self, alpha_id, name):
-        """Fetch an explicitly allow-listed read-only Alpha recordset.
+    def get_recordset(self, alpha_id, name, *, available=None):
+        """Fetch one discovered or bounded official Alpha recordset.
 
         An HTTP-accepted response with an empty body (a freshly simulated
         alpha whose PnL has not settled yet) is a valid "no data" response
         and returns ``None`` instead of raising a JSON parse error that
         would otherwise break the entire evidence snapshot.
         """
-        if name not in {"pnl"}:
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("alpha recordset name must be non-empty")
+        name = name.strip()
+        available_names = None
+        if available is not None:
+            available_names = {
+                str(item.get("name")) for item in available
+                if isinstance(item, Mapping) and item.get("name")
+            }
+        if (available_names is not None and name not in available_names) or (
+            available_names is None and name not in OFFICIAL_RECORDSET_NAMES
+        ):
             raise ValueError(f"unsupported alpha recordset: {name}")
         resp = self._request(
-            "GET", f"{self.base_url}/alphas/{alpha_id}/recordsets/{name}",
+            "GET", f"{self.base_url}/alphas/{alpha_id}/recordsets/{quote(name, safe='')}",
             context=f"GET alpha recordset {name} {alpha_id}",
         )
         try:
@@ -972,6 +1197,34 @@ class WQBClient:
     def get_pnl(self, alpha_id):
         """Fetch the official daily PnL recordset without inventing metrics."""
         return self.get_recordset(alpha_id, "pnl")
+
+    def get_activity_diversity(
+        self, user_id=None, *, region=None, delay=None, data_category=None
+    ):
+        """Read bounded account activity diversity; never chooses research work."""
+        if user_id is None:
+            user_id = self.get_authentication_status().get("user_id")
+        if not isinstance(user_id, (str, int)) or not str(user_id).strip():
+            raise WQBAuthError("GET activity diversity requires authenticated user id")
+        params = {}
+        if region is not None:
+            params["region"] = region
+        if delay is not None:
+            params["delay"] = delay
+        if data_category is not None:
+            params["dataCategory"] = data_category
+        resp = self._request(
+            "GET", f"{self.base_url}/users/{quote(str(user_id).strip(), safe='')}/activities/diversity",
+            params=params or None,
+            context="GET activity diversity",
+        )
+        payload = resp.json()
+        if not isinstance(payload, Mapping):
+            raise WQBSimulationError("Activity diversity response is malformed.")
+        return {
+            key: payload[key] for key in ("region", "delay", "dataCategory")
+            if key in payload and isinstance(payload[key], Mapping)
+        }
 
     def set_alpha_color(self, alpha_id, color, *, verify=True):
         """Update only top-level Alpha metadata color and optionally read it back.

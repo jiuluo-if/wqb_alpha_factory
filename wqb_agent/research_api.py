@@ -22,6 +22,7 @@ DO NOT USE FOR:
 from __future__ import annotations
 
 import json
+import math
 import os
 import tomllib
 from collections.abc import Mapping
@@ -54,6 +55,7 @@ from .operator_reference import (
     load_operator_syntax_reference,
     load_packaged_operator_syntax_reference,
 )
+from .protocol import endpoint_truth
 from .remote_alpha_repository import RemoteAlphaRepository
 from .remote_colors import preview_remote_colors, sync_remote_colors
 from .remote_evidence import RemoteAlphaEvidenceProvider
@@ -422,7 +424,7 @@ def get_simulation_config(*, config=None):
     }
 
 
-def validate_simulation_settings(settings, *, client=None, config=None):
+def validate_simulation_settings(settings, *, client=None, config=None, capability=None):
     """Validate bounded Simulation settings before Gateway construction."""
     errors = []
     if not isinstance(settings, Mapping):
@@ -432,19 +434,24 @@ def validate_simulation_settings(settings, *, client=None, config=None):
             "errors": ["settings must be an object"],
         }
     normalized = dict(settings)
-    for key in ("region", "universe", "instrumentType", "neutralization"):
+    for key in ("region", "universe", "instrumentType", "neutralization",
+                "pasteurization", "unitHandling", "nanHandling", "language"):
         if key in normalized and (not isinstance(normalized[key], str) or not normalized[key].strip()):
             errors.append(f"{key} must be a non-empty string")
-    for key in ("delay", "decay"):
-        if key not in normalized:
-            continue
-        value = normalized[key]
-        if isinstance(value, bool) or not isinstance(value, int) or value < (0 if key == "delay" else 1):
-            errors.append(f"{key} must be a valid non-negative integer")
-        elif key == "delay" and value not in {0, 1}:
-            errors.append("delay must be 0 or 1")
-        elif key == "decay" and value > 252:
-            errors.append("decay must be between 1 and 252")
+    if "delay" in normalized:
+        value = normalized["delay"]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            errors.append("delay must be a non-negative integer")
+    if "decay" in normalized:
+        value = normalized["decay"]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 1:
+            errors.append("decay must be a finite number >= 1")
+    if "truncation" in normalized:
+        value = normalized["truncation"]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            errors.append("truncation must be a finite number")
+    if "visualization" in normalized and not isinstance(normalized["visualization"], bool):
+        errors.append("visualization must be a boolean")
     fields = normalized.get("fields")
     if fields is not None and (
         not isinstance(fields, (list, tuple))
@@ -457,10 +464,33 @@ def validate_simulation_settings(settings, *, client=None, config=None):
             expected = getattr(client, attr, None)
             if key in normalized and expected is not None and str(normalized[key]) != str(expected):
                 errors.append(f"{key} does not match client scope")
+    if capability is None and client is not None:
+        reader = getattr(client, "get_simulation_capability", None)
+        if callable(reader):
+            try:
+                capability = reader()
+            except Exception:
+                capability = {"status": "UNKNOWN"}
+    capability_status = (
+        str(capability.get("capability_status") or capability.get("status") or "UNKNOWN").upper()
+        if isinstance(capability, Mapping) else "UNKNOWN"
+    )
+    validation_source = "LIVE_OPTIONS" if capability_status == "AVAILABLE" else "LOCAL_ONLY"
+    if capability_status == "AVAILABLE" and isinstance(capability, Mapping):
+        for key in capability.get("required_settings", ()):
+            if key not in normalized:
+                errors.append(f"missing required setting: {key}")
+        for key, spec in (capability.get("settings") or {}).items():
+            if key not in normalized or not isinstance(spec, Mapping):
+                continue
+            allowed = spec.get("allowed_values")
+            if isinstance(allowed, list) and normalized[key] not in allowed:
+                errors.append(f"{key} is not allowed by live OPTIONS")
     return {
         "valid": not errors, "status": "VALID" if not errors else "INVALID",
-        "source": "LOCAL_SCHEMA", "evidence_status": "INCONCLUSIVE",
-        "settings": normalized, "errors": errors,
+        "source": validation_source, "validation_source": validation_source,
+        "capability_status": capability_status,
+        "evidence_status": "INCONCLUSIVE", "settings": normalized, "errors": errors,
     }
 
 
@@ -767,31 +797,93 @@ def simulate_multi_batch(
     )
 
 
-def get_simulation_modes() -> dict[str, dict[str, Any]]:
-    """Describe the three UI modes without implying unverified write access."""
+def _simulation_modes_from_capabilities(authentication, simulation_capability):
+    authenticated = bool((authentication or {}).get("authenticated"))
+    permissions = {
+        str(item).upper() for item in (authentication or {}).get("permissions", ())
+    }
+    source = "BRAIN_LIVE" if authentication is not None else "UNKNOWN"
+    options_available = (
+        isinstance(simulation_capability, Mapping)
+        and str(simulation_capability.get("status", "")).upper() == "AVAILABLE"
+    )
+    choices = set(simulation_capability.get("simulation_type_choices", ())) if options_available else set()
+    single_available = authenticated and options_available and (
+        not choices or "REGULAR" in choices
+    )
+    multi_available = authenticated and options_available and "MULTI_SIMULATION" in permissions and (
+        not choices or "MULTI" in choices
+    )
+    multi = {
+        "name": "Multi-Simulation", "available": multi_available,
+        "status": "AVAILABLE" if multi_available else "UNAVAILABLE",
+        "source": source, "evidence_status": "INCONCLUSIVE",
+        "children_per_job": 10, "min_children_per_job": 2,
+        "max_concurrent_jobs": 2,
+    }
+    if authenticated and "MULTI_SIMULATION" not in permissions:
+        multi["reason"] = "PERMISSION_UNAVAILABLE"
+    elif not options_available:
+        multi["reason"] = "CAPABILITY_UNKNOWN"
+    elif not authenticated:
+        multi["reason"] = "AUTHENTICATION_REQUIRED"
     return {
         "single": {
-            "name": "Single Simulation",
-            "available": True,
-            "status": "AVAILABLE",
-            "evidence_status": "INCONCLUSIVE",
+            "name": "Single Simulation", "available": single_available,
+            "status": "AVAILABLE" if single_available else "UNAVAILABLE",
+            "source": source, "evidence_status": "INCONCLUSIVE",
             "max_concurrent": 10,
+            **({} if single_available else {"reason": "CAPABILITY_UNKNOWN"}),
         },
-        "multi": {
-            "name": "Multi-Simulation",
-            "available": True,
-            "status": "AVAILABLE",
-            "evidence_status": "INCONCLUSIVE",
-            "children_per_job": 10,
-            "max_concurrent_jobs": 2,
-        },
+        "multi": multi,
         "region_agnostic": {
-            "name": "Region-Agnostic Simulation",
-            "available": False,
-            "status": "UNAVAILABLE",
-            "evidence_status": "UNAVAILABLE",
-            "reason": "NO_VERIFIED_WRITE_CONTRACT",
+            "name": "Region-Agnostic Simulation", "available": False,
+            "status": "UNAVAILABLE", "evidence_status": "UNAVAILABLE",
+            "reason": "NO_VERIFIED_WRITE_CONTRACT", "source": "LOCAL_POLICY",
         },
+    }
+
+
+def get_simulation_modes(*, client=None, config=None) -> dict[str, dict[str, Any]]:
+    """Describe modes from live account permission and OPTIONS capability."""
+    if client is None:
+        return _simulation_modes_from_capabilities(None, None)
+    authentication = client.get_authentication_status()
+    capability = client.get_simulation_capability()
+    return _simulation_modes_from_capabilities(authentication, capability)
+
+
+def get_live_preflight(*, client=None, config=None, state_dir=None):
+    """Compose bounded read-only account/platform readiness facts."""
+    client = _remote_client(client=client)
+    authentication = client.get_authentication_status()
+    capability = client.get_simulation_capability()
+    modes = _simulation_modes_from_capabilities(authentication, capability)
+    typed = _normalized_config(config)
+    directory = _state_directory(typed, state_dir)
+    pending = get_pending_executions(state_dir=directory)["entries"]
+    try:
+        quota = simulation_quota(client=client, config=typed, state_dir=directory)
+    except Exception as exc:
+        quota = {"status": "UNKNOWN", "reason": type(exc).__name__}
+    auth_output = dict(authentication)
+    if auth_output.get("user_id") is not None:
+        value = str(auth_output["user_id"])
+        auth_output["user_id"] = value if len(value) <= 8 else value[:2] + "***" + value[-2:]
+    recordsets = endpoint_truth("recordsets")
+    return {
+        "network_write": False,
+        "authentication": auth_output,
+        "simulation_options": capability,
+        "simulation_modes": modes,
+        "multi_child_range": "2..10",
+        "scope": _client_scope(client),
+        "recordset_api": {
+            "status": recordsets.status.value if recordsets else "UNKNOWN",
+            "availability": "NOT_PROBED", "network_write": False,
+        },
+        "remote_quota": quota,
+        "pending_execution_count": len(pending),
     }
 
 
@@ -826,20 +918,38 @@ def get_alpha(alpha_id, *, client=None, config=None):
     return _remote_client(client=client).get_alpha(str(alpha_id).strip())
 
 
+def get_activity_diversity(*, client=None, config=None, user_id=None,
+                           region=None, delay=None, data_category=None):
+    """Return live account activity distribution for AI coverage diagnosis only."""
+    client = _remote_client(client=client)
+    if user_id is None:
+        user_id = client.get_authentication_status().get("user_id")
+    return {
+        "source": "BRAIN_LIVE",
+        "status": "AVAILABLE",
+        "network_write": False,
+        "user_id": user_id,
+        "diversity": client.get_activity_diversity(
+            user_id, region=region, delay=delay, data_category=data_category,
+        ),
+    }
+
+
 def get_alpha_evidence(alpha_id, *, client=None, config=None,
-                       live=True):
+                       live=True, recordsets=()):
     if not live:
         raise ValueError("LIVE_EVIDENCE_REQUIRED")
     import time as _time
     snapshot = RemoteAlphaEvidenceProvider(
         _remote_client(client=client)
-    ).collect(str(alpha_id).strip())
+    ).collect(str(alpha_id).strip(), recordsets=recordsets)
     return {
         "alpha_id": snapshot.alpha_id, "source": "LIVE",
         "fetched_at": _time.time(), "age_sec": 0.0,
         "alpha": dict(snapshot.alpha_detail),
         "aggregates": snapshot.aggregates, "pnl": snapshot.pnl,
         "self_correlation": snapshot.self_correlation,
+        "recordsets": dict(snapshot.recordsets),
         "status": dict(snapshot.status), "availability": dict(snapshot.availability),
     }
 
@@ -862,6 +972,13 @@ def get_alpha_pnl(alpha_id, *, client=None, config=None):
 def get_alpha_self_correlation(alpha_id, *, client=None, config=None):
     return get_alpha_evidence(alpha_id, client=client,
                               config=config)["self_correlation"]
+
+
+def get_alpha_recordsets(alpha_id, names, *, client=None, config=None):
+    """Read only explicitly selected, currently discoverable Alpha recordsets."""
+    return get_alpha_evidence(
+        alpha_id, client=client, config=config, recordsets=names,
+    )["recordsets"]
 
 
 def compare_alphas(alpha_ids, *, client=None, config=None):
@@ -1060,9 +1177,11 @@ def research_tool_manifest():
         {"name": "simulate_single_batch", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
         {"name": "simulate_multi_batch", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
         {"name": "get_simulation_modes", "mode": "READ_ONLY", "owner": "SimulationGateway"},
+        {"name": "get_live_preflight", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "resume_execution", "mode": "READ_ONLY", "remote_write": False, "owner": "ExecutionGuard"},
         {"name": "reconcile_execution", "mode": "READ_ONLY", "remote_write": False, "owner": "ExecutionGuard"},
         {"name": "get_alpha_evidence", "mode": "READ_ONLY", "owner": "BRAIN"},
+        {"name": "get_activity_diversity", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "compare_alphas", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "refresh_remote_alphas", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
         {"name": "list_remote_alphas", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
@@ -1086,12 +1205,14 @@ __all__ = [
     "build_simulation_spec", "build_simulation_variant",
     "validate_simulation_spec", "execution_fingerprint",
     "simulate", "simulate_single", "simulate_batch", "simulate_single_batch",
-    "simulate_multi_batch", "get_simulation_modes",
+    "simulate_multi_batch", "get_simulation_modes", "get_live_preflight",
     "get_pending_executions", "resume_execution",
     "reconcile_execution",
     "get_alpha", "get_alpha_evidence", "get_alpha_metrics",
     "get_alpha_aggregates", "get_alpha_pnl", "get_alpha_self_correlation",
+    "get_alpha_recordsets",
     "compare_alphas", "refresh_remote_alphas", "list_remote_alphas",
+    "get_activity_diversity",
     "get_remote_alpha", "get_remote_alpha_evidence", "remote_cache_status",
     "purge_remote_cache", "simulation_quota", "group_alphas",
     "find_alpha_duplicates", "find_duplicate_alphas", "find_similar_alphas",
