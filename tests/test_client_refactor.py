@@ -518,6 +518,46 @@ class TestOfficialReadOnlyClientAdapters(unittest.TestCase):
                 c.poll_multi_progress(f"{c.base_url}/multi/1")
         poll.assert_not_called()
 
+    def test_multi_progress_treats_bare_progress_payload_as_in_flight(self):
+        # Live BRAIN reports an in-flight Multi parent as a bare progress
+        # object ({"progress": 0.35}) with no status field.  That is "still
+        # running", not an unknown remote state, so it must keep polling the
+        # same known parent instead of aborting a valid job.
+        c = make_client()
+        snapshots = [
+            {"status_code": 200, "headers": {}, "payload": {"progress": 0.35},
+             "retry_after_seconds": 5.0},
+            {"status_code": 200, "headers": {}, "payload": {"progress": 0.9},
+             "retry_after_seconds": 5.0},
+            {"status_code": 200, "headers": {},
+             "payload": {"status": "COMPLETE", "children": ["sim-1"]},
+             "retry_after_seconds": 1.0},
+        ]
+        with mock.patch.object(
+            c, "get_progress_snapshot", side_effect=snapshots
+        ), mock.patch.object(
+            c, "poll_progress", return_value="alpha-1"
+        ), mock.patch("wqb_agent.client.time.sleep") as sleep:
+            result = c.poll_multi_progress(f"{c.base_url}/multi/1")
+
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertEqual(result["children"][0]["alpha_id"], "alpha-1")
+        self.assertGreaterEqual(sleep.call_count, 2)
+
+    def test_multi_progress_still_fails_on_a_genuinely_unknown_status(self):
+        # A payload that carries an unrecognized remote status is still a real
+        # unknown remote state and must not be silently polled forever.
+        c = make_client()
+        with mock.patch.object(c, "get_progress_snapshot", return_value={
+            "status_code": 200,
+            "headers": {},
+            "payload": {"status": "SOMETHING_NEW"},
+            "retry_after_seconds": 1.0,
+        }), mock.patch.object(c, "poll_progress") as poll:
+            with self.assertRaises(WQBSimulationError):
+                c.poll_multi_progress(f"{c.base_url}/multi/1")
+        poll.assert_not_called()
+
 
 class TestPublicReadAdapters(unittest.TestCase):
     def test_progress_snapshot_returns_transport_neutral_payload(self):

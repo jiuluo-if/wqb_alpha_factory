@@ -1121,6 +1121,26 @@ class WQBClient:
             if classification["phase"] == "TERMINAL_FAILURE":
                 raise WQBRemoteSimulationError(classification.get("diagnostic") or {})
             if classification["phase"] == "UNKNOWN":
+                if (
+                    classification.get("reason") == "MISSING_STATUS"
+                    and not classification.get("alpha")
+                    and not classification.get("children")
+                ):
+                    # Live BRAIN reports an in-flight simulation as a bare
+                    # progress object (``{"progress": 0.35}``) with no status
+                    # field.  That is "still running", not an unknown remote
+                    # state, so keep polling the same known parent instead of
+                    # aborting a valid remote job.
+                    remaining = max(0.0, timeout_sec - (time.monotonic() - start))
+                    if remaining <= 0:
+                        raise WQBTimeoutError("Multi-Simulation polling timed out.")
+                    delay = snapshot.get("retry_after_seconds")
+                    if isinstance(delay, bool) or not isinstance(delay, (int, float)) or delay <= 0:
+                        delay = 5.0
+                    if progress_callback and (polls == 1 or polls % 6 == 0):
+                        progress_callback(time.monotonic() - start, polls, status_code)
+                    time.sleep(min(float(delay), 30.0, remaining))
+                    continue
                 raise WQBSimulationError("UNKNOWN_REMOTE_STATUS in Multi-Simulation parent")
             if classification["phase"] == "SUCCESS":
                 children = classification.get("children") or []
