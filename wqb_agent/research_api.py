@@ -495,7 +495,8 @@ def validate_simulation_settings(settings, *, client=None, config=None, capabili
 
 
 def build_simulation_spec(expression, *, settings=None, fields=(), note=None, template_id=None,
-                          client=None, config=None, anchor_spec=None):
+                          client=None, config=None, anchor_spec=None,
+                          simulation_type="REGULAR"):
     """Build a validated, non-submitting SimulationSpec."""
     if anchor_spec is not None:
         if not isinstance(anchor_spec, SimulationSpec):
@@ -512,7 +513,7 @@ def build_simulation_spec(expression, *, settings=None, fields=(), note=None, te
     effective_settings.pop("fields", None)
     return SimulationSpec(
         expression=expression, settings=effective_settings, fields=tuple(fields or ()),
-        note=note, template_id=template_id,
+        note=note, template_id=template_id, simulation_type=simulation_type,
     )
 
 
@@ -829,6 +830,25 @@ def _simulation_modes_from_capabilities(authentication, simulation_capability):
         multi["reason"] = "CAPABILITY_UNKNOWN"
     elif not authenticated:
         multi["reason"] = "AUTHENTICATION_REQUIRED"
+    region_agnostic_available = (
+        authenticated and options_available
+        and "REGION_AGNOSTIC" in choices
+        and "REGION_AGNOSTIC" in permissions
+    )
+    region_agnostic = {
+        "name": "Region-Agnostic Simulation",
+        "available": region_agnostic_available,
+        "status": "AVAILABLE" if region_agnostic_available else "UNAVAILABLE",
+        "source": source, "evidence_status": "INCONCLUSIVE",
+        "simulation_type": "REGION_AGNOSTIC",
+    }
+    if not region_agnostic_available:
+        if not authenticated:
+            region_agnostic["reason"] = "AUTHENTICATION_REQUIRED"
+        elif not options_available or "REGION_AGNOSTIC" not in choices:
+            region_agnostic["reason"] = "CAPABILITY_UNKNOWN"
+        else:
+            region_agnostic["reason"] = "PERMISSION_UNAVAILABLE"
     return {
         "single": {
             "name": "Single Simulation", "available": single_available,
@@ -838,11 +858,7 @@ def _simulation_modes_from_capabilities(authentication, simulation_capability):
             **({} if single_available else {"reason": "CAPABILITY_UNKNOWN"}),
         },
         "multi": multi,
-        "region_agnostic": {
-            "name": "Region-Agnostic Simulation", "available": False,
-            "status": "UNAVAILABLE", "evidence_status": "UNAVAILABLE",
-            "reason": "NO_VERIFIED_WRITE_CONTRACT", "source": "LOCAL_POLICY",
-        },
+        "region_agnostic": region_agnostic,
     }
 
 

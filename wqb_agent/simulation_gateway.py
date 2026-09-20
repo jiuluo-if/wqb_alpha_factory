@@ -19,6 +19,27 @@ from .simulator import Simulator
 _CAPABILITY_UNCHECKED = object()
 _CAPABILITY_READER_ABSENT = object()
 _REMOTE_ROWS_UNCHECKED = object()
+REGULAR_SIMULATION_TYPE = "REGULAR"
+REGION_AGNOSTIC_SIMULATION_TYPE = "REGION_AGNOSTIC"
+
+
+def _spec_simulation_type(spec):
+    return str(getattr(spec, "simulation_type", REGULAR_SIMULATION_TYPE)
+               or REGULAR_SIMULATION_TYPE).upper()
+
+
+def _fingerprint_material(spec):
+    """Settings material that also separates the simulation type.
+
+    REGULAR returns the historical material unchanged so guard fingerprints
+    already persisted on disk keep matching; a non-REGULAR type is a different
+    remote request and must never collide with the REGULAR execution.
+    """
+    material = dict(spec.settings)
+    simulation_type = _spec_simulation_type(spec)
+    if simulation_type != REGULAR_SIMULATION_TYPE:
+        material["__simulationType__"] = simulation_type
+    return material
 
 
 @dataclass(frozen=True)
@@ -30,6 +51,10 @@ class SimulationSpec:
     fields: tuple[str, ...] = field(default_factory=tuple)
     note: str | None = None
     template_id: str | None = None
+    # Live OPTIONS advertises ``type`` choices REGULAR / REGION_AGNOSTIC.
+    # REGULAR stays the default so every existing caller and historical
+    # execution fingerprint is unchanged.
+    simulation_type: str = "REGULAR"
 
     def __post_init__(self):
         expression = str(self.expression or "").strip()
@@ -39,8 +64,12 @@ class SimulationSpec:
             raise TypeError("settings must be an object")
         if expression.count("(") != expression.count(")"):
             raise ValueError("expression has unbalanced parentheses")
+        simulation_type = str(self.simulation_type or "REGULAR").strip().upper()
+        if not simulation_type:
+            raise ValueError("simulation_type must be non-empty")
         object.__setattr__(self, "expression", expression)
         object.__setattr__(self, "settings", dict(self.settings))
+        object.__setattr__(self, "simulation_type", simulation_type)
         object.__setattr__(
             self, "fields", tuple(str(item) for item in (self.fields or ())
                                    if str(item).strip())
@@ -273,6 +302,9 @@ class SimulationGateway:
             errors.append("visualization must be a boolean")
         for key, attr in (("region", "region"), ("universe", "universe"),
                           ("instrumentType", "instrument_type")):
+            # Region-Agnostic simulation has no client region scope to match.
+            if _spec_simulation_type(spec) != REGULAR_SIMULATION_TYPE:
+                continue
             expected = getattr(self.client, attr, None)
             if key in settings and expected is not None and str(settings[key]) != str(expected):
                 errors.append(f"{key} does not match client scope")
@@ -349,7 +381,7 @@ class SimulationGateway:
     def execution_fingerprint(self, spec):
         spec = spec if isinstance(spec, SimulationSpec) else SimulationSpec(**dict(spec))
         self.validate_simulation_spec(spec)
-        return self.guard.fingerprint(spec.expression, spec.settings)
+        return self.guard.fingerprint(spec.expression, _fingerprint_material(spec))
 
     def _preflight_specs(self, specs, *, simulation_capability=_CAPABILITY_UNCHECKED):
         normalized = [
@@ -462,6 +494,7 @@ class SimulationGateway:
                 SimpleNamespace(
                     id=fingerprint[:16], expression=spec.expression,
                     settings=dict(spec.settings),
+                    simulation_type=spec.simulation_type,
                     status="PENDING", alpha_id=None, progress_url=None,
                     error=None, evidence=None, elapsed_sec=0.0,
                     submission_fingerprint=fingerprint,
@@ -661,6 +694,7 @@ class SimulationGateway:
                         submission_fingerprint=fingerprint,
                         expression=spec.expression,
                         settings=dict(spec.settings),
+                        simulation_type=spec.simulation_type,
                         status="PENDING",
                         alpha_id=None,
                         progress_url=None,

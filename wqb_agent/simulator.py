@@ -235,10 +235,15 @@ class Simulator:
                 persist()
                 for _submit_attempt in range(1, self.repoll_attempts + 1):
                     try:
+                        alpha_type = str(
+                            getattr(experiment, "simulation_type", "REGULAR")
+                            or "REGULAR"
+                        )
                         try:
                             experiment.progress_url = self.client.submit_simulation(
                                 experiment.expression,
                                 experiment.settings,
+                                alpha_type=alpha_type,
                                 idempotency_key=experiment.submission_fingerprint,
                             )
                         except TypeError as exc:
@@ -246,9 +251,15 @@ class Simulator:
                             # safe caller-side checkpoint semantics.
                             if "idempotency_key" not in str(exc):
                                 raise
-                            experiment.progress_url = self.client.submit_simulation(
-                                experiment.expression, experiment.settings
-                            )
+                            if alpha_type != "REGULAR":
+                                experiment.progress_url = self.client.submit_simulation(
+                                    experiment.expression, experiment.settings,
+                                    alpha_type=alpha_type,
+                                )
+                            else:
+                                experiment.progress_url = self.client.submit_simulation(
+                                    experiment.expression, experiment.settings
+                                )
                         experiment.status = "RUNNING"
                         persist()
                         break
@@ -415,7 +426,8 @@ class Simulator:
                 persist()
                 payloads = [
                     {
-                        "type": "REGULAR",
+                        "type": str(getattr(child, "simulation_type", "REGULAR")
+                                    or "REGULAR"),
                         "settings": dict(child.settings),
                         "regular": child.expression,
                     }

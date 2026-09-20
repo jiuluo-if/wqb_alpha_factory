@@ -804,5 +804,83 @@ class TestSimulationGateway(unittest.TestCase):
         self.assertEqual(provider.get_alpha("alpha-1")["id"], "alpha-1")
 
 
+class RegionAgnosticSimulationTests(unittest.TestCase):
+    """REGION_AGNOSTIC is a live OFFICIAL type choice, never local policy.
+
+    Live ``OPTIONS /simulations`` advertises ``type.choices`` =
+    ['REGULAR','REGION_AGNOSTIC'], so a Region-Agnostic write is a real
+    official request rather than an invented one.  REGULAR must stay the
+    default so previously persisted guard fingerprints keep matching.
+    """
+
+    def test_simulation_type_defaults_to_regular(self):
+        spec = SimulationSpec("rank(close)", {"delay": 1})
+        self.assertEqual(spec.simulation_type, "REGULAR")
+
+    def test_region_agnostic_fingerprint_never_collides_with_regular(self):
+        client = FakeGatewayClient()
+        with tempfile.TemporaryDirectory() as state:
+            gateway = SimulationGateway(client, state_dir=state)
+            regular = gateway.execution_fingerprint(
+                SimulationSpec("rank(close)", {"delay": 1})
+            )
+            region_agnostic = gateway.execution_fingerprint(
+                SimulationSpec("rank(close)", {"delay": 1},
+                               simulation_type="REGION_AGNOSTIC")
+            )
+        self.assertNotEqual(regular, region_agnostic)
+
+    def test_regular_fingerprint_is_unchanged_by_the_type_field(self):
+        # Guards persisted before this change must still match.
+        guard_material = SimulationSpec("rank(close)", {"delay": 1})
+        self.assertEqual(
+            ExecutionGuard.fingerprint("rank(close)", {"delay": 1}),
+            ExecutionGuard.fingerprint(
+                guard_material.expression, dict(guard_material.settings)
+            ),
+        )
+
+    def test_region_agnostic_spec_is_not_client_region_scope_validated(self):
+        client = FakeGatewayClient()
+        client.region = "USA"
+        client.universe = "TOP3000"
+        client.instrument_type = "EQUITY"
+        settings = {"region": "GLB", "universe": "MINVOL1M",
+                    "instrumentType": "EQUITY"}
+        with tempfile.TemporaryDirectory() as state:
+            gateway = SimulationGateway(client, state_dir=state)
+            with self.assertRaises(ValueError):
+                gateway._validate_settings(
+                    SimulationSpec("rank(close)", settings),
+                    {"status": "UNKNOWN"},
+                )
+            # No assertion target: must simply not raise.
+            gateway._validate_settings(
+                SimulationSpec("rank(close)", settings,
+                               simulation_type="REGION_AGNOSTIC"),
+                {"status": "UNKNOWN"},
+            )
+
+    def test_region_agnostic_simulation_posts_its_official_type(self):
+        client = FakeGatewayClient()
+        with tempfile.TemporaryDirectory() as state:
+            gateway = SimulationGateway(client, state_dir=state)
+            result = gateway.simulate(SimulationSpec(
+                "rank(close)", {"delay": 1},
+                simulation_type="REGION_AGNOSTIC",
+            ))
+        self.assertEqual(result["status"], "DONE")
+        _expression, _settings, kwargs = client.submissions[0]
+        self.assertEqual(kwargs.get("alpha_type"), "REGION_AGNOSTIC")
+
+    def test_regular_simulation_still_posts_regular(self):
+        client = FakeGatewayClient()
+        with tempfile.TemporaryDirectory() as state:
+            gateway = SimulationGateway(client, state_dir=state)
+            gateway.simulate(SimulationSpec("rank(close)", {"delay": 1}))
+        _expression, _settings, kwargs = client.submissions[0]
+        self.assertEqual(kwargs.get("alpha_type"), "REGULAR")
+
+
 if __name__ == "__main__":
     unittest.main()
