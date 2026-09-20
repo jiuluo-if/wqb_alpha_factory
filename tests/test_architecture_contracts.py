@@ -48,6 +48,26 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         self.assertIn("simulate", names)
         self.assertIn("get_alpha_evidence", names)
         self.assertIn("sync_alpha_colors", names)
+        import wqb_agent
+        for name in (
+            "get_alpha_metrics", "get_alpha_aggregates", "get_alpha_pnl",
+            "get_alpha_self_correlation", "get_alpha_recordsets",
+        ):
+            self.assertIn(name, names)
+            self.assertTrue(hasattr(wqb_agent, name), name)
+
+    def test_canonical_remote_read_surface_stays_available_at_public_facades(self):
+        canonical = {
+            "get_live_preflight", "get_simulation_modes", "get_alpha_evidence",
+            "get_alpha_recordsets", "get_activity_diversity",
+        }
+        import wqb_agent
+
+        for name in canonical:
+            self.assertTrue(hasattr(research_api, name), name)
+            self.assertTrue(hasattr(wqb_agent, name), name)
+        manifest = {item["name"] for item in research_api.research_tool_manifest()}
+        self.assertTrue(canonical <= manifest)
 
     def test_legacy_runtime_and_optimizer_modules_are_absent(self):
         retired = (

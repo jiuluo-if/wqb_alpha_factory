@@ -55,7 +55,7 @@ class FakeGatewayClient:
 
     def get_simulation_capability(self):
         return {"status": "AVAILABLE", "capability_status": "AVAILABLE",
-                "simulation_type_choices": ["REGULAR", "MULTI"],
+                "simulation_type_choices": ["REGULAR", "SUPER"],
                 "settings": {}, "required_fields": [], "required_settings": []}
 
 

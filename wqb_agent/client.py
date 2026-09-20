@@ -648,8 +648,8 @@ class WQBClient:
         if not isinstance(type_property, Mapping) or not isinstance(settings_property, Mapping):
             return self._unknown_capability("MALFORMED_RESPONSE")
         type_choices = type_property.get("enum")
-        if not isinstance(type_choices, list):
-            type_choices = []
+        if not isinstance(type_choices, list) or not type_choices:
+            return self._unknown_capability("MISSING_TYPE_ENUM")
         setting_properties = settings_property.get("properties")
         if not isinstance(setting_properties, Mapping):
             return self._unknown_capability("MALFORMED_RESPONSE")

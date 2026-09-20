@@ -274,7 +274,7 @@ class TestOfficialReadOnlyClientAdapters(unittest.TestCase):
         c._local.session = FakeSession([FakeResponse(200, payload={
             "actions": {"POST": {
                 "properties": {
-                    "type": {"enum": ["REGULAR", "MULTI"]},
+                    "type": {"enum": ["REGULAR", "SUPER"]},
                     "settings": {
                         "required": ["region", "universe"],
                         "properties": {
@@ -294,7 +294,7 @@ class TestOfficialReadOnlyClientAdapters(unittest.TestCase):
 
         self.assertEqual(result["status"], "AVAILABLE")
         self.assertEqual(result["source"], "BRAIN_LIVE")
-        self.assertEqual(result["simulation_type_choices"], ["REGULAR", "MULTI"])
+        self.assertEqual(result["simulation_type_choices"], ["REGULAR", "SUPER"])
         self.assertEqual(result["required_fields"], ["type", "settings"])
         self.assertEqual(result["settings"]["region"]["allowed_values"], ["USA", "GLB"])
         self.assertEqual(result["settings"]["universe"]["allowed_values"], ["TOP3000"])
@@ -306,6 +306,18 @@ class TestOfficialReadOnlyClientAdapters(unittest.TestCase):
         result = c.get_simulation_capability()
         self.assertEqual(result["status"], "UNKNOWN")
         self.assertEqual(result["capability_status"], "UNKNOWN")
+
+    def test_simulation_options_without_type_enum_is_unknown(self):
+        c = make_client()
+        c._local.session = FakeSession([FakeResponse(200, payload={
+            "actions": {"POST": {"properties": {
+                "type": {},
+                "settings": {"properties": {}},
+            }}}
+        })])
+        result = c.get_simulation_capability()
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(result["reason"], "MISSING_TYPE_ENUM")
 
     def test_recordset_discovery_and_read_share_bounded_contract(self):
         c = make_client()

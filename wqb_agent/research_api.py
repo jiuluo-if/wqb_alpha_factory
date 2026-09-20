@@ -807,12 +807,14 @@ def _simulation_modes_from_capabilities(authentication, simulation_capability):
         isinstance(simulation_capability, Mapping)
         and str(simulation_capability.get("status", "")).upper() == "AVAILABLE"
     )
-    choices = set(simulation_capability.get("simulation_type_choices", ())) if options_available else set()
-    single_available = authenticated and options_available and (
-        not choices or "REGULAR" in choices
-    )
-    multi_available = authenticated and options_available and "MULTI_SIMULATION" in permissions and (
-        not choices or "MULTI" in choices
+    choices = {
+        str(item).upper()
+        for item in simulation_capability.get("simulation_type_choices", ())
+    } if options_available else set()
+    regular_child_available = "REGULAR" in choices
+    single_available = authenticated and options_available and regular_child_available
+    multi_available = authenticated and options_available and regular_child_available and (
+        "MULTI_SIMULATION" in permissions
     )
     multi = {
         "name": "Multi-Simulation", "available": multi_available,
@@ -823,7 +825,7 @@ def _simulation_modes_from_capabilities(authentication, simulation_capability):
     }
     if authenticated and "MULTI_SIMULATION" not in permissions:
         multi["reason"] = "PERMISSION_UNAVAILABLE"
-    elif not options_available:
+    elif not options_available or not regular_child_available:
         multi["reason"] = "CAPABILITY_UNKNOWN"
     elif not authenticated:
         multi["reason"] = "AUTHENTICATION_REQUIRED"
@@ -960,18 +962,21 @@ def get_alpha_metrics(alpha_id, *, client=None, config=None):
 
 
 def get_alpha_aggregates(alpha_id, *, client=None, config=None):
-    return get_alpha_evidence(alpha_id, client=client,
-                              config=config)["aggregates"]
+    return RemoteAlphaEvidenceProvider(
+        _remote_client(client=client)
+    ).get_alpha_aggregates(str(alpha_id).strip())
 
 
 def get_alpha_pnl(alpha_id, *, client=None, config=None):
-    return get_alpha_evidence(alpha_id, client=client,
-                              config=config)["pnl"]
+    return RemoteAlphaEvidenceProvider(
+        _remote_client(client=client)
+    ).get_alpha_pnl(str(alpha_id).strip())
 
 
 def get_alpha_self_correlation(alpha_id, *, client=None, config=None):
-    return get_alpha_evidence(alpha_id, client=client,
-                              config=config)["self_correlation"]
+    return RemoteAlphaEvidenceProvider(
+        _remote_client(client=client)
+    ).get_alpha_self_correlation(str(alpha_id).strip())
 
 
 def get_alpha_recordsets(alpha_id, names, *, client=None, config=None):
@@ -1181,6 +1186,7 @@ def research_tool_manifest():
         {"name": "resume_execution", "mode": "READ_ONLY", "remote_write": False, "owner": "ExecutionGuard"},
         {"name": "reconcile_execution", "mode": "READ_ONLY", "remote_write": False, "owner": "ExecutionGuard"},
         {"name": "get_alpha_evidence", "mode": "READ_ONLY", "owner": "BRAIN"},
+        {"name": "get_alpha_recordsets", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "get_activity_diversity", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "compare_alphas", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "refresh_remote_alphas", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},

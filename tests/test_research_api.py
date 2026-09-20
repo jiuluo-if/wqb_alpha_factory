@@ -13,6 +13,10 @@ from wqb_agent.research_api import (
     discover_fields,
     find_similar_alphas,
     generate_probes,
+    get_alpha_aggregates,
+    get_alpha_pnl,
+    get_alpha_recordsets,
+    get_alpha_self_correlation,
     get_capabilities,
     get_live_preflight,
     get_operator_reference,
@@ -339,7 +343,7 @@ class TestResearchApi(unittest.TestCase):
             },
             get_simulation_capability=lambda: {
                 "status": "AVAILABLE", "capability_status": "AVAILABLE",
-                "source": "BRAIN_LIVE", "simulation_type_choices": ["REGULAR", "MULTI"],
+                "source": "BRAIN_LIVE", "simulation_type_choices": ["REGULAR", "SUPER"],
                 "settings": {}, "required_fields": [], "required_settings": [],
             },
         )
@@ -359,7 +363,7 @@ class TestResearchApi(unittest.TestCase):
             },
             get_simulation_capability=lambda: {
                 "status": "AVAILABLE", "capability_status": "AVAILABLE",
-                "source": "BRAIN_LIVE", "simulation_type_choices": ["REGULAR", "MULTI"],
+                "source": "BRAIN_LIVE", "simulation_type_choices": ["REGULAR", "SUPER"],
                 "settings": {}, "required_fields": [], "required_settings": [],
             },
         )
@@ -411,7 +415,7 @@ class TestResearchApi(unittest.TestCase):
             },
             get_simulation_capability=lambda: {
                 "status": "AVAILABLE", "capability_status": "AVAILABLE",
-                "source": "BRAIN_LIVE", "simulation_type_choices": ["REGULAR", "MULTI"],
+                "source": "BRAIN_LIVE", "simulation_type_choices": ["REGULAR", "SUPER"],
                 "settings": {}, "required_fields": [], "required_settings": [],
             },
             get_all_user_alphas=lambda **_kwargs: [],
@@ -441,6 +445,44 @@ class TestResearchApi(unittest.TestCase):
             gateway.simulate_multi_batch.assert_called_once_with(
                 [spec], child_batch_size=1, max_concurrent_multi=1
             )
+
+    def test_named_alpha_reads_are_direct_read_only_facade_calls(self):
+        client = mock.Mock()
+        client.get_aggregates.return_value = {"kind": "aggregates"}
+        client.get_pnl.return_value = {"kind": "pnl"}
+        client.get_self_correlation.return_value = {"kind": "correlation"}
+
+        self.assertEqual(get_alpha_aggregates("a1", client=client), {"kind": "aggregates"})
+        self.assertEqual(get_alpha_pnl("a1", client=client), {"kind": "pnl"})
+        self.assertEqual(
+            get_alpha_self_correlation("a1", client=client), {"kind": "correlation"}
+        )
+        client.get_aggregates.assert_called_once_with("a1")
+        client.get_pnl.assert_called_once_with("a1")
+        client.get_self_correlation.assert_called_once_with("a1")
+        client.get_alpha.assert_not_called()
+        client.list_alpha_recordsets.assert_not_called()
+
+    def test_selected_recordsets_are_exposed_by_public_facade(self):
+        client = mock.Mock()
+        client.get_alpha.return_value = {"id": "a1"}
+        client.list_alpha_recordsets.return_value = [
+            {"name": "coverage", "title": "Coverage"},
+        ]
+        client.get_recordset.return_value = {
+            "schema": {"properties": {"coverage": {}}},
+            "records": [[0.5]],
+        }
+
+        result = get_alpha_recordsets("a1", ["coverage"], client=client)
+
+        self.assertEqual(result["coverage"]["rows"], [{"coverage": 0.5}])
+        client.get_alpha.assert_called_once_with("a1")
+        client.list_alpha_recordsets.assert_called_once_with("a1")
+        client.get_recordset.assert_called_once()
+        client.get_aggregates.assert_not_called()
+        client.get_pnl.assert_not_called()
+        client.get_self_correlation.assert_not_called()
 
     def test_list_all_datafields_reads_every_bounded_page(self):
         rows = [{"id": f"field_{index}", "type": "MATRIX"} for index in range(5)]

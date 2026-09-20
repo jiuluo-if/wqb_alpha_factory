@@ -555,9 +555,12 @@ class SimulationGateway:
         capability = _CAPABILITY_READER_ABSENT
         if callable(capability_reader):
             capability = capability_reader()
-            choices = set((capability or {}).get("simulation_type_choices", ()))
+            choices = {
+                str(item).upper()
+                for item in (capability or {}).get("simulation_type_choices", ())
+            }
             if str((capability or {}).get("status", "")).upper() != "AVAILABLE" or (
-                choices and "MULTI" not in choices
+                "REGULAR" not in choices
             ):
                 raise ValueError("SIMULATION_CAPABILITY_UNAVAILABLE")
 
