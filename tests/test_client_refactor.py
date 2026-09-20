@@ -731,6 +731,20 @@ class TestSharedRateLimitGate(unittest.TestCase):
             c.submit_simulation("rank(a)", {})
         self.assertEqual(raised.exception.status_code, 429)
 
+    def test_simulation_post_429_registers_the_shared_rate_limit_gate(self):
+        # One ambiguous POST 429 must not let the rest of the batch stampede:
+        # the client-wide gate has to learn Retry-After even though this POST
+        # is never retried.
+        c = make_client()
+        c._local.session = FakeSession([
+            FakeResponse(429, headers={"Retry-After": "60"}),
+        ])
+        before = getattr(c, "_rate_limit_until", 0.0)
+        with mock.patch.object(c, "_wait_submission_slot"), \
+             self.assertRaises(WQBSubmitUnknownError):
+            c.submit_simulation("rank(a)", {})
+        self.assertGreater(c._rate_limit_until, before)
+
     def test_simulation_post_timeout_is_unknown_and_has_one_transport_call(self):
         c = make_client()
         session = mock.Mock()

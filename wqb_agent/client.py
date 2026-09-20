@@ -517,6 +517,12 @@ class WQBClient:
                 continue
             if resp.status_code == 429:
                 if not retry_rate_limit:
+                    # A Simulation POST must never be retried on an ambiguous
+                    # 429, but the platform rate limit is CLIENT-WIDE.  Record
+                    # it before raising so later requests (including other
+                    # POSTs) wait out Retry-After instead of stampeding the
+                    # platform and turning one 429 into a burst of failures.
+                    self._register_rate_limit(resp)
                     error = f"{context} received 429; POST acceptance is not contractually known."
                     raise (WQBSubmitUnknownError(error, status_code=429) if ambiguous_write
                            else WQBRateLimitError(error, status_code=429))
