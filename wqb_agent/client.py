@@ -76,6 +76,49 @@ def _finite_nonnegative(value, default):
     return parsed if math.isfinite(parsed) and parsed >= 0 else float(default)
 
 
+def _bounded_choice_values(choices, *, instrument_type=None, region=None):
+    """Normalize one live OPTIONS choice projection to a flat value list.
+
+    BRAIN advertises choice projections either as a flat list of
+    ``{"value", "label"}`` objects or as a scope-nested mapping keyed by
+    ``instrumentType``/``region``.  ``None`` means "not resolvable for this
+    client scope"; callers must treat that as fail-safe (no invented
+    allowed-value set) rather than as an empty allow-list that would reject
+    every valid setting.
+    """
+    if isinstance(choices, list):
+        values = []
+        for item in choices:
+            value = item.get("value") if isinstance(item, Mapping) else item
+            if value is None:
+                return None
+            values.append(value)
+        return values or None
+    if not isinstance(choices, Mapping):
+        return None
+    scope = {"instrumentType": instrument_type, "region": region}
+    node = choices
+    while isinstance(node, Mapping):
+        for key in ("instrumentType", "region"):
+            keyed = node.get(key)
+            wanted = scope.get(key)
+            if not isinstance(keyed, Mapping) or wanted is None:
+                continue
+            match = next(
+                (value for name, value in keyed.items()
+                 if str(name) == str(wanted)),
+                None,
+            )
+            if match is not None:
+                node = match
+                break
+        else:
+            return None
+    return _bounded_choice_values(
+        node, instrument_type=instrument_type, region=region
+    )
+
+
 class WQBError(Exception):
     """Base class for all classified WQB errors."""
 
@@ -642,15 +685,28 @@ class WQBClient:
             return self._unknown_capability("MALFORMED_RESPONSE")
         properties = post.get("properties")
         if not isinstance(properties, Mapping):
-            return self._unknown_capability("MALFORMED_RESPONSE")
+            # Live BRAIN advertises the POST projection directly on the
+            # action (``post.type`` / ``post.settings``) instead of nesting it
+            # under ``properties``.  Read whichever shape is advertised so a
+            # live settings projection is never silently downgraded.
+            properties = post
         type_property = properties.get("type")
         settings_property = properties.get("settings")
         if not isinstance(type_property, Mapping) or not isinstance(settings_property, Mapping):
             return self._unknown_capability("MALFORMED_RESPONSE")
+        instrument_type = getattr(self, "instrument_type", None)
+        region = getattr(self, "region", None)
         type_choices = type_property.get("enum")
+        if not isinstance(type_choices, list) or not type_choices:
+            type_choices = _bounded_choice_values(
+                type_property.get("choices"),
+                instrument_type=instrument_type, region=region,
+            )
         if not isinstance(type_choices, list) or not type_choices:
             return self._unknown_capability("MISSING_TYPE_ENUM")
         setting_properties = settings_property.get("properties")
+        if not isinstance(setting_properties, Mapping):
+            setting_properties = settings_property.get("children")
         if not isinstance(setting_properties, Mapping):
             return self._unknown_capability("MALFORMED_RESPONSE")
         settings = {}
@@ -663,8 +719,14 @@ class WQBClient:
             if not isinstance(spec, Mapping):
                 continue
             projection = {}
-            if isinstance(spec.get("enum"), list):
-                projection["allowed_values"] = list(spec["enum"])
+            allowed = spec.get("enum")
+            if not isinstance(allowed, list) or not allowed:
+                allowed = _bounded_choice_values(
+                    spec.get("choices"),
+                    instrument_type=instrument_type, region=region,
+                )
+            if isinstance(allowed, list) and allowed:
+                projection["allowed_values"] = list(allowed)
             if isinstance(spec.get("type"), str):
                 projection["type"] = spec["type"]
             if projection:

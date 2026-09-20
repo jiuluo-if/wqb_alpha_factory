@@ -319,6 +319,105 @@ class TestOfficialReadOnlyClientAdapters(unittest.TestCase):
         self.assertEqual(result["status"], "UNKNOWN")
         self.assertEqual(result["reason"], "MISSING_TYPE_ENUM")
 
+    def test_simulation_options_accepts_live_choices_and_children_projection(self):
+        # Live BRAIN advertises the POST projection with ``type.choices``
+        # ({value,label} objects) and ``settings.children`` whose choices are
+        # keyed by instrumentType/region.  A projection this client cannot
+        # read silently downgrades live settings validation and blocks the
+        # documented Multi probe path, so both shapes must resolve.
+        c = make_client()
+        c.instrument_type = "EQUITY"
+        c.region = "USA"
+        c.universe = "TOP3000"
+        c._local.session = FakeSession([FakeResponse(200, payload={
+            "actions": {"POST": {
+                "type": {
+                    "type": "choice", "required": True, "readOnly": False,
+                    "label": "Type",
+                    "choices": [
+                        {"value": "REGULAR", "label": "Regular"},
+                        {"value": "REGION_AGNOSTIC", "label": "Region Agnostic"},
+                    ],
+                },
+                "settings": {
+                    "type": "nested object", "required": True,
+                    "readOnly": False, "label": "Settings",
+                    "children": {
+                        "region": {
+                            "type": "choice", "required": True,
+                            "choices": {"instrumentType": {"EQUITY": [
+                                {"value": "USA", "label": "USA"},
+                                {"value": "GLB", "label": "GLB"},
+                            ]}},
+                        },
+                        "universe": {
+                            "type": "choice", "required": True,
+                            "choices": {"instrumentType": {"EQUITY": {"region": {
+                                "USA": [{"value": "TOP3000", "label": "TOP3000"}],
+                                "GLB": [{"value": "MINVOL1M", "label": "MINVOL1M"}],
+                            }}}},
+                        },
+                        "pasteurization": {
+                            "type": "choice", "required": True,
+                            "choices": [{"value": "ON", "label": "On"},
+                                        {"value": "OFF", "label": "Off"}],
+                        },
+                        "decay": {
+                            "type": "integer", "required": True,
+                            "minValue": 0, "maxValue": 512,
+                        },
+                    },
+                },
+            }},
+        })])
+
+        result = c.get_simulation_capability()
+
+        self.assertEqual(result["status"], "AVAILABLE")
+        self.assertEqual(result["capability_status"], "AVAILABLE")
+        self.assertEqual(
+            result["simulation_type_choices"], ["REGULAR", "REGION_AGNOSTIC"]
+        )
+        self.assertEqual(
+            result["settings"]["region"]["allowed_values"], ["USA", "GLB"]
+        )
+        # Nested scope choices resolve against this client's own scope.
+        self.assertEqual(
+            result["settings"]["universe"]["allowed_values"], ["TOP3000"]
+        )
+        self.assertEqual(
+            result["settings"]["pasteurization"]["allowed_values"], ["ON", "OFF"]
+        )
+        self.assertEqual(result["settings"]["decay"]["type"], "integer")
+        self.assertNotIn("allowed_values", result["settings"]["decay"])
+
+    def test_unresolvable_nested_scope_choices_omit_allowed_values(self):
+        # When the nested projection cannot be resolved for this client scope,
+        # the capability must stay fail-safe: no invented allowed-value set
+        # that would wrongly reject a valid setting.
+        c = make_client()
+        c.instrument_type = "EQUITY"
+        c.region = "EUR"
+        c.universe = "TOP800"
+        c._local.session = FakeSession([FakeResponse(200, payload={
+            "actions": {"POST": {
+                "type": {"choices": [{"value": "REGULAR", "label": "Regular"}]},
+                "settings": {"children": {
+                    "universe": {
+                        "type": "choice",
+                        "choices": {"instrumentType": {"EQUITY": {"region": {
+                            "USA": [{"value": "TOP3000", "label": "TOP3000"}],
+                        }}}},
+                    },
+                }},
+            }},
+        })])
+        result = c.get_simulation_capability()
+        self.assertEqual(result["status"], "AVAILABLE")
+        self.assertNotIn(
+            "allowed_values", result["settings"].get("universe", {})
+        )
+
     def test_recordset_discovery_and_read_share_bounded_contract(self):
         c = make_client()
         c._local.session = FakeSession([
