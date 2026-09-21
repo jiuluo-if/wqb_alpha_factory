@@ -56,6 +56,52 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
             self.assertIn(name, names)
             self.assertTrue(hasattr(wqb_agent, name), name)
 
+    def test_research_surface_and_manifest_are_exactly_aligned(self):
+        expected = set(research_api.__all__) - {"SimulationSpec", "research_tool_manifest"}
+        rows = research_api.research_tool_manifest()
+        names = [row["name"] for row in rows]
+
+        self.assertEqual(len(names), len(set(names)))
+        self.assertEqual(set(names), expected)
+        for name in names:
+            self.assertTrue(callable(getattr(research_api, name)), name)
+
+    def test_package_root_matches_research_surface_and_lazy_exports(self):
+        import wqb_agent
+
+        self.assertEqual(
+            set(wqb_agent.__all__) - {"WQBClient"},
+            set(research_api.__all__),
+        )
+        for name in wqb_agent.__all__:
+            self.assertTrue(hasattr(wqb_agent, name), name)
+
+    def test_manifest_modes_reflect_possible_io(self):
+        rows = {
+            row["name"]: row for row in research_api.research_tool_manifest()
+        }
+        for name in (
+            "generate_probes", "validate_simulation_settings",
+            "build_simulation_spec", "group_alphas", "preview_alpha_colors",
+        ):
+            self.assertEqual(rows[name]["mode"], "READ_ONLY", name)
+        for name in ("refresh_remote_alphas", "purge_remote_cache"):
+            self.assertEqual(rows[name]["mode"], "LOCAL_CACHE_WRITE", name)
+            self.assertTrue(rows[name].get("local_write"), name)
+
+    def test_manifest_preserves_write_boundaries_and_compatibility_alias(self):
+        rows = {
+            row["name"]: row for row in research_api.research_tool_manifest()
+        }
+        self.assertIn("find_alpha_duplicates", rows)
+        self.assertIn("find_duplicate_alphas", rows)
+        for name in (
+            "simulate", "simulate_single", "simulate_batch",
+            "simulate_single_batch", "simulate_multi_batch",
+        ):
+            self.assertEqual(rows[name]["mode"], "SIMULATION_WRITE", name)
+            self.assertTrue(rows[name].get("remote_write"), name)
+
     def test_canonical_remote_read_surface_stays_available_at_public_facades(self):
         canonical = {
             "get_live_preflight", "get_simulation_modes", "get_alpha_evidence",
