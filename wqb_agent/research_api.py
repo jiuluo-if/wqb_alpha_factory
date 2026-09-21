@@ -22,7 +22,6 @@ DO NOT USE FOR:
 from __future__ import annotations
 
 import json
-import math
 import os
 import tomllib
 from collections.abc import Mapping
@@ -60,7 +59,16 @@ from .remote_alpha_repository import RemoteAlphaRepository
 from .remote_colors import preview_remote_colors, sync_remote_colors
 from .remote_evidence import RemoteAlphaEvidenceProvider
 from .remote_quota import SimulationQuota
-from .simulation_gateway import ExecutionGuard, SimulationGateway, SimulationSpec
+from .simulation_gateway import (
+    MULTI_DEFAULT_CHILD_BATCH_SIZE,
+    MULTI_DEFAULT_CONCURRENCY,
+    MULTI_MAX_CHILDREN,
+    MULTI_MAX_CONCURRENCY,
+    MULTI_MIN_CHILDREN,
+    ExecutionGuard,
+    SimulationGateway,
+    SimulationSpec,
+)
 
 
 def _load_config(config: Mapping[str, Any] | str | None) -> dict[str, Any]:
@@ -425,93 +433,10 @@ def get_simulation_config(*, config=None):
 
 
 def validate_simulation_settings(settings, *, client=None, config=None, capability=None):
-    """Validate bounded Simulation settings before Gateway construction."""
-    errors = []
-    if not isinstance(settings, Mapping):
-        return {
-            "valid": False, "status": "INVALID", "source": "LOCAL_SCHEMA",
-            "evidence_status": "UNAVAILABLE", "settings": {},
-            "errors": ["settings must be an object"],
-        }
-    normalized = dict(settings)
-    for key in ("region", "universe", "instrumentType", "neutralization",
-                "pasteurization", "unitHandling", "nanHandling", "language"):
-        if key in normalized and (not isinstance(normalized[key], str) or not normalized[key].strip()):
-            errors.append(f"{key} must be a non-empty string")
-    if "delay" in normalized:
-        value = normalized["delay"]
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            errors.append("delay must be a non-negative integer")
-    if "decay" in normalized:
-        value = normalized["decay"]
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 1:
-            errors.append("decay must be a finite number >= 1")
-    if "truncation" in normalized:
-        value = normalized["truncation"]
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-            errors.append("truncation must be a finite number")
-    if "visualization" in normalized and not isinstance(normalized["visualization"], bool):
-        errors.append("visualization must be a boolean")
-    fields = normalized.get("fields")
-    if fields is not None and (
-        not isinstance(fields, (list, tuple))
-        or not fields
-        or any(not isinstance(item, (str, int)) or not str(item).strip() for item in fields)
-    ):
-        errors.append("fields must be a non-empty list when provided")
-    if client is not None:
-        for key, attr in (("region", "region"), ("universe", "universe"), ("instrumentType", "instrument_type")):
-            expected = getattr(client, attr, None)
-            if key in normalized and expected is not None and str(normalized[key]) != str(expected):
-                errors.append(f"{key} does not match client scope")
-    if capability is None and client is not None:
-        reader = getattr(client, "get_simulation_capability", None)
-        if callable(reader):
-            try:
-                capability = reader()
-            except Exception:
-                capability = {"status": "UNKNOWN"}
-    capability_status = (
-        str(capability.get("capability_status") or capability.get("status") or "UNKNOWN").upper()
-        if isinstance(capability, Mapping) else "UNKNOWN"
+    """Compatibility facade for the canonical Gateway-owned validator."""
+    return SimulationGateway.validate_simulation_settings(
+        settings, client=client, capability=capability
     )
-    validation_source = "LIVE_OPTIONS" if capability_status == "AVAILABLE" else "LOCAL_ONLY"
-    if capability_status == "AVAILABLE" and isinstance(capability, Mapping):
-        for key in capability.get("required_settings", ()):
-            if key not in normalized:
-                errors.append(f"missing required setting: {key}")
-        # The capability projection is resolved for the CLIENT's own
-        # instrumentType/region. When the request targets a different scope,
-        # scope-dependent option lists do not apply and must not be used to
-        # reject a setting the platform itself accepts. This does not expand
-        # the writer contract beyond the executable SimulationSpec validator.
-        scope_dependent_applies = True
-        if client is not None:
-            client_region = getattr(client, "region", None)
-            client_type = getattr(client, "instrument_type", None)
-            requested_region = normalized.get("region", client_region)
-            requested_type = normalized.get("instrumentType", client_type)
-            scope_dependent_applies = (
-                (client_region is None or str(requested_region) == str(client_region))
-                and (client_type is None or str(requested_type) == str(client_type))
-            )
-        for key, spec in (capability.get("settings") or {}).items():
-            if key not in normalized or not isinstance(spec, Mapping):
-                continue
-            if not scope_dependent_applies and key in (
-                    "universe", "delay", "neutralization", "decay",
-                    "truncation", "pasteurization", "unitHandling",
-                    "nanHandling"):
-                continue
-            allowed = spec.get("allowed_values")
-            if isinstance(allowed, list) and normalized[key] not in allowed:
-                errors.append(f"{key} is not allowed by live OPTIONS")
-    return {
-        "valid": not errors, "status": "VALID" if not errors else "INVALID",
-        "source": validation_source, "validation_source": validation_source,
-        "capability_status": capability_status,
-        "evidence_status": "INCONCLUSIVE", "settings": normalized, "errors": errors,
-    }
 
 
 def build_simulation_spec(expression, *, settings=None, fields=(), note=None, template_id=None,
@@ -807,12 +732,14 @@ def simulate_single_batch(specs, *, client=None, config=None, state_dir=None):
 
 def simulate_multi_batch(
     specs, *, client=None, config=None, state_dir=None,
-    child_batch_size=10, max_concurrent_multi=2,
+    child_batch_size=MULTI_DEFAULT_CHILD_BATCH_SIZE,
+    max_concurrent_multi=MULTI_DEFAULT_CONCURRENCY,
 ):
     """Execute probe windows as Multi-Simulation parents.
 
-    Each parent contains at most ten children and at most two parent jobs
-    are dispatched concurrently.  The Gateway remains the only write path.
+    Each parent contains two to ten children. The safe default dispatches
+    two parent jobs concurrently; the supported hard maximum is eight.
+    The Gateway remains the only write path.
     """
     gateway = _simulation_gateway(
         client=client, config=config, state_dir=state_dir
@@ -847,8 +774,11 @@ def _simulation_modes_from_capabilities(authentication, simulation_capability):
         "name": "Multi-Simulation", "available": multi_available,
         "status": "AVAILABLE" if multi_available else "UNAVAILABLE",
         "source": source, "evidence_status": "INCONCLUSIVE",
-        "children_per_job": 10, "min_children_per_job": 2,
-        "max_concurrent_jobs": 2,
+        "children_per_job": MULTI_DEFAULT_CHILD_BATCH_SIZE,
+        "min_children_per_job": MULTI_MIN_CHILDREN,
+        "max_children_per_job": MULTI_MAX_CHILDREN,
+        "default_concurrent_jobs": MULTI_DEFAULT_CONCURRENCY,
+        "max_concurrent_jobs": MULTI_MAX_CONCURRENCY,
     }
     if authenticated and "MULTI_SIMULATION" not in permissions:
         multi["reason"] = "PERMISSION_UNAVAILABLE"

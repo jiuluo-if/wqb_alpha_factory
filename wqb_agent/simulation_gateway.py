@@ -21,6 +21,11 @@ _CAPABILITY_READER_ABSENT = object()
 _REMOTE_ROWS_UNCHECKED = object()
 REGULAR_SIMULATION_TYPE = "REGULAR"
 SUPPORTED_WRITE_SIMULATION_TYPES = frozenset({REGULAR_SIMULATION_TYPE})
+MULTI_MIN_CHILDREN = 2
+MULTI_MAX_CHILDREN = 10
+MULTI_DEFAULT_CHILD_BATCH_SIZE = 10
+MULTI_DEFAULT_CONCURRENCY = 2
+MULTI_MAX_CONCURRENCY = 8
 
 
 def _spec_simulation_type(spec):
@@ -205,6 +210,117 @@ class SimulationGateway:
         )
 
     @staticmethod
+    def validate_simulation_settings(settings, *, client=None, capability=None):
+        """Return the canonical bounded Simulation settings validation report."""
+        errors = []
+        if not isinstance(settings, Mapping):
+            return {
+                "valid": False, "status": "INVALID", "source": "LOCAL_SCHEMA",
+                "evidence_status": "UNAVAILABLE", "settings": {},
+                "errors": ["settings must be an object"],
+            }
+        normalized = dict(settings)
+        for key in ("region", "universe", "instrumentType", "neutralization",
+                    "pasteurization", "unitHandling", "nanHandling", "language"):
+            if key in normalized and (
+                not isinstance(normalized[key], str) or not normalized[key].strip()
+            ):
+                errors.append(f"{key} must be a non-empty string")
+        if "delay" in normalized:
+            value = normalized["delay"]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                errors.append("delay must be a non-negative integer")
+        if "decay" in normalized:
+            value = normalized["decay"]
+            if (
+                isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or value < 1
+            ):
+                errors.append("decay must be a finite number >= 1")
+        if "truncation" in normalized:
+            value = normalized["truncation"]
+            if (
+                isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+            ):
+                errors.append("truncation must be a finite number")
+        if "visualization" in normalized and not isinstance(normalized["visualization"], bool):
+            errors.append("visualization must be a boolean")
+        fields = normalized.get("fields")
+        if fields is not None and (
+            not isinstance(fields, (list, tuple))
+            or not fields
+            or any(
+                not isinstance(item, (str, int)) or not str(item).strip()
+                for item in fields
+            )
+        ):
+            errors.append("fields must be a non-empty list when provided")
+        if client is not None:
+            for key, attr in (
+                ("region", "region"),
+                ("universe", "universe"),
+                ("instrumentType", "instrument_type"),
+            ):
+                expected = getattr(client, attr, None)
+                if (
+                    key in normalized
+                    and expected is not None
+                    and str(normalized[key]) != str(expected)
+                ):
+                    errors.append(f"{key} does not match client scope")
+        if capability is None and client is not None:
+            reader = getattr(client, "get_simulation_capability", None)
+            if callable(reader):
+                try:
+                    capability = reader()
+                except Exception:
+                    capability = {"status": "UNKNOWN"}
+        capability_status = (
+            str(
+                capability.get("capability_status")
+                or capability.get("status")
+                or "UNKNOWN"
+            ).upper()
+            if isinstance(capability, Mapping) else "UNKNOWN"
+        )
+        validation_source = "LIVE_OPTIONS" if capability_status == "AVAILABLE" else "LOCAL_ONLY"
+        if capability_status == "AVAILABLE" and isinstance(capability, Mapping):
+            for key in capability.get("required_settings", ()):
+                if key not in normalized:
+                    errors.append(f"missing required setting: {key}")
+            # OPTIONS is resolved for the client's own instrumentType/region.
+            # Scope-dependent lists must not reject a request for another scope.
+            scope_dependent_applies = True
+            if client is not None:
+                client_region = getattr(client, "region", None)
+                client_type = getattr(client, "instrument_type", None)
+                requested_region = normalized.get("region", client_region)
+                requested_type = normalized.get("instrumentType", client_type)
+                scope_dependent_applies = (
+                    (client_region is None or str(requested_region) == str(client_region))
+                    and (client_type is None or str(requested_type) == str(client_type))
+                )
+            for key, spec in (capability.get("settings") or {}).items():
+                if key not in normalized or not isinstance(spec, Mapping):
+                    continue
+                if not scope_dependent_applies and key in (
+                    "universe", "delay", "neutralization", "decay",
+                    "truncation", "pasteurization", "unitHandling",
+                    "nanHandling",
+                ):
+                    continue
+                allowed = spec.get("allowed_values")
+                if isinstance(allowed, list) and normalized[key] not in allowed:
+                    errors.append(f"{key} is not allowed by live OPTIONS")
+        return {
+            "valid": not errors, "status": "VALID" if not errors else "INVALID",
+            "source": validation_source, "validation_source": validation_source,
+            "capability_status": capability_status,
+            "evidence_status": "INCONCLUSIVE", "settings": normalized, "errors": errors,
+        }
+
+    @staticmethod
     def validate_simulation_spec(spec):
         spec = spec if isinstance(spec, SimulationSpec) else SimulationSpec(**dict(spec))
         _validate_write_simulation_type(spec)
@@ -276,57 +392,11 @@ class SimulationGateway:
         )
 
     def _validate_settings(self, spec, capability):
-        settings = spec.settings
-        errors = []
-        for key in ("region", "universe", "instrumentType", "neutralization",
-                    "pasteurization", "unitHandling", "nanHandling", "language"):
-            if key in settings and (not isinstance(settings[key], str) or not settings[key].strip()):
-                errors.append(f"{key} must be a non-empty string")
-        delay = settings.get("delay")
-        if delay is not None and (isinstance(delay, bool) or not isinstance(delay, int) or delay < 0):
-            errors.append("delay must be a non-negative integer")
-        for key in ("decay", "truncation"):
-            value = settings.get(key)
-            if value is not None and (
-                isinstance(value, bool) or not isinstance(value, (int, float))
-                or not math.isfinite(value) or (key == "decay" and value < 1)
-            ):
-                errors.append(f"{key} must be a finite numeric value")
-        if "visualization" in settings and not isinstance(settings["visualization"], bool):
-            errors.append("visualization must be a boolean")
-        for key, attr in (("region", "region"), ("universe", "universe"),
-                          ("instrumentType", "instrument_type")):
-            expected = getattr(self.client, attr, None)
-            if key in settings and expected is not None and str(settings[key]) != str(expected):
-                errors.append(f"{key} does not match client scope")
-        if isinstance(capability, Mapping) and str(capability.get("status", "")).upper() == "AVAILABLE":
-            for key in capability.get("required_settings", ()):
-                if key not in settings:
-                    errors.append(f"missing required setting: {key}")
-            # The projection was resolved for this client's own
-            # instrumentType/region; a request targeting another scope must
-            # not be judged by it.
-            client_region = getattr(self.client, "region", None)
-            client_type = getattr(self.client, "instrument_type", None)
-            requested_region = settings.get("region", client_region)
-            requested_type = settings.get("instrumentType", client_type)
-            scope_dependent_applies = (
-                (client_region is None or str(requested_region) == str(client_region))
-                and (client_type is None or str(requested_type) == str(client_type))
-            )
-            for key, projection in (capability.get("settings") or {}).items():
-                allowed = projection.get("allowed_values") if isinstance(projection, Mapping) else None
-                if key not in settings or not isinstance(allowed, list):
-                    continue
-                if not scope_dependent_applies and key in (
-                        "universe", "delay", "neutralization", "decay",
-                        "truncation", "pasteurization", "unitHandling",
-                        "nanHandling"):
-                    continue
-                if settings[key] not in allowed:
-                    errors.append(f"{key} is not allowed by live OPTIONS")
-        if errors:
-            raise ValueError("invalid simulation settings: " + "; ".join(errors))
+        report = self.validate_simulation_settings(
+            spec.settings, client=self.client, capability=capability
+        )
+        if not report["valid"]:
+            raise ValueError("invalid simulation settings: " + "; ".join(report["errors"]))
 
     def _validate_live_capability(
         self, spec, *, operator_capability=_CAPABILITY_UNCHECKED,
@@ -559,7 +629,8 @@ class SimulationGateway:
         return results
 
     def simulate_multi_batch(
-        self, specs, *, child_batch_size=10, max_concurrent_multi=2
+        self, specs, *, child_batch_size=MULTI_DEFAULT_CHILD_BATCH_SIZE,
+        max_concurrent_multi=MULTI_DEFAULT_CONCURRENCY
     ):
         with single_instance_scope(self.state_dir, operation="multi-simulation"):
             self.guard.reconcile()
@@ -569,7 +640,8 @@ class SimulationGateway:
             )
 
     def _simulate_multi_batch(
-        self, specs, *, child_batch_size=10, max_concurrent_multi=2
+        self, specs, *, child_batch_size=MULTI_DEFAULT_CHILD_BATCH_SIZE,
+        max_concurrent_multi=MULTI_DEFAULT_CONCURRENCY
     ):
         """Execute large probe windows as bounded Multi-Simulation parents."""
         normalized_specs = [
@@ -577,18 +649,23 @@ class SimulationGateway:
             else SimulationSpec(**dict(item))
             for item in (specs or ())
         ]
+        if isinstance(child_batch_size, bool) or not isinstance(child_batch_size, int):
+            raise TypeError("child_batch_size must be an integer")
+        if child_batch_size < MULTI_MIN_CHILDREN or child_batch_size > MULTI_MAX_CHILDREN:
+            raise ValueError(
+                f"child_batch_size must be between {MULTI_MIN_CHILDREN} "
+                f"and {MULTI_MAX_CHILDREN}"
+            )
+        if isinstance(max_concurrent_multi, bool) or not isinstance(max_concurrent_multi, int):
+            raise TypeError("max_concurrent_multi must be an integer")
+        if max_concurrent_multi < 1 or max_concurrent_multi > MULTI_MAX_CONCURRENCY:
+            raise ValueError(
+                f"max_concurrent_multi must be between 1 and {MULTI_MAX_CONCURRENCY}"
+            )
         if len(normalized_specs) == 1:
             # A one-child remainder is a valid Single request, never a
             # one-element Multi payload.  The Gateway still owns this split.
             return self._simulate_batch(normalized_specs)
-        if isinstance(child_batch_size, bool) or not isinstance(child_batch_size, int):
-            raise TypeError("child_batch_size must be an integer")
-        if child_batch_size < 2 or child_batch_size > 10:
-            raise ValueError("child_batch_size must be between 2 and 10")
-        if isinstance(max_concurrent_multi, bool) or not isinstance(max_concurrent_multi, int):
-            raise TypeError("max_concurrent_multi must be an integer")
-        if max_concurrent_multi < 1 or max_concurrent_multi > 8:
-            raise ValueError("max_concurrent_multi must be between 1 and 8")
 
         auth_reader = getattr(self.client, "get_authentication_status", None)
         if not callable(auth_reader):

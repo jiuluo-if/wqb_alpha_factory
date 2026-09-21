@@ -1,3 +1,4 @@
+import inspect
 import json
 import multiprocessing
 import os
@@ -17,6 +18,11 @@ from wqb_agent.client import (
 from wqb_agent.locking import OwnerBusyError
 from wqb_agent.remote_evidence import RemoteAlphaEvidenceProvider
 from wqb_agent.simulation_gateway import (
+    MULTI_DEFAULT_CHILD_BATCH_SIZE,
+    MULTI_DEFAULT_CONCURRENCY,
+    MULTI_MAX_CHILDREN,
+    MULTI_MAX_CONCURRENCY,
+    MULTI_MIN_CHILDREN,
     ExecutionGuard,
     SimulationGateway,
     SimulationSpec,
@@ -325,6 +331,86 @@ class TestSimulationGateway(unittest.TestCase):
             self.assertEqual(client.max_active_multi, 2)
             self.assertEqual(gateway.guard.entries(), [])
 
+    def test_multi_defaults_and_bounds_have_one_gateway_owned_source(self):
+        from wqb_agent import research_api
+
+        self.assertEqual(MULTI_MIN_CHILDREN, 2)
+        self.assertEqual(MULTI_MAX_CHILDREN, 10)
+        self.assertEqual(MULTI_DEFAULT_CHILD_BATCH_SIZE, 10)
+        self.assertEqual(MULTI_DEFAULT_CONCURRENCY, 2)
+        self.assertEqual(MULTI_MAX_CONCURRENCY, 8)
+        gateway_signature = inspect.signature(
+            SimulationGateway.simulate_multi_batch
+        ).parameters
+        facade_signature = inspect.signature(
+            research_api.simulate_multi_batch
+        ).parameters
+        self.assertEqual(
+            gateway_signature["child_batch_size"].default,
+            MULTI_DEFAULT_CHILD_BATCH_SIZE,
+        )
+        self.assertEqual(
+            gateway_signature["max_concurrent_multi"].default,
+            MULTI_DEFAULT_CONCURRENCY,
+        )
+        self.assertEqual(
+            facade_signature["child_batch_size"].default,
+            MULTI_DEFAULT_CHILD_BATCH_SIZE,
+        )
+        self.assertEqual(
+            facade_signature["max_concurrent_multi"].default,
+            MULTI_DEFAULT_CONCURRENCY,
+        )
+
+    def test_multi_explicit_hard_max_eight_is_valid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = MultiGatewayClient()
+            results = SimulationGateway(client, state_dir=tmp).simulate_multi_batch(
+                [
+                    SimulationSpec("rank(field_a)", {"delay": 1}),
+                    SimulationSpec("rank(field_b)", {"delay": 1}),
+                ],
+                max_concurrent_multi=8,
+            )
+        self.assertEqual([item["status"] for item in results], ["DONE", "DONE"])
+        self.assertEqual(len(client.multi_submissions), 1)
+
+    def test_multi_concurrency_and_child_bounds_fail_before_guard_or_post(self):
+        cases = (
+            {"max_concurrent_multi": 0},
+            {"max_concurrent_multi": True},
+            {"max_concurrent_multi": "2"},
+            {"max_concurrent_multi": 9},
+            {"child_batch_size": 1},
+            {"child_batch_size": 11},
+        )
+        for overrides in cases:
+            with self.subTest(overrides=overrides):
+                client = MultiGatewayClient()
+                with tempfile.TemporaryDirectory() as tmp:
+                    gateway = SimulationGateway(client, state_dir=tmp)
+                    with self.assertRaises((TypeError, ValueError)):
+                        gateway.simulate_multi_batch(
+                            [
+                                SimulationSpec("rank(field_a)", {"delay": 1}),
+                                SimulationSpec("rank(field_b)", {"delay": 1}),
+                            ],
+                            **overrides,
+                        )
+                    self.assertEqual(client.multi_submissions, [])
+                    self.assertEqual(client.submissions, [])
+                    self.assertEqual(gateway.guard.entries(), [])
+
+    def test_one_child_remainder_uses_single_without_one_child_multi(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = MultiGatewayClient()
+            results = SimulationGateway(client, state_dir=tmp).simulate_multi_batch(
+                [SimulationSpec("rank(field_a)", {"delay": 1})]
+            )
+        self.assertEqual(results[0]["status"], "DONE")
+        self.assertEqual(client.multi_submissions, [])
+        self.assertEqual(len(client.submissions), 1)
+
     def test_multi_batch_24_packs_as_ten_ten_four(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = MultiGatewayClient()
@@ -338,6 +424,7 @@ class TestSimulationGateway(unittest.TestCase):
                 [len(payloads) for payloads, _kwargs in client.multi_submissions],
                 [10, 10, 4],
             )
+            self.assertEqual(client.max_active_multi, 2)
 
     def test_multi_requires_live_permission_before_registering_or_posting(self):
         with tempfile.TemporaryDirectory() as tmp:

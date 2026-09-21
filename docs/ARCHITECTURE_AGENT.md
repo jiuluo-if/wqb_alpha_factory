@@ -25,9 +25,10 @@ research_api.simulate_multi_batch
 
 Simulation mode boundaries are explicit: the production writer currently
 supports only the verified `REGULAR` request schema. Single Simulation uses a
-default ten-worker window for small optimizations; Multi-Simulation groups at
-most ten REGULAR children per parent and dispatches at most eight parents
-concurrently for large probes. Region-Agnostic and SUPER may be platform-
+default ten-worker window for small optimizations; Multi-Simulation groups two
+to ten REGULAR children per parent, dispatches two parents concurrently by
+default, and supports an explicit hard maximum of eight parents for large
+probes. Region-Agnostic and SUPER may be platform-
 advertised capabilities, but are not writer-supported modes and are never a
 fallback or part of the Multi window until their independent write contracts
 are implemented and verified.

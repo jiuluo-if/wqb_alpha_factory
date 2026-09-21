@@ -33,6 +33,7 @@ from wqb_agent.research_api import (
     simulate_single,
     validate_simulation_settings,
 )
+from wqb_agent.simulation_gateway import SimulationGateway
 
 
 class TestResearchApi(unittest.TestCase):
@@ -407,8 +408,35 @@ class TestResearchApi(unittest.TestCase):
         self.assertEqual(modes["single"]["max_concurrent"], 10)
         self.assertEqual(modes["multi"]["name"], "Multi-Simulation")
         self.assertEqual(modes["multi"]["children_per_job"], 10)
-        self.assertEqual(modes["multi"]["max_concurrent_jobs"], 2)
+        self.assertEqual(modes["multi"]["min_children_per_job"], 2)
+        self.assertEqual(modes["multi"]["max_children_per_job"], 10)
+        self.assertEqual(modes["multi"]["default_concurrent_jobs"], 2)
+        self.assertEqual(modes["multi"]["max_concurrent_jobs"], 8)
         self.assertFalse(modes["region_agnostic"]["available"])
+
+    def test_settings_validation_facade_uses_gateway_owner(self):
+        client = SimpleNamespace(region="USA", universe="TOP3000", instrument_type="EQUITY")
+        capability = {
+            "status": "AVAILABLE",
+            "required_settings": [],
+            "settings": {},
+        }
+        with mock.patch.object(
+            SimulationGateway, "validate_simulation_settings",
+            return_value={
+                "valid": True, "status": "VALID", "source": "GATEWAY",
+                "validation_source": "GATEWAY", "capability_status": "AVAILABLE",
+                "evidence_status": "INCONCLUSIVE",
+                "settings": {"delay": 1}, "errors": [],
+            },
+        ) as validator:
+            result = validate_simulation_settings(
+                {"delay": 1}, client=client, capability=capability
+            )
+        self.assertEqual(result["source"], "GATEWAY")
+        validator.assert_called_once_with(
+            {"delay": 1}, client=client, capability=capability
+        )
 
     def test_platform_advertised_non_regular_type_is_not_writer_available(self):
         client = SimpleNamespace(
