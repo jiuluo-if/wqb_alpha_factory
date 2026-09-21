@@ -198,7 +198,7 @@ def simulation_rate_limit_from_headers(response_or_headers):
         "remaining": _bounded_nonnegative_integer(
             _header_value(headers, "X-Ratelimit-Remaining")
         ),
-        "reset_seconds": _bounded_nonnegative_integer(
+        "reset": _bounded_nonnegative_integer(
             _header_value(headers, "X-Ratelimit-Reset")
         ),
     }

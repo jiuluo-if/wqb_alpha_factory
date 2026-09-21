@@ -39,6 +39,7 @@ class TestRemoteSimulationQuota(unittest.TestCase):
             self.assertEqual(snapshot["evidence_status"], "APPROXIMATE")
             self.assertTrue(snapshot["estimate"]["approximate"])
             self.assertEqual(snapshot["official"]["status"], "UNKNOWN")
+            self.assertIsNone(snapshot["official"]["reset"])
 
     def test_unique_alpha_rows_are_only_an_approximate_simulation_estimate(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -68,7 +69,7 @@ class TestRemoteSimulationQuota(unittest.TestCase):
                     "source": "BRAIN_SIMULATION_HEADERS",
                     "limit": 1600,
                     "remaining": 987,
-                    "reset_seconds": 12345,
+                    "reset": 12345,
                 },
             )
 
@@ -76,6 +77,8 @@ class TestRemoteSimulationQuota(unittest.TestCase):
 
             self.assertEqual(snapshot["source"], "BRAIN_SIMULATION_HEADERS")
             self.assertEqual(snapshot["official"]["remaining"], 987)
+            self.assertEqual(snapshot["official"]["reset"], 12345)
+            self.assertNotIn("reset" + "_seconds", snapshot["official"])
             self.assertEqual(snapshot["today_remaining"], 2)
             self.assertEqual(snapshot["estimate"]["today_remaining"], 2)
             self.assertEqual(snapshot["evidence_status"], "AVAILABLE")
@@ -92,6 +95,7 @@ class TestRemoteSimulationQuota(unittest.TestCase):
                              "ESTIMATE_REMOTE_ALPHA_REPOSITORY+EXECUTION_GUARD")
             self.assertEqual(result["today_used"], 0)
             self.assertEqual(result["official"]["status"], "UNKNOWN")
+            self.assertIsNone(result["official"]["reset"])
 
     def test_public_quota_api_uses_client_observation_as_official_primary(self):
         class _Client:
@@ -105,13 +109,15 @@ class TestRemoteSimulationQuota(unittest.TestCase):
                     "source": "BRAIN_SIMULATION_HEADERS",
                     "limit": 1600,
                     "remaining": 987,
-                    "reset_seconds": 12345,
+                    "reset": 12345,
                 }
 
         with tempfile.TemporaryDirectory() as tmp:
             result = research_api.simulation_quota(client=_Client(), state_dir=tmp)
 
         self.assertEqual(result["official"]["remaining"], 987)
+        self.assertEqual(result["official"]["reset"], 12345)
+        self.assertNotIn("reset" + "_seconds", result["official"])
         self.assertEqual(result["source"], "BRAIN_SIMULATION_HEADERS")
         self.assertEqual(result["estimate"]["source"],
                          "ESTIMATE_REMOTE_ALPHA_REPOSITORY+EXECUTION_GUARD")

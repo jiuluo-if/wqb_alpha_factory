@@ -72,6 +72,9 @@ class TestProgressUrlSafety(unittest.TestCase):
         self.assertEqual(
             self.client.get_simulation_quota_observation()["remaining"], 987
         )
+        self.assertEqual(
+            self.client.get_simulation_quota_observation()["reset"], 12345
+        )
 
     def test_missing_location_preserves_real_quota_observation(self):
         self.client._wait_submission_slot = mock.Mock()
@@ -84,6 +87,9 @@ class TestProgressUrlSafety(unittest.TestCase):
             self.client.submit_simulation("rank(x)", {})
         self.assertEqual(
             self.client.get_simulation_quota_observation()["remaining"], 986
+        )
+        self.assertEqual(
+            self.client.get_simulation_quota_observation()["reset"], 12345
         )
 
     def test_invalid_persisted_url_makes_no_get(self):
@@ -515,8 +521,11 @@ class TestOfficialReadOnlyClientAdapters(unittest.TestCase):
             "source": "BRAIN_SIMULATION_HEADERS",
             "limit": 1600,
             "remaining": 987,
-            "reset_seconds": 12345,
+            "reset": 12345,
         })
+        self.assertNotIn(
+            "reset" + "_seconds", c.get_simulation_quota_observation()
+        )
 
     def test_successful_multi_submission_keeps_progress_url_and_quota_observation(self):
         c = make_client()
@@ -535,6 +544,10 @@ class TestOfficialReadOnlyClientAdapters(unittest.TestCase):
 
         self.assertEqual(result, "https://api.worldquantbrain.com/multi/1")
         self.assertEqual(c.get_simulation_quota_observation()["remaining"], 985)
+        self.assertEqual(c.get_simulation_quota_observation()["reset"], 12345)
+        self.assertNotIn(
+            "reset" + "_seconds", c.get_simulation_quota_observation()
+        )
 
     def test_single_submission_rejects_unimplemented_type_before_post(self):
         c = make_client()
@@ -854,6 +867,7 @@ class TestSharedRateLimitGate(unittest.TestCase):
                 c.submit_simulation("rank(a)", {})
         self.assertEqual(session.request.call_count, 1)
         self.assertEqual(c.get_simulation_quota_observation()["status"], "UNKNOWN")
+        self.assertIsNone(c.get_simulation_quota_observation()["reset"])
 
     def test_simulation_post_5xx_is_unknown_without_quota_observation(self):
         c = make_client()
@@ -862,6 +876,7 @@ class TestSharedRateLimitGate(unittest.TestCase):
             with self.assertRaises(WQBSubmitUnknownError):
                 c.submit_simulation("rank(a)", {})
         self.assertEqual(c.get_simulation_quota_observation()["status"], "UNKNOWN")
+        self.assertIsNone(c.get_simulation_quota_observation()["reset"])
 
     def test_retry_after_longer_than_budget_fails_without_sleeping_full_delay(self):
         c = make_client()

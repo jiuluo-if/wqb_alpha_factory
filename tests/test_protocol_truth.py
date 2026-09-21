@@ -184,8 +184,9 @@ class TestProtocolTruth(unittest.TestCase):
             "source": "BRAIN_SIMULATION_HEADERS",
             "limit": 1600,
             "remaining": 987,
-            "reset_seconds": 12345,
+            "reset": 12345,
         })
+        self.assertNotIn("reset" + "_seconds", result)
         self.assertIsInstance(json.dumps(result), str)
 
     def test_simulation_rate_limit_parser_fails_closed_for_invalid_or_missing_headers(self):
@@ -197,6 +198,17 @@ class TestProtocolTruth(unittest.TestCase):
             with self.subTest(headers=headers):
                 result = simulation_rate_limit_from_headers(headers)
                 self.assertNotEqual(result["status"], "AVAILABLE")
+
+        for value in ("-1", "nan", "inf", "9007199254740992"):
+            headers = {
+                "X-Ratelimit-Limit": "1600",
+                "X-Ratelimit-Remaining": "987",
+                "X-Ratelimit-Reset": value,
+            }
+            with self.subTest(headers=headers):
+                result = simulation_rate_limit_from_headers(headers)
+                self.assertNotEqual(result["status"], "AVAILABLE")
+                self.assertIsNone(result["reset"])
 
         partial = simulation_rate_limit_from_headers({"X-Ratelimit-Remaining": "987"})
         self.assertEqual(partial["status"], "PARTIAL")

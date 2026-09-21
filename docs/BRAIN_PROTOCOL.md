@@ -16,6 +16,8 @@
 
 成功的 `POST /simulations` response 中，`X-Ratelimit-Limit`、`X-Ratelimit-Remaining` 和 `X-Ratelimit-Reset` 是 BRAIN 提供的官方 Simulation quota observation；Multi response 中每个 child 分别计入配额，重复提交一个已经存在的 Alpha 也仍然计数。`/users/self/alphas` 的 Alpha 创建日期视图可能按 `alpha_id` 去重，不能作为精确 Simulation counter。当前 client 只在内存保留最近一次成功 response 的 bounded header projection；没有观察到这些 headers 时，官方 quota 必须保持 `UNKNOWN`。
 
+`X-Ratelimit-Reset` 只投影为 bounded raw numeric `reset` header value；没有独立官方证据时，不推断其时间单位或时间基准。
+
 `RemoteAlphaRepository` rows 加上 unresolved `ExecutionGuard` 只能形成 `APPROXIMATE` 的本地 usage estimate，不能覆盖 BRAIN 的 official remaining，也不创建 quota history、ledger 或数据库。fallback estimate 的日期边界与 remote metadata 一致使用 `America/New_York`；旧的 `today_used`、`today_remaining` 等兼容字段必须明确标为 estimate。
 
 `GET /authentication` 只投影当前 live session 的 `authenticated`、`user_id`、`token_expiry` 和 `permissions`，不保存 JWT、cookie 或权限状态。`MULTI_SIMULATION` permission 是 Multi-Simulation 的账户能力前置条件；没有该 permission 时，客户端不得用 POST 探测或静默退化为大量 Single。

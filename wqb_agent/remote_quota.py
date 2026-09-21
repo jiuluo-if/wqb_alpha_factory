@@ -18,7 +18,7 @@ def _unknown_official_observation():
         "source": OFFICIAL_SOURCE,
         "limit": None,
         "remaining": None,
-        "reset_seconds": None,
+        "reset": None,
     }
 
 
@@ -31,7 +31,7 @@ def _official_projection(observation):
     if status not in {"AVAILABLE", "PARTIAL"}:
         return _unknown_official_observation()
     values = {}
-    for key in ("limit", "remaining", "reset_seconds"):
+    for key in ("limit", "remaining", "reset"):
         value = observation.get(key)
         values[key] = (
             int(value)
