@@ -89,6 +89,8 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         for name in ("refresh_remote_alphas", "purge_remote_cache"):
             self.assertEqual(rows[name]["mode"], "LOCAL_CACHE_WRITE", name)
             self.assertTrue(rows[name].get("local_write"), name)
+        self.assertEqual(rows["remote_cache_status"]["mode"], "READ_ONLY")
+        self.assertFalse(rows["remote_cache_status"].get("local_write", False))
 
     def test_manifest_preserves_write_boundaries_and_compatibility_alias(self):
         rows = {

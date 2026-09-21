@@ -1,8 +1,10 @@
 import json
 import os
 import tempfile
+import time
 import unittest
 
+from wqb_agent.alpha_feed_cache import TEMP_RESOURCE_TTL_SEC, RemoteAlphaCache
 from wqb_agent.audit import audit_execution_surface
 from wqb_agent.doctor import run_doctor
 from wqb_agent.simulation_gateway import ExecutionGuard
@@ -39,6 +41,40 @@ class TestRemoteDiagnostics(unittest.TestCase):
             result = audit_execution_surface(state_dir)
         self.assertFalse(result["ok"])
         self.assertIn("EXECUTION_GUARD_STATUS_INVALID", result["errors"])
+
+    def test_audit_does_not_delete_valid_non_default_retention_cache(self):
+        with tempfile.TemporaryDirectory() as state_dir:
+            cache_path = os.path.join(state_dir, ".alpha_feed_cache", "remote.json")
+            cache = RemoteAlphaCache(cache_path, retention_days=14)
+            cache.refresh({
+                cache.local_date: {
+                    "simulations": [{"alpha_id": "synthetic-simulation"}],
+                    "submitted_alphas": [],
+                }
+            })
+            with open(cache_path, "rb") as handle:
+                before = handle.read()
+
+            audit_execution_surface(state_dir)
+
+            self.assertTrue(os.path.exists(cache_path))
+            with open(cache_path, "rb") as handle:
+                self.assertEqual(handle.read(), before)
+
+    def test_doctor_does_not_remove_stale_temp_resources(self):
+        with tempfile.TemporaryDirectory() as state_dir:
+            cache_path = os.path.join(state_dir, ".alpha_feed_cache", "remote.json")
+            cache = RemoteAlphaCache(cache_path)
+            cache.refresh({cache.local_date: {"simulations": [], "submitted_alphas": []}})
+            stale_temp = cache_path + ".tmp.stale"
+            with open(stale_temp, "w", encoding="utf-8") as handle:
+                handle.write("synthetic temp")
+            stale_at = time.time() - TEMP_RESOURCE_TTL_SEC - 1
+            os.utime(stale_temp, (stale_at, stale_at))
+
+            run_doctor(self.config(state_dir), offline=True)
+
+            self.assertTrue(os.path.exists(stale_temp))
 
 
 if __name__ == "__main__":

@@ -1,4 +1,6 @@
+import os
 import tempfile
+import time
 import unittest
 
 from wqb_agent import research_api
@@ -81,6 +83,41 @@ class TestRemoteAlphaRepository(unittest.TestCase):
             self.assertEqual(
                 research_api.get_remote_alpha("missing", state_dir=tmp), None
             )
+
+    def test_purge_remote_cache_is_explicit_main_cache_delete_owner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repository = RemoteAlphaRepository(
+                FakeAlphaReader(), cache_path=f"{tmp}/remote.json",
+                clock=lambda: 1789560000,
+            )
+            repository.refresh_remote_alphas()
+            self.assertTrue(os.path.exists(repository.cache.path))
+
+            self.assertTrue(repository.purge_remote_cache())
+            self.assertFalse(os.path.exists(repository.cache.path))
+
+    def test_remote_cache_status_read_does_not_remove_stale_temp_resources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repository = RemoteAlphaRepository(
+                FakeAlphaReader(),
+                cache_path=f"{tmp}/.alpha_feed_cache/remote.json",
+                clock=None,
+            )
+            repository.refresh_remote_alphas()
+            stale_temp = repository.cache.path + ".tmp.stale"
+            with open(stale_temp, "w", encoding="utf-8") as handle:
+                handle.write("synthetic temp")
+            stale_at = time.time() - 7 * 24 * 60 * 60 - 1
+            os.utime(stale_temp, (stale_at, stale_at))
+            with open(repository.cache.path, "rb") as handle:
+                before = handle.read()
+
+            status = research_api.remote_cache_status(state_dir=tmp)
+
+            self.assertIn(status["freshness"], {"FRESH", "STALE"})
+            self.assertTrue(os.path.exists(stale_temp))
+            with open(repository.cache.path, "rb") as handle:
+                self.assertEqual(handle.read(), before)
 
 
 if __name__ == "__main__":

@@ -223,7 +223,6 @@ class RemoteAlphaCache:
         }
 
     def load(self):
-        self._cleanup_expired_resources()
         try:
             with open(self.path, encoding="utf-8") as handle:
                 payload = json.load(handle)
@@ -236,10 +235,6 @@ class RemoteAlphaCache:
             or payload.get("retention_days", 7) != self.retention_days
             or payload.get("week_start") != self.week_start
         ):
-            try:
-                os.unlink(self.path)
-            except (FileNotFoundError, OSError):
-                pass
             return None
         return payload
 
