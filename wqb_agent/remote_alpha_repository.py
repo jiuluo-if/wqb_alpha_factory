@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from .alpha_feed_cache import DEFAULT_ROLLING_SIMULATION_CAP, RemoteAlphaCache
+from .alpha_feed_cache import RemoteAlphaCache
 from .query_errors import QueryTooBroadError
 from .remote_evidence import RemoteAlphaEvidenceProvider
 
@@ -40,12 +40,7 @@ class RemoteAlphaRepository:
             raise ValueError("retention_days 必须是 1-90 的整数")
         self.retention_days = days
         self.cache = RemoteAlphaCache(
-            cache_path, clock=clock,
-            rolling_simulation_cap=(
-                days * 1600
-                if retention_days != 7 else DEFAULT_ROLLING_SIMULATION_CAP
-            ),
-            retention_days=days,
+            cache_path, clock=clock, retention_days=days,
         )
         self.alpha_reader = alpha_reader
         self._now = clock or time.time

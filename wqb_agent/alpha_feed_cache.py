@@ -12,7 +12,6 @@ from .artifacts import atomic_write_json_if_changed
 NEW_YORK = ZoneInfo("America/New_York")
 
 SCHEMA_VERSION = 1
-DEFAULT_ROLLING_SIMULATION_CAP = 7 * 1600
 TEMP_RESOURCE_TTL_SEC = 7 * 24 * 60 * 60
 
 
@@ -35,11 +34,6 @@ def _local_date(timestamp):
     ).date()
 
 
-def _week_start(local_day):
-    """Return the rolling seven-day window start, inclusive."""
-    return local_day - timedelta(days=6)
-
-
 def _utc_iso(timestamp):
     return datetime.fromtimestamp(timestamp, tz=UTC).isoformat().replace(
         "+00:00", "Z"
@@ -47,22 +41,15 @@ def _utc_iso(timestamp):
 
 
 class RemoteAlphaCache:
-    """Persist only the rolling seven-day New York window of Alpha metadata.
+    """Persist only the configured rolling New York retention window.
 
     This is a rebuildable view, not research evidence.  It stores no metrics,
     expressions, trajectory rows, or platform result payloads.
     """
 
-    def __init__(self, path, *, clock=None, rolling_simulation_cap=DEFAULT_ROLLING_SIMULATION_CAP,
-                 retention_days=7):
+    def __init__(self, path, *, clock=None, retention_days=7):
         if not path:
             raise ValueError("Alpha feed cache path 不能为空")
-        try:
-            cap = int(rolling_simulation_cap)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("rolling_simulation_cap 必须是正整数") from exc
-        if cap < 1:
-            raise ValueError("rolling_simulation_cap 必须是正整数")
         try:
             days = int(retention_days)
         except (TypeError, ValueError) as exc:
@@ -71,7 +58,6 @@ class RemoteAlphaCache:
             raise ValueError("retention_days 必须是 1-90 的整数")
         self.path = os.path.abspath(path)
         self._clock = clock or __import__("time").time
-        self.rolling_simulation_cap = cap
         self.retention_days = days
 
     @property
@@ -144,50 +130,10 @@ class RemoteAlphaCache:
                 }
         return normalized
 
-    @staticmethod
-    def _simulation_sort_key(day, row):
-        return (
-            str(day),
-            str(row.get("date_created") or row.get("dateCreated") or ""),
-            str(row.get("alpha_id") or row.get("id") or ""),
-        )
-
-    def _prune_simulations(self, days, local_day):
-        entries = [
-            (day, row)
-            for day, bucket in days.items()
-            for row in bucket["simulations"]
-        ]
-        excess = max(0, len(entries) - self.rolling_simulation_cap)
-        if not excess:
-            return 0
-        current_key = local_day.isoformat()
-        removable = sorted(
-            entries,
-            key=lambda item: (
-                item[0] == current_key,
-                self._simulation_sort_key(*item),
-            ),
-        )
-        remove = {
-            (day, str(row.get("alpha_id") or row.get("id")))
-            for day, row in removable[:excess]
-        }
-        for day, bucket in days.items():
-            bucket["simulations"] = [
-                row for row in bucket["simulations"]
-                if (day, str(row.get("alpha_id") or row.get("id"))) not in remove
-            ]
-        for day in list(days):
-            if not days[day]["simulations"] and not days[day]["submitted_alphas"]:
-                del days[day]
-        return len(remove)
-
     def refresh(self, days):
         now = self._clock()
         local_day = _local_date(now)
         normalized = self._normalize_days(days, local_day)
-        pruned = self._prune_simulations(normalized, local_day)
         next_day = local_day + timedelta(days=1)
         expires_at = datetime.combine(
             next_day, datetime.min.time(), tzinfo=NEW_YORK
@@ -218,7 +164,6 @@ class RemoteAlphaCache:
             "expires_at": payload["expires_at"],
             "simulation_count": simulation_count,
             "submitted_count": submitted_count,
-            "pruned_simulation_count": pruned,
             "expired_resource_count": expired_resources,
         }
 

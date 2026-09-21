@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import date, timedelta
 
 from wqb_agent.alpha_feed_cache import (
     TEMP_RESOURCE_TTL_SEC,
@@ -144,6 +145,71 @@ class TestAlphaFeedCache(unittest.TestCase):
 
             self.assertFalse(os.path.exists(stale_temp))
             self.assertEqual(result["expired_resource_count"], 1)
+
+    def test_refresh_keeps_retained_rows_and_dedupes_without_quota_pruning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "remote.json")
+            cache = RemoteAlphaCache(
+                path, clock=lambda: FIXED_NOW, retention_days=3,
+            )
+            local = cache.local_date
+            local_day = date.fromisoformat(local)
+            days = {
+                local: {
+                    "simulations": [
+                        {"alpha_id": "synthetic-dup"},
+                        {"alpha_id": "synthetic-dup"},
+                        {"alpha_id": "synthetic-today"},
+                    ],
+                    "submitted_alphas": [
+                        {"alpha_id": "synthetic-submitted"},
+                    ],
+                },
+                (local_day - timedelta(days=1)).isoformat(): {
+                    "simulations": [{"alpha_id": "synthetic-yesterday"}],
+                    "submitted_alphas": [],
+                },
+                (local_day - timedelta(days=2)).isoformat(): {
+                    "simulations": [{"alpha_id": "synthetic-two-days"}],
+                    "submitted_alphas": [],
+                },
+                (local_day - timedelta(days=3)).isoformat(): {
+                    "simulations": [{"alpha_id": "synthetic-expired"}],
+                    "submitted_alphas": [],
+                },
+            }
+
+            result = cache.refresh(days)
+            payload = cache.load()
+
+            self.assertEqual(result["simulation_count"], 4)
+            self.assertEqual(result["submitted_count"], 1)
+            self.assertNotIn("pruned_simulation_count", result)
+            self.assertNotIn(
+                "synthetic-expired",
+                {
+                    row["alpha_id"]
+                    for bucket in payload["days"].values()
+                    for row in bucket["simulations"]
+                },
+            )
+            self.assertEqual(
+                {
+                    row["alpha_id"]
+                    for bucket in payload["days"].values()
+                    for row in bucket["simulations"]
+                },
+                {
+                    "synthetic-dup",
+                    "synthetic-today",
+                    "synthetic-yesterday",
+                    "synthetic-two-days",
+                },
+            )
+            self.assertEqual(
+                payload["days"][local]["submitted_alphas"],
+                [{"alpha_id": "synthetic-submitted"}],
+            )
 
 
 if __name__ == "__main__":

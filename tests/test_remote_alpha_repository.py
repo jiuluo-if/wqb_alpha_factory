@@ -30,7 +30,38 @@ class FakeEvidenceClient(FakeAlphaReader):
         return {"alpha_id": str(alpha_id), "status": "AVAILABLE", "value": 0.2}
 
 
+class ManySyntheticAlphaReader:
+    def __init__(self, count):
+        self.rows = [
+            {
+                "id": f"synthetic-alpha-{index:04d}",
+                "dateCreated": "2026-09-16T12:00:00Z",
+            }
+            for index in range(count)
+        ]
+
+    def __call__(self, **kwargs):
+        if kwargs.get("status") == "SUBMITTED":
+            return []
+        return list(self.rows)
+
+
 class TestRemoteAlphaRepository(unittest.TestCase):
+    def test_refresh_keeps_all_retained_metadata_without_quota_cap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repository = RemoteAlphaRepository(
+                ManySyntheticAlphaReader(1601),
+                cache_path=f"{tmp}/remote.json",
+                retention_days=1, clock=lambda: 1789560000,
+            )
+
+            refreshed = repository.refresh_remote_alphas()
+
+            self.assertEqual(refreshed["rolling_simulated_count"], 1601)
+            self.assertEqual(refreshed["simulation_count"], 1601)
+            self.assertNotIn("pruned_simulation_count", refreshed)
+            self.assertEqual(len(repository.list_remote_alphas()), 1601)
+
     def test_refresh_and_list_use_configured_rolling_window(self):
         with tempfile.TemporaryDirectory() as tmp:
             repository = RemoteAlphaRepository(
