@@ -278,6 +278,67 @@ class TestResearchApi(unittest.TestCase):
                 template_id="synthetic", anchor_spec=anchor,
             )
 
+    def test_settings_variant_inherits_anchor_identity(self):
+        from wqb_agent.research_api import build_simulation_spec
+
+        anchor = SimulationSpec(
+            "rank(field_a)", settings={"decay": 4}, fields=("field_a",),
+            template_id="synthetic", simulation_type="REGULAR",
+        )
+        variant = build_simulation_spec(
+            "rank(field_a)", settings={"decay": 6}, anchor_spec=anchor,
+        )
+        self.assertEqual(variant.fields, ("field_a",))
+        self.assertEqual(variant.template_id, "synthetic")
+        self.assertEqual(variant.simulation_type, anchor.simulation_type)
+        self.assertEqual(variant.expression, anchor.expression)
+
+    def test_settings_variant_rejects_anchor_identity_changes(self):
+        from wqb_agent.research_api import build_simulation_spec
+
+        anchor = SimulationSpec(
+            "rank(field_a)", fields=("field_a",), template_id="synthetic",
+        )
+        cases = (
+            {"fields": ["field_b"]},
+            {"template_id": "synthetic-other"},
+            {"simulation_type": "SUPER"},
+        )
+        for overrides in cases:
+            with self.subTest(overrides=overrides):
+                with self.assertRaisesRegex(ValueError, "NEW_PROBE_REQUIRED"):
+                    build_simulation_spec(
+                        "rank(field_a)", settings={"decay": 6},
+                        anchor_spec=anchor, **overrides,
+                    )
+
+    def test_settings_variant_rejects_new_template_identity(self):
+        from wqb_agent.research_api import build_simulation_spec
+
+        anchor = SimulationSpec("rank(field_a)", fields=("field_a",))
+        with self.assertRaisesRegex(ValueError, "NEW_PROBE_REQUIRED"):
+            build_simulation_spec(
+                "rank(field_a)", settings={"decay": 6},
+                template_id="synthetic", anchor_spec=anchor,
+            )
+
+    def test_settings_variant_rejects_non_regular_anchor_before_construction(self):
+        from wqb_agent.research_api import build_simulation_spec
+
+        for simulation_type in ("SUPER", "REGION_AGNOSTIC"):
+            with self.subTest(simulation_type=simulation_type):
+                anchor = SimulationSpec(
+                    "rank(field_a)", fields=("field_a",),
+                    simulation_type=simulation_type,
+                )
+                with self.assertRaisesRegex(
+                    ValueError, "UNSUPPORTED_SIMULATION_TYPE"
+                ):
+                    build_simulation_spec(
+                        "rank(field_a)", settings={"decay": 6},
+                        anchor_spec=anchor,
+                    )
+
     def test_template_crud_requires_explicit_private_catalog(self):
         from wqb_agent.research_api import (
             create_template,

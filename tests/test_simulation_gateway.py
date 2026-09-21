@@ -957,6 +957,30 @@ class SimulationWriteContractTests(unittest.TestCase):
         self.assertEqual(result["status"], "DONE")
         self.assertEqual(client.submissions[0][2]["alpha_type"], "REGULAR")
 
+    def test_settings_variant_preserves_fields_for_field_capability_preflight(self):
+        anchor = SimulationSpec(
+            "rank(field_a)", settings={"delay": 1}, fields=("field_a",),
+        )
+        variant = research_api.build_simulation_spec(
+            "rank(field_a)", settings={"delay": 2}, anchor_spec=anchor,
+        )
+        client = FakeGatewayClient()
+        field_requests = []
+
+        def unavailable_fields(fields):
+            field_requests.append(fields)
+            return {"valid": False, "fields": []}
+
+        client.get_field_capability = unavailable_fields
+        with tempfile.TemporaryDirectory() as state:
+            gateway = SimulationGateway(client, state_dir=state)
+            with self.assertRaisesRegex(ValueError, "FIELD_CAPABILITY_UNAVAILABLE"):
+                gateway.simulate(variant)
+            self.assertEqual(client.submissions, [])
+            self.assertEqual(gateway.guard.entries(), [])
+
+        self.assertEqual(field_requests, [["field_a"]])
+
     def test_non_regular_types_are_rejected_before_guard_or_post(self):
         for simulation_type in ("REGION_AGNOSTIC", "SUPER", "BOGUS"):
             with self.subTest(simulation_type=simulation_type):

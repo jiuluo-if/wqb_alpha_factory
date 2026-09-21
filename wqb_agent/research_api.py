@@ -443,12 +443,22 @@ def build_simulation_spec(expression, *, settings=None, fields=(), note=None, te
                           client=None, config=None, anchor_spec=None,
                           simulation_type="REGULAR"):
     """Build a validated, non-submitting SimulationSpec."""
+    effective_fields = tuple(str(item) for item in (fields or ()) if str(item).strip())
+    effective_template_id = template_id
+    effective_simulation_type = str(simulation_type or "REGULAR").strip().upper()
     if anchor_spec is not None:
         if not isinstance(anchor_spec, SimulationSpec):
             anchor_spec = SimulationSpec(**dict(anchor_spec))
-        if (template_id is not None and anchor_spec.template_id is not None
-                and template_id != anchor_spec.template_id):
+        SimulationGateway.validate_simulation_spec(anchor_spec)
+        if effective_fields and effective_fields != anchor_spec.fields:
+            raise ValueError("NEW_PROBE_REQUIRED: fields changed during optimization")
+        effective_fields = anchor_spec.fields
+        if template_id is not None and template_id != anchor_spec.template_id:
             raise ValueError("NEW_PROBE_REQUIRED: template changed during optimization")
+        effective_template_id = anchor_spec.template_id
+        if effective_simulation_type != anchor_spec.simulation_type:
+            raise ValueError("NEW_PROBE_REQUIRED: simulation type changed during optimization")
+        effective_simulation_type = anchor_spec.simulation_type
         if canonical_expression(expression) != canonical_expression(anchor_spec.expression):
             raise ValueError("NEW_PROBE_REQUIRED: settings variant changed expression")
     result = validate_simulation_settings(settings or {}, client=client, config=config)
@@ -457,8 +467,9 @@ def build_simulation_spec(expression, *, settings=None, fields=(), note=None, te
     effective_settings = dict(result["settings"])
     effective_settings.pop("fields", None)
     spec = SimulationSpec(
-        expression=expression, settings=effective_settings, fields=tuple(fields or ()),
-        note=note, template_id=template_id, simulation_type=simulation_type,
+        expression=expression, settings=effective_settings, fields=effective_fields,
+        note=note, template_id=effective_template_id,
+        simulation_type=effective_simulation_type,
     )
     SimulationGateway.validate_simulation_spec(spec)
     return spec
