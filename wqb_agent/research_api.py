@@ -943,8 +943,12 @@ def _remote_client(*, client=None):
     return WQBClient()
 
 
+def _evidence_provider(*, client=None):
+    return RemoteAlphaEvidenceProvider(_remote_client(client=client))
+
+
 def get_alpha(alpha_id, *, client=None, config=None):
-    return _remote_client(client=client).get_alpha(str(alpha_id).strip())
+    return _evidence_provider(client=client).get_alpha(alpha_id)
 
 
 def get_activity_diversity(*, client=None, config=None, user_id=None,
@@ -966,59 +970,36 @@ def get_activity_diversity(*, client=None, config=None, user_id=None,
 
 def get_alpha_evidence(alpha_id, *, client=None, config=None,
                        live=True, recordsets=()):
-    if not live:
-        raise ValueError("LIVE_EVIDENCE_REQUIRED")
-    import time as _time
-    snapshot = RemoteAlphaEvidenceProvider(
-        _remote_client(client=client)
-    ).collect(str(alpha_id).strip(), recordsets=recordsets)
-    return {
-        "alpha_id": snapshot.alpha_id, "source": "LIVE",
-        "fetched_at": _time.time(), "age_sec": 0.0,
-        "alpha": dict(snapshot.alpha_detail),
-        "aggregates": snapshot.aggregates, "pnl": snapshot.pnl,
-        "self_correlation": snapshot.self_correlation,
-        "recordsets": dict(snapshot.recordsets),
-        "status": dict(snapshot.status), "availability": dict(snapshot.availability),
-    }
+    return _evidence_provider(client=client).get_alpha_evidence(
+        alpha_id, live=live, recordsets=recordsets,
+    )
 
 
 def get_alpha_metrics(alpha_id, *, client=None, config=None):
-    return get_alpha_evidence(alpha_id, client=client,
-                              config=config)["alpha"].get("is", {})
+    return _evidence_provider(client=client).get_alpha_metrics(alpha_id)
 
 
 def get_alpha_aggregates(alpha_id, *, client=None, config=None):
-    return RemoteAlphaEvidenceProvider(
-        _remote_client(client=client)
-    ).get_alpha_aggregates(str(alpha_id).strip())
+    return _evidence_provider(client=client).get_alpha_aggregates(alpha_id)
 
 
 def get_alpha_pnl(alpha_id, *, client=None, config=None):
-    return RemoteAlphaEvidenceProvider(
-        _remote_client(client=client)
-    ).get_alpha_pnl(str(alpha_id).strip())
+    return _evidence_provider(client=client).get_alpha_pnl(alpha_id)
 
 
 def get_alpha_self_correlation(alpha_id, *, client=None, config=None):
-    return RemoteAlphaEvidenceProvider(
-        _remote_client(client=client)
-    ).get_alpha_self_correlation(str(alpha_id).strip())
+    return _evidence_provider(client=client).get_alpha_self_correlation(alpha_id)
 
 
 def get_alpha_recordsets(alpha_id, names, *, client=None, config=None):
     """Read only explicitly selected, currently discoverable Alpha recordsets."""
-    return get_alpha_evidence(
-        alpha_id, client=client, config=config, recordsets=names,
+    return _evidence_provider(client=client).get_alpha_evidence(
+        alpha_id, recordsets=names,
     )["recordsets"]
 
 
 def compare_alphas(alpha_ids, *, client=None, config=None):
-    return {"source": "LIVE", "status": "AVAILABLE", "evidence_status": "AVAILABLE",
-            "alphas": [
-        get_alpha_evidence(item, client=client, config=config)
-        for item in (alpha_ids or ())
-    ]}
+    return _evidence_provider(client=client).compare_alphas(alpha_ids)
 
 
 def _remote_repository(*, client=None, config=None, state_dir=None,

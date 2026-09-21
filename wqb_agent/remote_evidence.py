@@ -5,12 +5,9 @@ from __future__ import annotations
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
 
-from .client import (
-    WQBCorrelationPendingError,
-    WQBNotFoundError,
-)
+from .client import WQBNotFoundError
 
 
 def decode_recordset(payload):
@@ -53,12 +50,8 @@ class RemoteAlphaEvidence:
     availability: Mapping[str, str] = field(default_factory=dict)
 
 
-class RemoteEvidenceProvider(Protocol):
-    def collect(self, alpha_id: str) -> RemoteAlphaEvidence: ...
-
-
-class _RemoteEvidenceCollector:
-    """Project one WQBClient into a live, read-only Alpha evidence API."""
+class RemoteAlphaEvidenceProvider:
+    """Live, read-only Alpha evidence API."""
 
     def __init__(self, client):
         self.client = client
@@ -104,44 +97,6 @@ class _RemoteEvidenceCollector:
             status=status, availability=availability,
         )
 
-    @staticmethod
-    def _slot_value(value, key, default):
-        if isinstance(value, Mapping):
-            return str(value.get(key) or default).upper()
-        return default
-
-    @staticmethod
-    def _slot(name, operation, alpha_id, *, allow_not_found=False, pending_unknown=False):
-        try:
-            value = operation(alpha_id)
-            if pending_unknown and isinstance(value, Mapping) and str(value.get("status") or "").upper() in {
-                "PENDING", "RUNNING", "QUEUED", "UNSETTLED",
-            }:
-                value = dict(value)
-                value.update({"status": "UNKNOWN", "availability": "AVAILABLE",
-                              "reason_code": "CORRELATION_PENDING"})
-            return value
-        except WQBCorrelationPendingError:
-            return {"status": "UNKNOWN", "availability": "AVAILABLE",
-                    "reason_code": "CORRELATION_PENDING", "slot": name}
-        except WQBNotFoundError:
-            if not allow_not_found:
-                raise
-            return {"status": "UNAVAILABLE", "availability": "UNAVAILABLE",
-                    "slot": name, "reason_code": "CAPABILITY_UNAVAILABLE"}
-        except (AttributeError, NotImplementedError) as exc:
-            return {"status": "UNAVAILABLE", "availability": "UNAVAILABLE",
-                    "slot": name, "reason": str(exc) or "capability unavailable"}
-        except Exception as exc:
-            if str(getattr(exc, "kind", "")).upper() in {"UNAVAILABLE", "CAPABILITY_UNAVAILABLE"}:
-                return {"status": "UNAVAILABLE", "availability": "UNAVAILABLE",
-                        "slot": name, "reason": str(exc) or "capability unavailable"}
-            raise
-
-
-class RemoteAlphaEvidenceProvider(_RemoteEvidenceCollector):
-    """Live, read-only Alpha evidence API."""
-
     def get_alpha(self, alpha_id):
         return self.client.get_alpha(str(alpha_id).strip())
 
@@ -176,6 +131,10 @@ class RemoteAlphaEvidenceProvider(_RemoteEvidenceCollector):
         return self.client.get_self_correlation(str(alpha_id).strip())
 
     def compare_alphas(self, alpha_ids):
-        return {"source": "LIVE", "alphas": [
-            self.get_alpha_evidence(item) for item in (alpha_ids or ())
-        ]}
+        return {
+            "source": "LIVE", "status": "AVAILABLE",
+            "evidence_status": "AVAILABLE",
+            "alphas": [
+                self.get_alpha_evidence(item) for item in (alpha_ids or ())
+            ],
+        }

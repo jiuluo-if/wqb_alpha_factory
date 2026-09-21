@@ -14,6 +14,8 @@ from wqb_agent.research_api import (
     find_similar_alphas,
     generate_probes,
     get_alpha_aggregates,
+    get_alpha_evidence,
+    get_alpha_metrics,
     get_alpha_pnl,
     get_alpha_recordsets,
     get_alpha_self_correlation,
@@ -484,6 +486,72 @@ class TestResearchApi(unittest.TestCase):
         client.get_self_correlation.assert_called_once_with("a1")
         client.get_alpha.assert_not_called()
         client.list_alpha_recordsets.assert_not_called()
+
+    def test_alpha_evidence_facade_keeps_cheap_first_envelope(self):
+        client = mock.Mock()
+        client.get_alpha.return_value = {"id": "a1", "is": {"sharpe": 1.2}}
+
+        result = get_alpha_evidence("a1", client=client)
+
+        self.assertEqual(
+            set(result),
+            {
+                "alpha_id", "source", "fetched_at", "age_sec", "alpha",
+                "aggregates", "pnl", "self_correlation", "recordsets",
+                "status", "availability",
+            },
+        )
+        self.assertEqual(result["source"], "LIVE")
+        self.assertEqual(result["alpha"], {"id": "a1", "is": {"sharpe": 1.2}})
+        self.assertIsNone(result["aggregates"])
+        self.assertIsNone(result["pnl"])
+        self.assertIsNone(result["self_correlation"])
+        self.assertEqual(result["recordsets"], {})
+        client.get_alpha.assert_called_once_with("a1")
+        client.list_alpha_recordsets.assert_not_called()
+        client.get_aggregates.assert_not_called()
+        client.get_pnl.assert_not_called()
+        client.get_self_correlation.assert_not_called()
+
+    def test_alpha_metrics_use_only_detail_is_projection(self):
+        client = mock.Mock()
+        client.get_alpha.return_value = {"id": "a1", "is": {"sharpe": 1.2}}
+
+        self.assertEqual(get_alpha_metrics("a1", client=client), {"sharpe": 1.2})
+        client.get_alpha.assert_called_once_with("a1")
+        client.list_alpha_recordsets.assert_not_called()
+        client.get_aggregates.assert_not_called()
+        client.get_pnl.assert_not_called()
+        client.get_self_correlation.assert_not_called()
+
+    def test_alpha_evidence_requires_live_reads(self):
+        client = mock.Mock()
+
+        with self.assertRaisesRegex(ValueError, "LIVE_EVIDENCE_REQUIRED"):
+            get_alpha_evidence("a1", client=client, live=False)
+
+        client.get_alpha.assert_not_called()
+
+    def test_compare_alphas_keeps_public_envelope(self):
+        client = mock.Mock()
+        client.get_alpha.side_effect = [
+            {"id": "a1", "is": {"sharpe": 1.2}},
+            {"id": "a2", "is": {"sharpe": 0.8}},
+        ]
+
+        result = __import__("wqb_agent.research_api", fromlist=["compare_alphas"]).compare_alphas(
+            ["a1", "a2"], client=client
+        )
+
+        self.assertEqual(
+            {key: result[key] for key in ("source", "status", "evidence_status")},
+            {"source": "LIVE", "status": "AVAILABLE", "evidence_status": "AVAILABLE"},
+        )
+        self.assertEqual([item["alpha_id"] for item in result["alphas"]], ["a1", "a2"])
+        client.list_alpha_recordsets.assert_not_called()
+        client.get_aggregates.assert_not_called()
+        client.get_pnl.assert_not_called()
+        client.get_self_correlation.assert_not_called()
 
     def test_selected_recordsets_are_exposed_by_public_facade(self):
         client = mock.Mock()

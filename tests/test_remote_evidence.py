@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 from wqb_agent.client import WQBNotFoundError
 from wqb_agent.remote_evidence import RemoteAlphaEvidenceProvider, decode_recordset
@@ -96,6 +96,25 @@ class TestRemoteEvidence(unittest.TestCase):
         with self.assertRaises(RuntimeError) as raised:
             RemoteAlphaEvidenceProvider(client).collect("a1", recordsets=["coverage"])
         self.assertIs(raised.exception, error)
+
+    def test_compare_alphas_matches_public_evidence_envelope(self):
+        client = Mock()
+        client.get_alpha.side_effect = [
+            {"id": "a1", "is": {"sharpe": 1.2}},
+            {"id": "a2", "is": {"sharpe": 0.8}},
+        ]
+
+        result = RemoteAlphaEvidenceProvider(client).compare_alphas(["a1", "a2"])
+
+        self.assertEqual(result["source"], "LIVE")
+        self.assertEqual(result["status"], "AVAILABLE")
+        self.assertEqual(result["evidence_status"], "AVAILABLE")
+        self.assertEqual([item["alpha_id"] for item in result["alphas"]], ["a1", "a2"])
+        client.get_alpha.assert_has_calls([call("a1"), call("a2")])
+        client.list_alpha_recordsets.assert_not_called()
+        client.get_aggregates.assert_not_called()
+        client.get_pnl.assert_not_called()
+        client.get_self_correlation.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()
