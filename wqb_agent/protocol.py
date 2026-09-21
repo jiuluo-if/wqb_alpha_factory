@@ -51,7 +51,9 @@ ENDPOINT_TRUTH = (
     EndpointTruth("data_fields", "GET", "/data-fields", CapabilityStatus.OFFICIAL,
                   "dataset.id plus pagination/type", "results[], count", True),
     EndpointTruth("simulations", "POST", "/simulations", CapabilityStatus.OFFICIAL,
-                  "type, settings, regular", "Location header", False),
+                  "type, settings, regular",
+                  "Location, X-Ratelimit-Limit, X-Ratelimit-Remaining, "
+                  "X-Ratelimit-Reset headers", False),
     EndpointTruth("simulation_options", "OPTIONS", "/simulations", CapabilityStatus.OFFICIAL,
                   "none", "actions.POST capability projection", True),
     EndpointTruth("simulation_progress", "GET", "/simulations/{id}", CapabilityStatus.OFFICIAL,
@@ -159,9 +161,60 @@ def endpoint_truth(key):
 def _header_value(headers, name):
     if headers is None:
         return None
+    if hasattr(headers, "items"):
+        wanted = str(name).casefold()
+        for key, value in headers.items():
+            if str(key).casefold() == wanted:
+                return value
     if hasattr(headers, "get"):
         return headers.get(name) or headers.get(name.lower())
     return None
+
+
+_JSON_SAFE_NONNEGATIVE_MAX = 2**53 - 1
+
+
+def _bounded_nonnegative_integer(value):
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        parsed = float(str(value).strip())
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(parsed) or parsed < 0 or not parsed.is_integer():
+        return None
+    if parsed > _JSON_SAFE_NONNEGATIVE_MAX:
+        return None
+    return int(parsed)
+
+
+def simulation_rate_limit_from_headers(response_or_headers):
+    """Project official Simulation quota headers without owning any state."""
+    headers = getattr(response_or_headers, "headers", response_or_headers)
+    values = {
+        "limit": _bounded_nonnegative_integer(
+            _header_value(headers, "X-Ratelimit-Limit")
+        ),
+        "remaining": _bounded_nonnegative_integer(
+            _header_value(headers, "X-Ratelimit-Remaining")
+        ),
+        "reset_seconds": _bounded_nonnegative_integer(
+            _header_value(headers, "X-Ratelimit-Reset")
+        ),
+    }
+    valid_count = sum(value is not None for value in values.values())
+    if valid_count == len(values):
+        status, evidence_status = "AVAILABLE", "AVAILABLE"
+    elif valid_count:
+        status, evidence_status = "PARTIAL", "INCONCLUSIVE"
+    else:
+        status, evidence_status = "UNKNOWN", "UNAVAILABLE"
+    return {
+        "status": status,
+        "evidence_status": evidence_status,
+        "source": "BRAIN_SIMULATION_HEADERS",
+        **values,
+    }
 
 
 def retry_after_seconds(response_or_headers, now=None, default=5.0):

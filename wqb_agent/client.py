@@ -50,6 +50,7 @@ from .protocol import (
     classify_simulation_status,
     probe_capability_response,
     retry_after_seconds,
+    simulation_rate_limit_from_headers,
 )
 from .query_errors import QueryTooBroadError
 
@@ -260,6 +261,29 @@ class WQBClient:
         self._rate_limit_until = 0.0
         self._submit_lock = threading.Lock()
         self._next_submit_at = 0.0
+        self._simulation_quota_lock = threading.Lock()
+        self._simulation_quota_observation = simulation_rate_limit_from_headers(None)
+
+    def _ensure_simulation_quota_state(self):
+        """Lazy compatibility for clients created via ``__new__`` in tests."""
+        if hasattr(self, "_simulation_quota_lock"):
+            return
+        self._simulation_quota_lock = threading.Lock()
+        self._simulation_quota_observation = simulation_rate_limit_from_headers(None)
+
+    def get_simulation_quota_observation(self):
+        """Return the latest in-memory official Simulation quota observation."""
+        self._ensure_simulation_quota_state()
+        with self._simulation_quota_lock:
+            return dict(self._simulation_quota_observation)
+
+    def _record_simulation_quota_observation(self, response):
+        observation = simulation_rate_limit_from_headers(response)
+        if observation["status"] == "UNKNOWN":
+            return
+        self._ensure_simulation_quota_state()
+        with self._simulation_quota_lock:
+            self._simulation_quota_observation = observation
 
     # ---- thread-local session ----
 
@@ -922,6 +946,7 @@ class WQBClient:
             retry_rate_limit=False,
             headers=headers,
         )
+        self._record_simulation_quota_observation(resp)
         location = resp.headers.get("Location")
         if not location:
             raise WQBSubmitUnknownError(
@@ -978,6 +1003,7 @@ class WQBClient:
             retry_rate_limit=False,
             headers=headers,
         )
+        self._record_simulation_quota_observation(resp)
         location = resp.headers.get("Location")
         if not location:
             raise WQBSubmitUnknownError(

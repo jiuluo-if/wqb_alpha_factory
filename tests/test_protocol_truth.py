@@ -9,6 +9,7 @@ from wqb_agent.protocol import (
     fixture_capability,
     probe_capability_response,
     retry_after_seconds,
+    simulation_rate_limit_from_headers,
 )
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "brain")
@@ -34,6 +35,16 @@ class TestProtocolTruth(unittest.TestCase):
                 self.assertEqual(catalog[key]["status"], "OFFICIAL")
                 self.assertEqual(catalog[key]["method"], method)
                 self.assertEqual(catalog[key]["path"], path)
+
+    def test_simulation_post_truth_includes_quota_headers(self):
+        schema = {
+            row["key"]: row["response_schema"] for row in endpoint_catalog()
+        }["simulations"]
+        for header in (
+            "Location", "X-Ratelimit-Limit", "X-Ratelimit-Remaining",
+            "X-Ratelimit-Reset",
+        ):
+            self.assertIn(header, schema)
 
     def test_simulation_status_classifier_uses_remote_truth(self):
         expected = {
@@ -159,3 +170,37 @@ class TestProtocolTruth(unittest.TestCase):
     def test_list_payload_is_rejected_for_non_operator_keys(self):
         result = probe_capability_response("data_sets", 200, [])
         self.assertNotEqual(result["availability"], "AVAILABLE")
+
+    def test_simulation_rate_limit_parser_is_case_insensitive_and_json_safe(self):
+        result = simulation_rate_limit_from_headers({
+            "x-ratelimit-limit": "1600",
+            "X-RATELIMIT-REMAINING": "987",
+            "X-RateLimit-Reset": "12345",
+        })
+
+        self.assertEqual(result, {
+            "status": "AVAILABLE",
+            "evidence_status": "AVAILABLE",
+            "source": "BRAIN_SIMULATION_HEADERS",
+            "limit": 1600,
+            "remaining": 987,
+            "reset_seconds": 12345,
+        })
+        self.assertIsInstance(json.dumps(result), str)
+
+    def test_simulation_rate_limit_parser_fails_closed_for_invalid_or_missing_headers(self):
+        for headers in (
+            {"X-Ratelimit-Limit": "-1", "X-Ratelimit-Remaining": "987", "X-Ratelimit-Reset": "12345"},
+            {"X-Ratelimit-Limit": "nan", "X-Ratelimit-Remaining": "987", "X-Ratelimit-Reset": "12345"},
+            {"X-Ratelimit-Limit": "1600", "X-Ratelimit-Remaining": "inf", "X-Ratelimit-Reset": "12345"},
+        ):
+            with self.subTest(headers=headers):
+                result = simulation_rate_limit_from_headers(headers)
+                self.assertNotEqual(result["status"], "AVAILABLE")
+
+        partial = simulation_rate_limit_from_headers({"X-Ratelimit-Remaining": "987"})
+        self.assertEqual(partial["status"], "PARTIAL")
+        self.assertEqual(partial["remaining"], 987)
+        unknown = simulation_rate_limit_from_headers({})
+        self.assertEqual(unknown["status"], "UNKNOWN")
+        self.assertIsNone(unknown["limit"])

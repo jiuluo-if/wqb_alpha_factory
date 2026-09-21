@@ -1053,17 +1053,20 @@ def purge_remote_cache(*, client=None, config=None, state_dir=None):
 
 
 def simulation_quota(*, client=None, config=None, state_dir=None):
-    """Return a read-only quota projection from remote usage and active guards."""
+    """Return official client quota observation plus an approximate fallback."""
     repository = _remote_repository(
         client=client, config=config, state_dir=state_dir,
         require_client=False,
     )
     quota = _normalized_config(config).quota
     typed = _normalized_config(config)
+    observation_reader = getattr(client, "get_simulation_quota_observation", None)
+    observation = observation_reader() if callable(observation_reader) else None
     return SimulationQuota(
         repository, ExecutionGuard(_state_directory(typed, state_dir), reconcile=False),
         daily_cap=quota.daily,
         rolling_cap=quota.rolling_limit,
+        official_observation=observation,
     ).snapshot()
 
 

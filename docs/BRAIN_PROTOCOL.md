@@ -14,6 +14,10 @@
 
 当前官方接口登记：`POST /authentication`、`GET /authentication`、`data_sets`、`data_fields`、`OPTIONS /simulations`、`POST /simulations`、已知 progress URL、`users/self/alphas`、`GET /alphas/{id}`、`GET /alphas/{id}/recordsets`、`GET /alphas/{id}/recordsets/{name}` 和 `GET /users/{userid}/activities/diversity`。本轮只把这些官方接口作为生产协议事实；`/operators` 等仍按现有 provenance 处理。
 
+成功的 `POST /simulations` response 中，`X-Ratelimit-Limit`、`X-Ratelimit-Remaining` 和 `X-Ratelimit-Reset` 是 BRAIN 提供的官方 Simulation quota observation；Multi response 中每个 child 分别计入配额，重复提交一个已经存在的 Alpha 也仍然计数。`/users/self/alphas` 的 Alpha 创建日期视图可能按 `alpha_id` 去重，不能作为精确 Simulation counter。当前 client 只在内存保留最近一次成功 response 的 bounded header projection；没有观察到这些 headers 时，官方 quota 必须保持 `UNKNOWN`。
+
+`RemoteAlphaRepository` rows 加上 unresolved `ExecutionGuard` 只能形成 `APPROXIMATE` 的本地 usage estimate，不能覆盖 BRAIN 的 official remaining，也不创建 quota history、ledger 或数据库。fallback estimate 的日期边界与 remote metadata 一致使用 `America/New_York`；旧的 `today_used`、`today_remaining` 等兼容字段必须明确标为 estimate。
+
 `GET /authentication` 只投影当前 live session 的 `authenticated`、`user_id`、`token_expiry` 和 `permissions`，不保存 JWT、cookie 或权限状态。`MULTI_SIMULATION` permission 是 Multi-Simulation 的账户能力前置条件；没有该 permission 时，客户端不得用 POST 探测或静默退化为大量 Single。
 
 `OPTIONS /simulations` 的 `actions.POST` 是 Simulation settings 的平台 truth。客户端只投影 Simulation type choices、实际使用的 settings allowed values/type 和 required fields；未知 vendor 字段忽略。当前 writer 的唯一支持类型是已经完整建模并验证的 `REGULAR`，即使平台广告 `SUPER` 或 `REGION_AGNOSTIC`，也不能把广告 capability 当作本项目的 write contract；SUPER 只有在独立 `combo`/`selection` request schema 实现并验证后才能进入 production writer。`MULTI` 不是 Simulation type，而是由 `MULTI_SIMULATION` permission 授权的 dispatch mode，当前 Multi child 仍只使用 REGULAR schema。OPTIONS 不可用时只能返回 `UNKNOWN`，并以最低本地 shape 校验继续提供 `LOCAL_ONLY` 结果，不能宣称 live validation 已通过。

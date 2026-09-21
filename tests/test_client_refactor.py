@@ -58,6 +58,33 @@ class TestProgressUrlSafety(unittest.TestCase):
             self.client.submit_simulation("rank(x)", {})
         self.client._request.assert_called_once()
 
+    def test_malformed_location_preserves_real_quota_observation(self):
+        self.client._wait_submission_slot = mock.Mock()
+        self.client._request = mock.Mock(return_value=mock.Mock(headers={
+            "Location": "https://evil.example/job",
+            "X-Ratelimit-Limit": "1600",
+            "X-Ratelimit-Remaining": "987",
+            "X-Ratelimit-Reset": "12345",
+        }))
+        with self.assertRaises(WQBSubmitUnknownError):
+            self.client.submit_simulation("rank(x)", {})
+        self.assertEqual(
+            self.client.get_simulation_quota_observation()["remaining"], 987
+        )
+
+    def test_missing_location_preserves_real_quota_observation(self):
+        self.client._wait_submission_slot = mock.Mock()
+        self.client._request = mock.Mock(return_value=mock.Mock(headers={
+            "X-Ratelimit-Limit": "1600",
+            "X-Ratelimit-Remaining": "986",
+            "X-Ratelimit-Reset": "12345",
+        }))
+        with self.assertRaises(WQBSubmitUnknownError):
+            self.client.submit_simulation("rank(x)", {})
+        self.assertEqual(
+            self.client.get_simulation_quota_observation()["remaining"], 986
+        )
+
     def test_invalid_persisted_url_makes_no_get(self):
         self.client._session = mock.Mock()
         with self.assertRaises(WQBSimulationError):
@@ -468,6 +495,46 @@ class TestOfficialReadOnlyClientAdapters(unittest.TestCase):
         self.assertFalse(request.call_args.kwargs.get("retry_rate_limit"))
         c._wait_submission_slot.assert_called_once_with()
 
+    def test_successful_single_submission_keeps_progress_url_and_quota_observation(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        response = FakeResponse(201, headers={
+            "Location": "/sim/1",
+            "X-Ratelimit-Limit": "1600",
+            "x-ratelimit-remaining": "987",
+            "X-RATELIMIT-RESET": "12345",
+        })
+        with mock.patch.object(c, "_request", return_value=response):
+            self.assertEqual(c.submit_simulation("rank(a)", {}),
+                             "https://api.worldquantbrain.com/sim/1")
+
+        self.assertEqual(c.get_simulation_quota_observation(), {
+            "status": "AVAILABLE",
+            "evidence_status": "AVAILABLE",
+            "source": "BRAIN_SIMULATION_HEADERS",
+            "limit": 1600,
+            "remaining": 987,
+            "reset_seconds": 12345,
+        })
+
+    def test_successful_multi_submission_keeps_progress_url_and_quota_observation(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        response = FakeResponse(201, headers={
+            "Location": "/multi/1",
+            "X-Ratelimit-Limit": "1600",
+            "X-Ratelimit-Remaining": "985",
+            "X-Ratelimit-Reset": "12345",
+        })
+        with mock.patch.object(c, "_request", return_value=response):
+            result = c.submit_multi_simulation([
+                {"expression": "rank(a)", "settings": {}},
+                {"expression": "rank(b)", "settings": {}},
+            ])
+
+        self.assertEqual(result, "https://api.worldquantbrain.com/multi/1")
+        self.assertEqual(c.get_simulation_quota_observation()["remaining"], 985)
+
     def test_single_submission_rejects_unimplemented_type_before_post(self):
         c = make_client()
         c._wait_submission_slot = mock.Mock()
@@ -785,6 +852,15 @@ class TestSharedRateLimitGate(unittest.TestCase):
             with self.assertRaises(WQBSubmitUnknownError):
                 c.submit_simulation("rank(a)", {})
         self.assertEqual(session.request.call_count, 1)
+        self.assertEqual(c.get_simulation_quota_observation()["status"], "UNKNOWN")
+
+    def test_simulation_post_5xx_is_unknown_without_quota_observation(self):
+        c = make_client()
+        c._local.session = FakeSession([FakeResponse(500, text="server error")])
+        with mock.patch.object(c, "_wait_submission_slot"):
+            with self.assertRaises(WQBSubmitUnknownError):
+                c.submit_simulation("rank(a)", {})
+        self.assertEqual(c.get_simulation_quota_observation()["status"], "UNKNOWN")
 
     def test_retry_after_longer_than_budget_fails_without_sleeping_full_delay(self):
         c = make_client()
