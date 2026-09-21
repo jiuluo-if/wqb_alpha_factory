@@ -110,14 +110,13 @@ class FieldDiscovery:
                  require_platform_alpha_count=False,
                  dataset_sampling="stratified", min_datasets=2,
                  dataset_pool=None, persist_catalog=False,
-                 candidate_pool_size=100, heartbeat=None):
+                 candidate_pool_size=100):
         """Field discovery with a two-level cache: in-memory (per run) and
         on-disk (cross-run, keyed by dataset id, TTL-bounded). A large
         pagination walk is only re-done when the cache is missing or stale,
         which keeps repeated rounds cheap without freezing the catalog.
         """
         self.client = client
-        self.heartbeat = heartbeat
         self.pagination_limit = pagination_limit
         self.max_pages = max_pages
         self._cache = {}
@@ -383,8 +382,8 @@ class FieldDiscovery:
                 "created_by_version": CREATED_BY_VERSION, "saved_at": time.time(),
                 "datasets": self._disk_cache}
         try:
-            # A cache heartbeat is not a new discovery artifact.  Refresh the
-            # timestamp only when the dataset payload itself changed.
+            # Refresh the timestamp only when the dataset payload itself
+            # changed; metadata-only writes are not new discovery artifacts.
             atomic_write_json_if_changed(
                 self.cache_path, data, ignored_keys=("saved_at",),
                 indent=None,
@@ -750,11 +749,6 @@ class FieldDiscovery:
         self.last_excluded_unknown_usage = []
         self._candidate_counts = {}
         self._dataset_snapshot = None
-        if self.heartbeat is not None:
-            self.heartbeat.emit_stage(
-                "DISCOVERY", dataset_current=0, dataset_total=0,
-                fields_collected=0, retry_count=0,
-            )
         keywords = self._keywords_from_hypothesis(hypothesis)
         chosen = []
         seen = set()
@@ -899,12 +893,6 @@ class FieldDiscovery:
         # A discovery pass may touch several datasets. Persist the merged
         # cache once, after all fields for this pass have been collected.
         self._save_disk_cache()
-        if self.heartbeat is not None:
-            self.heartbeat.emit_stage(
-                "DISCOVERY", dataset_current=len(available),
-                dataset_total=len(dataset_ids), fields_collected=len(chosen),
-                retry_count=0,
-            )
         return chosen
 
     def _rank_fields_for_dataset(self, dataset_id, keywords, category, hypothesis):

@@ -104,7 +104,6 @@ DIRECT_TESTS = {
         "tests/test_client_refactor.py",
     ),
     "wqb_agent/expression.py": ("tests/test_expression.py",),
-    "wqb_agent/heartbeat.py": ("tests/test_heartbeat.py",),
     "wqb_agent/remote_evidence.py": ("tests/test_remote_evidence.py",),
     "wqb_agent/simulation_gateway.py": ("tests/test_simulation_gateway.py",),
     "wqb_agent/remote_alpha_repository.py": ("tests/test_remote_alpha_repository.py",),

@@ -5,6 +5,7 @@ import unittest
 
 from wqb_agent import research_api
 from wqb_agent.alpha_factory import AlphaFactory
+from wqb_agent.discovery import FieldDiscovery
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "wqb_agent"
@@ -119,9 +120,13 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         retired = (
             "agent.py", "runtime_components.py", "runtime_composition.py",
             "runtime_policy.py", "optimizer_workflow.py", "optimizer_selection.py",
+            "heartbeat.py",
         )
         for name in retired:
             self.assertFalse((PACKAGE / name).exists(), name)
+
+    def test_field_discovery_has_no_retired_heartbeat_injection(self):
+        self.assertNotIn("heartbeat", inspect.signature(FieldDiscovery.__init__).parameters)
 
     def test_public_simulation_path_is_gateway_to_simulator_to_client(self):
         gateway_imports = _imports(PACKAGE / "simulation_gateway.py")
