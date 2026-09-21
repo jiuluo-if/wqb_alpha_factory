@@ -99,10 +99,6 @@ DIRECT_TESTS = {
     "wqb_agent/diagnostics.py": ("tests/test_remote_diagnostics.py",),
     "wqb_agent/evidence_status.py": ("tests/test_protocol_truth.py",),
     "wqb_agent/failures.py": ("tests/test_client_refactor.py",),
-    "wqb_agent/schema.py": (
-        "tests/test_client_refactor.py",
-        "tests/test_client_refactor.py",
-    ),
     "wqb_agent/expression.py": ("tests/test_expression.py",),
     "wqb_agent/remote_evidence.py": ("tests/test_remote_evidence.py",),
     "wqb_agent/simulation_gateway.py": ("tests/test_simulation_gateway.py",),

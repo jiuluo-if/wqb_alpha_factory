@@ -13,6 +13,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -1000,6 +1001,11 @@ class TestDiscoveryDiskCache(unittest.TestCase):
         # MATRIX + VECTOR 各 4 页（count=200），共 400 字段
         self.assertEqual(len(fields1), 400)
         self.assertTrue(os.path.exists(cache_path))
+        with open(cache_path, encoding="utf-8") as f:
+            payload = json.load(f)
+        self.assertEqual(payload["schema"], FieldDiscovery.CACHE_SCHEMA)
+        self.assertNotIn("schema_version", payload)
+        self.assertNotIn("created_by_version", payload)
         # 两类型都被拉取（探索 Vector 字段族的前提）
         self.assertEqual({c[2] for c in client.calls}, {"MATRIX", "VECTOR"})
         # second instance should hit the disk cache: no API calls
@@ -1009,6 +1015,47 @@ class TestDiscoveryDiskCache(unittest.TestCase):
         fields2 = d2._fields_for("news18")
         self.assertEqual(len(fields2), 400)
         self.assertEqual(client2.calls, [])
+
+    def test_wrong_active_schema_is_ignored_and_refetched(self):
+        tmp = tempfile.mkdtemp(prefix="wqb_test_disc_schema_")
+        cache_path = os.path.join(tmp, "fields_cache.json")
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "schema": FieldDiscovery.CACHE_SCHEMA + 1,
+                "saved_at": time.time(),
+                "datasets": {"news18": [{"id": "stale"}]},
+            }, f)
+
+        client = self.FakeClient()
+        discovery = FieldDiscovery(
+            client, cache_path=cache_path, cache_ttl_sec=3600,
+        )
+        fields = discovery._fields_for("news18")
+
+        self.assertEqual(len(fields), 400)
+        self.assertTrue(client.calls)
+        self.assertNotEqual(fields, [{"id": "stale"}])
+
+    def test_legacy_extra_cache_metadata_remains_readable(self):
+        tmp = tempfile.mkdtemp(prefix="wqb_test_disc_legacy_")
+        cache_path = os.path.join(tmp, "fields_cache.json")
+        legacy_fields = [{"id": "legacy", "dataset": {"id": "news18"}}]
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "schema": FieldDiscovery.CACHE_SCHEMA,
+                "schema_version": 1,
+                "created_by_version": "alpha-factory",
+                "saved_at": time.time(),
+                "datasets": {"news18": legacy_fields},
+            }, f)
+
+        client = self.FakeClient()
+        discovery = FieldDiscovery(
+            client, cache_path=cache_path, cache_ttl_sec=3600,
+        )
+
+        self.assertEqual(discovery._fields_for("news18"), legacy_fields)
+        self.assertEqual(client.calls, [])
 
     def test_stale_cache_refetches(self):
         tmp = tempfile.mkdtemp(prefix="wqb_test_disc2_")

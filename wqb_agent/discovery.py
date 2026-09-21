@@ -35,7 +35,6 @@ from .field_metadata import (
     profile_field,
     profile_frequency_evidence,
 )
-from .schema import CREATED_BY_VERSION, FIELDS_CACHE_VERSION
 
 __all__ = [
     "FieldDiscovery", "dataset_description_frequency", "frequency_evidence",
@@ -378,9 +377,11 @@ class FieldDiscovery:
     def _save_disk_cache(self):
         if not self.cache_path or self._using_catalog:
             return
-        data = {"schema": self.CACHE_SCHEMA, "schema_version": FIELDS_CACHE_VERSION,
-                "created_by_version": CREATED_BY_VERSION, "saved_at": time.time(),
-                "datasets": self._disk_cache}
+        data = {
+            "schema": self.CACHE_SCHEMA,
+            "saved_at": time.time(),
+            "datasets": self._disk_cache,
+        }
         try:
             # Refresh the timestamp only when the dataset payload itself
             # changed; metadata-only writes are not new discovery artifacts.
