@@ -36,6 +36,58 @@ from wqb_agent.research_api import (
 
 
 class TestResearchApi(unittest.TestCase):
+    def test_spec_facades_share_regular_only_writer_contract(self):
+        from wqb_agent.research_api import (
+            build_simulation_spec,
+            execution_fingerprint,
+            validate_simulation_spec,
+        )
+
+        client = SimpleNamespace()
+        for simulation_type in ("REGION_AGNOSTIC", "SUPER", "BOGUS"):
+            with self.subTest(simulation_type=simulation_type):
+                with self.assertRaisesRegex(
+                    ValueError, "UNSUPPORTED_SIMULATION_TYPE"
+                ):
+                    build_simulation_spec(
+                        "rank(close)", simulation_type=simulation_type
+                    )
+                spec = SimulationSpec(
+                    "rank(close)", simulation_type=simulation_type
+                )
+                with self.assertRaisesRegex(
+                    ValueError, "UNSUPPORTED_SIMULATION_TYPE"
+                ):
+                    validate_simulation_spec(spec, client=client)
+                with self.assertRaisesRegex(
+                    ValueError, "UNSUPPORTED_SIMULATION_TYPE"
+                ):
+                    execution_fingerprint(spec, client=client)
+
+    def test_numeric_variant_rejects_non_regular_base_spec(self):
+        from wqb_agent.alpha_templates import AlphaTemplate, TemplateNumericSlot
+        from wqb_agent.research_api import build_simulation_variant
+
+        template = AlphaTemplate(
+            "non-regular-base", expression="rank(ts_mean({p}, 5))",
+            required_slots=("p",), role="CONTROL_ALPHA",
+            semantic_contract="SYNTHETIC_FIXTURE", economic_mechanism="synthetic",
+            field_relationship="single field", direction_reason="synthetic",
+            expected_horizon="short-term", falsification="synthetic",
+            numeric_slots=(TemplateNumericSlot(
+                name="window", kind="RESEARCH_HORIZON", default=5,
+                allowed_values=(5, 22), economic_role="synthetic", token="5",
+                occurrence=0,
+            ),),
+        )
+        base = SimulationSpec(
+            "rank(ts_mean(field_a, 5))", fields=("field_a",),
+            template_id=template.template_id, simulation_type="SUPER",
+        )
+
+        with self.assertRaisesRegex(ValueError, "UNSUPPORTED_SIMULATION_TYPE"):
+            build_simulation_variant(base, template, "window", 22)
+
     def test_field_classification_exposes_type_dataset_and_semantics(self):
         from wqb_agent.research_api import classify_fields
 

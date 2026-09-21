@@ -811,18 +811,24 @@ class SimulationWriteContractTests(unittest.TestCase):
         spec = SimulationSpec("rank(close)", {"delay": 1})
         self.assertEqual(spec.simulation_type, "REGULAR")
 
-    def test_region_agnostic_fingerprint_never_collides_with_regular(self):
+    def test_canonical_validation_and_fingerprint_reject_non_regular_types(self):
         client = FakeGatewayClient()
         with tempfile.TemporaryDirectory() as state:
             gateway = SimulationGateway(client, state_dir=state)
-            regular = gateway.execution_fingerprint(
-                SimulationSpec("rank(close)", {"delay": 1})
-            )
-            region_agnostic = gateway.execution_fingerprint(
-                SimulationSpec("rank(close)", {"delay": 1},
-                               simulation_type="REGION_AGNOSTIC")
-            )
-        self.assertNotEqual(regular, region_agnostic)
+            for simulation_type in ("REGION_AGNOSTIC", "SUPER", "BOGUS"):
+                with self.subTest(simulation_type=simulation_type):
+                    spec = SimulationSpec(
+                        "rank(close)", {"delay": 1},
+                        simulation_type=simulation_type,
+                    )
+                    with self.assertRaisesRegex(
+                        ValueError, "UNSUPPORTED_SIMULATION_TYPE"
+                    ):
+                        gateway.validate_simulation_spec(spec)
+                    with self.assertRaisesRegex(
+                        ValueError, "UNSUPPORTED_SIMULATION_TYPE"
+                    ):
+                        gateway.execution_fingerprint(spec)
 
     def test_regular_fingerprint_is_unchanged_by_the_type_field(self):
         # Guards persisted before this change must still match.
@@ -833,6 +839,36 @@ class SimulationWriteContractTests(unittest.TestCase):
                 guard_material.expression, dict(guard_material.settings)
             ),
         )
+        with tempfile.TemporaryDirectory() as state:
+            gateway = SimulationGateway(FakeGatewayClient(), state_dir=state)
+            self.assertEqual(
+                gateway.execution_fingerprint(guard_material),
+                ExecutionGuard.fingerprint("rank(close)", {"delay": 1}),
+            )
+
+    def test_public_regular_build_validate_fingerprint_and_simulate_chain(self):
+        spec = research_api.build_simulation_spec(
+            "rank(close)", settings={"delay": 1}
+        )
+        client = FakeGatewayClient()
+        with tempfile.TemporaryDirectory() as state:
+            validated = research_api.validate_simulation_spec(
+                spec, client=client, state_dir=state
+            )
+            fingerprint = research_api.execution_fingerprint(
+                spec, client=client, state_dir=state
+            )
+            result = research_api.simulate(
+                spec, client=client, state_dir=state
+            )
+
+        self.assertEqual(validated["status"], "VALID")
+        self.assertEqual(
+            fingerprint,
+            ExecutionGuard.fingerprint(spec.expression, spec.settings),
+        )
+        self.assertEqual(result["status"], "DONE")
+        self.assertEqual(client.submissions[0][2]["alpha_type"], "REGULAR")
 
     def test_non_regular_types_are_rejected_before_guard_or_post(self):
         for simulation_type in ("REGION_AGNOSTIC", "SUPER", "BOGUS"):

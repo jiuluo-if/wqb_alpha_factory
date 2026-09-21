@@ -481,10 +481,10 @@ def validate_simulation_settings(settings, *, client=None, config=None, capabili
             if key not in normalized:
                 errors.append(f"missing required setting: {key}")
         # The capability projection is resolved for the CLIENT's own
-        # instrumentType/region.  When the request targets a different scope
-        # (for example region=ALL for a Region-Agnostic simulation), the
+        # instrumentType/region. When the request targets a different scope,
         # scope-dependent option lists do not apply and must not be used to
-        # reject a setting the platform itself accepts.
+        # reject a setting the platform itself accepts. This does not expand
+        # the writer contract beyond the executable SimulationSpec validator.
         scope_dependent_applies = True
         if client is not None:
             client_region = getattr(client, "region", None)
@@ -531,10 +531,12 @@ def build_simulation_spec(expression, *, settings=None, fields=(), note=None, te
         raise ValueError("invalid simulation settings: " + "; ".join(result["errors"]))
     effective_settings = dict(result["settings"])
     effective_settings.pop("fields", None)
-    return SimulationSpec(
+    spec = SimulationSpec(
         expression=expression, settings=effective_settings, fields=tuple(fields or ()),
         note=note, template_id=template_id, simulation_type=simulation_type,
     )
+    SimulationGateway.validate_simulation_spec(spec)
+    return spec
 
 
 def _optimization_operator_signatures(template):
@@ -552,6 +554,7 @@ def build_simulation_variant(base_spec, template, slot_name, value):
     """Return one bounded numeric variant without mutating or submitting."""
     if not isinstance(base_spec, SimulationSpec):
         base_spec = SimulationSpec(**dict(base_spec))
+    SimulationGateway.validate_simulation_spec(base_spec)
     template = _coerce_template(template)
     if base_spec.template_id != template.template_id:
         raise ValueError("template_id does not match base SimulationSpec")
@@ -575,11 +578,14 @@ def build_simulation_variant(base_spec, template, slot_name, value):
         raise ValueError("NEW_PROBE_REQUIRED: operator occurrence count changed")
     if operator_occurrence_signature(expression) != anchor_signature:
         raise ValueError("NEW_PROBE_REQUIRED: operator topology changed")
-    return SimulationSpec(
+    result = SimulationSpec(
         expression=expression,
         settings=dict(base_spec.settings), fields=base_spec.fields,
         note=base_spec.note, template_id=base_spec.template_id,
+        simulation_type=base_spec.simulation_type,
     )
+    SimulationGateway.validate_simulation_spec(result)
+    return result
 
 
 def validate_template(template):

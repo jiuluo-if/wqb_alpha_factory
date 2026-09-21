@@ -20,7 +20,6 @@ _CAPABILITY_UNCHECKED = object()
 _CAPABILITY_READER_ABSENT = object()
 _REMOTE_ROWS_UNCHECKED = object()
 REGULAR_SIMULATION_TYPE = "REGULAR"
-REGION_AGNOSTIC_SIMULATION_TYPE = "REGION_AGNOSTIC"
 SUPPORTED_WRITE_SIMULATION_TYPES = frozenset({REGULAR_SIMULATION_TYPE})
 
 
@@ -35,20 +34,6 @@ def _validate_write_simulation_type(spec):
         raise ValueError(
             "UNSUPPORTED_SIMULATION_TYPE: production writer supports REGULAR only"
         )
-
-
-def _fingerprint_material(spec):
-    """Settings material that also separates the simulation type.
-
-    REGULAR returns the historical material unchanged so guard fingerprints
-    already persisted on disk keep matching; a non-REGULAR type is a different
-    remote request and must never collide with the REGULAR execution.
-    """
-    material = dict(spec.settings)
-    simulation_type = _spec_simulation_type(spec)
-    if simulation_type != REGULAR_SIMULATION_TYPE:
-        material["__simulationType__"] = simulation_type
-    return material
 
 
 @dataclass(frozen=True)
@@ -222,6 +207,7 @@ class SimulationGateway:
     @staticmethod
     def validate_simulation_spec(spec):
         spec = spec if isinstance(spec, SimulationSpec) else SimulationSpec(**dict(spec))
+        _validate_write_simulation_type(spec)
         analysis = analyze_expression(spec.expression)
         if not analysis.identifiers:
             raise ValueError("expression must contain an identifier")
@@ -318,8 +304,8 @@ class SimulationGateway:
                 if key not in settings:
                     errors.append(f"missing required setting: {key}")
             # The projection was resolved for this client's own
-            # instrumentType/region; a request that targets another scope
-            # (region=ALL for Region-Agnostic) must not be judged by it.
+            # instrumentType/region; a request targeting another scope must
+            # not be judged by it.
             client_region = getattr(self.client, "region", None)
             client_type = getattr(self.client, "instrument_type", None)
             requested_region = settings.get("region", client_region)
@@ -404,7 +390,7 @@ class SimulationGateway:
     def execution_fingerprint(self, spec):
         spec = spec if isinstance(spec, SimulationSpec) else SimulationSpec(**dict(spec))
         self.validate_simulation_spec(spec)
-        return self.guard.fingerprint(spec.expression, _fingerprint_material(spec))
+        return self.guard.fingerprint(spec.expression, spec.settings)
 
     def _preflight_specs(self, specs, *, simulation_capability=_CAPABILITY_UNCHECKED):
         normalized = [
