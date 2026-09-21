@@ -8,8 +8,10 @@ from wqb_agent.simulation_gateway import ExecutionGuard
 
 
 class _Repository:
-    def __init__(self, rows):
+    def __init__(self, rows, retention_days=None):
         self.rows = rows
+        if retention_days is not None:
+            self.retention_days = retention_days
 
     def list_remote_alphas(self):
         return list(self.rows)
@@ -38,8 +40,25 @@ class TestRemoteSimulationQuota(unittest.TestCase):
             self.assertFalse(snapshot["persisted_quota_state"])
             self.assertEqual(snapshot["evidence_status"], "APPROXIMATE")
             self.assertTrue(snapshot["estimate"]["approximate"])
+            self.assertIsNone(snapshot["estimate"]["window_days"])
+            self.assertEqual(snapshot["estimate"]["window_source"], "UNKNOWN")
             self.assertEqual(snapshot["official"]["status"], "UNKNOWN")
             self.assertIsNone(snapshot["official"]["reset"])
+
+    def test_estimate_window_comes_from_repository_retention(self):
+        for retention_days in (3, 14):
+            with self.subTest(retention_days=retention_days), tempfile.TemporaryDirectory() as tmp:
+                snapshot = SimulationQuota(
+                    _Repository([], retention_days=retention_days),
+                    ExecutionGuard(tmp), daily_cap=3, rolling_cap=5,
+                    local_date=lambda: "2026-09-16",
+                ).snapshot()
+
+            self.assertEqual(snapshot["estimate"]["window_days"], retention_days)
+            self.assertEqual(
+                snapshot["estimate"]["window_source"],
+                "REMOTE_CACHE_RETENTION",
+            )
 
     def test_unique_alpha_rows_are_only_an_approximate_simulation_estimate(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -54,6 +73,7 @@ class TestRemoteSimulationQuota(unittest.TestCase):
             self.assertEqual(snapshot["estimate"]["today_used"], 1)
             self.assertEqual(snapshot["estimate"]["source"],
                              "ESTIMATE_REMOTE_ALPHA_REPOSITORY+EXECUTION_GUARD")
+            self.assertIsNone(snapshot["estimate"]["window_days"])
             self.assertEqual(snapshot["official"]["status"], "UNKNOWN")
             self.assertIsNone(snapshot["official"]["remaining"])
 
@@ -81,6 +101,7 @@ class TestRemoteSimulationQuota(unittest.TestCase):
             self.assertNotIn("reset" + "_seconds", snapshot["official"])
             self.assertEqual(snapshot["today_remaining"], 2)
             self.assertEqual(snapshot["estimate"]["today_remaining"], 2)
+            self.assertEqual(snapshot["estimate"]["window_days"], None)
             self.assertEqual(snapshot["evidence_status"], "AVAILABLE")
             self.assertTrue(snapshot["legacy_fields_are_estimate"])
 
@@ -145,6 +166,32 @@ class TestRemoteSimulationQuota(unittest.TestCase):
             result["source"], "ESTIMATE_REMOTE_ALPHA_REPOSITORY+EXECUTION_GUARD"
         )
         self.assertEqual(result["evidence_status"], "APPROXIMATE")
+
+    def test_public_quota_estimate_window_uses_remote_cache_retention(self):
+        class _Client:
+            def get_all_user_alphas(self, **_kwargs):
+                return []
+
+            def get_simulation_quota_observation(self):
+                return None
+
+        for retention_days in (3, 14):
+            with self.subTest(retention_days=retention_days), tempfile.TemporaryDirectory() as tmp:
+                result = research_api.simulation_quota(
+                    client=_Client(),
+                    config={
+                        "simulation": {},
+                        "remote_cache": {"retention_days": retention_days},
+                    },
+                    state_dir=tmp,
+                )
+
+            self.assertEqual(result["official"]["status"], "UNKNOWN")
+            self.assertEqual(result["estimate"]["window_days"], retention_days)
+            self.assertEqual(
+                result["estimate"]["window_source"],
+                "REMOTE_CACHE_RETENTION",
+            )
 
 
 if __name__ == "__main__":

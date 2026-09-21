@@ -11,6 +11,17 @@ OFFICIAL_SOURCE = "BRAIN_SIMULATION_HEADERS"
 ESTIMATE_SOURCE = "ESTIMATE_REMOTE_ALPHA_REPOSITORY+EXECUTION_GUARD"
 
 
+def _estimate_window(repository):
+    retention_days = getattr(repository, "retention_days", None)
+    if (
+        isinstance(retention_days, bool)
+        or not isinstance(retention_days, int)
+        or not 1 <= retention_days <= 90
+    ):
+        return None, "UNKNOWN"
+    return retention_days, "REMOTE_CACHE_RETENTION"
+
+
 def _unknown_official_observation():
     return {
         "status": "UNKNOWN",
@@ -89,6 +100,7 @@ class SimulationQuota:
                 if isinstance(row, dict)]
         today_used = sum(1 for row in rows if str(row.get("local_date")) == today)
         active = len(self.guard.entries())
+        window_days, window_source = _estimate_window(self.repository)
         rolling_used = len(rows) + active
         estimate = {
             "today_used": today_used + active,
@@ -98,6 +110,8 @@ class SimulationQuota:
             "daily_cap": self.daily_cap,
             "rolling_cap": self.rolling_cap,
             "active_guard_count": active,
+            "window_days": window_days,
+            "window_source": window_source,
             "source": ESTIMATE_SOURCE,
             "persisted_quota_state": False,
             "evidence_status": "APPROXIMATE",

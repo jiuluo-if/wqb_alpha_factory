@@ -57,7 +57,6 @@ class FactoryConfig:
 @dataclass(frozen=True)
 class QuotaConfig:
     daily: int = 1600
-    rolling_days: int = 7
     rolling_limit: int = 11200
 
 
@@ -190,10 +189,6 @@ def parse_config(raw):
     quota_raw = raw.get("quota", {})
     if not isinstance(quota_raw, dict):
         raise ValueError("config.quota 必须是对象")
-    rolling_days = _int_in_range(
-        quota_raw.get("rolling_days", 7), key="config.quota.rolling_days",
-        minimum=1, maximum=90,
-    )
     rolling_limit = _int_in_range(
         quota_raw.get("rolling_limit", 11200), key="config.quota.rolling_limit",
         minimum=0,
@@ -203,7 +198,7 @@ def parse_config(raw):
     )
     if daily_limit > rolling_limit:
         raise ValueError("config.quota.daily 不得超过 config.quota.rolling_limit")
-    quota = QuotaConfig(daily_limit, rolling_days, rolling_limit)
+    quota = QuotaConfig(daily=daily_limit, rolling_limit=rolling_limit)
     factory_raw = raw.get("factory", {})
     if not isinstance(factory_raw, dict):
         raise ValueError("config.factory 必须是对象")

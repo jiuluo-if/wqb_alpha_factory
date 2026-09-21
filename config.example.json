@@ -41,7 +41,6 @@
   },
   "quota": {
     "daily": 1600,
-    "rolling_days": 7,
     "rolling_limit": 11200
   },
   "factory": {

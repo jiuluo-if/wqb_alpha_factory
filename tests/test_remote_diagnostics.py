@@ -1,11 +1,13 @@
 import json
 import os
+import pathlib
 import tempfile
 import time
 import unittest
 
 from wqb_agent.alpha_feed_cache import TEMP_RESOURCE_TTL_SEC, RemoteAlphaCache
 from wqb_agent.audit import audit_execution_surface
+from wqb_agent.config import parse_config
 from wqb_agent.doctor import run_doctor
 from wqb_agent.simulation_gateway import ExecutionGuard
 
@@ -23,6 +25,22 @@ class TestRemoteDiagnostics(unittest.TestCase):
         self.assertEqual(result["cache"]["freshness"], "UNKNOWN")
         self.assertNotIn("trajectory", result)
         self.assertNotIn("trial_ledger", result)
+
+    def test_quota_ignores_legacy_rolling_days_without_typed_field(self):
+        parsed = parse_config({
+            "simulation": {},
+            "quota": {"daily": 3, "rolling_days": 14, "rolling_limit": 5},
+        })
+
+        self.assertEqual(parsed.quota.daily, 3)
+        self.assertEqual(parsed.quota.rolling_limit, 5)
+        self.assertFalse(hasattr(parsed.quota, "rolling_days"))
+
+    def test_config_example_does_not_publish_rolling_days(self):
+        example = pathlib.Path(__file__).resolve().parents[1] / "config.example.json"
+        payload = json.loads(example.read_text(encoding="utf-8"))
+
+        self.assertNotIn("rolling_days", payload["quota"])
 
     def test_known_running_execution_is_reported_without_replaying_result(self):
         with tempfile.TemporaryDirectory() as state_dir:
