@@ -122,6 +122,30 @@ class TestRemoteSimulationQuota(unittest.TestCase):
         self.assertEqual(result["estimate"]["source"],
                          "ESTIMATE_REMOTE_ALPHA_REPOSITORY+EXECUTION_GUARD")
 
+    def test_public_quota_api_falls_back_when_latest_observation_is_unknown(self):
+        class _Client:
+            def get_all_user_alphas(self, **_kwargs):
+                return []
+
+            def get_simulation_quota_observation(self):
+                return {
+                    "status": "UNKNOWN",
+                    "evidence_status": "UNAVAILABLE",
+                    "source": "BRAIN_SIMULATION_HEADERS",
+                    "limit": None,
+                    "remaining": None,
+                    "reset": None,
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = research_api.simulation_quota(client=_Client(), state_dir=tmp)
+
+        self.assertEqual(result["official"]["status"], "UNKNOWN")
+        self.assertEqual(
+            result["source"], "ESTIMATE_REMOTE_ALPHA_REPOSITORY+EXECUTION_GUARD"
+        )
+        self.assertEqual(result["evidence_status"], "APPROXIMATE")
+
 
 if __name__ == "__main__":
     unittest.main()

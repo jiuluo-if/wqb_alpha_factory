@@ -18,6 +18,8 @@
 
 `X-Ratelimit-Reset` 只投影为 bounded raw numeric `reset` header value；没有独立官方证据时，不推断其时间单位或时间基准。
 
+每个 accepted Simulation POST response 独立替换上一份 in-memory header projection；不同 response 的 quota fields 不合并。
+
 `RemoteAlphaRepository` rows 加上 unresolved `ExecutionGuard` 只能形成 `APPROXIMATE` 的本地 usage estimate，不能覆盖 BRAIN 的 official remaining，也不创建 quota history、ledger 或数据库。fallback estimate 的日期边界与 remote metadata 一致使用 `America/New_York`；旧的 `today_used`、`today_remaining` 等兼容字段必须明确标为 estimate。
 
 `GET /authentication` 只投影当前 live session 的 `authenticated`、`user_id`、`token_expiry` 和 `permissions`，不保存 JWT、cookie 或权限状态。`MULTI_SIMULATION` permission 是 Multi-Simulation 的账户能力前置条件；没有该 permission 时，客户端不得用 POST 探测或静默退化为大量 Single。

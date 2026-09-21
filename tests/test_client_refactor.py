@@ -549,6 +549,180 @@ class TestOfficialReadOnlyClientAdapters(unittest.TestCase):
             "reset" + "_seconds", c.get_simulation_quota_observation()
         )
 
+    def test_successful_response_without_headers_replaces_available_observation(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        responses = [
+            FakeResponse(201, headers={
+                "Location": "/sim/1",
+                "X-Ratelimit-Limit": "1600",
+                "X-Ratelimit-Remaining": "987",
+                "X-Ratelimit-Reset": "12345",
+            }),
+            FakeResponse(201, headers={"Location": "/sim/2"}),
+        ]
+        with mock.patch.object(c, "_request", side_effect=responses):
+            c.submit_simulation("rank(a)", {})
+            self.assertEqual(
+                c.get_simulation_quota_observation()["remaining"], 987
+            )
+            c.submit_simulation("rank(b)", {})
+
+        self.assertEqual(c.get_simulation_quota_observation(), {
+            "status": "UNKNOWN",
+            "evidence_status": "UNAVAILABLE",
+            "source": "BRAIN_SIMULATION_HEADERS",
+            "limit": None,
+            "remaining": None,
+            "reset": None,
+        })
+
+    def test_successful_partial_response_does_not_merge_with_available_observation(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        responses = [
+            FakeResponse(201, headers={
+                "Location": "/sim/1",
+                "X-Ratelimit-Limit": "1600",
+                "X-Ratelimit-Remaining": "987",
+                "X-Ratelimit-Reset": "12345",
+            }),
+            FakeResponse(201, headers={
+                "Location": "/sim/2",
+                "X-Ratelimit-Remaining": "900",
+            }),
+        ]
+        with mock.patch.object(c, "_request", side_effect=responses):
+            c.submit_simulation("rank(a)", {})
+            c.submit_simulation("rank(b)", {})
+
+        self.assertEqual(c.get_simulation_quota_observation(), {
+            "status": "PARTIAL",
+            "evidence_status": "INCONCLUSIVE",
+            "source": "BRAIN_SIMULATION_HEADERS",
+            "limit": None,
+            "remaining": 900,
+            "reset": None,
+        })
+
+    def test_successful_multi_response_without_headers_replaces_single_observation(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        responses = [
+            FakeResponse(201, headers={
+                "Location": "/sim/1",
+                "X-Ratelimit-Limit": "1600",
+                "X-Ratelimit-Remaining": "987",
+                "X-Ratelimit-Reset": "12345",
+            }),
+            FakeResponse(201, headers={"Location": "/multi/2"}),
+        ]
+        with mock.patch.object(c, "_request", side_effect=responses):
+            c.submit_simulation("rank(a)", {})
+            c.submit_multi_simulation([
+                {"expression": "rank(b)", "settings": {}},
+                {"expression": "rank(c)", "settings": {}},
+            ])
+
+        self.assertEqual(c.get_simulation_quota_observation()["status"], "UNKNOWN")
+        self.assertIsNone(c.get_simulation_quota_observation()["remaining"])
+
+    def test_success_without_headers_and_invalid_location_replaces_available_observation(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        responses = [
+            FakeResponse(201, headers={
+                "Location": "/sim/1",
+                "X-Ratelimit-Limit": "1600",
+                "X-Ratelimit-Remaining": "987",
+                "X-Ratelimit-Reset": "12345",
+            }),
+            FakeResponse(201, headers={}),
+        ]
+        with mock.patch.object(c, "_request", side_effect=responses):
+            c.submit_simulation("rank(a)", {})
+            with self.assertRaises(WQBSubmitUnknownError):
+                c.submit_simulation("rank(b)", {})
+
+        self.assertEqual(c.get_simulation_quota_observation()["status"], "UNKNOWN")
+        self.assertIsNone(c.get_simulation_quota_observation()["remaining"])
+
+    def test_success_with_malformed_headers_replaces_available_observation(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        responses = [
+            FakeResponse(201, headers={
+                "Location": "/sim/1",
+                "X-Ratelimit-Limit": "1600",
+                "X-Ratelimit-Remaining": "987",
+                "X-Ratelimit-Reset": "12345",
+            }),
+            FakeResponse(201, headers={
+                "Location": "/sim/2",
+                "X-Ratelimit-Limit": "bad",
+                "X-Ratelimit-Remaining": "bad",
+                "X-Ratelimit-Reset": "bad",
+            }),
+        ]
+        with mock.patch.object(c, "_request", side_effect=responses):
+            c.submit_simulation("rank(a)", {})
+            c.submit_simulation("rank(b)", {})
+
+        self.assertEqual(c.get_simulation_quota_observation()["status"], "UNKNOWN")
+        self.assertIsNone(c.get_simulation_quota_observation()["remaining"])
+
+    def test_timeout_after_success_does_not_create_a_new_observation(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        session = mock.Mock()
+        session.request.side_effect = [
+            FakeResponse(201, headers={
+                "Location": "/sim/1",
+                "X-Ratelimit-Limit": "1600",
+                "X-Ratelimit-Remaining": "987",
+                "X-Ratelimit-Reset": "12345",
+            }),
+            requests.exceptions.Timeout("ambiguous"),
+        ]
+        c._local.session = session
+        with mock.patch.object(
+            c, "_record_simulation_quota_observation",
+            wraps=c._record_simulation_quota_observation,
+        ) as recorder:
+            c.submit_simulation("rank(a)", {})
+            with self.assertRaises(WQBSubmitUnknownError):
+                c.submit_simulation("rank(b)", {})
+
+        self.assertEqual(recorder.call_count, 1)
+        self.assertEqual(c.get_simulation_quota_observation()["status"], "AVAILABLE")
+        self.assertEqual(c.get_simulation_quota_observation()["remaining"], 987)
+
+    def test_5xx_after_success_does_not_create_a_new_observation(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        session = mock.Mock()
+        session.request.side_effect = [
+            FakeResponse(201, headers={
+                "Location": "/sim/1",
+                "X-Ratelimit-Limit": "1600",
+                "X-Ratelimit-Remaining": "987",
+                "X-Ratelimit-Reset": "12345",
+            }),
+            FakeResponse(500, text="server error"),
+        ]
+        c._local.session = session
+        with mock.patch.object(
+            c, "_record_simulation_quota_observation",
+            wraps=c._record_simulation_quota_observation,
+        ) as recorder:
+            c.submit_simulation("rank(a)", {})
+            with self.assertRaises(WQBSubmitUnknownError):
+                c.submit_simulation("rank(b)", {})
+
+        self.assertEqual(recorder.call_count, 1)
+        self.assertEqual(c.get_simulation_quota_observation()["status"], "AVAILABLE")
+        self.assertEqual(c.get_simulation_quota_observation()["remaining"], 987)
+
     def test_single_submission_rejects_unimplemented_type_before_post(self):
         c = make_client()
         c._wait_submission_slot = mock.Mock()

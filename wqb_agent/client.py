@@ -279,8 +279,6 @@ class WQBClient:
 
     def _record_simulation_quota_observation(self, response):
         observation = simulation_rate_limit_from_headers(response)
-        if observation["status"] == "UNKNOWN":
-            return
         self._ensure_simulation_quota_state()
         with self._simulation_quota_lock:
             self._simulation_quota_observation = observation
