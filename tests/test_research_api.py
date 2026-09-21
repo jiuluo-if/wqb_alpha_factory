@@ -414,6 +414,77 @@ class TestResearchApi(unittest.TestCase):
         self.assertEqual(modes["multi"]["max_concurrent_jobs"], 8)
         self.assertFalse(modes["region_agnostic"]["available"])
 
+    def test_simulation_mode_reason_projection_truth_table(self):
+        cases = (
+            (
+                "unauthenticated_available",
+                {"authenticated": False, "permissions": []},
+                {"status": "AVAILABLE", "simulation_type_choices": ["REGULAR"]},
+                "AUTHENTICATION_REQUIRED", "AUTHENTICATION_REQUIRED",
+            ),
+            (
+                "unauthenticated_unknown_options",
+                {"authenticated": False, "permissions": []},
+                {"status": "UNKNOWN", "simulation_type_choices": []},
+                "AUTHENTICATION_REQUIRED", "AUTHENTICATION_REQUIRED",
+            ),
+            (
+                "authenticated_unknown_options",
+                {"authenticated": True, "permissions": []},
+                {"status": "UNKNOWN", "simulation_type_choices": []},
+                "CAPABILITY_UNKNOWN", "CAPABILITY_UNKNOWN",
+            ),
+            (
+                "authenticated_without_regular",
+                {"authenticated": True, "permissions": ["MULTI_SIMULATION"]},
+                {"status": "AVAILABLE", "simulation_type_choices": ["SUPER"]},
+                "CAPABILITY_UNKNOWN", "CAPABILITY_UNKNOWN",
+            ),
+            (
+                "authenticated_single_only",
+                {"authenticated": True, "permissions": []},
+                {"status": "AVAILABLE", "simulation_type_choices": ["REGULAR"]},
+                None, "PERMISSION_UNAVAILABLE",
+            ),
+            (
+                "authenticated_multi_available",
+                {"authenticated": True, "permissions": ["MULTI_SIMULATION"]},
+                {"status": "AVAILABLE", "simulation_type_choices": ["REGULAR"]},
+                None, None,
+            ),
+            (
+                "capability_status_only",
+                {"authenticated": True, "permissions": ["MULTI_SIMULATION"]},
+                {"capability_status": "AVAILABLE", "simulation_type_choices": ["REGULAR"]},
+                None, None,
+            ),
+            (
+                "biometric_auth_reason_passthrough",
+                {
+                    "authenticated": False, "permissions": [],
+                    "reason": "BIOMETRIC_AUTH_REQUIRED",
+                },
+                {"status": "UNKNOWN", "simulation_type_choices": []},
+                "BIOMETRIC_AUTH_REQUIRED", "BIOMETRIC_AUTH_REQUIRED",
+            ),
+        )
+        for name, authentication, capability, single_reason, multi_reason in cases:
+            with self.subTest(case=name):
+                client = SimpleNamespace(
+                    get_authentication_status=lambda value=authentication: value,
+                    get_simulation_capability=lambda value=capability: value,
+                )
+                modes = get_simulation_modes(client=client)
+                for mode_name, expected_reason in (
+                    ("single", single_reason), ("multi", multi_reason)
+                ):
+                    mode = modes[mode_name]
+                    self.assertEqual(mode["available"], expected_reason is None)
+                    if expected_reason is None:
+                        self.assertNotIn("reason", mode)
+                    else:
+                        self.assertEqual(mode["reason"], expected_reason)
+
     def test_settings_validation_facade_uses_gateway_owner(self):
         client = SimpleNamespace(region="USA", universe="TOP3000", instrument_type="EQUITY")
         capability = {
@@ -437,6 +508,33 @@ class TestResearchApi(unittest.TestCase):
         validator.assert_called_once_with(
             {"delay": 1}, client=client, capability=capability
         )
+
+    def test_live_preflight_reuses_mode_reason_projection(self):
+        client = SimpleNamespace(
+            get_authentication_status=lambda: {
+                "authenticated": False,
+                "permissions": [],
+                "reason": "BIOMETRIC_AUTH_REQUIRED",
+            },
+            get_simulation_capability=lambda: {
+                "capability_status": "UNKNOWN",
+                "simulation_type_choices": [],
+            },
+        )
+        with tempfile.TemporaryDirectory() as state, mock.patch(
+            "wqb_agent.research_api.simulation_quota",
+            return_value={"status": "UNKNOWN"},
+        ):
+            result = get_live_preflight(client=client, state_dir=state)
+        self.assertEqual(
+            result["simulation_modes"]["single"]["reason"],
+            "BIOMETRIC_AUTH_REQUIRED",
+        )
+        self.assertEqual(
+            result["simulation_modes"]["multi"]["reason"],
+            "BIOMETRIC_AUTH_REQUIRED",
+        )
+        self.assertFalse(result["network_write"])
 
     def test_platform_advertised_non_regular_type_is_not_writer_available(self):
         client = SimpleNamespace(

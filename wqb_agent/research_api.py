@@ -751,25 +751,57 @@ def simulate_multi_batch(
     )
 
 
+def _capability_status(capability):
+    if not isinstance(capability, Mapping):
+        return "UNKNOWN"
+    return str(
+        capability.get("capability_status")
+        or capability.get("status")
+        or "UNKNOWN"
+    ).upper()
+
+
+def _mode_unavailable_reason(
+    authentication, *, options_available, regular_available, multi=False,
+    permissions=(),
+):
+    if not bool((authentication or {}).get("authenticated")):
+        reason = (authentication or {}).get("reason")
+        if isinstance(reason, str) and reason.strip():
+            return reason.strip()[:100]
+        return "AUTHENTICATION_REQUIRED"
+    if not options_available or not regular_available:
+        return "CAPABILITY_UNKNOWN"
+    if multi and "MULTI_SIMULATION" not in permissions:
+        return "PERMISSION_UNAVAILABLE"
+    return None
+
+
 def _simulation_modes_from_capabilities(authentication, simulation_capability):
-    authenticated = bool((authentication or {}).get("authenticated"))
     permissions = {
         str(item).upper() for item in (authentication or {}).get("permissions", ())
     }
     source = "BRAIN_LIVE" if authentication is not None else "UNKNOWN"
-    options_available = (
-        isinstance(simulation_capability, Mapping)
-        and str(simulation_capability.get("status", "")).upper() == "AVAILABLE"
-    )
+    options_available = _capability_status(simulation_capability) == "AVAILABLE"
     choices = {
         str(item).upper()
         for item in simulation_capability.get("simulation_type_choices", ())
     } if options_available else set()
     regular_child_available = "REGULAR" in choices
-    single_available = authenticated and options_available and regular_child_available
-    multi_available = authenticated and options_available and regular_child_available and (
-        "MULTI_SIMULATION" in permissions
+    single_reason = _mode_unavailable_reason(
+        authentication,
+        options_available=options_available,
+        regular_available=regular_child_available,
     )
+    multi_reason = _mode_unavailable_reason(
+        authentication,
+        options_available=options_available,
+        regular_available=regular_child_available,
+        multi=True,
+        permissions=permissions,
+    )
+    single_available = single_reason is None
+    multi_available = multi_reason is None
     multi = {
         "name": "Multi-Simulation", "available": multi_available,
         "status": "AVAILABLE" if multi_available else "UNAVAILABLE",
@@ -780,12 +812,16 @@ def _simulation_modes_from_capabilities(authentication, simulation_capability):
         "default_concurrent_jobs": MULTI_DEFAULT_CONCURRENCY,
         "max_concurrent_jobs": MULTI_MAX_CONCURRENCY,
     }
-    if authenticated and "MULTI_SIMULATION" not in permissions:
-        multi["reason"] = "PERMISSION_UNAVAILABLE"
-    elif not options_available or not regular_child_available:
-        multi["reason"] = "CAPABILITY_UNKNOWN"
-    elif not authenticated:
-        multi["reason"] = "AUTHENTICATION_REQUIRED"
+    if multi_reason is not None:
+        multi["reason"] = multi_reason
+    single = {
+        "name": "Single Simulation", "available": single_available,
+        "status": "AVAILABLE" if single_available else "UNAVAILABLE",
+        "source": source, "evidence_status": "INCONCLUSIVE",
+        "max_concurrent": 10,
+    }
+    if single_reason is not None:
+        single["reason"] = single_reason
     region_agnostic = {
         "name": "Region-Agnostic Simulation",
         "available": False,
@@ -797,13 +833,7 @@ def _simulation_modes_from_capabilities(authentication, simulation_capability):
         "reason": "WRITER_UNSUPPORTED",
     }
     return {
-        "single": {
-            "name": "Single Simulation", "available": single_available,
-            "status": "AVAILABLE" if single_available else "UNAVAILABLE",
-            "source": source, "evidence_status": "INCONCLUSIVE",
-            "max_concurrent": 10,
-            **({} if single_available else {"reason": "CAPABILITY_UNKNOWN"}),
-        },
+        "single": single,
         "multi": multi,
         "region_agnostic": region_agnostic,
     }
