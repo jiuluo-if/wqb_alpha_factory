@@ -10,7 +10,12 @@ from wqb_agent.remote_alpha_repository import RemoteAlphaRepository
 class FakeAlphaReader:
     def __call__(self, **kwargs):
         if kwargs.get("status") == "SUBMITTED":
-            return [{"id": "submitted-1", "dateSubmitted": "2026-09-16T12:00:00Z"}]
+            return [{
+                "id": "submitted-1",
+                "status": "SUBMITTED",
+                "dateCreated": "2026-09-16T12:00:00Z",
+                "dateSubmitted": "2026-09-16T12:00:00Z",
+            }]
         return [{"id": "simulated-1", "dateCreated": "2026-09-15T12:00:00Z"}]
 
     get_all_user_alphas = __call__
@@ -46,6 +51,16 @@ class ManySyntheticAlphaReader:
         return list(self.rows)
 
 
+class SubmittedAlphaReader:
+    def __init__(self, rows):
+        self.rows = list(rows)
+
+    def __call__(self, **kwargs):
+        if kwargs.get("status") == "SUBMITTED":
+            return list(self.rows)
+        return []
+
+
 class TestRemoteAlphaRepository(unittest.TestCase):
     def test_refresh_keeps_all_retained_metadata_without_quota_cap(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -75,7 +90,51 @@ class TestRemoteAlphaRepository(unittest.TestCase):
             self.assertEqual(refreshed["retention_days"], 3)
             self.assertEqual({row["alpha_id"] for row in listed},
                              {"submitted-1", "simulated-1"})
+            submitted = next(row for row in listed if row["alpha_id"] == "submitted-1")
+            self.assertEqual(submitted["date_created"], "2026-09-16T12:00:00Z")
+            self.assertEqual(submitted["simulation_local_date"], "2026-09-16")
             self.assertEqual(repository.cache_status()["retention_days"], 3)
+
+    def test_submitted_metadata_keeps_submission_day_separate_from_creation_day(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repository = RemoteAlphaRepository(
+                SubmittedAlphaReader([{
+                    "id": "created-yesterday",
+                    "status": "SUBMITTED",
+                    "dateCreated": "2026-09-22T12:00:00Z",
+                    "dateSubmitted": "2026-09-23T12:00:00Z",
+                }]),
+                cache_path=f"{tmp}/remote.json", retention_days=7,
+                clock=lambda: 1790164800,
+            )
+
+            repository.refresh_remote_alphas()
+            listed = repository.list_remote_alphas(status="SUBMITTED")
+
+            self.assertEqual(len(listed), 1)
+            self.assertEqual(listed[0]["local_date"], "2026-09-23")
+            self.assertEqual(listed[0]["date_created"], "2026-09-22T12:00:00Z")
+            self.assertEqual(listed[0]["simulation_local_date"], "2026-09-22")
+
+    def test_submitted_metadata_without_creation_date_remains_visible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repository = RemoteAlphaRepository(
+                SubmittedAlphaReader([{
+                    "id": "missing-created-date",
+                    "status": "SUBMITTED",
+                    "dateSubmitted": "2026-09-23T12:00:00Z",
+                }]),
+                cache_path=f"{tmp}/remote.json", retention_days=7,
+                clock=lambda: 1790164800,
+            )
+
+            repository.refresh_remote_alphas()
+            listed = repository.list_remote_alphas(status="SUBMITTED")
+
+            self.assertEqual(len(listed), 1)
+            self.assertEqual(listed[0]["local_date"], "2026-09-23")
+            self.assertIsNone(listed[0]["date_created"])
+            self.assertIsNone(listed[0]["simulation_local_date"])
 
     def test_list_can_narrow_the_configured_window_without_remote_io(self):
         with tempfile.TemporaryDirectory() as tmp:

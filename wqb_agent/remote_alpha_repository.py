@@ -102,8 +102,10 @@ class RemoteAlphaRepository:
         submitted = []
         for row in submitted_rows:
             record = {"alpha_id": str(row["id"]), "status": row.get("status"),
+                      "date_created": row.get("dateCreated"),
                       "date_submitted": row.get("dateSubmitted"),
                       "local_date": _remote_local_date(row.get("dateSubmitted")),
+                      "simulation_local_date": _remote_local_date(row.get("dateCreated")),
                       "source": "/users/self/alphas"}
             bucket = bucket_for(row.get("dateSubmitted"))
             if bucket is not None:
@@ -119,6 +121,7 @@ class RemoteAlphaRepository:
                 continue
             record = {"alpha_id": str(row["id"]), "status": row.get("status"),
                       "date_created": row.get("dateCreated"), "local_date": local_value,
+                      "simulation_local_date": local_value,
                       "source": "/users/self/alphas"}
             bucket["simulations"].append(record)
             simulated.append(record)

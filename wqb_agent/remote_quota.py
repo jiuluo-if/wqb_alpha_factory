@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .config import DEFAULT_DAILY_SIMULATION_LIMIT
@@ -22,6 +22,52 @@ def _estimate_window(repository):
     ):
         return None, "UNKNOWN"
     return retention_days, "REMOTE_CACHE_RETENTION"
+
+
+def _valid_local_date(value):
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return date.fromisoformat(value.strip()).isoformat()
+    except ValueError:
+        return None
+
+
+def _creation_local_date(value):
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(NEW_YORK).date().isoformat()
+
+
+def _simulation_local_date(row):
+    simulation_day = _valid_local_date(row.get("simulation_local_date"))
+    if simulation_day is not None:
+        return simulation_day
+    simulation_day = _creation_local_date(row.get("date_created"))
+    if simulation_day is not None:
+        return simulation_day
+    status = str(row.get("status") or "").upper()
+    if "date_submitted" in row or status == "SUBMITTED":
+        return None
+    return _valid_local_date(row.get("local_date"))
+
+
+def _in_estimate_window(simulation_day, today, window_days):
+    if window_days is None:
+        return True
+    try:
+        current_day = date.fromisoformat(today)
+        candidate = date.fromisoformat(simulation_day)
+    except ValueError:
+        return False
+    window_start = current_day - timedelta(days=window_days - 1)
+    return window_start <= candidate <= current_day
 
 
 def _unknown_official_observation():
@@ -101,10 +147,17 @@ class SimulationQuota:
         today = str(self._local_date())
         rows = [row for row in self.repository.list_remote_alphas()
                 if isinstance(row, dict)]
-        today_used = sum(1 for row in rows if str(row.get("local_date")) == today)
-        active = len(self.guard.entries())
         window_days, window_source = _estimate_window(self.repository)
-        rolling_used = len(rows) + active
+        simulation_days = []
+        for row in rows:
+            simulation_day = _simulation_local_date(row)
+            if simulation_day is not None and _in_estimate_window(
+                simulation_day, today, window_days
+            ):
+                simulation_days.append(simulation_day)
+        today_used = sum(day == today for day in simulation_days)
+        active = len(self.guard.entries())
+        rolling_used = len(simulation_days) + active
         estimate = {
             "today_used": today_used + active,
             "rolling_used": rolling_used,

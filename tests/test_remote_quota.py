@@ -18,6 +18,78 @@ class _Repository:
 
 
 class TestSimulationQuota(unittest.TestCase):
+    @staticmethod
+    def _snapshot(rows, *, retention_days=7):
+        with tempfile.TemporaryDirectory() as tmp:
+            return SimulationQuota(
+                _Repository(rows, retention_days=retention_days),
+                ExecutionGuard(tmp),
+                local_date=lambda: "2026-09-23",
+            ).snapshot()
+
+    def test_submitted_today_created_yesterday_counts_only_in_rolling_usage(self):
+        snapshot = self._snapshot([{
+            "alpha_id": "created-yesterday",
+            "status": "SUBMITTED",
+            "date_created": "2026-09-22T12:00:00Z",
+            "date_submitted": "2026-09-23T12:00:00Z",
+            "local_date": "2026-09-23",
+            "simulation_local_date": "2026-09-22",
+        }])
+
+        self.assertEqual(snapshot["today_used"], 0)
+        self.assertEqual(snapshot["rolling_used"], 1)
+        self.assertEqual(snapshot["estimate"]["today_remaining"], 5000)
+        self.assertEqual(snapshot["estimate"]["rolling_remaining"], 11199)
+
+    def test_submitted_today_created_outside_window_is_not_counted(self):
+        snapshot = self._snapshot([{
+            "alpha_id": "created-too-old",
+            "status": "SUBMITTED",
+            "date_created": "2026-09-10T12:00:00Z",
+            "date_submitted": "2026-09-23T12:00:00Z",
+            "local_date": "2026-09-23",
+            "simulation_local_date": "2026-09-10",
+        }])
+
+        self.assertEqual(snapshot["today_used"], 0)
+        self.assertEqual(snapshot["rolling_used"], 0)
+
+    def test_created_today_counts_for_today_and_rolling_usage(self):
+        snapshot = self._snapshot([{
+            "alpha_id": "created-today",
+            "status": "SUBMITTED",
+            "date_created": "2026-09-23T12:00:00Z",
+            "date_submitted": "2026-09-23T13:00:00Z",
+            "local_date": "2026-09-23",
+            "simulation_local_date": "2026-09-23",
+        }])
+
+        self.assertEqual(snapshot["today_used"], 1)
+        self.assertEqual(snapshot["rolling_used"], 1)
+
+    def test_unsubmitted_creation_date_remains_a_simulation_day(self):
+        snapshot = self._snapshot([{
+            "alpha_id": "unsubmitted-created-today",
+            "status": "UNSUBMITTED",
+            "date_created": "2026-09-23T12:00:00Z",
+            "local_date": "2026-09-23",
+        }])
+
+        self.assertEqual(snapshot["today_used"], 1)
+        self.assertEqual(snapshot["rolling_used"], 1)
+
+    def test_submitted_row_without_creation_date_fails_closed(self):
+        snapshot = self._snapshot([{
+            "alpha_id": "legacy-submitted",
+            "status": "SUBMITTED",
+            "date_submitted": "2026-09-23T12:00:00Z",
+            "local_date": "2026-09-23",
+        }])
+
+        self.assertEqual(snapshot["today_used"], 0)
+        self.assertEqual(snapshot["rolling_used"], 0)
+
     def test_default_daily_policy_projects_approximate_remaining(self):
         with tempfile.TemporaryDirectory() as tmp:
             guard = ExecutionGuard(tmp)
@@ -123,6 +195,38 @@ class TestSimulationQuota(unittest.TestCase):
             self.assertEqual(snapshot["estimate"]["window_days"], None)
             self.assertEqual(snapshot["evidence_status"], "AVAILABLE")
             self.assertTrue(snapshot["legacy_fields_are_estimate"])
+
+    def test_official_headers_are_unchanged_when_creation_day_is_filtered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            quota = SimulationQuota(
+                _Repository([{
+                    "alpha_id": "created-too-old",
+                    "status": "SUBMITTED",
+                    "date_created": "2026-09-10T12:00:00Z",
+                    "date_submitted": "2026-09-23T12:00:00Z",
+                    "local_date": "2026-09-23",
+                    "simulation_local_date": "2026-09-10",
+                }], retention_days=7),
+                ExecutionGuard(tmp),
+                local_date=lambda: "2026-09-23",
+                official_observation={
+                    "status": "AVAILABLE",
+                    "evidence_status": "AVAILABLE",
+                    "source": "BRAIN_SIMULATION_HEADERS",
+                    "limit": 1600,
+                    "remaining": 987,
+                    "reset": 12345,
+                },
+            )
+
+            snapshot = quota.snapshot()
+
+        self.assertEqual(snapshot["today_used"], 0)
+        self.assertEqual(snapshot["rolling_used"], 0)
+        self.assertEqual(snapshot["source"], "BRAIN_SIMULATION_HEADERS")
+        self.assertEqual(snapshot["official"]["limit"], 1600)
+        self.assertEqual(snapshot["official"]["remaining"], 987)
+        self.assertEqual(snapshot["official"]["reset"], 12345)
 
     def test_fallback_date_uses_new_york_at_fixed_utc_boundary(self):
         fixed = datetime(2026, 9, 17, 3, 30, tzinfo=UTC)
