@@ -721,24 +721,12 @@ def simulate(spec, *, client=None, config=None, state_dir=None):
     ).simulate(spec)
 
 
-def simulate_single(spec, *, client=None, config=None, state_dir=None):
-    """Explicit small-optimization alias for one Single Simulation."""
-    return simulate(spec, client=client, config=config, state_dir=state_dir)
-
-
 def simulate_batch(specs, *, client=None, config=None, state_dir=None):
     """Execute Single Simulations through the ten-worker window by default."""
     gateway = _simulation_gateway(
         client=client, config=config, state_dir=state_dir
     )
     return gateway.simulate_batch(specs)
-
-
-def simulate_single_batch(specs, *, client=None, config=None, state_dir=None):
-    """Explicit small-optimization batch alias for Single Simulation."""
-    return simulate_batch(
-        specs, client=client, config=config, state_dir=state_dir
-    )
 
 
 def simulate_multi_batch(
@@ -1080,7 +1068,7 @@ def group_alphas(alpha_ids=None, *, rows=None, client=None,
     return group_remote_evidence(rows)
 
 
-def find_alpha_duplicates(alpha_id, *, rows=None, client=None,
+def find_duplicate_alphas(alpha_id, *, rows=None, client=None,
                           config=None, state_dir=None):
     if rows is None:
         rows = []
@@ -1090,15 +1078,6 @@ def find_alpha_duplicates(alpha_id, *, rows=None, client=None,
         for item in repository.list_remote_alphas():
             rows.append(repository.get_remote_alpha_evidence(item["alpha_id"]))
     return find_remote_duplicates(rows, alpha_id)
-
-
-def find_duplicate_alphas(alpha_id, *, rows=None, client=None,
-                          config=None, state_dir=None):
-    """Public name for exact execution duplicate lookup."""
-    return find_alpha_duplicates(
-        alpha_id, rows=rows, client=client,
-        config=config, state_dir=state_dir,
-    )
 
 
 def find_similar_alphas(expression_or_alpha_id, *, rows=None,
@@ -1171,8 +1150,6 @@ def research_tool_manifest():
         {"name": "execution_fingerprint", "mode": "READ_ONLY", "owner": "SimulationGateway"},
         {"name": "simulate", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
         {"name": "simulate_batch", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
-        {"name": "simulate_single", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
-        {"name": "simulate_single_batch", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
         {"name": "simulate_multi_batch", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
         {"name": "get_simulation_modes", "mode": "READ_ONLY", "owner": "SimulationGateway"},
         {"name": "get_live_preflight", "mode": "READ_ONLY", "owner": "BRAIN"},
@@ -1195,7 +1172,6 @@ def research_tool_manifest():
         {"name": "remote_cache_status", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
         {"name": "simulation_quota", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
         {"name": "purge_remote_cache", "mode": "LOCAL_CACHE_WRITE", "local_write": True, "owner": "RemoteAlphaRepository"},
-        {"name": "find_alpha_duplicates", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
         {"name": "find_duplicate_alphas", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
         {"name": "find_similar_alphas", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
         {"name": "group_alphas", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
@@ -1214,7 +1190,7 @@ __all__ = [
     "classify_fields", "get_simulation_config", "validate_simulation_settings",
     "build_simulation_spec", "build_simulation_variant",
     "validate_simulation_spec", "execution_fingerprint",
-    "simulate", "simulate_single", "simulate_batch", "simulate_single_batch",
+    "simulate", "simulate_batch",
     "simulate_multi_batch", "get_simulation_modes", "get_live_preflight",
     "get_pending_executions", "resume_execution",
     "reconcile_execution",
@@ -1225,7 +1201,7 @@ __all__ = [
     "get_activity_diversity",
     "get_remote_alpha", "get_remote_alpha_evidence", "remote_cache_status",
     "purge_remote_cache", "simulation_quota", "group_alphas",
-    "find_alpha_duplicates", "find_duplicate_alphas", "find_similar_alphas",
+    "find_duplicate_alphas", "find_similar_alphas",
     "preview_alpha_colors", "sync_alpha_colors",
     "research_tool_manifest",
 ]

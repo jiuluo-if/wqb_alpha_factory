@@ -33,6 +33,7 @@ Simulation must use the existing Agent facade outside this read-only server and
 preserve its guard and reconciliation contract. Alpha submission remains
 manual.
 
-The current v2 worktree contains unresolved local guard entries. The MCP server
-only reads them; it does not poll known progress URLs, resume a task, rewrite a
-guard, or retry an ambiguous POST.
+When local guard entries exist, the MCP server only reads their bounded
+projection; it does not poll known progress URLs, resume a task, rewrite a
+guard, or retry an ambiguous POST. Their current runtime presence is never
+recorded in tracked documentation.

@@ -92,18 +92,23 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         self.assertEqual(rows["remote_cache_status"]["mode"], "READ_ONLY")
         self.assertFalse(rows["remote_cache_status"].get("local_write", False))
 
-    def test_manifest_preserves_write_boundaries_and_compatibility_alias(self):
+    def test_manifest_preserves_write_boundaries_and_has_one_public_name_per_operation(self):
         rows = {
             row["name"]: row for row in research_api.research_tool_manifest()
         }
-        self.assertIn("find_alpha_duplicates", rows)
+        import wqb_agent
+
         self.assertIn("find_duplicate_alphas", rows)
-        for name in (
-            "simulate", "simulate_single", "simulate_batch",
-            "simulate_single_batch", "simulate_multi_batch",
-        ):
+        self.assertNotIn("find_alpha_duplicates", rows)
+        for name in ("simulate", "simulate_batch", "simulate_multi_batch"):
             self.assertEqual(rows[name]["mode"], "SIMULATION_WRITE", name)
             self.assertTrue(rows[name].get("remote_write"), name)
+        for name in (
+            "simulate_single", "simulate_single_batch", "find_alpha_duplicates",
+        ):
+            self.assertNotIn(name, rows)
+            self.assertFalse(hasattr(research_api, name), name)
+            self.assertFalse(hasattr(wqb_agent, name), name)
 
     def test_canonical_remote_read_surface_stays_available_at_public_facades(self):
         canonical = {

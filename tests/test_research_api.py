@@ -30,8 +30,8 @@ from wqb_agent.research_api import (
     list_datasets,
     list_remote_alphas,
     list_templates,
+    simulate,
     simulate_multi_batch,
-    simulate_single,
     validate_simulation_settings,
 )
 from wqb_agent.simulation_gateway import SimulationGateway
@@ -433,7 +433,7 @@ class TestResearchApi(unittest.TestCase):
                 for config in forms:
                     gateway_type.reset_mock()
                     gateway_type.return_value.simulate.return_value = {"status": "DONE"}
-                    simulate_single(spec, client=client, config=config, state_dir=tmp)
+                    simulate(spec, client=client, config=config, state_dir=tmp)
                     gateway_type.assert_called_once()
                     self.assertEqual(
                         gateway_type.call_args.kwargs["max_concurrent"], 2
@@ -710,7 +710,7 @@ class TestResearchApi(unittest.TestCase):
         with mock.patch("wqb_agent.research_api._simulation_gateway") as factory:
             gateway = factory.return_value
             gateway.simulate.return_value = {"status": "DONE"}
-            self.assertEqual(simulate_single(spec), {"status": "DONE"})
+            self.assertEqual(simulate(spec), {"status": "DONE"})
             gateway.simulate.assert_called_once_with(spec)
 
         with mock.patch("wqb_agent.research_api._simulation_gateway") as factory:

@@ -6,7 +6,7 @@
 
 - `get_capabilities()`、`discover_fields()`、`get_operator_reference()`；
 - `list_templates()`、`inspect_template()`、`generate_probes()`；
-- `validate_simulation_spec()`、`simulate()`、`simulate_batch()`；
+- `validate_simulation_spec()`、`simulate()`、`simulate_batch()`、`simulate_multi_batch()`；
 - `build_simulation_spec()`、`build_simulation_variant()`；
 - `get_alpha()`、`get_alpha_evidence()`、`compare_alphas()`；
 - `list_remote_alphas()`、`find_duplicate_alphas()`、`find_similar_alphas()`、`group_alphas()`；
@@ -39,7 +39,7 @@ Probe 的固定候选预算采用 deterministic、lazy、bounded 的 template-le
 - 每轮只能改变一个 dimension：一个 numeric slot 或一个 settings key。field、template、mechanism、operator role 的变化回到 Probe；不要生成 Cartesian product 或 grid search。
 - 当前研究 horizon 的 numeric variants 与 settings variants 原则上留在同一 variant family；operator topology 变化必须拆成不同 family。family 内多个参数点必须一起解释，不能只挑最高 Sharpe 的一个包装成独立机制。不要把 `observed_execution_count` 当作完整 search history 或 total trial count，也不要据此实现 DSR/PBO。
 - numeric variant 使用 `build_simulation_variant(anchor, template, slot_name, value)`；目标值必须是声明的 allowed value，no-op 会被拒绝，且 anchor/operator topology 不得改变。settings variant 从 anchor.settings 复制后由 AI 明确改一个 key，再使用 `build_simulation_spec(anchor_spec=anchor)` 做现有 validation；expression 必须保持 byte-for-byte 或 canonical-equivalent，不自动计算 `decay`、`truncation` 或 universe。
-- 一个 variant 使用 `simulate_batch()`；两个或以上且设置兼容时优先 `simulate_multi_batch()`。所有执行仍经过 `research_api → SimulationGateway → Simulator → WQBClient`。
+- 一个 variant 使用 `simulate()`；多个彼此独立的 Single 使用 `simulate_batch()`；两个或以上且设置兼容时可使用 `simulate_multi_batch()`。所有执行仍经过 `research_api → SimulationGateway → Simulator → WQBClient`。
 - 优先复用本次 Simulation 已返回且 `AVAILABLE` 的 evidence；只有需要当前 Alpha detail 时读取 `get_alpha()`。只有 AI 判断需要完整 robustness comparison 时，才调用 `get_alpha_evidence()` 或 `compare_alphas()`；对 FAILED、NOT_DISPATCHED、SUBMIT_UNKNOWN 或明显无效 candidate 不做无条件深读。
 
 每轮开始必须说明：anchor、唯一优化 dimension、测试理由、新增 Simulation 数量、baseline 是否已有 evidence。完成后比较 baseline 与全部 variants，不只报告最好结果；相邻值没有一致且可解释的改善时停止当前 dimension。若需要同时改变多个维度，停止当前优化并重新形成 Probe hypothesis。任何 variant 数量、结果和解释都不能把参数扫描包装成新经济机制。

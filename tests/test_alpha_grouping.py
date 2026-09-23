@@ -27,6 +27,18 @@ class TestAlphaGrouping(unittest.TestCase):
             submission_fingerprint(first, {"delay": 2}),
         )
 
+    def test_formal_duplicate_lookup_name_is_the_only_public_spelling(self):
+        rows = [
+            {"alpha_id": "target", "alpha": {"regular": "rank(close)"}, "settings": {"delay": 1}},
+            {"alpha_id": "match", "alpha": {"regular": "rank(close)"}, "settings": {"delay": 1}},
+        ]
+
+        result = research_api.find_duplicate_alphas("target", rows=rows)
+
+        self.assertEqual(result["kind"], "EXACT")
+        self.assertEqual([item["alpha_id"] for item in result["matches"]], ["match", "target"])
+        self.assertFalse(hasattr(research_api, "find_alpha_duplicates"))
+
     def test_grouping_uses_remote_expression_and_settings(self):
         rows = [
             {"alpha_id": "a", "alpha": {"regular": "rank(close)"}, "settings": {"delay": 1}},
