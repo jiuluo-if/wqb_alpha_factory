@@ -40,6 +40,8 @@ Multi-Simulation payload 必须包含 2--10 个 child；单个余数由 `Simulat
 
 `research_api.simulate_multi_batch()` 保留原有的 `list[child_result]` 形状，但每个实际 Multi child 结果都附带 bounded `parent` projection：parent fingerprint、最终状态、progress URL、child 数量、exception class、failure kind、HTTP status（若 transport 明确知道）、remote status/diagnostic、bounded status path 和 guard action。该 projection 只存在于当前返回值，不写入 `ExecutionGuard`；`SUBMIT_UNKNOWN` 与已知 URL 的 `UNKNOWN` 仍分别保留原有 exactly-once 和同 URL 对账语义。
 
+Multi response 中每个 child 分别计入配额；因此 unresolved Multi parent 的 local `APPROXIMATE` estimate 按其实际 child Simulation 数量投影，一个 parent guard 不等于一次 Simulation。ExecutionGuard 只增加 bounded `simulation_count` 整数，不保存 child payload、expression、settings、结果或 child ID；缺失或非法的旧 metadata 按 1 fail closed，不能把 estimate 提升为 official quota。
+
 Simulation 的 `ERROR`/`FAIL` 诊断只保留 bounded 的 remote status、message、property、line、start、end 和 simulation id，不保存完整 private expression。Multi parent 完成后仍逐个确认 child；child 的完成、远端失败和远端超时按 child 保存，不能把 partial completion 压成整个 batch UNKNOWN。
 
 Alpha detail 是完成后的 cheap evidence。`get_alpha_aggregates`、`get_alpha_pnl` 和 `get_alpha_self_correlation` 是按需的 named read-only facade，不会隐式拉取其他 deep evidence。recordset 先通过官方 list endpoint discovery，再按 AI 明确选择的名称读取；同一次 evidence collection 共享内存 discovery snapshot，不建立持久 capability cache。recordset decoder 保留官方数值，不重新计算指标或把数据解释为 winner/diversification judgment。activity diversity 是账户覆盖诊断，只读，不参与自动选 Alpha、模板、字段 ranking 或预算。

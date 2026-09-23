@@ -13,4 +13,6 @@
 
 ExecutionGuard 状态只有 `SUBMITTING`、`RUNNING`、`SUBMIT_UNKNOWN`。`SUBMITTING` 在重启后按不确定提交处理；有 progress URL 只能轮询该 URL；没有证据证明 POST 未发生时禁止重 POST。
 
+ExecutionGuard 仍只保存未解决 remote-write safety metadata；每条记录可额外保存 bounded integer `simulation_count`，表示该 guarded write 如果已被平台接受所代表的 Simulation 数量。Single 默认为 1，Multi 使用实际 child 数量（2--10）。旧记录缺失该字段时按 1 读取；非法值按 1 fail closed。不得保存 child payload、expression、settings、result 或 child ID。
+
 Remote cache 可删除并从 BRAIN 重建。读取 cache 时，invalid、contract mismatch 或缺失只视为 unavailable/UNKNOWN；已过期 cache 由 freshness 标为 `STALE`，不自动删除主 cache 或清理临时资源。`refresh_remote_alphas`/`RemoteAlphaCache.refresh` 是 bounded maintenance 与原子写入 owner，`purge_remote_cache` 是显式主 cache 删除 owner。cache 与 live 冲突时 live 优先，过期或缺失 cache 不得制造 PASS。credentials、真实 Alpha、私有 field 和完整研究数据不得写入 tracked 文件、日志或 guard。

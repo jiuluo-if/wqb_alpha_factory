@@ -103,6 +103,26 @@ class ExecutionGuard:
     def fingerprint(expression, settings):
         return submission_fingerprint(expression, settings)
 
+    @staticmethod
+    def _normalize_simulation_count(value):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not 1 <= value <= MULTI_MAX_CHILDREN
+        ):
+            return 1
+        return value
+
+    @classmethod
+    def _validate_simulation_count(cls, value):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError("simulation_count must be an integer")
+        if not 1 <= value <= MULTI_MAX_CHILDREN:
+            raise ValueError(
+                f"simulation_count must be between 1 and {MULTI_MAX_CHILDREN}"
+            )
+        return value
+
     def _read(self):
         try:
             import json
@@ -122,6 +142,9 @@ class ExecutionGuard:
                 "status": row["status"],
                 "created_at": row.get("created_at"),
                 "updated_at": row.get("updated_at"),
+                "simulation_count": self._normalize_simulation_count(
+                    row.get("simulation_count", 1)
+                ),
             }
             if row.get("progress_url") is not None:
                 item["progress_url"] = str(row["progress_url"])
@@ -145,9 +168,13 @@ class ExecutionGuard:
         return next((row for row in self.entries()
                      if row.get("execution_fingerprint") == fingerprint), None)
 
-    def register(self, fingerprint, *, progress_url=None, status="SUBMITTING"):
+    def register(
+        self, fingerprint, *, progress_url=None, status="SUBMITTING",
+        simulation_count=1,
+    ):
         if status not in self.STATUSES:
             raise ValueError("invalid execution guard status")
+        simulation_count = self._validate_simulation_count(simulation_count)
         now = time.time()
         with self._lock:
             rows = self._read()
@@ -158,6 +185,7 @@ class ExecutionGuard:
             rows.append({
                 "execution_fingerprint": str(fingerprint), "status": status,
                 "progress_url": progress_url, "created_at": now, "updated_at": now,
+                "simulation_count": simulation_count,
             })
             self._write(rows)
             return True
@@ -762,7 +790,9 @@ class SimulationGateway:
                             "parent": parent,
                         }
                     continue
-                if not self.guard.register(batch_fingerprint):
+                if not self.guard.register(
+                    batch_fingerprint, simulation_count=len(children)
+                ):
                     parent = self._parent_projection(
                         fingerprint=batch_fingerprint,
                         status="EXACT_DUPLICATE",

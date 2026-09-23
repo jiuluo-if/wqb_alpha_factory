@@ -17,6 +17,7 @@ from wqb_agent.client import (
 )
 from wqb_agent.locking import OwnerBusyError
 from wqb_agent.remote_evidence import RemoteAlphaEvidenceProvider
+from wqb_agent.remote_quota import SimulationQuota
 from wqb_agent.simulation_gateway import (
     MULTI_DEFAULT_CHILD_BATCH_SIZE,
     MULTI_DEFAULT_CONCURRENCY,
@@ -63,6 +64,13 @@ class FakeGatewayClient:
         return {"status": "AVAILABLE", "capability_status": "AVAILABLE",
                 "simulation_type_choices": ["REGULAR", "SUPER"],
                 "settings": {}, "required_fields": [], "required_settings": []}
+
+
+class _EmptyQuotaRepository:
+    retention_days = 7
+
+    def list_remote_alphas(self):
+        return []
 
 
 class ProcessSimulationClient(FakeGatewayClient):
@@ -487,7 +495,9 @@ class TestSimulationGateway(unittest.TestCase):
             results = research_api.simulate_multi_batch([
                 SimulationSpec("rank(field_a)", {"delay": 1}),
                 SimulationSpec("rank(field_b)", {"delay": 1}),
-            ], client=client, state_dir=tmp)
+                SimulationSpec("rank(field_c)", {"delay": 1}),
+                SimulationSpec("rank(field_d)", {"delay": 1}),
+            ], client=client, state_dir=tmp, child_batch_size=4)
 
             parent = results[0]["parent"]
             self.assertEqual(parent["status"], "SUBMIT_UNKNOWN")
@@ -497,7 +507,17 @@ class TestSimulationGateway(unittest.TestCase):
             self.assertEqual(parent["status_path"], [
                 "PENDING", "SUBMITTING", "SUBMIT_UNKNOWN",
             ])
-            self.assertEqual(len(SimulationGateway(client, state_dir=tmp).guard.entries()), 1)
+            guard = SimulationGateway(client, state_dir=tmp).guard
+            self.assertEqual(len(guard.entries()), 1)
+            self.assertEqual(guard.entries()[0]["simulation_count"], 4)
+            snapshot = SimulationQuota(
+                _EmptyQuotaRepository(), guard,
+                local_date=lambda: "2026-09-23",
+            ).snapshot()
+            self.assertEqual(snapshot["active_guard_count"], 1)
+            self.assertEqual(snapshot["active_guard_simulation_count"], 4)
+            self.assertEqual(snapshot["today_used"], 4)
+            self.assertEqual(snapshot["window_used"], 4)
 
     def test_multi_parent_known_url_unknown_is_reconcilable_and_observable(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -518,6 +538,10 @@ class TestSimulationGateway(unittest.TestCase):
             self.assertEqual(
                 SimulationGateway(client, state_dir=tmp).guard.entries()[0]["status"],
                 "RUNNING",
+            )
+            self.assertEqual(
+                SimulationGateway(client, state_dir=tmp).guard.entries()[0]["simulation_count"],
+                2,
             )
 
     def test_multi_parent_known_url_timeout_keeps_timeout_kind_and_guard(self):
@@ -828,9 +852,80 @@ class TestSimulationGateway(unittest.TestCase):
             self.assertEqual(
                 set(entry),
                 {"execution_fingerprint", "status", "progress_url",
-                 "created_at", "updated_at"},
+                 "created_at", "updated_at", "simulation_count"},
             )
             self.assertNotIn("metrics", entry)
+
+    def test_execution_guard_persists_bounded_simulation_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = ExecutionGuard(tmp)
+            self.assertTrue(guard.register("single"))
+            self.assertTrue(guard.register("multi", simulation_count=7))
+            counts = {
+                row["execution_fingerprint"]: row["simulation_count"]
+                for row in guard.entries()
+            }
+            self.assertEqual(counts["single"], 1)
+            self.assertEqual(counts["multi"], 7)
+            for value in (True, False, 0, -1, 11, "10"):
+                with self.subTest(value=value):
+                    with self.assertRaises((TypeError, ValueError)):
+                        guard.register(f"invalid-{value!r}", simulation_count=value)
+
+    def test_execution_guard_legacy_and_malformed_counts_default_to_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "execution_guard.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump({"entries": [
+                    {"execution_fingerprint": "legacy", "status": "SUBMIT_UNKNOWN"},
+                    {"execution_fingerprint": "bad-int", "status": "RUNNING", "simulation_count": "10"},
+                    {"execution_fingerprint": "bad-range", "status": "RUNNING", "simulation_count": 999},
+                ]}, handle)
+
+            entries = ExecutionGuard(tmp).entries()
+            snapshot = SimulationQuota(
+                _EmptyQuotaRepository(), ExecutionGuard(tmp),
+                local_date=lambda: "2026-09-23",
+            ).snapshot()
+
+        self.assertEqual(
+            {row["execution_fingerprint"]: row["simulation_count"] for row in entries},
+            {"legacy": 1, "bad-int": 1, "bad-range": 1},
+        )
+        self.assertEqual(snapshot["active_guard_count"], 3)
+        self.assertEqual(snapshot["active_guard_simulation_count"], 3)
+
+    def test_execution_guard_update_and_reconcile_preserve_simulation_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = ExecutionGuard(tmp)
+            guard.register("multi", status="SUBMITTING", simulation_count=7)
+            self.assertTrue(guard.update("multi", status="RUNNING", progress_url="progress"))
+            self.assertEqual(guard.find("multi")["simulation_count"], 7)
+            guard.register("interrupted", status="SUBMITTING", simulation_count=6)
+            reconciled = ExecutionGuard(tmp)
+
+            entry = reconciled.find("multi")
+            interrupted = reconciled.find("interrupted")
+
+        self.assertEqual(entry["status"], "RUNNING")
+        self.assertEqual(entry["simulation_count"], 7)
+        self.assertEqual(interrupted["status"], "SUBMIT_UNKNOWN")
+        self.assertEqual(interrupted["simulation_count"], 6)
+
+    def test_terminal_guard_removal_removes_weighted_quota_contribution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = ExecutionGuard(tmp)
+            guard.register("multi", simulation_count=4)
+            self.assertTrue(guard.remove("multi"))
+            snapshot = SimulationQuota(
+                _EmptyQuotaRepository(), guard,
+                local_date=lambda: "2026-09-23",
+            ).snapshot()
+
+        self.assertEqual(snapshot["active_guard_count"], 0)
+        self.assertEqual(snapshot["active_guard_simulation_count"], 0)
+        self.assertEqual(snapshot["today_used"], 0)
+        self.assertEqual(snapshot["window_used"], 0)
 
     def test_known_progress_url_recovery_only_polls_same_url(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -7,6 +7,7 @@ from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .config import DEFAULT_DAILY_SIMULATION_LIMIT
+from .simulation_gateway import MULTI_MAX_CHILDREN
 
 NEW_YORK = ZoneInfo("America/New_York")
 OFFICIAL_SOURCE = "BRAIN_SIMULATION_HEADERS"
@@ -68,6 +69,17 @@ def _in_estimate_window(simulation_day, today, window_days):
         return False
     window_start = current_day - timedelta(days=window_days - 1)
     return window_start <= candidate <= current_day
+
+
+def _guard_simulation_count(row):
+    value = row.get("simulation_count") if isinstance(row, Mapping) else None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 1 <= value <= MULTI_MAX_CHILDREN
+    ):
+        return 1
+    return value
 
 
 def _unknown_official_observation():
@@ -152,14 +164,21 @@ class SimulationQuota:
             ):
                 simulation_days.append(simulation_day)
         today_used = sum(day == today for day in simulation_days)
-        active = len(self.guard.entries())
-        window_used = len(simulation_days) + active
+        entries = self.guard.entries()
+        active_guard_count = len(entries)
+        active_guard_simulation_count = sum(
+            _guard_simulation_count(row) for row in entries
+        )
+        window_used = len(simulation_days) + active_guard_simulation_count
         estimate = {
-            "today_used": today_used + active,
-            "today_remaining": max(0, self.daily_cap - today_used - active),
+            "today_used": today_used + active_guard_simulation_count,
+            "today_remaining": max(
+                0, self.daily_cap - today_used - active_guard_simulation_count
+            ),
             "daily_cap": self.daily_cap,
             "window_used": window_used,
-            "active_guard_count": active,
+            "active_guard_count": active_guard_count,
+            "active_guard_simulation_count": active_guard_simulation_count,
             "window_days": window_days,
             "window_source": window_source,
             "source": ESTIMATE_SOURCE,

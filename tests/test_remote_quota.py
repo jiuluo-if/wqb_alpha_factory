@@ -112,7 +112,27 @@ class TestSimulationQuota(unittest.TestCase):
         self.assertEqual(snapshot["estimate"]["daily_cap"], 5000)
         self.assertEqual(snapshot["estimate"]["today_remaining"], 4898)
         self.assertEqual(snapshot["estimate"]["active_guard_count"], 2)
+        self.assertEqual(snapshot["estimate"]["active_guard_simulation_count"], 2)
         self.assertEqual(snapshot["evidence_status"], "APPROXIMATE")
+
+    def test_weighted_unresolved_guard_counts_sum_child_simulations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = ExecutionGuard(tmp)
+            guard.register("multi-10-a", simulation_count=10)
+            guard.register("multi-10-b", simulation_count=10)
+            guard.register("multi-4", simulation_count=4)
+            snapshot = SimulationQuota(
+                _Repository([], retention_days=7), guard,
+                local_date=lambda: "2026-09-23",
+            ).snapshot()
+
+        self.assertEqual(snapshot["active_guard_count"], 3)
+        self.assertEqual(snapshot["active_guard_simulation_count"], 24)
+        self.assertEqual(snapshot["today_used"], 24)
+        self.assertEqual(snapshot["window_used"], 24)
+        self.assertEqual(snapshot["estimate"]["today_used"], 24)
+        self.assertEqual(snapshot["estimate"]["active_guard_count"], 3)
+        self.assertEqual(snapshot["estimate"]["active_guard_simulation_count"], 24)
 
     def test_quota_projects_remote_rows_and_active_guards_without_state(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -210,6 +230,36 @@ class TestSimulationQuota(unittest.TestCase):
             self.assertNotIn("rolling_remaining", snapshot)
             self.assertEqual(snapshot["evidence_status"], "AVAILABLE")
             self.assertTrue(snapshot["legacy_fields_are_estimate"])
+
+    def test_official_headers_are_unchanged_by_weighted_guard_estimate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = ExecutionGuard(tmp)
+            guard.register("multi", simulation_count=10)
+            snapshot = SimulationQuota(
+                _Repository([], retention_days=7), guard,
+                local_date=lambda: "2026-09-23",
+                official_observation={
+                    "status": "AVAILABLE",
+                    "evidence_status": "AVAILABLE",
+                    "source": "BRAIN_SIMULATION_HEADERS",
+                    "limit": 6000,
+                    "remaining": 5000,
+                    "reset": 12345,
+                },
+            ).snapshot()
+
+        self.assertEqual(snapshot["source"], "BRAIN_SIMULATION_HEADERS")
+        self.assertEqual(snapshot["evidence_status"], "AVAILABLE")
+        self.assertEqual(snapshot["official"], {
+            "status": "AVAILABLE",
+            "evidence_status": "AVAILABLE",
+            "source": "BRAIN_SIMULATION_HEADERS",
+            "limit": 6000,
+            "remaining": 5000,
+            "reset": 12345,
+        })
+        self.assertEqual(snapshot["estimate"]["active_guard_count"], 1)
+        self.assertEqual(snapshot["estimate"]["active_guard_simulation_count"], 10)
 
     def test_official_headers_are_unchanged_when_creation_day_is_filtered(self):
         with tempfile.TemporaryDirectory() as tmp:

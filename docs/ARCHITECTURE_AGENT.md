@@ -39,7 +39,7 @@ are implemented and verified.
 
 ## ExecutionGuard
 
-唯一持久安全记录是 `.wqb_state/execution_guard.json`。每条记录最多包含 fingerprint、`SUBMITTING/RUNNING/SUBMIT_UNKNOWN`、progress URL、时间戳和可选 remote Alpha ID。完成结果被 BRAIN 确认前不得删除；不确定 POST 永不自动重试。
+唯一持久安全记录是 `.wqb_state/execution_guard.json`。每条记录最多包含 fingerprint、`SUBMITTING/RUNNING/SUBMIT_UNKNOWN`、progress URL、时间戳、bounded `simulation_count` 和可选 remote Alpha ID。`simulation_count` 只表达该 unresolved write 对应的 Simulation 数量；不保存 child payload、expression、settings 或结果。完成结果被 BRAIN 确认前不得删除；不确定 POST 永不自动重试。
 
 ## RemoteAlphaRepository
 

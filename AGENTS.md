@@ -26,7 +26,7 @@ research_api.simulate / simulate_batch
 
 Gateway 只负责：规范化有效 settings、基本请求 schema、live field/operator capability、execution fingerprint、exact duplicate、concurrency/quota、transport safety、提交、轮询和恢复。不得把研究判断变成执行前硬 gate。
 
-ExecutionGuard 是唯一远端写安全 owner，记录只允许 fingerprint、`SUBMITTING/RUNNING/SUBMIT_UNKNOWN`、progress URL、时间戳和可选 remote Alpha ID。POST 前先持久化 `SUBMITTING`；进程异常后视为 `SUBMIT_UNKNOWN`，不得自动重 POST；已知 progress URL 只能轮询同一任务。
+ExecutionGuard 是唯一远端写安全 owner，记录只允许 fingerprint、`SUBMITTING/RUNNING/SUBMIT_UNKNOWN`、progress URL、时间戳、bounded `simulation_count` 和可选 remote Alpha ID。`simulation_count` 只表示该 unresolved write 可能代表的 Simulation 数量，不保存 child payload 或结果；POST 前先持久化 `SUBMITTING`；进程异常后视为 `SUBMIT_UNKNOWN`，不得自动重 POST；已知 progress URL 只能轮询同一任务。
 
 ## Remote First
 
