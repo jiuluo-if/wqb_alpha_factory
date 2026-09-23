@@ -1042,7 +1042,6 @@ def simulation_quota(*, client=None, config=None, state_dir=None):
     return SimulationQuota(
         repository, ExecutionGuard(_state_directory(typed, state_dir), reconcile=False),
         daily_cap=quota.daily,
-        rolling_cap=quota.rolling_limit,
         official_observation=observation,
     ).snapshot()
 

@@ -27,7 +27,7 @@ class TestSimulationQuota(unittest.TestCase):
                 local_date=lambda: "2026-09-23",
             ).snapshot()
 
-    def test_submitted_today_created_yesterday_counts_only_in_rolling_usage(self):
+    def test_submitted_today_created_yesterday_counts_only_in_window_usage(self):
         snapshot = self._snapshot([{
             "alpha_id": "created-yesterday",
             "status": "SUBMITTED",
@@ -38,11 +38,16 @@ class TestSimulationQuota(unittest.TestCase):
         }])
 
         self.assertEqual(snapshot["today_used"], 0)
-        self.assertEqual(snapshot["rolling_used"], 1)
+        self.assertEqual(snapshot["window_used"], 1)
+        self.assertEqual(snapshot["window_days"], 7)
+        self.assertEqual(snapshot["window_source"], "REMOTE_CACHE_RETENTION")
         self.assertEqual(snapshot["estimate"]["today_remaining"], 5000)
-        self.assertEqual(snapshot["estimate"]["rolling_remaining"], 11199)
+        self.assertNotIn("rolling_cap", snapshot)
+        self.assertNotIn("rolling_remaining", snapshot)
+        self.assertNotIn("rolling_cap", snapshot["estimate"])
+        self.assertNotIn("rolling_remaining", snapshot["estimate"])
 
-    def test_submitted_today_created_outside_window_is_not_counted(self):
+    def test_submitted_today_created_outside_window_is_not_observed(self):
         snapshot = self._snapshot([{
             "alpha_id": "created-too-old",
             "status": "SUBMITTED",
@@ -53,9 +58,9 @@ class TestSimulationQuota(unittest.TestCase):
         }])
 
         self.assertEqual(snapshot["today_used"], 0)
-        self.assertEqual(snapshot["rolling_used"], 0)
+        self.assertEqual(snapshot["window_used"], 0)
 
-    def test_created_today_counts_for_today_and_rolling_usage(self):
+    def test_created_today_counts_for_today_and_window_usage(self):
         snapshot = self._snapshot([{
             "alpha_id": "created-today",
             "status": "SUBMITTED",
@@ -66,9 +71,9 @@ class TestSimulationQuota(unittest.TestCase):
         }])
 
         self.assertEqual(snapshot["today_used"], 1)
-        self.assertEqual(snapshot["rolling_used"], 1)
+        self.assertEqual(snapshot["window_used"], 1)
 
-    def test_unsubmitted_creation_date_remains_a_simulation_day(self):
+    def test_unsubmitted_creation_date_remains_window_observation(self):
         snapshot = self._snapshot([{
             "alpha_id": "unsubmitted-created-today",
             "status": "UNSUBMITTED",
@@ -77,7 +82,7 @@ class TestSimulationQuota(unittest.TestCase):
         }])
 
         self.assertEqual(snapshot["today_used"], 1)
-        self.assertEqual(snapshot["rolling_used"], 1)
+        self.assertEqual(snapshot["window_used"], 1)
 
     def test_submitted_row_without_creation_date_fails_closed(self):
         snapshot = self._snapshot([{
@@ -88,7 +93,7 @@ class TestSimulationQuota(unittest.TestCase):
         }])
 
         self.assertEqual(snapshot["today_used"], 0)
-        self.assertEqual(snapshot["rolling_used"], 0)
+        self.assertEqual(snapshot["window_used"], 0)
 
     def test_default_daily_policy_projects_approximate_remaining(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -101,7 +106,7 @@ class TestSimulationQuota(unittest.TestCase):
             ]
             snapshot = SimulationQuota(
                 _Repository(rows, retention_days=7), guard,
-                rolling_cap=11200, local_date=lambda: "2026-09-16",
+                local_date=lambda: "2026-09-16",
             ).snapshot()
 
         self.assertEqual(snapshot["estimate"]["daily_cap"], 5000)
@@ -117,16 +122,19 @@ class TestSimulationQuota(unittest.TestCase):
                 _Repository([
                     {"alpha_id": "today", "local_date": "2026-09-16"},
                     {"alpha_id": "older", "local_date": "2026-09-10"},
-                ]), guard, daily_cap=3, rolling_cap=5,
+                ]), guard, daily_cap=3,
                 local_date=lambda: "2026-09-16",
             )
 
             snapshot = quota.snapshot()
 
             self.assertEqual(snapshot["today_used"], 2)
-            self.assertEqual(snapshot["rolling_used"], 3)
+            self.assertEqual(snapshot["window_used"], 3)
             self.assertEqual(snapshot["today_remaining"], 1)
-            self.assertEqual(snapshot["rolling_remaining"], 2)
+            self.assertNotIn("rolling_cap", snapshot)
+            self.assertNotIn("rolling_remaining", snapshot)
+            self.assertNotIn("rolling_cap", snapshot["estimate"])
+            self.assertNotIn("rolling_remaining", snapshot["estimate"])
             self.assertEqual(snapshot["active_guard_count"], 1)
             self.assertFalse(snapshot["persisted_quota_state"])
             self.assertEqual(snapshot["evidence_status"], "APPROXIMATE")
@@ -141,10 +149,11 @@ class TestSimulationQuota(unittest.TestCase):
             with self.subTest(retention_days=retention_days), tempfile.TemporaryDirectory() as tmp:
                 snapshot = SimulationQuota(
                     _Repository([], retention_days=retention_days),
-                    ExecutionGuard(tmp), daily_cap=3, rolling_cap=5,
+                    ExecutionGuard(tmp), daily_cap=3,
                     local_date=lambda: "2026-09-16",
                 ).snapshot()
 
+            self.assertEqual(snapshot["estimate"]["window_used"], 0)
             self.assertEqual(snapshot["estimate"]["window_days"], retention_days)
             self.assertEqual(
                 snapshot["estimate"]["window_source"],
@@ -155,7 +164,7 @@ class TestSimulationQuota(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             quota = SimulationQuota(
                 _Repository([{"alpha_id": "already-existing", "local_date": "2026-09-16"}]),
-                ExecutionGuard(tmp), daily_cap=1600, rolling_cap=11200,
+                ExecutionGuard(tmp), daily_cap=1600,
                 local_date=lambda: "2026-09-16",
             )
 
@@ -164,7 +173,10 @@ class TestSimulationQuota(unittest.TestCase):
             self.assertEqual(snapshot["estimate"]["today_used"], 1)
             self.assertEqual(snapshot["estimate"]["source"],
                              "ESTIMATE_REMOTE_ALPHA_REPOSITORY+EXECUTION_GUARD")
+            self.assertEqual(snapshot["estimate"]["window_used"], 1)
             self.assertIsNone(snapshot["estimate"]["window_days"])
+            self.assertNotIn("rolling_cap", snapshot)
+            self.assertNotIn("rolling_remaining", snapshot)
             self.assertEqual(snapshot["official"]["status"], "UNKNOWN")
             self.assertIsNone(snapshot["official"]["remaining"])
 
@@ -172,7 +184,7 @@ class TestSimulationQuota(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             quota = SimulationQuota(
                 _Repository([{"alpha_id": "one", "local_date": "2026-09-16"}]),
-                ExecutionGuard(tmp), daily_cap=3, rolling_cap=5,
+                ExecutionGuard(tmp), daily_cap=3,
                 local_date=lambda: "2026-09-16",
                 official_observation={
                     "status": "AVAILABLE",
@@ -192,7 +204,10 @@ class TestSimulationQuota(unittest.TestCase):
             self.assertNotIn("reset" + "_seconds", snapshot["official"])
             self.assertEqual(snapshot["today_remaining"], 2)
             self.assertEqual(snapshot["estimate"]["today_remaining"], 2)
+            self.assertEqual(snapshot["estimate"]["window_used"], 1)
             self.assertEqual(snapshot["estimate"]["window_days"], None)
+            self.assertNotIn("rolling_cap", snapshot)
+            self.assertNotIn("rolling_remaining", snapshot)
             self.assertEqual(snapshot["evidence_status"], "AVAILABLE")
             self.assertTrue(snapshot["legacy_fields_are_estimate"])
 
@@ -222,7 +237,7 @@ class TestSimulationQuota(unittest.TestCase):
             snapshot = quota.snapshot()
 
         self.assertEqual(snapshot["today_used"], 0)
-        self.assertEqual(snapshot["rolling_used"], 0)
+        self.assertEqual(snapshot["window_used"], 0)
         self.assertEqual(snapshot["source"], "BRAIN_SIMULATION_HEADERS")
         self.assertEqual(snapshot["official"]["limit"], 1600)
         self.assertEqual(snapshot["official"]["remaining"], 987)
@@ -264,6 +279,9 @@ class TestSimulationQuota(unittest.TestCase):
             self.assertEqual(result["official"]["reset"], 12345)
             self.assertEqual(result["official"]["limit"], 1600)
             self.assertEqual(result["estimate"]["daily_cap"], 5000)
+            self.assertEqual(result["estimate"]["window_used"], 0)
+            self.assertNotIn("rolling_cap", result)
+            self.assertNotIn("rolling_remaining", result)
             self.assertNotIn("reset" + "_seconds", result["official"])
             self.assertEqual(result["source"], "BRAIN_SIMULATION_HEADERS")
             self.assertEqual(result["estimate"]["source"],
@@ -314,6 +332,9 @@ class TestSimulationQuota(unittest.TestCase):
         self.assertEqual(result["source"], "BRAIN_SIMULATION_HEADERS")
         self.assertEqual(result["official"]["limit"], 6000)
         self.assertEqual(result["estimate"]["daily_cap"], 5000)
+        self.assertEqual(result["estimate"]["window_used"], 0)
+        self.assertNotIn("rolling_cap", result)
+        self.assertNotIn("rolling_remaining", result)
 
     def test_public_quota_estimate_window_uses_remote_cache_retention(self):
         class _Client:
@@ -335,6 +356,7 @@ class TestSimulationQuota(unittest.TestCase):
                 )
 
             self.assertEqual(result["official"]["status"], "UNKNOWN")
+            self.assertEqual(result["estimate"]["window_used"], 0)
             self.assertEqual(result["estimate"]["window_days"], retention_days)
             self.assertEqual(
                 result["estimate"]["window_source"],

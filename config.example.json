@@ -40,8 +40,7 @@
     "retention_days": 7
   },
   "quota": {
-    "daily": 5000,
-    "rolling_limit": 11200
+    "daily": 5000
   },
   "factory": {
     "default_probe_count": 100

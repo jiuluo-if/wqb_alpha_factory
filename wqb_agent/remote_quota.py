@@ -113,14 +113,10 @@ class SimulationQuota:
     """Project remote usage without creating a local quota state machine."""
 
     def __init__(self, repository, guard, *, daily_cap=DEFAULT_DAILY_SIMULATION_LIMIT,
-                 rolling_cap=11200,
                  local_date=None, official_observation=None):
         self.repository = repository
         self.guard = guard
         self.daily_cap = self._cap(daily_cap, "daily_cap")
-        self.rolling_cap = self._cap(rolling_cap, "rolling_cap")
-        if self.daily_cap > self.rolling_cap:
-            raise ValueError("daily_cap 不得超过 rolling_cap")
         self._local_date = local_date or self._today
         self.official_observation = official_observation
 
@@ -157,14 +153,12 @@ class SimulationQuota:
                 simulation_days.append(simulation_day)
         today_used = sum(day == today for day in simulation_days)
         active = len(self.guard.entries())
-        rolling_used = len(simulation_days) + active
+        window_used = len(simulation_days) + active
         estimate = {
             "today_used": today_used + active,
-            "rolling_used": rolling_used,
             "today_remaining": max(0, self.daily_cap - today_used - active),
-            "rolling_remaining": max(0, self.rolling_cap - rolling_used),
             "daily_cap": self.daily_cap,
-            "rolling_cap": self.rolling_cap,
+            "window_used": window_used,
             "active_guard_count": active,
             "window_days": window_days,
             "window_source": window_source,

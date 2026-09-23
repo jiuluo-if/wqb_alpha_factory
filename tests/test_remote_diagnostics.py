@@ -33,39 +33,38 @@ class TestRemoteDiagnostics(unittest.TestCase):
         })
 
         self.assertEqual(parsed.quota.daily, 3)
-        self.assertEqual(parsed.quota.rolling_limit, 5)
         self.assertFalse(hasattr(parsed.quota, "rolling_days"))
+        self.assertFalse(hasattr(parsed.quota, "rolling_limit"))
+
+    def test_quota_ignores_legacy_rolling_limit_without_typed_field(self):
+        parsed = parse_config({
+            "simulation": {},
+            "quota": {"daily": 5000, "rolling_limit": 11200},
+        })
+
+        self.assertEqual(parsed.quota.daily, 5000)
+        self.assertFalse(hasattr(parsed.quota, "rolling_limit"))
 
     def test_consultant_daily_policy_defaults_to_5000(self):
         parsed = parse_config({"simulation": {}})
 
         self.assertEqual(parsed.quota.daily, 5000)
-        self.assertEqual(parsed.quota.rolling_limit, 11200)
+        self.assertFalse(hasattr(parsed.quota, "rolling_limit"))
 
     def test_consultant_daily_policy_remains_explicitly_overridable(self):
         parsed = parse_config({
             "simulation": {},
-            "quota": {"daily": 4000, "rolling_limit": 11200},
+            "quota": {"daily": 4000},
         })
 
         self.assertEqual(parsed.quota.daily, 4000)
-
-    def test_daily_policy_cannot_exceed_rolling_limit(self):
-        with self.assertRaisesRegex(
-            ValueError, "config.quota.daily 不得超过 config.quota.rolling_limit"
-        ):
-            parse_config({
-                "simulation": {},
-                "quota": {"daily": 12000, "rolling_limit": 11200},
-            })
 
     def test_config_example_does_not_publish_rolling_days(self):
         example = pathlib.Path(__file__).resolve().parents[1] / "config.example.json"
         payload = json.loads(example.read_text(encoding="utf-8"))
 
         self.assertNotIn("rolling_days", payload["quota"])
-        self.assertEqual(payload["quota"]["daily"], 5000)
-        self.assertEqual(payload["quota"]["rolling_limit"], 11200)
+        self.assertEqual(payload["quota"], {"daily": 5000})
 
     def test_known_running_execution_is_reported_without_replaying_result(self):
         with tempfile.TemporaryDirectory() as state_dir:
