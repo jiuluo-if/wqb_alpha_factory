@@ -893,8 +893,11 @@ def get_live_preflight(*, client=None, config=None, state_dir=None):
     }
 
 
-def get_pending_executions(*, state_dir=".wqb_state"):
-    return {"entries": ExecutionGuard(state_dir, reconcile=False).entries()}
+def get_pending_executions(*, state_dir=None, config=None):
+    """Read unresolved local guard entries from the configured state directory."""
+    typed = _normalized_config(config)
+    directory = _state_directory(typed, state_dir)
+    return {"entries": ExecutionGuard(directory, reconcile=False).entries()}
 
 
 def resume_execution(fingerprint, *, client=None, config=None,

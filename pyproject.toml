@@ -10,8 +10,21 @@ requires-python = ">=3.11"
 dependencies = ["requests>=2.28"]
 
 [project.optional-dependencies]
-dev = ["ruff", "coverage", "mypy"]
+mcp = [
+  "mcp>=2.2,<3",
+  "tzdata>=2025.2; platform_system == 'Windows'",
+]
+dev = [
+  "ruff",
+  "coverage",
+  "mypy",
+  "mcp>=2.2,<3",
+  "tzdata>=2025.2; platform_system == 'Windows'",
+]
 perf = ["py-spy", "pytest", "pytest-xdist"]
+
+[project.scripts]
+alpha-factory-mcp = "wqb_agent.mcp_server:main"
 
 [tool.coverage.run]
 branch = true

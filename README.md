@@ -54,6 +54,13 @@ ExecutionGuard 的安全不变量：
 - 相同 expression 与 effective settings 的 active execution 只允许一次 POST。
 - Alpha submission 始终人工完成；颜色 PATCH 是独立的显式远端 metadata 操作。
 
+## Optional MCP read tools
+
+Install `python -m pip install -e ".[mcp]"` and start `alpha-factory-mcp` in
+the project directory to expose bounded read-only capability, permission,
+field, Alpha evidence, and local pending-guard tools over stdio. The exact tool
+contract and output bounds are in [`docs/MCP_READ_ONLY.md`](docs/MCP_READ_ONLY.md).
+
 ## 配置与验证
 
 配置使用 `simulation`、`runtime`、`remote_cache`、`quota`、`factory` 五个顶层 section，示例见 `config.example.json`。

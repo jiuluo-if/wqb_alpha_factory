@@ -12,6 +12,10 @@ BRAIN owns Alpha simulation evidence.
 
 `wqb_agent.research_api` 是唯一 Agent-facing facade，提供 discovery、operator capability、template/probe、Simulation、remote Alpha evidence、dedupe、group 和 color 工具。
 
+`wqb_agent.mcp_server` is an optional stdio transport over a small read-only
+subset of that facade. It exposes no writes and adds no second owner for
+research meaning or BRAIN access; see [`MCP_READ_ONLY.md`](MCP_READ_ONLY.md).
+
 ## 唯一 Simulation 写链
 
 ```text

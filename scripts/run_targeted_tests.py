@@ -90,6 +90,7 @@ DIRECT_TESTS = {
         "tests/test_alpha_grouping.py",
         "tests/test_remote_colors.py",
     ),
+    "wqb_agent/mcp_server.py": ("tests/test_mcp_server.py",),
     "wqb_agent/remote_quota.py": ("tests/test_remote_quota.py",),
     "wqb_agent/credentials.py": (
         "tests/test_credentials.py",

@@ -22,6 +22,7 @@ from wqb_agent.research_api import (
     get_capabilities,
     get_live_preflight,
     get_operator_reference,
+    get_pending_executions,
     get_simulation_modes,
     inspect_template,
     list_all_datafields,
@@ -683,12 +684,26 @@ class TestResearchApi(unittest.TestCase):
             },
             get_all_user_alphas=lambda **_kwargs: [],
         )
-        result = get_live_preflight(client=client, config={"simulation": {}, "runtime": {}})
+        with tempfile.TemporaryDirectory() as state:
+            result = get_live_preflight(
+                client=client,
+                config={"simulation": {}, "runtime": {}},
+                state_dir=state,
+            )
         self.assertFalse(result["network_write"])
         self.assertEqual(result["authentication"]["user_id"], "user-1")
         self.assertTrue(result["simulation_modes"]["multi"]["available"])
         self.assertEqual(result["multi_child_range"], "2..10")
         self.assertIn("pending_execution_count", result)
+
+    def test_pending_execution_read_uses_configured_state_directory(self):
+        with mock.patch("wqb_agent.research_api.ExecutionGuard") as guard_factory:
+            guard_factory.return_value.entries.return_value = []
+            result = get_pending_executions(
+                config={"simulation": {}, "runtime": {"state_dir": "synthetic-state"}},
+            )
+        self.assertEqual(result, {"entries": []})
+        guard_factory.assert_called_once_with("synthetic-state", reconcile=False)
 
     def test_single_alias_and_multi_facade_delegate_to_gateway(self):
         spec = SimulationSpec("rank(close)")
