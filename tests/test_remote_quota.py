@@ -140,6 +140,19 @@ class TestSimulationQuota(unittest.TestCase):
         self.assertEqual(snapshot["estimate"]["active_guard_simulation_count"], 2)
         self.assertEqual(snapshot["evidence_status"], "APPROXIMATE")
 
+    def test_direct_daily_cap_respects_consultant_policy_ceiling(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repository = _Repository([])
+            guard = ExecutionGuard(tmp)
+            self.assertEqual(
+                SimulationQuota(repository, guard, daily_cap=5000).daily_cap,
+                5000,
+            )
+            with self.assertRaisesRegex(ValueError, "小于或等于 5000"):
+                SimulationQuota(repository, guard, daily_cap=5001)
+            with self.assertRaisesRegex(ValueError, "小于或等于 5000"):
+                SimulationQuota(repository, guard, daily_cap=6000)
+
     def test_today_guard_contributes_to_today_and_window(self):
         with tempfile.TemporaryDirectory() as tmp:
             guard = ExecutionGuard(tmp)
@@ -514,6 +527,19 @@ class TestSimulationQuota(unittest.TestCase):
             self.assertEqual(result["official"]["status"], "UNKNOWN")
             self.assertEqual(result["estimate"]["daily_cap"], 5000)
             self.assertIsNone(result["official"]["reset"])
+
+    def test_public_quota_api_preserves_lower_local_daily_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = research_api.simulation_quota(
+                config={
+                    "simulation": {},
+                    "quota": {"daily": 4000},
+                },
+                state_dir=tmp,
+            )
+
+        self.assertEqual(result["estimate"]["daily_cap"], 4000)
+        self.assertEqual(result["today_remaining"], 4000)
 
     def test_public_quota_api_uses_client_observation_as_official_primary(self):
         class _Client:

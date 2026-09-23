@@ -195,6 +195,7 @@ def parse_config(raw):
     daily_limit = _int_in_range(
         quota_raw.get("daily", DEFAULT_DAILY_SIMULATION_LIMIT),
         key="config.quota.daily", minimum=0,
+        maximum=DEFAULT_DAILY_SIMULATION_LIMIT,
     )
     quota = QuotaConfig(daily=daily_limit)
     factory_raw = raw.get("factory", {})

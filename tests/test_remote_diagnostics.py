@@ -52,13 +52,53 @@ class TestRemoteDiagnostics(unittest.TestCase):
         self.assertEqual(parsed.quota.daily, 5000)
         self.assertFalse(hasattr(parsed.quota, "rolling_limit"))
 
-    def test_consultant_daily_policy_remains_explicitly_overridable(self):
+    def test_consultant_daily_policy_can_be_lowered(self):
         parsed = parse_config({
             "simulation": {},
             "quota": {"daily": 4000},
         })
 
         self.assertEqual(parsed.quota.daily, 4000)
+
+    def test_consultant_daily_policy_ceiling_is_5000(self):
+        self.assertEqual(
+            parse_config({
+                "simulation": {},
+                "quota": {"daily": 5000},
+            }).quota.daily,
+            5000,
+        )
+        self.assertEqual(
+            parse_config({
+                "simulation": {},
+                "quota": {"daily": 0},
+            }).quota.daily,
+            0,
+        )
+        for value in (5001, 100000):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "小于或等于 5000"):
+                    parse_config({
+                        "simulation": {},
+                        "quota": {"daily": value},
+                    })
+
+    def test_consultant_daily_policy_rejects_bool_and_non_integral_float(self):
+        for value in (True, 5000.5):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    parse_config({
+                        "simulation": {},
+                        "quota": {"daily": value},
+                    })
+
+        self.assertEqual(
+            parse_config({
+                "simulation": {},
+                "quota": {"daily": 5000.0},
+            }).quota.daily,
+            5000,
+        )
 
     def test_config_example_does_not_publish_rolling_days(self):
         example = pathlib.Path(__file__).resolve().parents[1] / "config.example.json"

@@ -159,6 +159,10 @@ class SimulationQuota:
             raise ValueError(f"{name} 必须是非负整数") from exc
         if result < 0:
             raise ValueError(f"{name} 必须是非负整数")
+        if result > DEFAULT_DAILY_SIMULATION_LIMIT:
+            raise ValueError(
+                f"{name} 必须小于或等于 {DEFAULT_DAILY_SIMULATION_LIMIT}"
+            )
         return result
 
     @staticmethod

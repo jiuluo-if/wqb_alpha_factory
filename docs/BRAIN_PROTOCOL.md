@@ -26,7 +26,7 @@
 
 `RemoteAlphaRepository` cache 只按配置的 retention window 保存可重建的 lightweight Alpha metadata，不使用本地 quota limit 裁剪 metadata rows；这些 rows 仍只是 `APPROXIMATE` usage evidence，不是精确 Simulation count。
 
-当前顾问阶段的本地 daily Simulation policy limit 默认为 5000；它只作用于 `APPROXIMATE` local quota projection，不覆盖 BRAIN response headers，也不代表平台固定 quota。
+当前顾问阶段的 local daily Simulation policy ceiling 为 5000，默认也是 5000；配置只允许下调，不允许高于 5000。它只作用于 `APPROXIMATE` local quota projection，不覆盖 BRAIN response headers，也不代表平台固定 quota。
 
 当前已确认的本地 quota policy 只有 daily limit=5000；`RemoteAlphaRepository` 的 configured retention window 只产生 `APPROXIMATE` `window_used` observation，不代表存在 rolling cap 或 rolling remaining，也不得从 daily=5000 推导 7-day=35000。
 
