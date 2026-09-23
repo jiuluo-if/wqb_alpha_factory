@@ -17,7 +17,7 @@ class _Repository:
         return list(self.rows)
 
 
-class TestRemoteSimulationQuota(unittest.TestCase):
+class TestSimulationQuota(unittest.TestCase):
     def test_default_daily_policy_projects_approximate_remaining(self):
         with tempfile.TemporaryDirectory() as tmp:
             guard = ExecutionGuard(tmp)

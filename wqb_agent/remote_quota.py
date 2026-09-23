@@ -134,9 +134,3 @@ class SimulationQuota:
             "usage_semantics": "APPROXIMATE_ESTIMATE",
             "legacy_fields_are_estimate": True,
         }
-
-
-# Compatibility name for integrations migrated from the intermediate
-# Remote-First implementation.  The production owner is SimulationQuota;
-# this alias does not retain any factory/session state.
-RemoteSimulationQuota = SimulationQuota
