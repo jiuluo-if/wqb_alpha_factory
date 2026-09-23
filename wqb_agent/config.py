@@ -21,6 +21,10 @@ _FIELD_SELECTION_DEFAULTS = {
     "min_datasets": 1,
     "persist_catalog": False,
 }
+
+DEFAULT_DAILY_SIMULATION_LIMIT = 5000
+
+
 @dataclass(frozen=True)
 class SimulationConfig:
     settings: dict = field(default_factory=lambda: {"neutralization": "SUBINDUSTRY"})
@@ -56,7 +60,7 @@ class FactoryConfig:
 
 @dataclass(frozen=True)
 class QuotaConfig:
-    daily: int = 1600
+    daily: int = DEFAULT_DAILY_SIMULATION_LIMIT
     rolling_limit: int = 11200
 
 
@@ -194,7 +198,8 @@ def parse_config(raw):
         minimum=0,
     )
     daily_limit = _int_in_range(
-        quota_raw.get("daily", 1600), key="config.quota.daily", minimum=0,
+        quota_raw.get("daily", DEFAULT_DAILY_SIMULATION_LIMIT),
+        key="config.quota.daily", minimum=0,
     )
     if daily_limit > rolling_limit:
         raise ValueError("config.quota.daily 不得超过 config.quota.rolling_limit")

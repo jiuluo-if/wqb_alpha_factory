@@ -40,7 +40,7 @@
     "retention_days": 7
   },
   "quota": {
-    "daily": 1600,
+    "daily": 5000,
     "rolling_limit": 11200
   },
   "factory": {

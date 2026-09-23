@@ -97,11 +97,12 @@ class TestRemoteAlphaRepository(unittest.TestCase):
 
     def test_public_repository_functions_do_not_require_agent_state_machine(self):
         with tempfile.TemporaryDirectory() as tmp:
+            config = {"remote_cache": {"retention_days": 14}}
             result = research_api.refresh_remote_alphas(
-                client=FakeAlphaReader(), state_dir=tmp
+                client=FakeAlphaReader(), config=config, state_dir=tmp
             )
-            self.assertEqual(result["retention_days"], 7)
-            listed = research_api.list_remote_alphas(state_dir=tmp)
+            self.assertEqual(result["retention_days"], 14)
+            listed = research_api.list_remote_alphas(config=config, state_dir=tmp)
             self.assertEqual(len(listed), 2)
 
     def test_public_remote_repository_reads_are_explicitly_live_or_cached(self):

@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
+from .config import DEFAULT_DAILY_SIMULATION_LIMIT
+
 NEW_YORK = ZoneInfo("America/New_York")
 OFFICIAL_SOURCE = "BRAIN_SIMULATION_HEADERS"
 ESTIMATE_SOURCE = "ESTIMATE_REMOTE_ALPHA_REPOSITORY+EXECUTION_GUARD"
@@ -64,7 +66,8 @@ def _official_projection(observation):
 class SimulationQuota:
     """Project remote usage without creating a local quota state machine."""
 
-    def __init__(self, repository, guard, *, daily_cap=1600, rolling_cap=11200,
+    def __init__(self, repository, guard, *, daily_cap=DEFAULT_DAILY_SIMULATION_LIMIT,
+                 rolling_cap=11200,
                  local_date=None, official_observation=None):
         self.repository = repository
         self.guard = guard

@@ -18,6 +18,25 @@ class _Repository:
 
 
 class TestRemoteSimulationQuota(unittest.TestCase):
+    def test_default_daily_policy_projects_approximate_remaining(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = ExecutionGuard(tmp)
+            guard.register("active-one")
+            guard.register("active-two")
+            rows = [
+                {"alpha_id": f"synthetic-{index}", "local_date": "2026-09-16"}
+                for index in range(100)
+            ]
+            snapshot = SimulationQuota(
+                _Repository(rows, retention_days=7), guard,
+                rolling_cap=11200, local_date=lambda: "2026-09-16",
+            ).snapshot()
+
+        self.assertEqual(snapshot["estimate"]["daily_cap"], 5000)
+        self.assertEqual(snapshot["estimate"]["today_remaining"], 4898)
+        self.assertEqual(snapshot["estimate"]["active_guard_count"], 2)
+        self.assertEqual(snapshot["evidence_status"], "APPROXIMATE")
+
     def test_quota_projects_remote_rows_and_active_guards_without_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             guard = ExecutionGuard(tmp)
@@ -116,6 +135,7 @@ class TestRemoteSimulationQuota(unittest.TestCase):
                              "ESTIMATE_REMOTE_ALPHA_REPOSITORY+EXECUTION_GUARD")
             self.assertEqual(result["today_used"], 0)
             self.assertEqual(result["official"]["status"], "UNKNOWN")
+            self.assertEqual(result["estimate"]["daily_cap"], 5000)
             self.assertIsNone(result["official"]["reset"])
 
     def test_public_quota_api_uses_client_observation_as_official_primary(self):
@@ -136,12 +156,14 @@ class TestRemoteSimulationQuota(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             result = research_api.simulation_quota(client=_Client(), state_dir=tmp)
 
-        self.assertEqual(result["official"]["remaining"], 987)
-        self.assertEqual(result["official"]["reset"], 12345)
-        self.assertNotIn("reset" + "_seconds", result["official"])
-        self.assertEqual(result["source"], "BRAIN_SIMULATION_HEADERS")
-        self.assertEqual(result["estimate"]["source"],
-                         "ESTIMATE_REMOTE_ALPHA_REPOSITORY+EXECUTION_GUARD")
+            self.assertEqual(result["official"]["remaining"], 987)
+            self.assertEqual(result["official"]["reset"], 12345)
+            self.assertEqual(result["official"]["limit"], 1600)
+            self.assertEqual(result["estimate"]["daily_cap"], 5000)
+            self.assertNotIn("reset" + "_seconds", result["official"])
+            self.assertEqual(result["source"], "BRAIN_SIMULATION_HEADERS")
+            self.assertEqual(result["estimate"]["source"],
+                             "ESTIMATE_REMOTE_ALPHA_REPOSITORY+EXECUTION_GUARD")
 
     def test_public_quota_api_falls_back_when_latest_observation_is_unknown(self):
         class _Client:
@@ -166,6 +188,28 @@ class TestRemoteSimulationQuota(unittest.TestCase):
             result["source"], "ESTIMATE_REMOTE_ALPHA_REPOSITORY+EXECUTION_GUARD"
         )
         self.assertEqual(result["evidence_status"], "APPROXIMATE")
+
+    def test_official_limit_above_local_policy_is_not_clamped(self):
+        class _Client:
+            def get_all_user_alphas(self, **_kwargs):
+                return []
+
+            def get_simulation_quota_observation(self):
+                return {
+                    "status": "AVAILABLE",
+                    "evidence_status": "AVAILABLE",
+                    "source": "BRAIN_SIMULATION_HEADERS",
+                    "limit": 6000,
+                    "remaining": 5000,
+                    "reset": 12345,
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = research_api.simulation_quota(client=_Client(), state_dir=tmp)
+
+        self.assertEqual(result["source"], "BRAIN_SIMULATION_HEADERS")
+        self.assertEqual(result["official"]["limit"], 6000)
+        self.assertEqual(result["estimate"]["daily_cap"], 5000)
 
     def test_public_quota_estimate_window_uses_remote_cache_retention(self):
         class _Client:

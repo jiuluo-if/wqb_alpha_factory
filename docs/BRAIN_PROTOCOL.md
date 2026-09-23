@@ -26,6 +26,8 @@
 
 `RemoteAlphaRepository` cache 只按配置的 retention window 保存可重建的 lightweight Alpha metadata，不使用本地 quota limit 裁剪 metadata rows；这些 rows 仍只是 `APPROXIMATE` usage evidence，不是精确 Simulation count。
 
+当前顾问阶段的本地 daily Simulation policy limit 默认为 5000；它只作用于 `APPROXIMATE` local quota projection，不覆盖 BRAIN response headers，也不代表平台固定 quota。
+
 `GET /authentication` 只投影当前 live session 的 `authenticated`、`user_id`、`token_expiry` 和 `permissions`，不保存 JWT、cookie 或权限状态。`MULTI_SIMULATION` permission 是 Multi-Simulation 的账户能力前置条件；没有该 permission 时，客户端不得用 POST 探测或静默退化为大量 Single。
 
 `OPTIONS /simulations` 的 `actions.POST` 是 Simulation settings 的平台 truth。客户端只投影 Simulation type choices、实际使用的 settings allowed values/type 和 required fields；未知 vendor 字段忽略。当前 writer 的唯一支持类型是已经完整建模并验证的 `REGULAR`，即使平台广告 `SUPER` 或 `REGION_AGNOSTIC`，也不能把广告 capability 当作本项目的 write contract；SUPER 只有在独立 `combo`/`selection` request schema 实现并验证后才能进入 production writer。`MULTI` 不是 Simulation type，而是由 `MULTI_SIMULATION` permission 授权的 dispatch mode，当前 Multi child 仍只使用 REGULAR schema。OPTIONS 不可用时只能返回 `UNKNOWN`，并以最低本地 shape 校验继续提供 `LOCAL_ONLY` 结果，不能宣称 live validation 已通过。
