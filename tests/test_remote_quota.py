@@ -144,14 +144,19 @@ class TestSimulationQuota(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repository = _Repository([])
             guard = ExecutionGuard(tmp)
-            self.assertEqual(
-                SimulationQuota(repository, guard, daily_cap=5000).daily_cap,
-                5000,
-            )
-            with self.assertRaisesRegex(ValueError, "小于或等于 5000"):
-                SimulationQuota(repository, guard, daily_cap=5001)
-            with self.assertRaisesRegex(ValueError, "小于或等于 5000"):
-                SimulationQuota(repository, guard, daily_cap=6000)
+            for value in (0, 4000, 4000.0, 5000, 5000.0):
+                with self.subTest(value=value):
+                    self.assertEqual(
+                        SimulationQuota(repository, guard, daily_cap=value).daily_cap,
+                        int(value),
+                    )
+            for value in (
+                True, False, 0.5, 1.5, 4999.9, 5000.1,
+                float("nan"), float("inf"), float("-inf"), -1, 5001, 6000,
+            ):
+                with self.subTest(value=value):
+                    with self.assertRaises(ValueError):
+                        SimulationQuota(repository, guard, daily_cap=value)
 
     def test_today_guard_contributes_to_today_and_window(self):
         with tempfile.TemporaryDirectory() as tmp:

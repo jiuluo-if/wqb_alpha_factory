@@ -153,9 +153,13 @@ class SimulationQuota:
     def _cap(value, name):
         if isinstance(value, bool):
             raise ValueError(f"{name} 必须是非负整数")
+        if isinstance(value, float) and (
+            not math.isfinite(value) or not value.is_integer()
+        ):
+            raise ValueError(f"{name} 必须是非负整数")
         try:
             result = int(value)
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, OverflowError) as exc:
             raise ValueError(f"{name} 必须是非负整数") from exc
         if result < 0:
             raise ValueError(f"{name} 必须是非负整数")
