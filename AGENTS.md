@@ -36,6 +36,8 @@ BRAIN 是 Alpha、Simulation、metrics、checks、aggregates、PnL 和 correlati
 
 ## 模板与隐私
 
+项目技能只维护在根目录 `skills/`。遇到 SPC Prompt 撰写或 BRAIN Alpha 证据归因时，按需读取其中对应的 `SKILL.md`；技能提供方法，不新增平台写入入口，也不覆盖本文件与 `wqb_agent.research_api` 的契约。
+
 模板变更前必须阅读本文件、`wqb_agent/AGENTS.md` 和 `wqb_agent/alpha_templates/AGENTS.md`。`alpha_templates` 是唯一模板 owner；公开 catalog 只能使用 synthetic 数据，私有 catalog 必须显式路径加载并 fail closed。
 
 tracked 代码、测试、docs 和 fixtures 不得包含真实 Alpha、私有 field、完整研究表达式、credentials 或运行状态。质量检查不得触发 live Simulation POST。
