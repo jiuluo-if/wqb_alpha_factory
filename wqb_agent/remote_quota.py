@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -80,6 +81,22 @@ def _guard_simulation_count(row):
     ):
         return 1
     return value
+
+
+def _guard_local_date(row):
+    """Return the local registration-date proxy for an unresolved guard."""
+    value = row.get("created_at") if isinstance(row, Mapping) else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        timestamp = float(value)
+        if not math.isfinite(timestamp):
+            return None
+        return datetime.fromtimestamp(timestamp, tz=UTC).astimezone(
+            NEW_YORK
+        ).date().isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
 
 
 def _unknown_official_observation():
@@ -169,16 +186,36 @@ class SimulationQuota:
         active_guard_simulation_count = sum(
             _guard_simulation_count(row) for row in entries
         )
-        window_used = len(simulation_days) + active_guard_simulation_count
+        today_guard_simulation_count = 0
+        window_guard_simulation_count = 0
+        unknown_guard_time_simulation_count = 0
+        for row in entries:
+            count = _guard_simulation_count(row)
+            guard_day = _guard_local_date(row)
+            if guard_day is None:
+                unknown_guard_time_simulation_count += count
+                today_guard_simulation_count += count
+                window_guard_simulation_count += count
+                continue
+            if guard_day == today:
+                today_guard_simulation_count += count
+            if window_days is None or _in_estimate_window(
+                guard_day, today, window_days
+            ):
+                window_guard_simulation_count += count
+        window_used = len(simulation_days) + window_guard_simulation_count
         estimate = {
-            "today_used": today_used + active_guard_simulation_count,
+            "today_used": today_used + today_guard_simulation_count,
             "today_remaining": max(
-                0, self.daily_cap - today_used - active_guard_simulation_count
+                0, self.daily_cap - today_used - today_guard_simulation_count
             ),
             "daily_cap": self.daily_cap,
             "window_used": window_used,
             "active_guard_count": active_guard_count,
             "active_guard_simulation_count": active_guard_simulation_count,
+            "today_guard_simulation_count": today_guard_simulation_count,
+            "window_guard_simulation_count": window_guard_simulation_count,
+            "unknown_guard_time_simulation_count": unknown_guard_time_simulation_count,
             "window_days": window_days,
             "window_source": window_source,
             "source": ESTIMATE_SOURCE,

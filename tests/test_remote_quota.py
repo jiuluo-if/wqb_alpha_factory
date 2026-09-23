@@ -1,10 +1,35 @@
+import json
+import math
 import tempfile
 import unittest
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 from wqb_agent import research_api
 from wqb_agent.remote_quota import SimulationQuota
 from wqb_agent.simulation_gateway import ExecutionGuard
+
+NEW_YORK = ZoneInfo("America/New_York")
+
+
+def _epoch(local_date):
+    return datetime.fromisoformat(f"{local_date}T12:00:00").replace(
+        tzinfo=NEW_YORK
+    ).timestamp()
+
+
+def _register_at(guard, fingerprint, local_date, *, simulation_count=1,
+                 status="SUBMIT_UNKNOWN", updated_date=None):
+    guard.register(
+        fingerprint, status=status, simulation_count=simulation_count,
+    )
+    with open(guard.path, encoding="utf-8") as handle:
+        payload = json.load(handle)
+    row = payload["entries"][-1]
+    row["created_at"] = _epoch(local_date)
+    row["updated_at"] = _epoch(updated_date or local_date)
+    with open(guard.path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle)
 
 
 class _Repository:
@@ -98,8 +123,8 @@ class TestSimulationQuota(unittest.TestCase):
     def test_default_daily_policy_projects_approximate_remaining(self):
         with tempfile.TemporaryDirectory() as tmp:
             guard = ExecutionGuard(tmp)
-            guard.register("active-one")
-            guard.register("active-two")
+            _register_at(guard, "active-one", "2026-09-16")
+            _register_at(guard, "active-two", "2026-09-16")
             rows = [
                 {"alpha_id": f"synthetic-{index}", "local_date": "2026-09-16"}
                 for index in range(100)
@@ -115,12 +140,100 @@ class TestSimulationQuota(unittest.TestCase):
         self.assertEqual(snapshot["estimate"]["active_guard_simulation_count"], 2)
         self.assertEqual(snapshot["evidence_status"], "APPROXIMATE")
 
+    def test_today_guard_contributes_to_today_and_window(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = ExecutionGuard(tmp)
+            _register_at(guard, "today", "2026-09-23", simulation_count=4)
+            snapshot = SimulationQuota(
+                _Repository([], retention_days=7), guard,
+                local_date=lambda: "2026-09-23",
+            ).snapshot()
+
+        self.assertEqual(snapshot["active_guard_count"], 1)
+        self.assertEqual(snapshot["active_guard_simulation_count"], 4)
+        self.assertEqual(snapshot["today_guard_simulation_count"], 4)
+        self.assertEqual(snapshot["window_guard_simulation_count"], 4)
+        self.assertEqual(snapshot["today_used"], 4)
+        self.assertEqual(snapshot["window_used"], 4)
+
+    def test_yesterday_guard_stays_in_window_but_not_today(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = ExecutionGuard(tmp)
+            _register_at(guard, "yesterday", "2026-09-22", simulation_count=4)
+            snapshot = SimulationQuota(
+                _Repository([], retention_days=7), guard,
+                local_date=lambda: "2026-09-23",
+            ).snapshot()
+
+        self.assertEqual(snapshot["active_guard_simulation_count"], 4)
+        self.assertEqual(snapshot["today_guard_simulation_count"], 0)
+        self.assertEqual(snapshot["window_guard_simulation_count"], 4)
+        self.assertEqual(snapshot["today_used"], 0)
+        self.assertEqual(snapshot["today_remaining"], 5000)
+        self.assertEqual(snapshot["window_used"], 4)
+
+    def test_guard_outside_retention_stays_for_safety_but_not_window_usage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = ExecutionGuard(tmp)
+            _register_at(guard, "old", "2026-09-10", simulation_count=10)
+            snapshot = SimulationQuota(
+                _Repository([], retention_days=7), guard,
+                local_date=lambda: "2026-09-23",
+            ).snapshot()
+
+            remaining_entries = len(guard.entries())
+
+        self.assertEqual(snapshot["active_guard_count"], 1)
+        self.assertEqual(remaining_entries, 1)
+        self.assertEqual(snapshot["active_guard_simulation_count"], 10)
+        self.assertEqual(snapshot["today_guard_simulation_count"], 0)
+        self.assertEqual(snapshot["window_guard_simulation_count"], 0)
+        self.assertEqual(snapshot["today_used"], 0)
+        self.assertEqual(snapshot["window_used"], 0)
+
+    def test_mixed_guard_dates_keep_all_active_and_filter_contributions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = ExecutionGuard(tmp)
+            _register_at(guard, "today", "2026-09-23", simulation_count=1)
+            _register_at(guard, "yesterday", "2026-09-22", simulation_count=4)
+            _register_at(guard, "old", "2026-09-10", simulation_count=10)
+            snapshot = SimulationQuota(
+                _Repository([], retention_days=7), guard,
+                local_date=lambda: "2026-09-23",
+            ).snapshot()
+
+        self.assertEqual(snapshot["active_guard_count"], 3)
+        self.assertEqual(snapshot["active_guard_simulation_count"], 15)
+        self.assertEqual(snapshot["today_guard_simulation_count"], 1)
+        self.assertEqual(snapshot["window_guard_simulation_count"], 5)
+        self.assertEqual(snapshot["today_used"], 1)
+        self.assertEqual(snapshot["window_used"], 5)
+
+    def test_updated_at_does_not_redate_guard_after_reconcile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = ExecutionGuard(tmp, reconcile=False)
+            _register_at(
+                guard, "interrupted", "2026-09-22", simulation_count=4,
+                status="SUBMITTING", updated_date="2026-09-22",
+            )
+            guard.reconcile()
+            entry = guard.find("interrupted")
+            snapshot = SimulationQuota(
+                _Repository([], retention_days=7), guard,
+                local_date=lambda: "2026-09-23",
+            ).snapshot()
+
+        self.assertEqual(entry["status"], "SUBMIT_UNKNOWN")
+        self.assertGreater(entry["updated_at"], entry["created_at"])
+        self.assertEqual(snapshot["today_guard_simulation_count"], 0)
+        self.assertEqual(snapshot["window_guard_simulation_count"], 4)
+
     def test_weighted_unresolved_guard_counts_sum_child_simulations(self):
         with tempfile.TemporaryDirectory() as tmp:
             guard = ExecutionGuard(tmp)
-            guard.register("multi-10-a", simulation_count=10)
-            guard.register("multi-10-b", simulation_count=10)
-            guard.register("multi-4", simulation_count=4)
+            _register_at(guard, "multi-10-a", "2026-09-23", simulation_count=10)
+            _register_at(guard, "multi-10-b", "2026-09-23", simulation_count=10)
+            _register_at(guard, "multi-4", "2026-09-23", simulation_count=4)
             snapshot = SimulationQuota(
                 _Repository([], retention_days=7), guard,
                 local_date=lambda: "2026-09-23",
@@ -137,7 +250,7 @@ class TestSimulationQuota(unittest.TestCase):
     def test_quota_projects_remote_rows_and_active_guards_without_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             guard = ExecutionGuard(tmp)
-            guard.register("active")
+            _register_at(guard, "active", "2026-09-16")
             quota = SimulationQuota(
                 _Repository([
                     {"alpha_id": "today", "local_date": "2026-09-16"},
@@ -156,6 +269,8 @@ class TestSimulationQuota(unittest.TestCase):
             self.assertNotIn("rolling_cap", snapshot["estimate"])
             self.assertNotIn("rolling_remaining", snapshot["estimate"])
             self.assertEqual(snapshot["active_guard_count"], 1)
+            self.assertEqual(snapshot["today_guard_simulation_count"], 1)
+            self.assertEqual(snapshot["window_guard_simulation_count"], 1)
             self.assertFalse(snapshot["persisted_quota_state"])
             self.assertEqual(snapshot["evidence_status"], "APPROXIMATE")
             self.assertTrue(snapshot["estimate"]["approximate"])
@@ -179,6 +294,99 @@ class TestSimulationQuota(unittest.TestCase):
                 snapshot["estimate"]["window_source"],
                 "REMOTE_CACHE_RETENTION",
             )
+
+    def test_unknown_window_conservatively_includes_all_guard_contributions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = ExecutionGuard(tmp)
+            _register_at(guard, "old", "2026-09-10", simulation_count=4)
+            _register_at(guard, "unknown-time", "2026-09-22", simulation_count=3)
+            snapshot = SimulationQuota(
+                _Repository([], retention_days=None), guard,
+                local_date=lambda: "2026-09-23",
+            ).snapshot()
+
+        self.assertIsNone(snapshot["window_days"])
+        self.assertEqual(snapshot["today_guard_simulation_count"], 0)
+        self.assertEqual(snapshot["window_guard_simulation_count"], 7)
+        self.assertEqual(snapshot["window_used"], 7)
+
+    def test_legacy_missing_created_at_is_conservatively_included(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = f"{tmp}/execution_guard.json"
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump({"entries": [{
+                    "execution_fingerprint": "legacy",
+                    "status": "SUBMIT_UNKNOWN",
+                    "simulation_count": 7,
+                }]}, handle)
+            guard = ExecutionGuard(tmp, reconcile=False)
+            snapshot = SimulationQuota(
+                _Repository([], retention_days=7), guard,
+                local_date=lambda: "2026-09-23",
+            ).snapshot()
+            remaining_entries = len(guard.entries())
+
+        self.assertEqual(remaining_entries, 1)
+        self.assertEqual(snapshot["active_guard_simulation_count"], 7)
+        self.assertEqual(snapshot["today_guard_simulation_count"], 7)
+        self.assertEqual(snapshot["window_guard_simulation_count"], 7)
+
+    def test_malformed_created_at_is_conservative_and_never_crashes(self):
+        malformed = (None, True, "123", math.nan, math.inf)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = f"{tmp}/execution_guard.json"
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump({"entries": [
+                    {
+                        "execution_fingerprint": f"bad-{index}",
+                        "status": "SUBMIT_UNKNOWN",
+                        "simulation_count": index + 1,
+                        "created_at": value,
+                        "updated_at": value,
+                    }
+                    for index, value in enumerate(malformed)
+                ]}, handle, allow_nan=True)
+            guard = ExecutionGuard(tmp, reconcile=False)
+            snapshot = SimulationQuota(
+                _Repository([], retention_days=7), guard,
+                local_date=lambda: "2026-09-23",
+            ).snapshot()
+            remaining_entries = len(guard.entries())
+
+        self.assertEqual(remaining_entries, 5)
+        self.assertEqual(snapshot["active_guard_simulation_count"], 15)
+        self.assertEqual(snapshot["today_guard_simulation_count"], 15)
+        self.assertEqual(snapshot["window_guard_simulation_count"], 15)
+
+    def test_guard_new_york_utc_boundary_uses_local_date(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = ExecutionGuard(tmp)
+            _register_at(guard, "before-midnight", "2026-09-22")
+            with open(guard.path, encoding="utf-8") as handle:
+                payload = json.load(handle)
+            payload["entries"][0]["created_at"] = datetime(
+                2026, 9, 23, 3, 30, tzinfo=UTC
+            ).timestamp()
+            _register_at(guard, "after-midnight", "2026-09-23")
+            with open(guard.path, encoding="utf-8") as handle:
+                payload = json.load(handle)
+            payload["entries"][0]["created_at"] = datetime(
+                2026, 9, 23, 3, 30, tzinfo=UTC
+            ).timestamp()
+            payload["entries"][1]["created_at"] = datetime(
+                2026, 9, 23, 4, 0, tzinfo=UTC
+            ).timestamp()
+            with open(guard.path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+            snapshot = SimulationQuota(
+                _Repository([], retention_days=7), guard,
+                local_date=lambda: "2026-09-23",
+            ).snapshot()
+
+        self.assertEqual(snapshot["today_guard_simulation_count"], 1)
+        self.assertEqual(snapshot["window_guard_simulation_count"], 2)
+        self.assertEqual(snapshot["today_used"], 1)
+        self.assertEqual(snapshot["window_used"], 2)
 
     def test_unique_alpha_rows_are_only_an_approximate_simulation_estimate(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -234,7 +442,7 @@ class TestSimulationQuota(unittest.TestCase):
     def test_official_headers_are_unchanged_by_weighted_guard_estimate(self):
         with tempfile.TemporaryDirectory() as tmp:
             guard = ExecutionGuard(tmp)
-            guard.register("multi", simulation_count=10)
+            _register_at(guard, "multi", "2026-09-23", simulation_count=10)
             snapshot = SimulationQuota(
                 _Repository([], retention_days=7), guard,
                 local_date=lambda: "2026-09-23",

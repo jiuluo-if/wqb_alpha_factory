@@ -5,6 +5,7 @@ import tempfile
 import time
 import unittest
 
+from wqb_agent import research_api
 from wqb_agent.alpha_feed_cache import TEMP_RESOURCE_TTL_SEC, RemoteAlphaCache
 from wqb_agent.audit import audit_execution_surface
 from wqb_agent.config import parse_config
@@ -74,6 +75,25 @@ class TestRemoteDiagnostics(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["execution_guard"]["statuses"], ["RUNNING"])
         self.assertFalse(result["network_write"])
+
+    def test_old_guard_remains_visible_outside_quota_window(self):
+        with tempfile.TemporaryDirectory() as state_dir:
+            path = os.path.join(state_dir, "execution_guard.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump({"entries": [{
+                    "execution_fingerprint": "old-guard",
+                    "status": "SUBMIT_UNKNOWN",
+                    "created_at": 0,
+                    "updated_at": 0,
+                    "simulation_count": 10,
+                }]}, handle)
+
+            audit = audit_execution_surface(state_dir)
+            pending = research_api.get_pending_executions(state_dir=state_dir)
+
+        self.assertEqual(audit["execution_guard"]["active_count"], 1)
+        self.assertEqual(len(pending["entries"]), 1)
+        self.assertEqual(pending["entries"][0]["simulation_count"], 10)
 
     def test_malformed_guard_is_fail_closed(self):
         with tempfile.TemporaryDirectory() as state_dir:

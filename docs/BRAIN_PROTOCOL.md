@@ -42,6 +42,8 @@ Multi-Simulation payload 必须包含 2--10 个 child；单个余数由 `Simulat
 
 Multi response 中每个 child 分别计入配额；因此 unresolved Multi parent 的 local `APPROXIMATE` estimate 按其实际 child Simulation 数量投影，一个 parent guard 不等于一次 Simulation。ExecutionGuard 只增加 bounded `simulation_count` 整数，不保存 child payload、expression、settings、结果或 child ID；缺失或非法的旧 metadata 按 1 fail closed，不能把 estimate 提升为 official quota。
 
+Unresolved guard 的 approximate daily/window contribution 按 durable `created_at` 的 `America/New_York` local day 投影；这是本地 pre-POST time proxy，不是官方 BRAIN Simulation timestamp。Estimate 可分别暴露所有 active guard 的 weighted count、today/window guard contribution 和 unknown-time contribution；`updated_at` 只表示 guard state maintenance，不得让同一 unresolved write 跨日漂移。缺失或非法 timestamp 保持 conservative unknown-time inclusion，且不改变 guard 的 exactly-once lifetime；这些字段仍只形成 `APPROXIMATE` estimate，不能覆盖 official headers。
+
 Simulation 的 `ERROR`/`FAIL` 诊断只保留 bounded 的 remote status、message、property、line、start、end 和 simulation id，不保存完整 private expression。Multi parent 完成后仍逐个确认 child；child 的完成、远端失败和远端超时按 child 保存，不能把 partial completion 压成整个 batch UNKNOWN。
 
 Alpha detail 是完成后的 cheap evidence。`get_alpha_aggregates`、`get_alpha_pnl` 和 `get_alpha_self_correlation` 是按需的 named read-only facade，不会隐式拉取其他 deep evidence。recordset 先通过官方 list endpoint discovery，再按 AI 明确选择的名称读取；同一次 evidence collection 共享内存 discovery snapshot，不建立持久 capability cache。recordset decoder 保留官方数值，不重新计算指标或把数据解释为 winner/diversification judgment。activity diversity 是账户覆盖诊断，只读，不参与自动选 Alpha、模板、字段 ranking 或预算。
