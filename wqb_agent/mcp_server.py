@@ -274,7 +274,11 @@ def build_server(*, api=research_api, client=None, config=None, state_dir=None):
 
     @server.tool(annotations=readonly)
     def get_alpha_evidence(alpha_id: str, recordsets: list[str] | None = None) -> dict[str, Any]:
-        """[READ_ONLY] Read one live Alpha evidence snapshot and up to two explicitly selected recordsets."""
+        """[READ_ONLY] Read one live Alpha evidence snapshot.
+
+        Without ``recordsets`` this stays at the cheap summary depth; selecting
+        recordsets reads the full evidence depth they require.
+        """
         selected = recordsets or []
         if (
             not alpha_id.strip() or len(alpha_id) > 128
@@ -289,6 +293,7 @@ def build_server(*, api=research_api, client=None, config=None, state_dir=None):
             lambda: api.get_alpha_evidence(
                 alpha_id, client=resolve_client(), config=config, live=True,
                 recordsets=selected,
+                depth="full" if selected else "summary",
             ),
             owner="research_api.get_alpha_evidence",
             allow_expression=True,

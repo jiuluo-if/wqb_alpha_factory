@@ -225,6 +225,38 @@ class ReadOnlyMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.structured_content["error"], "INVALID_ARGUMENT")
         evidence_reader.assert_not_called()
 
+    async def test_evidence_depth_follows_the_selected_recordsets(self):
+        calls = []
+
+        def read_evidence(*args, **kwargs):
+            calls.append((args, kwargs))
+            return {"source": "LIVE", "depth": "FULL"}
+
+        api = SimpleNamespace(
+            get_capabilities=lambda **_: {},
+            get_simulation_modes=lambda **_: {},
+            list_datafields=lambda *args, **kwargs: {},
+            get_alpha_evidence=read_evidence,
+            get_pending_executions=lambda **_: {"entries": []},
+        )
+        server = build_server(api=api, client=object(), state_dir="synthetic-state")
+
+        async with Client(server) as client:
+            await client.call_tool(
+                "get_alpha_evidence", {"alpha_id": "synthetic-alpha"},
+            )
+            await client.call_tool(
+                "get_alpha_evidence",
+                {"alpha_id": "synthetic-alpha", "recordsets": ["coverage"]},
+            )
+
+        # The cheap default must not turn into a full read, and selecting
+        # recordsets must not hit the "recordsets require full depth" guard.
+        self.assertEqual(calls[0][1]["depth"], "summary")
+        self.assertEqual(calls[0][1]["recordsets"], [])
+        self.assertEqual(calls[1][1]["depth"], "full")
+        self.assertEqual(calls[1][1]["recordsets"], ["coverage"])
+
     async def test_invalid_input_is_rejected_before_remote_facade_call(self):
         field_reader = Mock(return_value={"source": "LIVE", "fields": []})
         api = SimpleNamespace(
