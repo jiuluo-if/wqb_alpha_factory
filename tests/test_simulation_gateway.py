@@ -6,6 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
+from datetime import UTC, datetime
 
 from wqb_agent import research_api
 from wqb_agent.client import (
@@ -508,11 +509,15 @@ class TestSimulationGateway(unittest.TestCase):
                 "PENDING", "SUBMITTING", "SUBMIT_UNKNOWN",
             ])
             guard = SimulationGateway(client, state_dir=tmp).guard
-            self.assertEqual(len(guard.entries()), 1)
-            self.assertEqual(guard.entries()[0]["simulation_count"], 4)
+            entries = guard.entries()
+            self.assertEqual(len(entries), 1)
+            self.assertEqual(entries[0]["simulation_count"], 4)
+            guard_day = SimulationQuota._today(
+                datetime.fromtimestamp(entries[0]["created_at"], tz=UTC)
+            )
             snapshot = SimulationQuota(
                 _EmptyQuotaRepository(), guard,
-                local_date=lambda: "2026-09-23",
+                local_date=lambda: guard_day,
             ).snapshot()
             self.assertEqual(snapshot["active_guard_count"], 1)
             self.assertEqual(snapshot["active_guard_simulation_count"], 4)
