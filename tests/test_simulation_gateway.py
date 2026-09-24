@@ -155,13 +155,21 @@ class MultiGatewayClient(FakeGatewayClient):
         self._active_lock = threading.Lock()
         self.max_active_multi = 0
         self._multi_sizes = {}
+        self._overlap_event = None
 
     def submit_multi_simulation(self, payloads, **kwargs):
         with self._active_lock:
             self._active_multi += 1
             self.max_active_multi = max(self.max_active_multi, self._active_multi)
         try:
-            time.sleep(0.03)
+            if self._overlap_event is None:
+                time.sleep(0.03)
+            else:
+                with self._active_lock:
+                    if self._active_multi >= 2:
+                        self._overlap_event.set()
+                if not self._overlap_event.wait(timeout=5):
+                    raise TimeoutError("second Multi POST did not overlap")
             self.multi_submissions.append((payloads, kwargs))
             progress_url = f"multi-progress-{len(self.multi_submissions)}"
             self._multi_sizes[progress_url] = len(payloads)
@@ -315,6 +323,7 @@ class TestSimulationGateway(unittest.TestCase):
     def test_multi_batch_groups_ten_children_and_routes_one_remainder_to_single(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = MultiGatewayClient()
+            client._overlap_event = threading.Event()
             gateway = SimulationGateway(client, state_dir=tmp)
             specs = [
                 SimulationSpec(f"rank(field_{index})", {"delay": 1})
@@ -423,6 +432,7 @@ class TestSimulationGateway(unittest.TestCase):
     def test_multi_batch_24_packs_as_ten_ten_four(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = MultiGatewayClient()
+            client._overlap_event = threading.Event()
             gateway = SimulationGateway(client, state_dir=tmp)
             results = gateway.simulate_multi_batch([
                 SimulationSpec(f"rank(field_{index})", {"delay": 1})
