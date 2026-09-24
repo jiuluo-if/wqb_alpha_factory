@@ -36,7 +36,7 @@
 
 Simulation mode availability 的阻塞原因按 `authentication → platform capability → Multi-Simulation permission` 投影；该只读投影不改变 Simulation 写入契约。
 
-Multi-Simulation payload 必须包含 2--10 个 child；单个余数由 `SimulationGateway` 走 Single Simulation。Multi child 数量是 payload contract，不是并发建议。`WAITING`/`SIMULATING` 是 pending，`COMPLETE`/带 alpha 的 `WARNING` 是成功，`CANCELLED`/`ERROR`/`TIMEOUT`/`FAIL` 是远端已知终态；未知 status 返回 `UNKNOWN_REMOTE_STATUS` 并 fail safe。远端 `TIMEOUT` 不等同于本地 polling deadline，后者只保留 known progress URL 做同任务只读对账。
+Multi-Simulation payload 必须包含 2–10 个 child；单个余数由 `SimulationGateway` 走 Single Simulation。Multi child 数量是 payload contract，不是并发建议。`WAITING`/`SIMULATING` 是 pending，`COMPLETE`/带 alpha 的 `WARNING` 是成功，`CANCELLED`/`ERROR`/`TIMEOUT`/`FAIL` 是远端已知终态；未知 status 返回 `UNKNOWN_REMOTE_STATUS` 并 fail safe。远端 `TIMEOUT` 不等同于本地 polling deadline，后者只保留 known progress URL 做同任务只读对账。
 
 `research_api.simulate_multi_batch()` 保留原有的 `list[child_result]` 形状，但每个实际 Multi child 结果都附带 bounded `parent` projection：parent fingerprint、最终状态、progress URL、child 数量、exception class、failure kind、HTTP status（若 transport 明确知道）、remote status/diagnostic、bounded status path 和 guard action。该 projection 只存在于当前返回值，不写入 `ExecutionGuard`；`SUBMIT_UNKNOWN` 与已知 URL 的 `UNKNOWN` 仍分别保留原有 exactly-once 和同 URL 对账语义。
 

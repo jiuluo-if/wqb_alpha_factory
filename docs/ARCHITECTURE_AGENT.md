@@ -1,4 +1,4 @@
-# Remote-First Architecture
+# 远端优先架构
 
 ## 核心原则
 

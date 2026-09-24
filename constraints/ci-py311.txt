@@ -1,4 +1,4 @@
-# Generated from the CI Python 3.11 tool environment; refresh intentionally.
+# 由 CI 的 Python 3.11 工具链环境生成；更新须有意为之。
 requests==2.32.2
 setuptools==84.0.0
 ruff==0.16.5

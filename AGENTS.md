@@ -1,4 +1,4 @@
-# WQB Alpha Factory Agent Guide
+# WQB Alpha Factory Agent 指南
 
 ## 核心边界
 

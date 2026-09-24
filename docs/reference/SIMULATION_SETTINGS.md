@@ -1,4 +1,4 @@
-# Simulation Settings
+# Simulation 设置参考
 
 `SimulationSpec` 的 `settings` 是 BRAIN Simulation 的有效设置输入。Gateway 会规范化并校验 schema，execution fingerprint 使用规范化后的完整 settings。
 

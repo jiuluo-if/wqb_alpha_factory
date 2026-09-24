@@ -1,4 +1,4 @@
-# Alpha Templates
+# Alpha 模板（alpha_templates）
 
 `wqb_agent.alpha_templates` 是模板模型、loader、registry、校验和 catalog 的唯一 owner。公开 catalog 只包含 synthetic 示例；生产模板必须通过明确的私有路径加载，缺失时 fail closed。
 

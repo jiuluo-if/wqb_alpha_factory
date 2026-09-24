@@ -1,4 +1,4 @@
-# Remote-First Research Policy
+# 远端优先研究政策
 
 - AI 负责研究问题、经济机制、字段和表达式选择、实验优先级及结果解释。
 - Python 只负责 schema、live 平台能力、精确执行安全、远端读取、缓存和隐私。

@@ -3,14 +3,14 @@
 默认推理流程：
 
 ```text
-Observation
-→ several competing hypotheses
-→ grouped batch experiments
-→ BRAIN results
-→ compare hypothesis families
-→ expand promising directions
-→ falsification / robustness
-→ stop or continue
+观察
+→ 多个竞争假设
+→ 分组批次实验
+→ BRAIN 结果
+→ 比较假设家族
+→ 扩展有前景方向
+→ 证伪 / 稳健性
+→ 停止或继续
 ```
 
 每个批次记录：

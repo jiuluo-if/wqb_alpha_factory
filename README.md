@@ -25,8 +25,7 @@ RemoteAlphaRepository → AI 分析 evidence
 - Remote Alpha：live Alpha/evidence、滚动缓存、去重、比较、分组和颜色预览/同步。
 - Agent 默认工具面：`research_tool_manifest()` 返回小型 CORE profile；显式指定 `profile="full"` 才列出模板维护、颜色和其他低频能力。研究方法见唯一核心 Skill [`skills/wqb-research/SKILL.md`](skills/wqb-research/SKILL.md)。
 
-与 Agent 正式运行树及 `new_ai` 样本的功能、契约和取舍见
-[`docs/COMPATIBILITY_MATRIX.md`](docs/COMPATIBILITY_MATRIX.md)。
+退役的 `new_ai` 样本与 v2 树的历史兼容性对比已在迁移期完成，其结论体现在当前 `AGENTS.md` 与各 `docs/` 契约中；原始对比文档已清理，可在 Git 历史中查证。
 
 ```python
 from wqb_agent.research_api import SimulationSpec, simulate, get_alpha_evidence

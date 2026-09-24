@@ -1,6 +1,6 @@
 ---
 name: wqb-research
-description: "Use for WorldQuant BRAIN Alpha research, experiment batches, Simulation evidence, result interpretation and next-experiment choices."
+description: "用于 WorldQuant BRAIN Alpha 研究：实验批次设计、Simulation 证据、结果解释与下一次实验选择。"
 compatible_research_contract: "2026-09-24"
 ---
 
@@ -33,13 +33,13 @@ frontmatter 中 `compatible_research_contract` 是本文件编写时所针对的
 为当前问题保持一个简短工作集，每轮覆盖：
 
 ```text
-question
-active hypotheses
-strong evidence
-rejected explanations
-open uncertainty
-promising families
-next experiment
+问题
+活跃假设
+强证据
+被否决的解释
+开放不确定性
+有前景的家族
+下一实验
 ```
 
 它是工作记忆而非档案：永不替代 BRAIN 证据；只有跨任务仍成立的经验才配进 reference。
