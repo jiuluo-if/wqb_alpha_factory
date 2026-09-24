@@ -1,18 +1,18 @@
-# Result Interpretation
+# 结果解释
 
-## Evidence depth
+## 证据深度
 
-Use the Simulation's returned live Alpha detail or `get_alpha_summary()` for broad screening. Call `get_alpha_evidence(depth="full")` for a small finalist set only when the question requires aggregates, PnL, self-correlation or selected recordsets. Request `get_alpha_prod_correlation()` only for finalists; ordinary probes do not wait for it.
+宽面筛选用 Simulation 返回的 live Alpha detail 或 `get_alpha_summary()`。只有问题需要 aggregates、PnL、self-correlation 或指定 recordsets 时，才为小型终选集合调用 `get_alpha_evidence(depth="full")`。`get_alpha_prod_correlation()` 只为终选候选请求；普通探针不等它。
 
-For a batch comparison, prefer the summary depth. A summary read is one Alpha-detail request; it must not fan out into PnL, yearly aggregates and correlation calls.
+批次比较优先用 summary 深度：一次 summary 读取就是一个 Alpha detail 请求，不得扇出为 PnL、年度聚合与相关性调用。
 
-## Selection bias and multiple testing
+## 选择偏差与多重检验
 
-- Interpret a result together with `variant_family`, `observed_execution_count`, structural similarity, yearly evidence, correlation, parameter neighborhood and the proposed mechanism.
-- `observed_execution_count` is an observed lower bound, not a complete trial history. It is a warning about how many related attempts preceded a selected result, not an automatic score or filter.
-- High Sharpe after many related trials is exposed to multiple-testing and selection bias. Look for evidence across years, siblings, settings and plausible parameter neighborhoods; do not promote a lone peak.
-- Preserve exploration alongside promising directions. Expand only when comparative evidence supports a specific mechanism, and keep at least one competing or falsifying explanation alive.
+- 结果要结合 `variant_family`、`observed_execution_count`、结构相似度、年度证据、相关性、参数邻域与被主张的机制一起解释。
+- `observed_execution_count` 是观察到的下界，不是完整 trial 历史；它警示被选结果之前有多少相关尝试，不是自动打分或过滤器。
+- 大量相关 trial 之后的高 Sharpe 暴露于多重检验与选择偏差；要看跨年度、兄弟组、settings 与合理参数邻域的证据，不得把一个孤立峰值升格。
+- 有前景方向的同时保留探索。只有比较证据支持特定机制时才扩展，并至少保留一个竞争或证伪解释。
 
-## Failure attribution
+## 失败归因
 
-Record the most likely category and its evidence: hypothesis, field, operator, horizon, implementation, correlation or robustness. Separate a platform/implementation failure from a negative economic result. Retry an ambiguous write only by reconciling its existing progress URL; `SUBMIT_UNKNOWN` without a URL never causes a replacement POST.
+记录最可能的类别及其证据：假设、字段、算子、horizon、实现、相关性或稳健性。平台/实现失败要和经济上的负结果分开。模糊写入只通过对账其既有 progress URL 重试；无 URL 的 `SUBMIT_UNKNOWN` 永不触发替代 POST。

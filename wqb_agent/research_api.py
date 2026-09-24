@@ -894,12 +894,21 @@ def research_status(*, client=None, config=None, state_dir=None):
             "status": "UNKNOWN", "source": "UNAVAILABLE",
             "reason_code": "CAPABILITY_UNAVAILABLE", "error": type(exc).__name__,
         }
+    modes: dict[str, Any]
     if client is None:
         capability = {
             "source": "UNAVAILABLE", "status": "UNKNOWN",
             "evidence_status": "INCONCLUSIVE",
         }
-        modes = _simulation_modes_from_capabilities(None, None)
+        # Without a live client the mode report is derived from nothing, so it
+        # must not keep claiming a BRAIN_LIVE source.
+        modes = {
+            key: {
+                **value, "source": "UNAVAILABLE",
+                "evidence_status": "UNAVAILABLE",
+            }
+            for key, value in _simulation_modes_from_capabilities(None, None).items()
+        }
     else:
         try:
             capability = get_capabilities(client=client, config=typed)

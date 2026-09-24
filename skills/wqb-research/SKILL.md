@@ -4,33 +4,33 @@ description: "Use for WorldQuant BRAIN Alpha research, experiment batches, Simul
 compatible_research_contract: "2026-09-24"
 ---
 
-# WQB Research
+# WQB 研究
 
-## Owners
+## 负责方
 
-- BRAIN is the primary fact source for capabilities, fields, Simulations and Alpha evidence.
-- The Agent owns hypotheses, mechanisms, field choice, experiment groups and interpretation. Python validates deterministic contracts and executes safely; it does not choose economic research.
-- Alpha submission is always manual. All Simulation writes use `research_api → SimulationGateway → Simulator → WQBClient`.
-- A Simulation result is not evidence that its proposed mechanism is supported. Missing evidence stays `UNKNOWN`/`UNAVAILABLE`.
+- BRAIN 是能力、字段、Simulation 与 Alpha 证据的首要事实源。
+- Agent 拥有假设、机制、字段选择、实验分组与解释权。Python 校验确定性契约并安全执行，不做经济研究选择。
+- Alpha 提交永远人工完成。所有 Simulation 写入走 `research_api → SimulationGateway → Simulator → WQBClient`。
+- Simulation 结果不等于其主张机制得到支持。缺失证据保持 `UNKNOWN`/`UNAVAILABLE`。
 
-## Contract handshake
+## 契约握手
 
-`compatible_research_contract` above is the contract this file was written for. Call `research_status()` first and compare its `research_contract_version`. On a mismatch this Skill is `SKILL_STALE`: re-read the repository Skill and `AGENTS.md` before running any batch. Never reuse a stale Skill on trust.
+frontmatter 中 `compatible_research_contract` 是本文件编写时所针对的契约。先调用 `research_status()` 并比对其 `research_contract_version`；不匹配即本 Skill 为 `SKILL_STALE`：运行任何批次前重新阅读仓库 Skill 与 `AGENTS.md`。不得凭信任复用过期 Skill。
 
-## Every research batch
+## 每个研究批次
 
-- Start from multiple competing hypotheses. Use BRAIN raw dataset/datafield lists and explain each Agent-chosen field.
-- Give every proposal a `proposal_id`, a useful `note`, and a template/family label when applicable. Group the batch into controls, local siblings, falsifications and novel probes.
-- Use `note` as the hypothesis link each result echoes back, for example `H2:EXPLORE`, `H3:CONTROL`, `H2:FALSIFY`, `H2:LOCAL`. Python returns this label unchanged and never interprets it.
-- State which mechanism each group tests, what result would change the next decision, and how many Simulations it uses. Many purposeful Simulations are welcome; untraceable random expressions are not.
-- Preserve exploration. A high result is a candidate for comparison, not permission to exploit that direction broadly.
-- A local variant preserves field, operator and expression topology. A topology change is a `NEW_PROBE` with a distinct hypothesis.
-- Attribute failures to hypothesis, field, operator, horizon, implementation, correlation or robustness. Do not repeat a clearly failed mode without new evidence.
-- Do not treat a Skill, memory lesson or prior run as a BRAIN fact. Keep memory to a few transferable research lessons; never store full transcripts.
+- 从多个竞争假设起步。使用 BRAIN 原始 dataset/datafield 列表，并解释每个 Agent 选定字段。
+- 每个 proposal 给 `proposal_id`、有用的 `note`，适用时加模板/家族标签。批次按对照组、本地兄弟组、证伪组与新探针分组。
+- `note` 是每个结果回显的假设链接，如 `H2:EXPLORE`、`H3:CONTROL`、`H2:FALSIFY`、`H2:LOCAL`。Python 原样返回该标签，永不解释它。
+- 说明每组测试什么机制、什么结果会改变下一次决策、使用多少 Simulation。大量有目的的 Simulation 受欢迎；不可追溯的随机表达式不受欢迎。
+- 保留探索。高结果只是比较候选，不是大举开发该方向的许可。
+- 本地变体保持字段、算子与表达式拓扑不变；拓扑变化是带独立假设的 `NEW_PROBE`。
+- 失败归因到假设、字段、算子、horizon、实现、相关性或稳健性。没有新证据不得重跑已明确失败的形态。
+- Skill、记忆教训或历史运行不是 BRAIN 事实。记忆只保留少量可迁移研究教训；永不存完整转录。
 
-## Research working set
+## 研究工作集
 
-Keep one short working set for the current question and overwrite it every round:
+为当前问题保持一个简短工作集，每轮覆盖：
 
 ```text
 question
@@ -42,12 +42,12 @@ promising families
 next experiment
 ```
 
-It is working memory, not a record: it never replaces BRAIN evidence, and only experience that stayed true across tasks belongs in a reference.
+它是工作记忆而非档案：永不替代 BRAIN 证据；只有跨任务仍成立的经验才配进 reference。
 
-## Authority
+## 权限
 
-- `RESEARCH_MODE` (this Skill): run live research and Simulations; never edit core code, `AGENTS.md` or this Skill.
-- `MAINTENANCE_MODE`: edit code, tests and Skills; never execute a live Simulation POST.
-- A Skill change never takes effect from a single Simulation: execution evidence → proposed Skill diff → independent tests/review → accept or reject → then research continues under the accepted version.
+- `RESEARCH_MODE`（本 Skill）：运行 live 研究与 Simulation；永不改核心代码、`AGENTS.md` 或本 Skill。
+- `MAINTENANCE_MODE`：改代码、测试与 Skill；永不执行 live Simulation POST。
+- Skill 变更永不由单次 Simulation 生效：执行证据 → 提出 Skill diff → 独立测试/评审 → 接受或拒绝 → 之后研究在已接受版本下继续。
 
-Read [Batch design](references/batch-design.md) when planning or labeling a large batch. Read [Result interpretation](references/result-interpretation.md) when comparing winners, checking robustness, or deciding whether to continue.
+规划或标注大批次时读[批次设计](references/batch-design.md)；比较优胜者、检查稳健性或决定是否继续时读[结果解释](references/result-interpretation.md)。

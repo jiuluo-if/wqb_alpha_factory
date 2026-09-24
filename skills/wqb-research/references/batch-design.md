@@ -1,6 +1,6 @@
-# Batch Design
+# 批次设计
 
-Default reasoning flow:
+默认推理流程：
 
 ```text
 Observation
@@ -13,14 +13,14 @@ Observation
 → stop or continue
 ```
 
-For each batch, record:
+每个批次记录：
 
-1. What mechanism is being tested?
-2. Which proposals are controls, local siblings, falsifications or novel probes?
-3. What result would change the next decision?
+1. 测试什么机制？
+2. 哪些 proposal 是对照、本地兄弟、证伪或新探针？
+3. 什么结果会改变下一次决策？
 
-Use `proposal_id` for a unique transient result link, `note` for the hypothesis/group explanation, and `template_id` for template provenance. The Gateway returns these labels with each child result; they are not stored in `ExecutionGuard` or a local research database.
+`proposal_id` 是唯一的临时结果链接，`note` 写假设/分组解释，`template_id` 记模板出处。Gateway 随每个 child 结果返回这些标签；不存入 `ExecutionGuard` 或本地研究数据库。
 
-Read fields from `list_datasets()` and `list_datafields()`/`list_all_datafields()`. Select fields yourself and pass each field ID with its dataset provenance into `SimulationSpec`. The Gateway's live check is a safety check, not an economic suitability score.
+字段从 `list_datasets()` 与 `list_datafields()`/`list_all_datafields()` 读取。自行选字段，并把每个字段 ID 与其 dataset provenance 传入 `SimulationSpec`。Gateway 的 live 校验是安全校验，不是经济适配度评分。
 
-Build only the candidates needed to distinguish explanations. A large batch is useful when its groups have different interpretations; do not generate a Cartesian product or a Python-planned search cycle.
+只构造区分解释所需的最少候选。大批次有用当且仅当其分组有不同解释；不得生成笛卡尔积或 Python 规划的搜索循环。

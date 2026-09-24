@@ -133,6 +133,10 @@ class TestResearchApi(unittest.TestCase):
         self.assertEqual(result["pending_executions"], [])
         self.assertEqual(result["pending_execution_count"], 0)
         self.assertEqual(result["capability"]["status"], "UNKNOWN")
+        # Without a live client the mode report must not claim a live source.
+        self.assertTrue(result["simulation_modes"])
+        for mode in result["simulation_modes"].values():
+            self.assertEqual(mode["source"], "UNAVAILABLE")
         self.assertIn("freshness", result["cache"])
         self.assertIn("status", result["quota"])
 
