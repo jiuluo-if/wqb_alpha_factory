@@ -1315,6 +1315,75 @@ class TestSimulationGateway(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "parent fingerprint"):
                 guard.register("child", kind=ExecutionGuard.MULTI_CHILD)
 
+    def test_child_moved_into_another_multi_parent_is_not_reposted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first_spec = SimulationSpec("rank(field_a)", {"delay": 1})
+            second_spec = SimulationSpec("rank(field_b)", {"delay": 1})
+            third_spec = SimulationSpec("rank(field_c)", {"delay": 1})
+            SimulationGateway(
+                UnknownMultiGatewayClient(), state_dir=tmp
+            ).simulate_multi_batch([first_spec, second_spec])
+
+            client = MultiGatewayClient()
+            results = SimulationGateway(client, state_dir=tmp).simulate_multi_batch(
+                [first_spec, third_spec, SimulationSpec("rank(field_d)", {"delay": 1})]
+            )
+
+            self.assertEqual(results[0]["status"], "SUBMIT_UNKNOWN")
+            self.assertEqual(results[0]["guard_action"], "EXISTING_GUARD")
+            self.assertEqual([item["status"] for item in results[1:]], ["DONE", "DONE"])
+            self.assertEqual(len(client.multi_submissions), 1)
+            self.assertEqual(len(client.multi_submissions[0][0]), 2)
+
+    def test_timed_out_multi_parent_recovers_through_persisted_kind(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            specs = [
+                SimulationSpec("rank(field_a)", {"delay": 1}),
+                SimulationSpec("rank(field_b)", {"delay": 1}),
+            ]
+            first = SimulationGateway(KnownParentTimeoutClient(), state_dir=tmp)
+            first_results = first.simulate_multi_batch(specs)
+
+            self.assertEqual(
+                [item["status"] for item in first_results], ["UNKNOWN", "UNKNOWN"]
+            )
+            entries = first.guard.entries()
+            parent = next(row for row in entries if row["kind"] == "MULTI_PARENT")
+            self.assertTrue(parent["progress_url"])
+            self.assertEqual(
+                sorted(row["kind"] for row in entries),
+                ["MULTI_CHILD", "MULTI_CHILD", "MULTI_PARENT"],
+            )
+
+            # A restart keeps only the durable guard state. Recovery must still
+            # poll the known parent as a Multi parent and then release the
+            # parent together with every child row.
+            restarted = SimulationGateway(MultiGatewayClient(), state_dir=tmp)
+            result = restarted.resume_execution(parent["execution_fingerprint"])
+
+            self.assertEqual(result["status"], "DONE")
+            self.assertEqual(len(result["alpha_ids"]), 2)
+            self.assertEqual(restarted.guard.entries(), [])
+
+    def test_timed_out_multi_parent_recovery_follows_a_child_fingerprint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            specs = [
+                SimulationSpec("rank(field_a)", {"delay": 1}),
+                SimulationSpec("rank(field_b)", {"delay": 1}),
+            ]
+            first = SimulationGateway(KnownParentTimeoutClient(), state_dir=tmp)
+            first.simulate_multi_batch(specs)
+            child = next(
+                row for row in first.guard.entries() if row["kind"] == "MULTI_CHILD"
+            )
+
+            restarted = SimulationGateway(MultiGatewayClient(), state_dir=tmp)
+            result = restarted.resume_execution(child["execution_fingerprint"])
+
+            self.assertEqual(result["status"], "DONE")
+            self.assertEqual(result["fingerprint"], child["parent_fingerprint"])
+            self.assertEqual(restarted.guard.entries(), [])
+
     def test_public_remote_evidence_is_live_and_explicitly_sourced(self):
         evidence = research_api.get_alpha_evidence("alpha-1", client=FakeGatewayClient())
         self.assertEqual(evidence["source"], "LIVE")

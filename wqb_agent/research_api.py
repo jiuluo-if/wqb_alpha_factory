@@ -913,6 +913,12 @@ def research_status(*, client=None, config=None, state_dir=None):
         except Exception as exc:
             modes = {"error": type(exc).__name__, "status": "UNKNOWN"}
     live = client is not None
+    # A Multi child row is not an independent unresolved write: its parent row
+    # already represents that remote POST and its Simulation count.
+    pending_writes = [
+        row for row in pending
+        if str(row.get("kind") or "").upper() != "MULTI_CHILD"
+    ]
     return {
         "source": "LIVE" if live else "LOCAL_ONLY",
         "status": "AVAILABLE" if live else "PARTIAL",
@@ -922,7 +928,11 @@ def research_status(*, client=None, config=None, state_dir=None):
         "simulation_modes": modes,
         "quota": quota,
         "pending_executions": pending,
-        "pending_execution_count": len(pending),
+        "pending_execution_count": len(pending_writes),
+        "pending_simulation_count": sum(
+            int(row.get("simulation_count") or 1) for row in pending_writes
+        ),
+        "pending_multi_child_count": len(pending) - len(pending_writes),
         "cache": cache,
     }
 

@@ -1,16 +1,7 @@
-# Research API migration
+# Research API 迁移说明
 
-`wqb_agent.research_api` is the only Agent-facing facade. The canonical exact
-duplicate lookup is `find_duplicate_alphas`, matching the current formal
-Agent prompt and migration guidance. The redundant spelling
-`find_alpha_duplicates` has been retired.
+`wqb_agent.research_api` 是唯一 Agent-facing facade。规范化的精确重复查询是 `find_duplicate_alphas`，与当前正式 Agent prompt 及迁移指引一致；冗余名 `find_alpha_duplicates` 已退役。
 
-Template writes use `create_template`, `update_template`, and
-`delete_template` with an explicit absolute private catalog path. The public
-synthetic catalog is read-only.
+模板写入使用 `create_template`、`update_template`、`delete_template`，需显式绝对私有 catalog 路径；公开 synthetic catalog 只读。
 
-`simulate` and `simulate_single` both submit one request through the same
-`SimulationGateway`; `simulate_batch` executes independent Single requests,
-and `simulate_multi_batch` handles bounded Multi parents. The redundant
-`simulate_single_batch` wrapper remains retired. None of these APIs submits an
-Alpha; all Simulation writes flow through `SimulationGateway`.
+`simulate` 与 `simulate_single` 都通过同一 `SimulationGateway` 提交单个请求；`simulate_batch` 执行独立 Single 请求；`simulate_multi_batch` 处理有界 Multi parent。冗余项 `simulate_single_batch` 包装器保持退役。这些 API 都不提交 Alpha；所有 Simulation 写入都经 `SimulationGateway`。

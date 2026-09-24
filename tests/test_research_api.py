@@ -34,7 +34,7 @@ from wqb_agent.research_api import (
     simulate_multi_batch,
     validate_simulation_settings,
 )
-from wqb_agent.simulation_gateway import SimulationGateway
+from wqb_agent.simulation_gateway import ExecutionGuard, SimulationGateway
 
 
 class TestResearchApi(unittest.TestCase):
@@ -135,6 +135,27 @@ class TestResearchApi(unittest.TestCase):
         self.assertEqual(result["capability"]["status"], "UNKNOWN")
         self.assertIn("freshness", result["cache"])
         self.assertIn("status", result["quota"])
+
+    def test_research_status_counts_one_multi_parent_as_one_pending_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = ExecutionGuard(tmp)
+            guard.register(
+                "parent-fp", progress_url="multi-progress-1", status="RUNNING",
+                simulation_count=2, kind=ExecutionGuard.MULTI_PARENT,
+            )
+            for child in ("child-a", "child-b"):
+                guard.register(
+                    child, kind=ExecutionGuard.MULTI_CHILD,
+                    parent_fingerprint="parent-fp",
+                )
+
+            result = research_api.research_status(state_dir=tmp)
+
+        self.assertEqual(result["pending_execution_count"], 1)
+        self.assertEqual(result["pending_simulation_count"], 2)
+        self.assertEqual(result["pending_multi_child_count"], 2)
+        # The child rows stay visible so an Agent can still match its own specs.
+        self.assertEqual(len(result["pending_executions"]), 3)
 
     def test_research_status_reports_live_sections_with_a_client(self):
         client = mock.Mock()
