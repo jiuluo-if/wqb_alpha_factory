@@ -925,12 +925,33 @@ class TestSimulationGateway(unittest.TestCase):
                 requests.append(fields)
                 return {"valid": True, "source": "BRAIN_LIVE_ONLY", "fields": ["close"]}
 
-            client.get_field_capability = record_fields
             result = SimulationGateway(client, state_dir=tmp).simulate(
                 SimulationSpec("rank(close)", {"delay": 1})
             )
             self.assertEqual(result["status"], "DONE")
+            self.assertEqual(result["field_validation"], "UNVERIFIED")
             self.assertEqual(requests, [])
+
+    def test_declared_fields_are_reported_live_verified(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = VerifiedFieldCapabilityGatewayClient()
+            result = SimulationGateway(client, state_dir=tmp).simulate(
+                SimulationSpec(
+                    "rank(close)", {"delay": 1}, fields=("close",),
+                    field_datasets={"close": "synthetic-dataset"},
+                )
+            )
+            self.assertEqual(result["status"], "DONE")
+            self.assertEqual(result["field_validation"], "LIVE_VERIFIED")
+
+    def test_field_free_expression_is_rejected_before_any_post(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeGatewayClient()
+            with self.assertRaisesRegex(ValueError, "identifier"):
+                SimulationGateway(client, state_dir=tmp).simulate(
+                    SimulationSpec("1", {"delay": 1})
+                )
+            self.assertEqual(client.submissions, [])
 
     def test_batch_and_multi_results_echo_transient_proposal_labels(self):
         with tempfile.TemporaryDirectory() as tmp:

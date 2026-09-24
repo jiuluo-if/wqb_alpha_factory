@@ -14,6 +14,7 @@ from typing import Any
 from .artifacts import atomic_write_json_if_changed
 from .expression import (
     analyze_expression,
+    expression_field_identifiers,
     submission_fingerprint,
 )
 from .failures import ResearchReasonError, reason_code_for_failure
@@ -778,7 +779,7 @@ class SimulationGateway:
                     settings=dict(spec.settings),
                     simulation_type=spec.simulation_type,
                     fields=spec.fields,
-                    field_validation=("LIVE_VERIFIED" if spec.fields else "NOT_REQUESTED"),
+                    field_validation=(self._field_validation_label(spec)),
                     proposal_id=spec.proposal_id,
                     note=spec.note,
                     template_id=spec.template_id,
@@ -1026,7 +1027,7 @@ class SimulationGateway:
                         settings=dict(spec.settings),
                         simulation_type=spec.simulation_type,
                         fields=spec.fields,
-                        field_validation=("LIVE_VERIFIED" if spec.fields else "NOT_REQUESTED"),
+                        field_validation=(SimulationGateway._field_validation_label(spec)),
                         proposal_id=spec.proposal_id,
                         note=spec.note,
                         template_id=spec.template_id,
@@ -1233,14 +1234,32 @@ class SimulationGateway:
         return result
 
     @staticmethod
+    def _field_validation_label(spec):
+        """Report field truth instead of letting an unchecked field look fine.
+
+        ``LIVE_VERIFIED`` means the declared fields were checked against their
+        live BRAIN dataset.  ``UNVERIFIED`` means the expression carries fields
+        that no capability read covered.  ``NOT_REQUESTED`` means the expression
+        declares no field at all.
+        """
+        if getattr(spec, "fields", ()):
+            return "LIVE_VERIFIED"
+        try:
+            identifiers = expression_field_identifiers(
+                analyze_expression(spec.expression)
+            )
+        except Exception:
+            return "UNVERIFIED"
+        return "UNVERIFIED" if identifiers else "NOT_REQUESTED"
+
+    @staticmethod
     def _spec_labels(spec, *, field_validation=None):
         return {
             "proposal_id": spec.proposal_id,
             "note": spec.note,
             "template_id": spec.template_id,
-            "field_validation": field_validation or (
-                "LIVE_VERIFIED" if spec.fields else "NOT_REQUESTED"
-            ),
+            "field_validation": field_validation
+            or SimulationGateway._field_validation_label(spec),
         }
 
     @classmethod
@@ -1276,6 +1295,6 @@ class SimulationGateway:
             remote_status=getattr(item, "remote_status", None),
             diagnostic=getattr(item, "diagnostic", None),
             field_validation=getattr(item, "field_validation", None) or (
-                "LIVE_VERIFIED" if getattr(item, "fields", ()) else "NOT_REQUESTED"
+                cls._field_validation_label(item)
             ),
         )

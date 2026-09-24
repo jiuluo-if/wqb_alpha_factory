@@ -201,6 +201,30 @@ class TestLiveFieldCapability(unittest.TestCase):
         self.assertEqual(capability["missing"], ["field_a"])
         self.assertEqual(capability["reason_code"], "CAPABILITY_UNAVAILABLE")
 
+    def test_field_late_in_a_large_dataset_is_still_verified(self):
+        client = make_client()
+        total = 1748
+        pages = []
+
+        def get_datafields(dataset_id, **kwargs):
+            offset = kwargs["offset"]
+            pages.append(offset)
+            return ([
+                {"id": f"field_{index}", "dataset": {"id": dataset_id}}
+                for index in range(offset, min(offset + 50, total))
+            ], total)
+
+        client.get_datafields = get_datafields
+        capability = client.get_field_capability(
+            {"dataset_a": ["field_1700"]},
+            scope={"instrumentType": "EQUITY", "region": "USA",
+                   "delay": 1, "universe": "TOP3000"},
+        )
+
+        self.assertTrue(capability["valid"])
+        self.assertEqual(capability["fields"], ["field_1700"])
+        self.assertGreater(len(pages), 20)
+
     def test_field_lookup_page_cap_keeps_unknown_inconclusive(self):
         client = make_client()
         calls = []

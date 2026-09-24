@@ -3,9 +3,9 @@
 ## 核心原则
 
 ```text
-AI owns research reasoning.
-Python owns platform truth and execution safety.
-BRAIN owns Alpha simulation evidence.
+AI 负责研究推理。
+Python 负责平台事实与执行安全。
+BRAIN 负责 Alpha 模拟证据。
 ```
 
 ## 公开工具面
@@ -14,9 +14,7 @@ BRAIN owns Alpha simulation evidence.
 
 `research_status()` 是 Agent 的唯一起步调用：它只读地聚合 live capability、simulation modes、带 freshness 的 quota、pending executions、cache freshness 和 `research_contract_version`，不给出任何研究建议。`research_tool_manifest()` 默认只披露 CORE profile；模板维护、颜色同步、similarity 等低频能力需显式请求 `profile="full"`。
 
-`wqb_agent.mcp_server` is an optional stdio transport over a small read-only
-subset of that facade. It exposes no writes and adds no second owner for
-research meaning or BRAIN access; see [`MCP_READ_ONLY.md`](MCP_READ_ONLY.md).
+`wqb_agent.mcp_server` 是对该 facade 一小部分只读工具可选的 stdio 传输，不暴露任何写操作，也不为研究语义或 BRAIN 访问增设第二负责方；见 [`MCP_READ_ONLY.md`](MCP_READ_ONLY.md)。
 
 ## 唯一 Simulation 写链
 
@@ -29,15 +27,7 @@ research_api.simulate_multi_batch
  → BRAIN
 ```
 
-Simulation mode boundaries are explicit: the production writer currently
-supports only the verified `REGULAR` request schema. Single Simulation uses a
-default ten-worker window for small optimizations; Multi-Simulation groups two
-to ten REGULAR children per parent, dispatches two parents concurrently by
-default, and supports an explicit hard maximum of eight parents for large
-probes. Region-Agnostic and SUPER may be platform-
-advertised capabilities, but are not writer-supported modes and are never a
-fallback or part of the Multi window until their independent write contracts
-are implemented and verified.
+Simulation 模式边界是显式的：生产 writer 当前只支持已验证的 `REGULAR` 请求 schema。Single Simulation 小规模优化默认 10 个 worker 窗口；Multi-Simulation 每个 parent 2–10 个 REGULAR child，默认并发 dispatch 2 个 parent，显式硬上限 8 个 parent 供大规模探针使用。Region-Agnostic 与 SUPER 可以是平台广告的能力，但不是 writer 支持的模式，在它们各自的独立写入契约实现并验证之前，永不作为回退或 Multi 窗口的一部分。
 
 任何其他模块不得直接提交 Simulation。
 

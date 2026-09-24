@@ -63,6 +63,11 @@ CREDENTIALS_FILE = DEFAULT_CREDENTIALS_FILE
 FAIL_FAST_STATUSES = (400, 403, 404, 422)
 ALPHA_COLOR_VALUES = frozenset({"BLUE", "GREEN", "PURPLE", "RED", "YELLOW"})
 MAX_FIELD_CAPABILITY_PAGES = 100
+# Default page budget for one live field-verification walk. The largest dataset
+# observed live so far holds 1748 datafields (about 35 pages at 50 per page), so
+# a smaller default would fail closed on real fields that merely sit late in the
+# platform's page order.
+DEFAULT_FIELD_CAPABILITY_PAGES = 40
 MAX_ALPHA_HISTORY_SHARDS = 256
 # Wall-clock ceiling for enumerating the account's Alpha history. The shard walk
 # is bounded by request count alone, so a slow platform can otherwise stall a
@@ -927,7 +932,8 @@ class WQBClient:
         return payload.get("results", []), payload.get("count", 0)
 
     def get_field_capability(
-        self, field_ids_by_dataset, *, scope=None, max_pages=20,
+        self, field_ids_by_dataset, *, scope=None,
+        max_pages=DEFAULT_FIELD_CAPABILITY_PAGES,
     ):
         """Verify selected field IDs through bounded live `data_fields` reads.
 

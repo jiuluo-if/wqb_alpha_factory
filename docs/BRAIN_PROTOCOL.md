@@ -1,4 +1,4 @@
-# BRAIN Protocol Truth Layer
+# BRAIN 协议事实层
 
 本项目把协议事实集中在 `wqb_agent/protocol.py`。它只记录当前 client 已使用的 endpoint、请求/响应形状、Retry-After 解析和 capability 证据等级，不把社区猜测升级为官方契约。
 
@@ -14,9 +14,9 @@
 
 当前官方接口登记：`POST /authentication`、`GET /authentication`、`data_sets`、`data_fields`、`OPTIONS /simulations`、`POST /simulations`、已知 progress URL、`users/self/alphas`、`GET /alphas/{id}`、`GET /alphas/{id}/recordsets`、`GET /alphas/{id}/recordsets/{name}` 和 `GET /users/{userid}/activities/diversity`。本轮只把这些官方接口作为生产协议事实；`/operators` 等仍按现有 provenance 处理。
 
-成功的 `POST /simulations` response 中，`X-Ratelimit-Limit`、`X-Ratelimit-Remaining` 和 `X-Ratelimit-Reset` 是 BRAIN 提供的官方 Simulation quota observation；Multi response 中每个 child 分别计入配额，重复提交一个已经存在的 Alpha 也仍然计数。`/users/self/alphas` 的 Alpha 创建日期视图可能按 `alpha_id` 去重，不能作为精确 Simulation counter。当前 client 只在内存保留最近一次成功 response 的 bounded header projection；没有观察到这些 headers 时，官方 quota 必须保持 `UNKNOWN`。
+成功的 `POST /simulations` response 中，`X-Ratelimit-Limit`、`X-Ratelimit-Remaining` 和 `X-Ratelimit-Reset` 是 BRAIN 提供的官方 Simulation quota observation；Multi response 中每个 child 分别计入配额，重复提交一个已经存在的 Alpha 也仍然计数。`/users/self/alphas` 的 Alpha 创建日期视图可能按 `alpha_id` 去重，不能作为精确 Simulation counter。当前 client 只在内存保留最近一次成功 response 的 bounded header projection；未观察到这些 headers 时，官方配额必须保持 `UNKNOWN`。
 
-`X-Ratelimit-Reset` 只投影为 bounded raw numeric `reset` header value；没有独立官方证据时，不推断其时间单位或时间基准。
+`X-Ratelimit-Reset` 只投影为 bounded raw numeric `reset` header value；无独立官方证据时，不推断其时间单位或时间基准。
 
 每个 accepted Simulation POST response 独立替换上一份 in-memory header projection；不同 response 的 quota fields 不合并。
 
@@ -56,6 +56,8 @@ Agent 使用 `list_datasets()`、`list_datafields()` 和有页数上限的
 静态字段表、缓存或字段名猜测都不能替代 live response。没有 dataset provenance、
 能力 reader 缺失或分页未完整时保持 `CAPABILITY_UNAVAILABLE`，不提交 Simulation。
 平台 `alphaCount` 是一个字段元数据，不是字段优先级或经济价值排序信号。
+
+字段校验的页预算按已观测的最大 dataset 设定（1748 个 datafield 约 35 页，默认预算 40 页），因此位于平台分页顺序靠后的真实字段仍可被验证；预算耗尽时保持 fail closed，不会把"没找到"当成"字段不存在"。每个 Simulation 结果都带 `field_validation`：`LIVE_VERIFIED` 表示声明的字段已按 live dataset 校验，`UNVERIFIED` 表示表达式含字段但没有任何 capability read 覆盖它，`NOT_REQUESTED` 表示表达式不含字段。未声明 `fields` 的提交不会显示为已验证。
 
 仅观察登记：`operators`、`alpha_check`、`pnl`。这些接口没有被生产 client 自动调用；只有 capability probe 或脱敏 fixture 可以证明其当前可用性。
 
