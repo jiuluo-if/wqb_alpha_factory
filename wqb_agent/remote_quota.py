@@ -203,7 +203,13 @@ class SimulationQuota:
             ):
                 simulation_days.append(simulation_day)
         today_used = sum(day == today for day in simulation_days)
-        entries = self.guard.entries()
+        # A Multi parent row already represents every child Simulation it may
+        # have started, so child rows must not be counted a second time.
+        entries = [
+            row for row in self.guard.entries()
+            if isinstance(row, Mapping)
+            and str(row.get("kind") or "").upper() != "MULTI_CHILD"
+        ]
         active_guard_count = len(entries)
         active_guard_simulation_count = sum(
             _guard_simulation_count(row) for row in entries

@@ -99,19 +99,72 @@ class TestResearchApi(unittest.TestCase):
             "SimulationSpec", "research_tool_manifest",
         }
         self.assertEqual(full_names, expected_full | {"alpha_submission"})
-        self.assertLessEqual(len(core), 22)
+        self.assertEqual(len(core), 12)
         self.assertTrue({
-            "get_live_preflight", "list_datasets", "list_datafields",
+            "research_status", "list_datasets", "list_datafields",
             "build_simulation_spec", "validate_simulation_spec",
-            "simulate_batch", "simulate_multi_batch", "get_alpha_summary",
-            "get_alpha_evidence", "get_alpha_prod_correlation",
-            "simulation_quota", "get_pending_executions",
-            "reconcile_execution", "find_duplicate_alphas",
-            "find_similar_alphas",
+            "simulate", "simulate_batch", "simulate_multi_batch",
+            "get_alpha_summary", "get_alpha_evidence",
+            "find_duplicate_alphas", "resume_execution",
         } <= core_names)
         dangerous = {"create_template", "sync_alpha_colors", "alpha_submission"}
         self.assertTrue(dangerous <= full_names)
         self.assertFalse(dangerous & core_names)
+        # Aliases and low-frequency maintenance tools stay reachable through the
+        # public API but never occupy the default Agent surface.
+        self.assertFalse(core_names & {
+            "simulate_single", "find_similar_alphas", "reconcile_execution",
+            "list_all_datafields", "get_live_preflight", "simulation_quota",
+        })
+
+    def test_research_status_answers_startup_checks_without_a_live_client(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = research_api.research_status(state_dir=tmp)
+
+        self.assertEqual(result["source"], "LOCAL_ONLY")
+        self.assertEqual(result["status"], "PARTIAL")
+        self.assertEqual(
+            result["research_contract_version"],
+            research_api.RESEARCH_CONTRACT_VERSION,
+        )
+        for key in ("capability", "simulation_modes", "quota",
+                    "pending_executions", "cache"):
+            self.assertIn(key, result)
+        self.assertEqual(result["pending_executions"], [])
+        self.assertEqual(result["pending_execution_count"], 0)
+        self.assertEqual(result["capability"]["status"], "UNKNOWN")
+        self.assertIn("freshness", result["cache"])
+        self.assertIn("status", result["quota"])
+
+    def test_research_status_reports_live_sections_with_a_client(self):
+        client = mock.Mock()
+        client.get_operator_capability.return_value = {
+            "valid": True, "source": "BRAIN_LIVE_ONLY",
+            "operators": ["rank"], "status": "AVAILABLE",
+        }
+        client.get_authentication_status.return_value = {
+            "authenticated": True, "permissions": ["MULTI_SIMULATION"],
+        }
+        client.get_simulation_capability.return_value = {
+            "status": "AVAILABLE", "simulation_type_choices": ["REGULAR"],
+        }
+        client.get_all_user_alphas.return_value = []
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = research_api.research_status(client=client, state_dir=tmp)
+
+        self.assertEqual(result["source"], "LIVE")
+        self.assertEqual(
+            result["research_contract_version"],
+            research_api.RESEARCH_CONTRACT_VERSION,
+        )
+        self.assertEqual(result["simulation_modes"]["multi"]["status"], "AVAILABLE")
+        self.assertIn("freshness", result["cache"])
+
+    def test_core_manifest_is_a_small_startup_surface(self):
+        core = research_api.research_tool_manifest()
+        self.assertEqual(len(core), 12)
+        self.assertEqual(core[0]["name"], "research_status")
 
     def test_generated_probe_api_requires_agent_selected_raw_inputs(self):
         import inspect
@@ -1214,10 +1267,16 @@ class TestResearchApi(unittest.TestCase):
             )
             gateway.simulate.assert_called_once_with(spec)
         self.assertIs(wqb_agent.simulate_single, research_api.simulate_single)
-        self.assertIn(
-            "simulate_single",
-            {row["name"] for row in research_api.research_tool_manifest()},
-        )
+        full_names = {
+            row["name"]
+            for row in research_api.research_tool_manifest(profile="full")
+        }
+        core_names = {
+            row["name"] for row in research_api.research_tool_manifest()
+        }
+        # The alias stays callable but is not part of the default Agent surface.
+        self.assertIn("simulate_single", full_names)
+        self.assertNotIn("simulate_single", core_names)
 
 if __name__ == "__main__":
     unittest.main()

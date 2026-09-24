@@ -12,6 +12,8 @@ BRAIN owns Alpha simulation evidence.
 
 `wqb_agent.research_api` 是唯一 Agent-facing facade，提供原始 dataset/datafield 列表、operator capability、可选 template/probe、Simulation、remote Alpha evidence、dedupe、group 和 color 工具。字段/机制筛选由 Agent 负责；执行前只有确定性的 live schema 与 field/operator capability 校验。
 
+`research_status()` 是 Agent 的唯一起步调用：它只读地聚合 live capability、simulation modes、带 freshness 的 quota、pending executions、cache freshness 和 `research_contract_version`，不给出任何研究建议。`research_tool_manifest()` 默认只披露 CORE profile；模板维护、颜色同步、similarity 等低频能力需显式请求 `profile="full"`。
+
 `wqb_agent.mcp_server` is an optional stdio transport over a small read-only
 subset of that facade. It exposes no writes and adds no second owner for
 research meaning or BRAIN access; see [`MCP_READ_ONLY.md`](MCP_READ_ONLY.md).
@@ -43,7 +45,9 @@ are implemented and verified.
 
 ## ExecutionGuard
 
-唯一持久安全记录是 `.wqb_state/execution_guard.json`。每条记录最多包含 fingerprint、`SUBMITTING/RUNNING/SUBMIT_UNKNOWN`、progress URL、时间戳、bounded `simulation_count` 和可选 remote Alpha ID。`simulation_count` 只表达该 unresolved write 对应的 Simulation 数量；不保存 child payload、expression、settings 或结果。完成结果被 BRAIN 确认前不得删除；不确定 POST 永不自动重试。
+唯一持久安全记录是 `.wqb_state/execution_guard.json`。每条记录最多包含 fingerprint、`SUBMITTING/RUNNING/SUBMIT_UNKNOWN`、progress URL、时间戳、bounded `simulation_count`、`kind`（`SINGLE`/`MULTI_PARENT`/`MULTI_CHILD`）、MULTI_CHILD 的 `parent_fingerprint` 和可选 remote Alpha ID。`simulation_count` 只表达该 unresolved write 对应的 Simulation 数量；不保存 child payload、expression、settings 或结果。完成结果被 BRAIN 确认前不得删除；不确定 POST 永不自动重试。
+
+exact-once 以每个 Simulation 为单位，而不是每个 parent payload：Multi POST 前 parent 与每个 child 都会各自登记 fingerprint，因此 unknown 之后的重排、拆分、子集重试或把 child 改走 Single，都无法对同一个 unresolved child 再次 POST。`kind` 同时决定恢复路径：`MULTI_PARENT` 用 `poll_multi_progress`，否则用 `poll_progress`；child 的恢复跟随其 parent。
 
 ## RemoteAlphaRepository
 

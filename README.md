@@ -45,8 +45,8 @@ evidence = get_alpha_evidence(result["alpha_id"])
 推荐闭环：
 
 ```text
-list raw datasets/datafields → Agent selects field/hypothesis
-→ optionally generate explicitly selected probes → batch/Multi simulate → read live summary/full evidence
+列出原始 datasets/datafields → Agent 选择字段/假设
+→ 按需生成显式选定的 probes → 批量/Multi 模拟 → 读取实时 summary/完整 evidence
 → AI 分析 → AI 创建下一份 SimulationSpec
 ```
 
@@ -62,12 +62,11 @@ ExecutionGuard 的安全不变量：
 - 相同 expression 与 effective settings 的 active execution 只允许一次 POST。
 - Alpha submission 始终人工完成；颜色 PATCH 是独立的显式远端 metadata 操作。
 
-## Optional MCP read tools
+## 可选 MCP 只读工具
 
-Install `python -m pip install -e ".[mcp]"` and start `alpha-factory-mcp` in
-the project directory to expose bounded read-only capability, permission,
-field, Alpha evidence, and local pending-guard tools over stdio. The exact tool
-contract and output bounds are in [`docs/MCP_READ_ONLY.md`](docs/MCP_READ_ONLY.md).
+安装 `python -m pip install -e ".[mcp]"` 后，在项目目录启动 `alpha-factory-mcp`，
+经 stdio 暴露有界的只读能力、权限、字段、Alpha 证据与本地未决 guard 工具。
+工具契约与输出上限见 [`docs/MCP_READ_ONLY.md`](docs/MCP_READ_ONLY.md)。
 
 ## 配置与验证
 

@@ -118,6 +118,13 @@ class ExecutionGuard:
     """Persist only unresolved remote-write identities."""
 
     STATUSES = frozenset({"SUBMITTING", "RUNNING", "SUBMIT_UNKNOWN"})
+    # ``kind`` is execution-safety metadata, not research state: it records
+    # whether an unresolved remote write was one Single POST, a Multi parent
+    # POST, or one child carried by such a parent.
+    SINGLE = "SINGLE"
+    MULTI_PARENT = "MULTI_PARENT"
+    MULTI_CHILD = "MULTI_CHILD"
+    KINDS = frozenset({SINGLE, MULTI_PARENT, MULTI_CHILD})
 
     def __init__(self, state_dir, *, reconcile=True):
         self.state_dir = os.path.abspath(str(state_dir))
@@ -154,6 +161,12 @@ class ExecutionGuard:
         return value
 
     @classmethod
+    def _normalize_kind(cls, value):
+        """Unknown or legacy rows stay a plain Single write."""
+        kind = str(value or cls.SINGLE).strip().upper()
+        return kind if kind in cls.KINDS else cls.SINGLE
+
+    @classmethod
     def _validate_simulation_count(cls, value):
         if isinstance(value, bool) or not isinstance(value, int):
             raise TypeError("simulation_count must be an integer")
@@ -185,11 +198,14 @@ class ExecutionGuard:
                 "simulation_count": self._normalize_simulation_count(
                     row.get("simulation_count", 1)
                 ),
+                "kind": self._normalize_kind(row.get("kind")),
             }
             if row.get("progress_url") is not None:
                 item["progress_url"] = str(row["progress_url"])
             if row.get("remote_alpha_id") is not None:
                 item["remote_alpha_id"] = str(row["remote_alpha_id"])
+            if row.get("parent_fingerprint") is not None:
+                item["parent_fingerprint"] = str(row["parent_fingerprint"])
             normalized.append(item)
         return normalized
 
@@ -210,11 +226,14 @@ class ExecutionGuard:
 
     def register(
         self, fingerprint, *, progress_url=None, status="SUBMITTING",
-        simulation_count=1,
+        simulation_count=1, kind=SINGLE, parent_fingerprint=None,
     ):
         if status not in self.STATUSES:
             raise ValueError("invalid execution guard status")
         simulation_count = self._validate_simulation_count(simulation_count)
+        kind = self._normalize_kind(kind)
+        if kind == self.MULTI_CHILD and not parent_fingerprint:
+            raise ValueError("MULTI_CHILD requires a parent fingerprint")
         now = time.time()
         with self._lock:
             rows = self._read()
@@ -222,11 +241,14 @@ class ExecutionGuard:
                              if row.get("execution_fingerprint") == fingerprint), None)
             if existing is not None:
                 return False
-            rows.append({
+            row = {
                 "execution_fingerprint": str(fingerprint), "status": status,
                 "progress_url": progress_url, "created_at": now, "updated_at": now,
-                "simulation_count": simulation_count,
-            })
+                "simulation_count": simulation_count, "kind": kind,
+            }
+            if parent_fingerprint:
+                row["parent_fingerprint"] = str(parent_fingerprint)
+            rows.append(row)
             self._write(rows)
             return True
 
@@ -250,6 +272,20 @@ class ExecutionGuard:
             rows = self._read()
             kept = [row for row in rows
                     if row.get("execution_fingerprint") != fingerprint]
+            if len(kept) == len(rows):
+                return False
+            self._write(kept)
+            return True
+
+    def remove_batch(self, fingerprint):
+        """Resolve one unresolved write together with its Multi children."""
+        with self._lock:
+            rows = self._read()
+            kept = [
+                row for row in rows
+                if row.get("execution_fingerprint") != fingerprint
+                and row.get("parent_fingerprint") != fingerprint
+            ]
             if len(kept) == len(rows):
                 return False
             self._write(kept)
@@ -868,6 +904,22 @@ class SimulationGateway:
                 )
                 continue
             seen.add(fingerprint)
+            existing = self.guard.find(fingerprint)
+            if existing is not None:
+                # Exact-once is per Simulation, not per parent payload.  A child
+                # that already carries an unresolved remote write -- as a Single
+                # request, as a child of an earlier parent, or as part of a
+                # reordered/split/subset batch -- is never POSTed again.
+                existing_status = str(existing.get("status") or "")
+                results[index] = self._labelled_result(
+                    spec,
+                    "SUBMIT_UNKNOWN" if existing_status == "SUBMIT_UNKNOWN"
+                    else "EXACT_DUPLICATE",
+                    fingerprint,
+                    progress_url=existing.get("progress_url"),
+                    guard_action="EXISTING_GUARD",
+                )
+                continue
             remote = remote_duplicates.get(fingerprint)
             if remote is not None:
                 results[index] = self._labelled_result(
@@ -927,7 +979,8 @@ class SimulationGateway:
                         )
                     continue
                 if not self.guard.register(
-                    batch_fingerprint, simulation_count=len(children)
+                    batch_fingerprint, simulation_count=len(children),
+                    kind=ExecutionGuard.MULTI_PARENT,
                 ):
                     parent = self._parent_projection(
                         fingerprint=batch_fingerprint,
@@ -943,6 +996,27 @@ class SimulationGateway:
                             spec, "EXACT_DUPLICATE", fingerprint,
                             batch_fingerprint=batch_fingerprint, parent=parent,
                         )
+                    continue
+                # Register every child's own fingerprint before the parent POST
+                # so the same Simulation cannot be re-dispatched through a
+                # reordered, split, subset or Single retry afterwards.  The
+                # parent row stays the quota-counted identity; child rows carry
+                # no independent Simulation count.
+                for index, spec, fingerprint in children:
+                    if not self.guard.register(
+                        fingerprint, simulation_count=1,
+                        kind=ExecutionGuard.MULTI_CHILD,
+                        parent_fingerprint=batch_fingerprint,
+                    ):
+                        results[index] = self._labelled_result(
+                            spec, "EXACT_DUPLICATE", fingerprint,
+                            batch_fingerprint=batch_fingerprint,
+                        )
+                        children = [
+                            row for row in children if row[2] != fingerprint
+                        ]
+                if not children:
+                    self.guard.remove_batch(batch_fingerprint)
                     continue
                 child_records = [
                     SimpleNamespace(
@@ -1026,7 +1100,7 @@ class SimulationGateway:
         for batch in completed:
             batch_fingerprint = batch.submission_fingerprint
             if batch.status in {"DONE", "FAILED"}:
-                self.guard.remove(batch_fingerprint)
+                self.guard.remove_batch(batch_fingerprint)
             guard_action = (
                 "REMOVED_TERMINAL" if batch.status in {"DONE", "FAILED"}
                 else "PRESERVED_RUNNING" if batch.progress_url
@@ -1069,7 +1143,7 @@ class SimulationGateway:
         for batch_fingerprint, batch in batches:
             if batch_fingerprint in completed_fingerprints:
                 continue
-            self.guard.remove(batch_fingerprint)
+            self.guard.remove_batch(batch_fingerprint)
             parent = self._parent_projection(
                 fingerprint=batch_fingerprint,
                 status="NOT_DISPATCHED",
@@ -1097,30 +1171,43 @@ class SimulationGateway:
         row = self.guard.find(str(fingerprint))
         if row is None:
             raise KeyError("execution fingerprint not found")
+        parent_fingerprint = row.get("parent_fingerprint")
+        if parent_fingerprint:
+            # A Multi child carries no independent remote identity: recovery
+            # must follow the parent that owns the progress URL and every child.
+            parent = self.guard.find(parent_fingerprint)
+            if parent is not None:
+                row = parent
+                fingerprint = parent_fingerprint
         progress_url = row.get("progress_url")
         if not progress_url:
             return {"status": "SUBMIT_UNKNOWN", "fingerprint": str(fingerprint)}
         try:
-            # The guard deliberately stores only the durable remote identity
-            # (fingerprint/status/progress URL).  Therefore recovery must
-            # identify a Multi parent from its known progress response rather
-            # than persisting research metadata in the guard.  BRAIN returns
-            # ``children`` for a Multi parent; treating that response as a
-            # Single result raises "finished without alpha id" and strands a
-            # valid remote job in SUBMIT_UNKNOWN.
-            poller = self.client.poll_progress
-            is_multi = False
+            # ``kind`` is persisted safety metadata, so a known Multi parent is
+            # polled as a Multi parent instead of being guessed from a progress
+            # payload.  Legacy rows without ``kind`` keep the payload probe:
+            # BRAIN returns ``children`` for a Multi parent, and treating that
+            # response as Single raises "finished without alpha id" and strands
+            # a valid remote job in SUBMIT_UNKNOWN.
+            is_multi = str(row.get("kind") or "").upper() == ExecutionGuard.MULTI_PARENT
             remote_terminal_error = False
-            snapshot_reader = getattr(self.client, "get_progress_snapshot", None)
-            if snapshot_reader is not None:
-                snapshot = snapshot_reader(progress_url, timeout=60)
-                payload = snapshot.get("payload") if isinstance(snapshot, Mapping) else None
-                if isinstance(payload, Mapping):
-                    remote_status = str(payload.get("status", "")).upper()
-                    remote_terminal_error = remote_status in {"ERROR", "FAILED"}
-                    if isinstance(payload.get("children"), list):
-                        poller = self.client.poll_multi_progress
-                        is_multi = True
+            if not is_multi:
+                snapshot_reader = getattr(self.client, "get_progress_snapshot", None)
+                if snapshot_reader is not None:
+                    snapshot = snapshot_reader(progress_url, timeout=60)
+                    payload = (
+                        snapshot.get("payload")
+                        if isinstance(snapshot, Mapping) else None
+                    )
+                    if isinstance(payload, Mapping):
+                        remote_status = str(payload.get("status", "")).upper()
+                        remote_terminal_error = remote_status in {"ERROR", "FAILED"}
+                        if isinstance(payload.get("children"), list):
+                            is_multi = True
+            poller = (
+                self.client.poll_multi_progress if is_multi
+                else self.client.poll_progress
+            )
             alpha_ids = poller(progress_url)
             if is_multi:
                 if not isinstance(alpha_ids, (list, tuple)) or not alpha_ids:
@@ -1136,13 +1223,13 @@ class SimulationGateway:
                           "evidence": payload}
         except Exception as exc:
             if remote_terminal_error:
-                self.guard.remove(str(fingerprint))
+                self.guard.remove_batch(str(fingerprint))
                 return {"status": "FAILED", "fingerprint": str(fingerprint),
                         "error": str(exc), "progress_url": progress_url}
             return {"status": row.get("status", "SUBMIT_UNKNOWN"),
                     "fingerprint": str(fingerprint), "error": str(exc),
                     "progress_url": progress_url}
-        self.guard.remove(str(fingerprint))
+        self.guard.remove_batch(str(fingerprint))
         return result
 
     @staticmethod

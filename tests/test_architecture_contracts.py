@@ -22,6 +22,30 @@ def _imports(path):
 
 
 class RemoteFirstArchitectureTests(unittest.TestCase):
+    def test_single_research_skill_declares_the_runtime_contract(self):
+        skill_root = ROOT / "skills"
+        skill_dirs = sorted(path.parent.name for path in skill_root.glob("*/SKILL.md"))
+        self.assertEqual(skill_dirs, ["wqb-research"])
+
+        skill_path = skill_root / "wqb-research" / "SKILL.md"
+        text = skill_path.read_text(encoding="utf-8")
+        self.assertIn(
+            f'compatible_research_contract: "{research_api.RESEARCH_CONTRACT_VERSION}"',
+            text,
+        )
+        references = sorted(
+            path.name
+            for path in (skill_root / "wqb-research" / "references").glob("*.md")
+        )
+        self.assertLessEqual(len(references), 2)
+
+    def test_research_status_reports_the_contract_version(self):
+        status = research_api.research_status()
+        self.assertEqual(
+            status["research_contract_version"],
+            research_api.RESEARCH_CONTRACT_VERSION,
+        )
+
     def test_public_api_has_no_retired_agent_parameter(self):
         public = [
             value for name, value in vars(research_api).items()

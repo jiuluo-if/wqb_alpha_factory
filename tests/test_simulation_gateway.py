@@ -553,10 +553,20 @@ class TestSimulationGateway(unittest.TestCase):
             ])
             guard = SimulationGateway(client, state_dir=tmp).guard
             entries = guard.entries()
-            self.assertEqual(len(entries), 1)
-            self.assertEqual(entries[0]["simulation_count"], 4)
+            parents = [row for row in entries if row["kind"] == "MULTI_PARENT"]
+            children = [row for row in entries if row["kind"] == "MULTI_CHILD"]
+            self.assertEqual(len(parents), 1)
+            self.assertEqual(parents[0]["simulation_count"], 4)
+            # Every child owns its own unresolved-write identity, so a later
+            # reordered/split/subset/Single retry cannot re-POST it.
+            self.assertEqual(len(children), 4)
+            self.assertTrue(all(
+                row["parent_fingerprint"] == parents[0]["execution_fingerprint"]
+                for row in children
+            ))
+            self.assertTrue(all(row["simulation_count"] == 1 for row in children))
             guard_day = SimulationQuota._today(
-                datetime.fromtimestamp(entries[0]["created_at"], tz=UTC)
+                datetime.fromtimestamp(parents[0]["created_at"], tz=UTC)
             )
             snapshot = SimulationQuota(
                 _EmptyQuotaRepository(), guard,
@@ -663,7 +673,10 @@ class TestSimulationGateway(unittest.TestCase):
                 [item["status"] for item in first_results],
                 ["SUBMIT_UNKNOWN", "SUBMIT_UNKNOWN"],
             )
-            self.assertEqual(len(first.guard.entries()), 1)
+            self.assertEqual(
+                [row["kind"] for row in first.guard.entries()],
+                ["MULTI_PARENT", "MULTI_CHILD", "MULTI_CHILD"],
+            )
 
             second_client = UnknownMultiGatewayClient()
             second = SimulationGateway(second_client, state_dir=tmp)
@@ -673,7 +686,7 @@ class TestSimulationGateway(unittest.TestCase):
                 [item["status"] for item in second_results],
                 ["SUBMIT_UNKNOWN", "SUBMIT_UNKNOWN"],
             )
-            self.assertEqual(second_results[0]["parent"]["guard_action"], "EXISTING_GUARD")
+            self.assertEqual(second_results[0]["guard_action"], "EXISTING_GUARD")
             self.assertEqual(second_client.multi_submissions, [])
 
     def test_multi_parent_not_dispatched_result_explains_removed_guard(self):
@@ -717,7 +730,10 @@ class TestSimulationGateway(unittest.TestCase):
             )
             self.assertEqual(results[0]["parent"]["http_status"], 429)
             self.assertEqual(results[0]["parent"]["exception_class"], "WQBRateLimitError")
-            self.assertEqual(len(gateway.guard.entries()), 1)
+            self.assertEqual(
+                [row["kind"] for row in gateway.guard.entries()],
+                ["MULTI_PARENT", "MULTI_CHILD", "MULTI_CHILD"],
+            )
             resumed = SimulationGateway(MultiGatewayClient(), state_dir=tmp)
             resumed_results = resumed.simulate_multi_batch(specs)
             self.assertEqual(
@@ -1001,7 +1017,7 @@ class TestSimulationGateway(unittest.TestCase):
             self.assertEqual(
                 set(entry),
                 {"execution_fingerprint", "status", "progress_url",
-                 "created_at", "updated_at", "simulation_count"},
+                 "created_at", "updated_at", "simulation_count", "kind"},
             )
             self.assertNotIn("metrics", entry)
 
@@ -1121,6 +1137,162 @@ class TestSimulationGateway(unittest.TestCase):
             self.assertEqual(result["status"], "FAILED")
             self.assertIn("status=ERROR", result["error"])
             self.assertEqual(gateway.guard.entries(), [])
+
+    def test_multi_reordered_children_never_repost(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            specs = [
+                SimulationSpec(f"rank(field_{index})", {"delay": 1})
+                for index in range(4)
+            ]
+            first_client = UnknownMultiGatewayClient()
+            SimulationGateway(first_client, state_dir=tmp).simulate_multi_batch(
+                specs, child_batch_size=4
+            )
+
+            reordered = [specs[3], specs[1], specs[0], specs[2]]
+            second_client = UnknownMultiGatewayClient()
+            results = SimulationGateway(second_client, state_dir=tmp).simulate_multi_batch(
+                reordered, child_batch_size=4
+            )
+
+            self.assertEqual(
+                [item["status"] for item in results],
+                ["SUBMIT_UNKNOWN"] * 4,
+            )
+            self.assertTrue(all(
+                item["guard_action"] == "EXISTING_GUARD" for item in results
+            ))
+            self.assertEqual(second_client.multi_submissions, [])
+
+    def test_multi_split_batch_never_reposts_shared_children(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            specs = [
+                SimulationSpec(f"rank(field_{index})", {"delay": 1})
+                for index in range(4)
+            ]
+            SimulationGateway(
+                UnknownMultiGatewayClient(), state_dir=tmp
+            ).simulate_multi_batch(specs, child_batch_size=4)
+
+            split_client = UnknownMultiGatewayClient()
+            results = SimulationGateway(split_client, state_dir=tmp).simulate_multi_batch(
+                specs, child_batch_size=2, max_concurrent_multi=1
+            )
+
+            self.assertEqual(
+                [item["status"] for item in results],
+                ["SUBMIT_UNKNOWN"] * 4,
+            )
+            self.assertEqual(split_client.multi_submissions, [])
+
+    def test_multi_subset_retry_never_reposts_child(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            specs = [
+                SimulationSpec(f"rank(field_{index})", {"delay": 1})
+                for index in range(4)
+            ]
+            SimulationGateway(
+                UnknownMultiGatewayClient(), state_dir=tmp
+            ).simulate_multi_batch(specs, child_batch_size=4)
+
+            subset_client = UnknownMultiGatewayClient()
+            results = SimulationGateway(subset_client, state_dir=tmp).simulate_multi_batch(
+                specs[:2], child_batch_size=2
+            )
+
+            self.assertEqual(
+                [item["status"] for item in results],
+                ["SUBMIT_UNKNOWN", "SUBMIT_UNKNOWN"],
+            )
+            self.assertEqual(subset_client.multi_submissions, [])
+
+    def test_multi_child_never_reposted_as_single(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            specs = [
+                SimulationSpec("rank(field_a)", {"delay": 1}),
+                SimulationSpec("rank(field_b)", {"delay": 1}),
+            ]
+            SimulationGateway(
+                UnknownMultiGatewayClient(), state_dir=tmp
+            ).simulate_multi_batch(specs)
+
+            single_client = FakeGatewayClient()
+            result = SimulationGateway(single_client, state_dir=tmp).simulate(specs[0])
+
+            self.assertEqual(result["status"], "SUBMIT_UNKNOWN")
+            self.assertEqual(single_client.submissions, [])
+
+    def test_single_unknown_child_is_not_retried_inside_multi(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first = SimulationSpec("rank(field_a)", {"delay": 1})
+            second = SimulationSpec("rank(field_b)", {"delay": 1})
+            third = SimulationSpec("rank(field_c)", {"delay": 1})
+            SimulationGateway(
+                FakeGatewayClient(unknown=True), state_dir=tmp
+            ).simulate(first)
+
+            multi_client = MultiGatewayClient()
+            results = SimulationGateway(multi_client, state_dir=tmp).simulate_multi_batch(
+                [first, second, third]
+            )
+
+            self.assertEqual(results[0]["status"], "SUBMIT_UNKNOWN")
+            self.assertEqual(results[0]["guard_action"], "EXISTING_GUARD")
+            self.assertEqual([item["status"] for item in results[1:]], ["DONE", "DONE"])
+            self.assertEqual(len(multi_client.multi_submissions), 1)
+            self.assertEqual(len(multi_client.multi_submissions[0][0]), 2)
+
+    def test_multi_parent_recovers_with_multi_polling_from_persisted_kind(self):
+        class ProgressOnlyMultiClient(MultiGatewayClient):
+            def get_progress_snapshot(self, progress_url, **kwargs):
+                return {"status_code": 200, "payload": {"progress": 0.3}}
+
+            def poll_progress(self, progress_url, **kwargs):
+                raise AssertionError("a Multi parent must not use Single polling")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = ProgressOnlyMultiClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            batch_fingerprint = ExecutionGuard.fingerprint(
+                "MULTI[child-a,child-b]", {"mode": "MULTI", "children": 2}
+            )
+            gateway.guard.register(
+                batch_fingerprint, progress_url="multi-progress-1",
+                status="RUNNING", simulation_count=2,
+                kind=ExecutionGuard.MULTI_PARENT,
+            )
+
+            result = gateway.resume_execution(batch_fingerprint)
+
+            self.assertEqual(result["status"], "DONE")
+            self.assertEqual(len(result["alpha_ids"]), 2)
+            self.assertEqual(gateway.guard.entries(), [])
+
+    def test_multi_child_recovery_follows_its_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = MultiGatewayClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            gateway.guard.register(
+                "parent-fingerprint", progress_url="multi-progress-1",
+                status="RUNNING", simulation_count=2,
+                kind=ExecutionGuard.MULTI_PARENT,
+            )
+            gateway.guard.register(
+                "child-fingerprint", kind=ExecutionGuard.MULTI_CHILD,
+                parent_fingerprint="parent-fingerprint",
+            )
+
+            result = gateway.resume_execution("child-fingerprint")
+
+            self.assertEqual(result["status"], "DONE")
+            self.assertEqual(result["fingerprint"], "parent-fingerprint")
+            self.assertEqual(gateway.guard.entries(), [])
+
+    def test_multi_child_guard_requires_a_parent_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = ExecutionGuard(tmp)
+            with self.assertRaisesRegex(ValueError, "parent fingerprint"):
+                guard.register("child", kind=ExecutionGuard.MULTI_CHILD)
 
     def test_public_remote_evidence_is_live_and_explicitly_sourced(self):
         evidence = research_api.get_alpha_evidence("alpha-1", client=FakeGatewayClient())

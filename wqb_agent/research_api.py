@@ -75,6 +75,11 @@ MAX_PROBE_FIELDS = 100
 MAX_PROBE_TEMPLATES = 100
 MAX_PROBE_COUNT = 100
 
+# The research contract version is the compatibility handshake between the
+# single research Skill and this runtime.  A Skill that declares a different
+# ``compatible_research_contract`` is stale and must be re-read, not reused.
+RESEARCH_CONTRACT_VERSION = "2026-09-24"
+
 
 def _load_config(config: Mapping[str, Any] | str | None) -> dict[str, Any]:
     if config is None:
@@ -868,6 +873,60 @@ def get_live_preflight(*, client=None, config=None, state_dir=None):
     }
 
 
+def research_status(*, client=None, config=None, state_dir=None):
+    """Aggregate the read-only facts an Agent checks before starting research.
+
+    This is the single startup-readiness call: live capability, simulation
+    modes, quota with freshness, pending executions, cache freshness and the
+    research contract version.  Every section keeps its own source/status, and
+    a missing live client degrades those sections to UNKNOWN instead of failing
+    the whole call.  Python reports facts only; it never chooses the next
+    experiment.
+    """
+    typed = _normalized_config(config)
+    directory = _state_directory(typed, state_dir)
+    pending = get_pending_executions(state_dir=directory)["entries"]
+    cache = remote_cache_status(config=typed, state_dir=directory)
+    try:
+        quota = simulation_quota(client=client, config=typed, state_dir=directory)
+    except Exception as exc:
+        quota = {
+            "status": "UNKNOWN", "source": "UNAVAILABLE",
+            "reason_code": "CAPABILITY_UNAVAILABLE", "error": type(exc).__name__,
+        }
+    if client is None:
+        capability = {
+            "source": "UNAVAILABLE", "status": "UNKNOWN",
+            "evidence_status": "INCONCLUSIVE",
+        }
+        modes = _simulation_modes_from_capabilities(None, None)
+    else:
+        try:
+            capability = get_capabilities(client=client, config=typed)
+        except Exception as exc:
+            capability = {
+                "source": "UNAVAILABLE", "status": "UNKNOWN",
+                "evidence_status": "INCONCLUSIVE", "error": type(exc).__name__,
+            }
+        try:
+            modes = get_simulation_modes(client=client, config=typed)
+        except Exception as exc:
+            modes = {"error": type(exc).__name__, "status": "UNKNOWN"}
+    live = client is not None
+    return {
+        "source": "LIVE" if live else "LOCAL_ONLY",
+        "status": "AVAILABLE" if live else "PARTIAL",
+        "evidence_status": "AVAILABLE" if live else "INCONCLUSIVE",
+        "research_contract_version": RESEARCH_CONTRACT_VERSION,
+        "capability": capability,
+        "simulation_modes": modes,
+        "quota": quota,
+        "pending_executions": pending,
+        "pending_execution_count": len(pending),
+        "cache": cache,
+    }
+
+
 def get_pending_executions(*, state_dir=None, config=None):
     """Read unresolved local guard entries from the configured state directory."""
     typed = _normalized_config(config)
@@ -1177,6 +1236,7 @@ def sync_alpha_colors(plan=None, *, exact_plan=None, client=None, config=None,
 def research_tool_manifest(profile="core"):
     """Return a deterministic default CORE surface or the opt-in full catalog."""
     rows: list[dict[str, Any]] = [
+        {"name": "research_status", "mode": "READ_ONLY", "owner": "research_api"},
         {"name": "get_capabilities", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "get_operators", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "get_operator_reference", "mode": "READ_ONLY", "owner": "BRAIN"},
@@ -1237,14 +1297,12 @@ def research_tool_manifest(profile="core"):
     if profile != "core":
         raise ValueError("profile must be 'core' or 'full'")
     core_names = {
-        "get_live_preflight",
-        "list_datasets", "list_datafields", "list_all_datafields",
-        "build_simulation_spec", "build_simulation_variant",
-        "validate_simulation_spec", "simulate", "simulate_single",
-        "simulate_batch", "simulate_multi_batch", "get_alpha_summary",
-        "get_alpha_evidence", "compare_alphas", "get_alpha_prod_correlation",
-        "simulation_quota", "get_pending_executions", "resume_execution",
-        "reconcile_execution", "find_duplicate_alphas", "find_similar_alphas",
+        "research_status",
+        "list_datasets", "list_datafields",
+        "build_simulation_spec", "validate_simulation_spec",
+        "simulate", "simulate_batch", "simulate_multi_batch",
+        "get_alpha_summary", "get_alpha_evidence",
+        "find_duplicate_alphas", "resume_execution",
     }
     return [row for row in rows if row["name"] in core_names]
 
@@ -1261,7 +1319,7 @@ __all__ = [
     "simulate", "simulate_single", "simulate_batch",
     "simulate_multi_batch", "get_simulation_modes", "get_live_preflight",
     "get_pending_executions", "resume_execution",
-    "reconcile_execution",
+    "reconcile_execution", "research_status",
     "get_alpha", "get_alpha_summary", "get_alpha_evidence", "get_alpha_metrics",
     "get_alpha_aggregates", "get_alpha_pnl", "get_alpha_self_correlation",
     "get_alpha_prod_correlation",
