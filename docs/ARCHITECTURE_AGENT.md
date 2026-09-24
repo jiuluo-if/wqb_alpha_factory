@@ -19,7 +19,7 @@ research meaning or BRAIN access; see [`MCP_READ_ONLY.md`](MCP_READ_ONLY.md).
 ## 唯一 Simulation 写链
 
 ```text
-research_api.simulate / simulate_batch
+research_api.simulate / simulate_single / simulate_batch
 research_api.simulate_multi_batch
  → SimulationGateway
  → Simulator

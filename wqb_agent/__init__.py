@@ -11,6 +11,7 @@ __all__ = [
     "validate_simulation_spec",
     "execution_fingerprint",
     "simulate",
+    "simulate_single",
     "simulate_batch",
     "simulate_multi_batch",
     "get_simulation_modes",
@@ -72,7 +73,7 @@ def __getattr__(name):
         return WQBClient
     if name in {
         "SimulationSpec", "validate_simulation_spec", "execution_fingerprint",
-        "simulate", "simulate_batch",
+        "simulate", "simulate_single", "simulate_batch",
         "simulate_multi_batch", "get_simulation_modes", "get_live_preflight", "get_pending_executions", "resume_execution",
         "reconcile_execution", "get_alpha",
         "get_alpha_evidence", "get_alpha_metrics", "get_alpha_aggregates",

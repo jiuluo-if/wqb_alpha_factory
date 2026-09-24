@@ -721,6 +721,11 @@ def simulate(spec, *, client=None, config=None, state_dir=None):
     ).simulate(spec)
 
 
+def simulate_single(spec, *, client=None, config=None, state_dir=None):
+    """Explicitly named single-request facade over the canonical writer."""
+    return simulate(spec, client=client, config=config, state_dir=state_dir)
+
+
 def simulate_batch(specs, *, client=None, config=None, state_dir=None):
     """Execute Single Simulations through the ten-worker window by default."""
     gateway = _simulation_gateway(
@@ -1149,6 +1154,7 @@ def research_tool_manifest():
         {"name": "validate_simulation_spec", "mode": "READ_ONLY", "owner": "SimulationGateway"},
         {"name": "execution_fingerprint", "mode": "READ_ONLY", "owner": "SimulationGateway"},
         {"name": "simulate", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
+        {"name": "simulate_single", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
         {"name": "simulate_batch", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
         {"name": "simulate_multi_batch", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
         {"name": "get_simulation_modes", "mode": "READ_ONLY", "owner": "SimulationGateway"},
@@ -1190,7 +1196,7 @@ __all__ = [
     "classify_fields", "get_simulation_config", "validate_simulation_settings",
     "build_simulation_spec", "build_simulation_variant",
     "validate_simulation_spec", "execution_fingerprint",
-    "simulate", "simulate_batch",
+    "simulate", "simulate_single", "simulate_batch",
     "simulate_multi_batch", "get_simulation_modes", "get_live_preflight",
     "get_pending_executions", "resume_execution",
     "reconcile_execution",

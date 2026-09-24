@@ -1085,6 +1085,23 @@ class TestResearchApi(unittest.TestCase):
             )
             subprocess.run([sys.executable, "-c", probe], check=True, capture_output=True, text=True)
 
+    def test_explicit_simulate_single_facade_delegates_to_gateway(self):
+        import wqb_agent
+        from wqb_agent import research_api
+
+        spec = SimulationSpec("rank(close)")
+        with mock.patch("wqb_agent.research_api._simulation_gateway") as factory:
+            gateway = factory.return_value
+            gateway.simulate.return_value = {"status": "DONE"}
+            self.assertEqual(
+                research_api.simulate_single(spec), {"status": "DONE"}
+            )
+            gateway.simulate.assert_called_once_with(spec)
+        self.assertIs(wqb_agent.simulate_single, research_api.simulate_single)
+        self.assertIn(
+            "simulate_single",
+            {row["name"] for row in research_api.research_tool_manifest()},
+        )
 
 if __name__ == "__main__":
     unittest.main()

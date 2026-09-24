@@ -20,7 +20,7 @@ RemoteAlphaRepository → AI 分析 evidence
 
 - 平台事实：`get_capabilities()`、`discover_fields()`、`get_operator_reference()`。
 - Probe/template：`list_templates()`、`inspect_template()`、`generate_probes()`。
-- Real Simulation：`validate_simulation_spec()`、`simulate()` / `simulate_batch()`、`simulate_multi_batch()`，带实时能力检查、fingerprint、exact-once guard 和已知进度任务恢复。单个请求用 `simulate()`，独立 Single 批次用 `simulate_batch()`。
+- Real Simulation：`validate_simulation_spec()`、`simulate()` / `simulate_single()`、`simulate_batch()`、`simulate_multi_batch()`，带实时能力检查、fingerprint、exact-once guard 和已知进度任务恢复。`simulate()` 与 `simulate_single()` 都提交一个请求并委托同一 Gateway；独立 Single 批次用 `simulate_batch()`。
 - Simulation 模式：小规模优化可使用 Single 或小批量 Multi；大规模探针使用 Multi，每个 Multi parent 默认/最多 10 个 child（最少 2 个），默认同时 dispatch 2 个 parent，显式 override 的受支持硬上限为 8。`Region-Agnostic Simulation` 保持独立，当前没有经过验证的写入契约，不会被 Multi 窗口隐式替代。
 - Remote Alpha：live Alpha/evidence、滚动缓存、去重、比较、分组和颜色预览/同步。
 

@@ -100,11 +100,14 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
 
         self.assertIn("find_duplicate_alphas", rows)
         self.assertNotIn("find_alpha_duplicates", rows)
-        for name in ("simulate", "simulate_batch", "simulate_multi_batch"):
+        for name in (
+            "simulate", "simulate_single", "simulate_batch",
+            "simulate_multi_batch",
+        ):
             self.assertEqual(rows[name]["mode"], "SIMULATION_WRITE", name)
             self.assertTrue(rows[name].get("remote_write"), name)
         for name in (
-            "simulate_single", "simulate_single_batch", "find_alpha_duplicates",
+            "simulate_single_batch", "find_alpha_duplicates",
         ):
             self.assertNotIn(name, rows)
             self.assertFalse(hasattr(research_api, name), name)
