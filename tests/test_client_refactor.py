@@ -165,6 +165,46 @@ class TestBoundedAlphaHistoryShards(unittest.TestCase):
         with self.assertRaisesRegex(WQBQueryTooBroadError, "shard budget"):
             list(client.iter_user_alpha_history_shards(max_shards=1))
 
+    def test_lookback_days_starts_the_walk_in_the_recent_window(self):
+        from datetime import UTC, datetime
+
+        client = make_client()
+        calls = []
+
+        def read(**kwargs):
+            calls.append(kwargs)
+            return [{"id": "alpha-recent", "regular": "rank(close)"}]
+
+        client.get_all_user_alphas = read
+        rows = list(client.iter_user_alpha_history_shards(lookback_days=2))
+
+        self.assertEqual([row["id"] for row in rows], ["alpha-recent"])
+        self.assertEqual(len(calls), 1)
+        started = datetime.fromisoformat(calls[0]["date_created_after"])
+        age_sec = (datetime.now(UTC) - started).total_seconds()
+        self.assertLess(abs(age_sec - 2 * 86400), 300)
+
+    def test_without_lookback_days_the_walk_still_starts_at_epoch(self):
+        from datetime import UTC, datetime
+
+        client = make_client()
+        calls = []
+
+        def read(**kwargs):
+            calls.append(kwargs)
+            return []
+
+        client.get_all_user_alphas = read
+        list(client.iter_user_alpha_history_shards())
+        started = datetime.fromisoformat(calls[0]["date_created_after"])
+        self.assertEqual(started.astimezone(UTC).year, 1970)
+
+    def test_non_positive_lookback_days_is_rejected(self):
+        client = make_client()
+        for value in (0, -1, "2", True):
+            with self.assertRaisesRegex(ValueError, "lookback_days"):
+                list(client.iter_user_alpha_history_shards(lookback_days=value))
+
 
 class TestLiveFieldCapability(unittest.TestCase):
     def test_selected_field_is_verified_from_its_live_dataset(self):
@@ -848,6 +888,26 @@ class TestOfficialReadOnlyClientAdapters(unittest.TestCase):
                 )
         request.assert_not_called()
         c._wait_submission_slot.assert_not_called()
+
+    def test_single_submission_sends_the_region_agnostic_schema(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        settings = {"region": "ALL", "universe": "LARGE", "delay": 1}
+        with mock.patch.object(
+            c, "_request", return_value=FakeResponse(
+                201, headers={"Location": "/sim/ra-1"}
+            )
+        ) as request:
+            url = c.submit_simulation(
+                "rank(a)", settings, alpha_type="REGION_AGNOSTIC"
+            )
+
+        self.assertEqual(url, "https://api.worldquantbrain.com/sim/ra-1")
+        body = request.call_args.kwargs["json"]
+        self.assertEqual(body["type"], "REGION_AGNOSTIC")
+        self.assertEqual(body["settings"], settings)
+        self.assertEqual(body["regular"], "rank(a)")
+        c._wait_submission_slot.assert_called_once()
 
     def test_multi_submission_rejects_non_regular_child_before_post(self):
         c = make_client()

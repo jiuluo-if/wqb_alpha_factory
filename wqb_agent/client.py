@@ -59,6 +59,17 @@ BASE_URL = "https://api.worldquantbrain.com"
 
 CREDENTIALS_FILE = DEFAULT_CREDENTIALS_FILE
 
+# Simulation request schemas this writer implements.  ``REGION_AGNOSTIC`` is a
+# real BRAIN type: one POST returns a Region-Agnostic parent plus its per-region
+# child alphas, and it shares the REGULAR payload shape.  Anything else (for
+# example ``SUPER``) stays rejected here, and the platform advertising a type is
+# never by itself a write contract.
+REGULAR_SIMULATION_TYPE = "REGULAR"
+REGION_AGNOSTIC_SIMULATION_TYPE = "REGION_AGNOSTIC"
+SUPPORTED_SIMULATION_REQUEST_TYPES = frozenset(
+    {REGULAR_SIMULATION_TYPE, REGION_AGNOSTIC_SIMULATION_TYPE}
+)
+
 # Status codes that indicate a permanent, non-retryable rejection.
 FAIL_FAST_STATUSES = (400, 403, 404, 422)
 ALPHA_COLOR_VALUES = frozenset({"BLUE", "GREEN", "PURPLE", "RED", "YELLOW"})
@@ -1025,8 +1036,9 @@ class WQBClient:
     def iter_user_alpha_history_shards(
         self, *, result_cap=1000, max_shards=MAX_ALPHA_HISTORY_SHARDS,
         min_window_sec=60, time_budget_sec=MAX_ALPHA_HISTORY_SECONDS,
+        lookback_days=None,
     ):
-        """Yield complete user Alpha history from bounded date shards.
+        """Yield user Alpha history from bounded date shards.
 
         A broad date range is bisected only when BRAIN explicitly reports the
         result cap was exceeded. The method fails closed if it cannot finish
@@ -1034,6 +1046,14 @@ class WQBClient:
 
         ``time_budget_sec`` bounds the wall-clock cost of the whole walk so a slow
         platform surfaces as a QueryTooBroad error instead of an unbounded stall.
+
+        ``lookback_days`` starts the walk at ``now - lookback_days`` instead of
+        1970, i.e. the walk then covers a *bounded recent window*, not the
+        complete history.  BRAIN answers ``GET /users/self/alphas`` in ~6 s per
+        page and serialises concurrent pages, so an unbounded walk over a large
+        library cannot finish inside any practical budget.  A caller that passes
+        this argument is responsible for treating the result as a recent-window
+        scan rather than as complete history.
         """
         if isinstance(result_cap, bool) or not isinstance(result_cap, int) or result_cap < 1:
             raise ValueError("result_cap must be a positive integer")
@@ -1046,8 +1066,16 @@ class WQBClient:
                      or not isinstance(time_budget_sec, (int, float))
                      or time_budget_sec <= 0)):
             raise ValueError("time_budget_sec must be a positive number or None")
+        if (lookback_days is not None
+                and (isinstance(lookback_days, bool)
+                     or not isinstance(lookback_days, (int, float))
+                     or lookback_days <= 0)):
+            raise ValueError("lookback_days must be a positive number or None")
 
-        start = datetime(1970, 1, 1, tzinfo=UTC)
+        if lookback_days is None:
+            start = datetime(1970, 1, 1, tzinfo=UTC)
+        else:
+            start = datetime.now(UTC) - timedelta(days=float(lookback_days))
         end = datetime.now(UTC) + timedelta(seconds=1)
         pending = [(start, end, 0)]
         requests_used = 0
@@ -1098,10 +1126,18 @@ class WQBClient:
         POST.  The durable caller-side fingerprint supports later read-only
         reconciliation.
         """
-        if str(alpha_type or "").upper() != "REGULAR":
-            raise ValueError("Only the REGULAR Simulation request schema is supported")
+        requested_type = str(
+            alpha_type or REGULAR_SIMULATION_TYPE
+        ).upper() or REGULAR_SIMULATION_TYPE
+        if requested_type not in SUPPORTED_SIMULATION_REQUEST_TYPES:
+            raise ValueError(
+                "Only the "
+                + " and ".join(sorted(SUPPORTED_SIMULATION_REQUEST_TYPES))
+                + " Simulation request schemas are supported (got "
+                + requested_type + ")"
+            )
         self._wait_submission_slot()
-        body = {"type": "REGULAR", "settings": settings, "regular": expression}
+        body = {"type": requested_type, "settings": settings, "regular": expression}
         headers = {"X-Idempotency-Key": idempotency_key} if idempotency_key else None
         resp = self._request(
             "POST",

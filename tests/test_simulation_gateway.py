@@ -25,6 +25,9 @@ from wqb_agent.simulation_gateway import (
     MULTI_MAX_CHILDREN,
     MULTI_MAX_CONCURRENCY,
     MULTI_MIN_CHILDREN,
+    REMOTE_DUPLICATE_LOOKBACK_DAYS,
+    REMOTE_DUPLICATE_SCAN_BUDGET_SEC,
+    REMOTE_DUPLICATE_SCAN_KEY,
     ExecutionGuard,
     SimulationGateway,
     SimulationSpec,
@@ -877,6 +880,59 @@ class TestSimulationGateway(unittest.TestCase):
             )
             self.assertEqual(result["status"], "EXACT_DUPLICATE")
             self.assertEqual(result["alpha_id"], "old-exact")
+            self.assertEqual(client.submissions, [])
+
+    def test_duplicate_scan_reports_its_bounded_recent_window(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = RemoteHistoryGatewayClient()
+            result = SimulationGateway(client, state_dir=tmp).simulate(
+                SimulationSpec("rank(open)", {"delay": 1})
+            )
+            scan = result["remote_duplicate_scan"]
+            self.assertEqual(scan["status"], "BOUNDED_RECENT_WINDOW")
+            self.assertEqual(scan["lookback_days"], REMOTE_DUPLICATE_LOOKBACK_DAYS)
+            self.assertFalse(scan["complete"])
+
+    def test_duplicate_scan_asks_the_shard_reader_for_a_bounded_window(self):
+        class RecordingHistoryClient(ShardedRemoteHistoryGatewayClient):
+            def __init__(self):
+                super().__init__()
+                self.scan_kwargs = None
+
+            def iter_user_alpha_history_shards(self, **kwargs):
+                self.scan_kwargs = dict(kwargs)
+                yield from super().iter_user_alpha_history_shards(**kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = RecordingHistoryClient()
+            SimulationGateway(client, state_dir=tmp).simulate(
+                SimulationSpec("rank(close)", {"delay": 1})
+            )
+            self.assertEqual(
+                client.scan_kwargs["lookback_days"], REMOTE_DUPLICATE_LOOKBACK_DAYS
+            )
+            self.assertEqual(
+                client.scan_kwargs["time_budget_sec"], REMOTE_DUPLICATE_SCAN_BUDGET_SEC
+            )
+
+    def test_legacy_shard_reader_without_window_argument_still_scans(self):
+        class LegacyHistoryClient(ShardedRemoteHistoryGatewayClient):
+            def __init__(self):
+                super().__init__()
+                self.called = False
+
+            def iter_user_alpha_history_shards(self):
+                self.called = True
+                yield {"id": "old-exact", "regular": "rank(close)",
+                       "settings": {"delay": 1}, "status": "UNSUBMITTED"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = LegacyHistoryClient()
+            result = SimulationGateway(client, state_dir=tmp).simulate(
+                SimulationSpec("rank(close)", {"delay": 1})
+            )
+            self.assertTrue(client.called)
+            self.assertEqual(result["status"], "EXACT_DUPLICATE")
             self.assertEqual(client.submissions, [])
 
     def test_incomplete_remote_history_scan_fails_closed_before_post(self):

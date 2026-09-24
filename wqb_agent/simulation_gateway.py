@@ -12,6 +12,10 @@ from types import SimpleNamespace
 from typing import Any
 
 from .artifacts import atomic_write_json_if_changed
+from .client import (
+    REGULAR_SIMULATION_TYPE,
+    SUPPORTED_SIMULATION_REQUEST_TYPES,
+)
 from .expression import (
     analyze_expression,
     expression_field_identifiers,
@@ -24,19 +28,24 @@ from .simulator import Simulator
 _CAPABILITY_UNCHECKED = object()
 _CAPABILITY_READER_ABSENT = object()
 _REMOTE_ROWS_UNCHECKED = object()
-REGULAR_SIMULATION_TYPE = "REGULAR"
-# Region-Agnostic writes return an RA_PARENT plus its RA_CHILD alphas for several
-# regions. The platform advertises the type through /simulations/options; keeping it
-# in this set is what allows `simulation_type="REGION_AGNOSTIC"` specs to be written.
-REGION_AGNOSTIC_SIMULATION_TYPE = "REGION_AGNOSTIC"
-SUPPORTED_WRITE_SIMULATION_TYPES = frozenset(
-    {REGULAR_SIMULATION_TYPE, REGION_AGNOSTIC_SIMULATION_TYPE}
-)
+# The write-type whitelist is owned by the client that builds the request body;
+# the Gateway only refuses a spec before it can reach that POST.
+SUPPORTED_WRITE_SIMULATION_TYPES = SUPPORTED_SIMULATION_REQUEST_TYPES
 MULTI_MIN_CHILDREN = 2
 MULTI_MAX_CHILDREN = 10
 MULTI_DEFAULT_CHILD_BATCH_SIZE = 10
 MULTI_DEFAULT_CONCURRENCY = 2
 MULTI_MAX_CONCURRENCY = 8
+
+# The preflight exact-duplicate scan reads the remote Alpha library.  BRAIN
+# answers one `/users/self/alphas` page in ~6 s and serialises concurrent pages,
+# so walking the complete history of a large library needs tens of minutes and
+# can never finish inside a usable budget — it used to abort every POST before
+# dispatch.  The scan is therefore bounded to the most recent days and reports
+# itself as a window rather than as complete history.
+REMOTE_DUPLICATE_LOOKBACK_DAYS = 2
+REMOTE_DUPLICATE_SCAN_BUDGET_SEC = 300
+REMOTE_DUPLICATE_SCAN_KEY = "__remote_duplicate_scan__"
 
 
 def _spec_simulation_type(spec):
@@ -562,13 +571,40 @@ class SimulationGateway:
                     "CAPABILITY_UNAVAILABLE",
                 )
 
+    @staticmethod
+    def _recent_history_rows(shard_reader):
+        """Walk a bounded recent window of the remote Alpha library.
+
+        The scan is limited to the most recent ``REMOTE_DUPLICATE_LOOKBACK_DAYS``
+        days.  A reader that predates the window argument keeps its own contract
+        instead of failing the whole preflight.
+        """
+        try:
+            return shard_reader(
+                lookback_days=REMOTE_DUPLICATE_LOOKBACK_DAYS,
+                time_budget_sec=REMOTE_DUPLICATE_SCAN_BUDGET_SEC,
+            )
+        except TypeError:
+            return shard_reader()
+
+    @staticmethod
+    def _attach_scan_evidence(results, remote_duplicates):
+        """Publish the duplicate-scan window next to every batch result."""
+        scan = (remote_duplicates or {}).get(REMOTE_DUPLICATE_SCAN_KEY)
+        if not isinstance(scan, Mapping):
+            return results
+        for result in results:
+            if isinstance(result, dict):
+                result["remote_duplicate_scan"] = dict(scan)
+        return results
+
     def _remote_history_matches(self, validated):
         targets = {fingerprint for _index, _spec, fingerprint in validated}
         if not targets:
             return {}
         shard_reader = getattr(self.client, "iter_user_alpha_history_shards", None)
         if callable(shard_reader):
-            rows = shard_reader()
+            rows = self._recent_history_rows(shard_reader)
         else:
             reader = getattr(self.client, "get_all_user_alphas", None)
             if not callable(reader):
@@ -611,6 +647,13 @@ class SimulationGateway:
                     "alpha_id": row.get("id") or alpha.get("id"),
                     "source": "LIVE",
                 })
+        # The scan evidence travels with the batch results: it states which
+        # window was scanned, so no reader can mistake it for complete history.
+        matches[REMOTE_DUPLICATE_SCAN_KEY] = {
+            "status": "BOUNDED_RECENT_WINDOW",
+            "lookback_days": REMOTE_DUPLICATE_LOOKBACK_DAYS,
+            "complete": False,
+        }
         return matches
 
     @staticmethod
@@ -838,7 +881,7 @@ class SimulationGateway:
                 spec, "NOT_DISPATCHED", fingerprint,
                 error="dispatch paused before submission",
             )
-        return results
+        return self._attach_scan_evidence(results, remote_duplicates)
 
     def simulate_multi_batch(
         self, specs, *, child_batch_size=MULTI_DEFAULT_CHILD_BATCH_SIZE,
@@ -1169,7 +1212,7 @@ class SimulationGateway:
                     error="dispatch paused before submission",
                     failure_scope="PARENT", parent=parent,
                 )
-        return results
+        return self._attach_scan_evidence(results, remote_duplicates)
 
     def resume_execution(self, fingerprint):
         with single_instance_scope(self.state_dir, operation="resume-simulation"):
