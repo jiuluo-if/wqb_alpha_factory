@@ -6,7 +6,7 @@ import time
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
 
 from .client import WQBCorrelationPendingError, WQBNotFoundError
 
@@ -49,12 +49,6 @@ class RemoteAlphaEvidence:
     recordsets: Mapping[str, Any] = field(default_factory=dict)
     status: Mapping[str, str] = field(default_factory=dict)
     availability: Mapping[str, str] = field(default_factory=dict)
-
-
-class RemoteEvidenceProvider(Protocol):
-    """Structural contract shared by live evidence readers."""
-
-    def collect(self, alpha_id: str) -> RemoteAlphaEvidence: ...
 
 
 class _RemoteEvidenceCollector:
