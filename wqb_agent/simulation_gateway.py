@@ -12,7 +12,11 @@ from types import SimpleNamespace
 from typing import Any
 
 from .artifacts import atomic_write_json_if_changed
-from .expression import analyze_expression, submission_fingerprint
+from .expression import (
+    analyze_expression,
+    submission_fingerprint,
+)
+from .failures import ResearchReasonError, reason_code_for_failure
 from .locking import single_instance_scope
 from .simulator import Simulator
 
@@ -53,6 +57,8 @@ class SimulationSpec:
     # OPTIONS may advertise types beyond the writer contract. REGULAR stays
     # the default so existing callers and historical fingerprints are stable.
     simulation_type: str = "REGULAR"
+    field_datasets: Mapping[str, str] = field(default_factory=dict)
+    proposal_id: str | None = None
 
     def __post_init__(self):
         expression = str(self.expression or "").strip()
@@ -60,6 +66,8 @@ class SimulationSpec:
             raise ValueError("expression must be non-empty")
         if not isinstance(self.settings, Mapping):
             raise TypeError("settings must be an object")
+        if not isinstance(self.field_datasets, Mapping):
+            raise TypeError("field_datasets must be an object")
         if expression.count("(") != expression.count(")"):
             raise ValueError("expression has unbalanced parentheses")
         simulation_type = str(self.simulation_type or "REGULAR").strip().upper()
@@ -68,10 +76,42 @@ class SimulationSpec:
         object.__setattr__(self, "expression", expression)
         object.__setattr__(self, "settings", dict(self.settings))
         object.__setattr__(self, "simulation_type", simulation_type)
-        object.__setattr__(
-            self, "fields", tuple(str(item) for item in (self.fields or ())
-                                   if str(item).strip())
-        )
+        raw_fields = (self.fields,) if isinstance(self.fields, str) else (self.fields or ())
+        fields = []
+        field_datasets = {
+            str(field_id).strip(): str(dataset_id).strip()
+            for field_id, dataset_id in self.field_datasets.items()
+            if str(field_id).strip() and str(dataset_id).strip()
+        }
+        for item in raw_fields:
+            if isinstance(item, Mapping):
+                field_id = item.get("id") or item.get("field_id")
+                dataset = item.get("dataset_id") or item.get("dataset")
+                if isinstance(dataset, Mapping):
+                    dataset = dataset.get("id") or dataset.get("name")
+                if field_id is None:
+                    raise ResearchReasonError(
+                        "field profile requires an id", "CAPABILITY_UNAVAILABLE"
+                    )
+                normalized_id = str(field_id).strip()
+                if dataset is not None and str(dataset).strip():
+                    field_datasets[normalized_id] = str(dataset).strip()
+            else:
+                normalized_id = str(item).strip()
+            if normalized_id and normalized_id not in fields:
+                fields.append(normalized_id)
+        if set(field_datasets) - set(fields):
+            raise ResearchReasonError(
+                "field_datasets contains an undeclared field", "CAPABILITY_UNAVAILABLE"
+            )
+        proposal_id = self.proposal_id
+        if proposal_id is not None:
+            proposal_id = str(proposal_id).strip()
+            if not proposal_id or len(proposal_id) > 128:
+                raise ValueError("proposal_id must contain 1 to 128 characters")
+        object.__setattr__(self, "fields", tuple(fields))
+        object.__setattr__(self, "field_datasets", field_datasets)
+        object.__setattr__(self, "proposal_id", proposal_id)
 
 
 class ExecutionGuard:
@@ -430,6 +470,33 @@ class SimulationGateway:
         self, spec, *, operator_capability=_CAPABILITY_UNCHECKED,
         field_capability=_CAPABILITY_UNCHECKED,
     ):
+        self._validate_operator_capability(spec, operator_capability)
+        if field_capability is _CAPABILITY_UNCHECKED:
+            field_capability = _CAPABILITY_READER_ABSENT
+        if spec.fields and field_capability is _CAPABILITY_READER_ABSENT:
+            raise ResearchReasonError(
+                "FIELD_CAPABILITY_UNAVAILABLE: no live field reader",
+                "CAPABILITY_UNAVAILABLE",
+            )
+        if spec.fields:
+            if not isinstance(field_capability, Mapping) or field_capability.get("valid") is not True:
+                raise ResearchReasonError(
+                    "FIELD_CAPABILITY_UNAVAILABLE", "CAPABILITY_UNAVAILABLE"
+                )
+            if field_capability.get("source") != "BRAIN_LIVE_ONLY":
+                raise ResearchReasonError(
+                    "FIELD_CAPABILITY_UNAVAILABLE: non-live source",
+                    "CAPABILITY_UNAVAILABLE",
+                )
+            available = {str(item).casefold() for item in field_capability.get("fields", ())}
+            missing_fields = sorted({str(item).casefold() for item in spec.fields} - available)
+            if missing_fields:
+                raise ResearchReasonError(
+                    "FIELD_CAPABILITY_UNAVAILABLE: " + ", ".join(missing_fields),
+                    "CAPABILITY_UNAVAILABLE",
+                )
+
+    def _validate_operator_capability(self, spec, operator_capability):
         if operator_capability is _CAPABILITY_UNCHECKED:
             reader = getattr(self.client, "get_operator_capability", None)
             operator_capability = (
@@ -438,52 +505,81 @@ class SimulationGateway:
         if operator_capability is not _CAPABILITY_READER_ABSENT:
             capability = operator_capability
             if not isinstance(capability, Mapping) or capability.get("valid") is not True:
-                raise ValueError("OPERATOR_CAPABILITY_UNAVAILABLE")
+                raise ResearchReasonError(
+                    "OPERATOR_CAPABILITY_UNAVAILABLE", "CAPABILITY_UNAVAILABLE"
+                )
             operators = {str(item).casefold() for item in capability.get("operators", ())}
             requested = set(analyze_expression(spec.expression).operators)
             missing = sorted(requested - operators)
             if missing:
-                raise ValueError("OPERATOR_CAPABILITY_UNAVAILABLE: " + ", ".join(missing))
-        if field_capability is _CAPABILITY_UNCHECKED:
-            field_reader = getattr(self.client, "get_field_capability", None)
-            field_capability = (
-                field_reader(list(spec.fields))
-                if spec.fields and callable(field_reader)
-                else _CAPABILITY_READER_ABSENT
-            )
-        if spec.fields and field_capability is not _CAPABILITY_READER_ABSENT:
-            if not isinstance(field_capability, Mapping) or field_capability.get("valid") is not True:
-                raise ValueError("FIELD_CAPABILITY_UNAVAILABLE")
-            available = {str(item).casefold() for item in field_capability.get("fields", ())}
-            missing_fields = sorted({str(item).casefold() for item in spec.fields} - available)
-            if missing_fields:
-                raise ValueError("FIELD_CAPABILITY_UNAVAILABLE: " + ", ".join(missing_fields))
+                raise ResearchReasonError(
+                    "OPERATOR_CAPABILITY_UNAVAILABLE: " + ", ".join(missing),
+                    "CAPABILITY_UNAVAILABLE",
+                )
 
-    def _remote_duplicate(
-        self, spec, fingerprint, rows=_REMOTE_ROWS_UNCHECKED
-    ):
-        if rows is _REMOTE_ROWS_UNCHECKED:
+    def _remote_history_matches(self, validated):
+        targets = {fingerprint for _index, _spec, fingerprint in validated}
+        if not targets:
+            return {}
+        shard_reader = getattr(self.client, "iter_user_alpha_history_shards", None)
+        if callable(shard_reader):
+            rows = shard_reader()
+        else:
             reader = getattr(self.client, "get_all_user_alphas", None)
             if not callable(reader):
-                return None
-            try:
-                rows = reader(max_results=1000)
-            except Exception:
-                # Remote duplicate lookup is advisory; transport failure must
-                # not be mistaken for proof that a write is safe or unsafe.
-                return None
-        for row in rows or ():
+                raise ResearchReasonError(
+                    "REMOTE_DUPLICATE_CAPABILITY_UNAVAILABLE",
+                    "CAPABILITY_UNAVAILABLE",
+                )
+            # Compatibility path remains bounded. QueryTooBroad and transport
+            # failures propagate; an incomplete scan is never treated as clear.
+            rows = reader(max_results=1000)
+        try:
+            iterator = iter(rows)
+        except TypeError as exc:
+            raise ResearchReasonError(
+                "REMOTE_DUPLICATE_CAPABILITY_UNAVAILABLE",
+                "CAPABILITY_UNAVAILABLE",
+            ) from exc
+
+        matches = {}
+        for row in iterator:
             if not isinstance(row, Mapping):
                 continue
             alpha_payload = row.get("alpha")
-            alpha: Mapping[str, Any] = (
-                alpha_payload if isinstance(alpha_payload, Mapping) else row
-            )
+            alpha = alpha_payload if isinstance(alpha_payload, Mapping) else row
             expression = alpha.get("regular") or alpha.get("expression")
-            settings = alpha.get("settings") if isinstance(alpha.get("settings"), Mapping) else {}
-            if isinstance(expression, str) and self.guard.fingerprint(expression, settings) == fingerprint:
-                return {"alpha_id": row.get("id") or alpha.get("id"), "source": "LIVE"}
-        return None
+            settings = alpha.get("settings", row.get("settings"))
+            settings = settings if isinstance(settings, Mapping) else {}
+            if not isinstance(expression, str) or not expression.strip():
+                continue
+            remote_type = (
+                alpha.get("type") or alpha.get("simulation_type")
+                or row.get("type") or "REGULAR"
+            )
+            remote_spec = SimulationSpec(
+                expression, settings, simulation_type=str(remote_type)
+            )
+            remote_fingerprint = self.execution_fingerprint(remote_spec)
+            if remote_fingerprint in targets:
+                matches.setdefault(remote_fingerprint, {
+                    "alpha_id": row.get("id") or alpha.get("id"),
+                    "source": "LIVE",
+                })
+        return matches
+
+    @staticmethod
+    def _scope_for_spec(client, spec):
+        settings = spec.settings
+        return {
+            "instrumentType": settings.get(
+                "instrumentType", getattr(client, "instrument_type", "EQUITY")
+            ),
+            "region": settings.get("region", getattr(client, "region", "USA")),
+            "delay": settings.get("delay", getattr(client, "delay", 1)),
+            "universe": settings.get("universe", getattr(client, "universe", "TOP3000")),
+        }
+
 
     def execution_fingerprint(self, spec):
         spec = spec if isinstance(spec, SimulationSpec) else SimulationSpec(**dict(spec))
@@ -519,35 +615,73 @@ class SimulationGateway:
             operator_reader() if callable(operator_reader)
             else _CAPABILITY_READER_ABSENT
         )
-        field_reader = getattr(self.client, "get_field_capability", None)
-        field_capabilities: dict[tuple[str, ...], Any] = {}
-        remote_reader = getattr(self.client, "get_all_user_alphas", None)
-        remote_rows = _REMOTE_ROWS_UNCHECKED
-        if callable(remote_reader):
-            try:
-                remote_rows = remote_reader(max_results=1000)
-            except Exception:
-                # Remote history is advisory; continue without a duplicate
-                # claim when this read is unavailable.
-                remote_rows = None
-
         validated = []
+        field_reader = getattr(self.client, "get_field_capability", None)
+        field_groups = {}
+        spec_field_groups = {}
         for index, spec in enumerate(normalized):
             self._validate_settings(spec, simulation_capability)
             fingerprint = self.execution_fingerprint(spec)
+            self._validate_operator_capability(spec, operator_capability)
+            scope = self._scope_for_spec(self.client, spec)
+            if spec.fields:
+                if not callable(field_reader):
+                    raise ResearchReasonError(
+                        "FIELD_CAPABILITY_UNAVAILABLE: no live field reader",
+                        "CAPABILITY_UNAVAILABLE",
+                    )
+                groups_for_spec = set()
+                for field_id in spec.fields:
+                    dataset_id = spec.field_datasets.get(field_id)
+                    if not dataset_id:
+                        raise ResearchReasonError(
+                            f"FIELD_CAPABILITY_UNAVAILABLE: missing dataset for {field_id}",
+                            "CAPABILITY_UNAVAILABLE",
+                        )
+                    scope_key = tuple(sorted((key, str(value)) for key, value in scope.items()))
+                    group_key = (scope_key, str(dataset_id))
+                    group = field_groups.setdefault(group_key, {
+                        "scope": scope, "dataset_id": str(dataset_id), "fields": set(),
+                    })
+                    group["fields"].add(field_id)
+                    groups_for_spec.add(group_key)
+                spec_field_groups[index] = groups_for_spec
+            validated.append((index, spec, fingerprint))
+        capabilities = {}
+        for group_key, group in field_groups.items():
+            capability = field_reader(
+                {group["dataset_id"]: sorted(group["fields"])},
+                scope=group["scope"],
+            )
+            if (not isinstance(capability, Mapping)
+                    or capability.get("valid") is not True
+                    or capability.get("source") != "BRAIN_LIVE_ONLY"):
+                raise ResearchReasonError(
+                    "FIELD_CAPABILITY_UNAVAILABLE", "CAPABILITY_UNAVAILABLE"
+                )
+            available = {str(item).casefold() for item in capability.get("fields", ())}
+            missing = {field_id.casefold() for field_id in group["fields"]} - available
+            if missing:
+                raise ResearchReasonError(
+                    "FIELD_CAPABILITY_UNAVAILABLE: " + ", ".join(sorted(missing)),
+                    "CAPABILITY_UNAVAILABLE",
+                )
+            capabilities[group_key] = available
+        for index, spec, _fingerprint in validated:
             field_capability = _CAPABILITY_READER_ABSENT
-            if spec.fields and callable(field_reader):
-                field_key = tuple(spec.fields)
-                if field_key not in field_capabilities:
-                    field_capabilities[field_key] = field_reader(list(field_key))
-                field_capability = field_capabilities[field_key]
+            if spec.fields:
+                available = set().union(*(
+                    capabilities[group_key] for group_key in spec_field_groups[index]
+                ))
+                field_capability = {
+                    "valid": True, "source": "BRAIN_LIVE_ONLY",
+                    "fields": available,
+                }
             self._validate_live_capability(
-                spec,
-                operator_capability=operator_capability,
+                spec, operator_capability=operator_capability,
                 field_capability=field_capability,
             )
-            validated.append((index, spec, fingerprint))
-        return results, validated, remote_rows
+        return results, validated, self._remote_history_matches(validated)
 
     def simulate(self, spec):
         return self.simulate_batch([spec])[0]
@@ -557,47 +691,46 @@ class SimulationGateway:
             self.guard.reconcile()
             return self._simulate_batch(specs)
 
-    def _simulate_batch(self, specs):
+    def _simulate_batch(self, specs, *, preflight=None):
         """Execute a batch through one bounded Simulator window.
 
         The batch remains one guarded execution per spec; only dispatch and
         polling share the existing bounded worker pool.
         """
-        results, validated, remote_rows = self._preflight_specs(specs)
+        results, validated, remote_duplicates = (
+            preflight if preflight is not None else self._preflight_specs(specs)
+        )
         prepared = []
         seen = set()
         for index, spec, fingerprint in validated:
             if fingerprint in seen:
-                results[index] = {
-                    "status": "EXACT_DUPLICATE", "fingerprint": fingerprint,
-                }
+                results[index] = self._labelled_result(
+                    spec, "EXACT_DUPLICATE", fingerprint
+                )
                 continue
             seen.add(fingerprint)
             existing = self.guard.find(fingerprint)
             if existing is not None:
                 if existing.get("status") == "SUBMIT_UNKNOWN":
-                    results[index] = {
-                        "status": "SUBMIT_UNKNOWN",
-                        "fingerprint": fingerprint,
-                        "progress_url": existing.get("progress_url"),
-                    }
+                    results[index] = self._labelled_result(
+                        spec, "SUBMIT_UNKNOWN", fingerprint,
+                        progress_url=existing.get("progress_url"),
+                    )
                 else:
-                    results[index] = {
-                        "status": "EXACT_DUPLICATE", "fingerprint": fingerprint,
-                    }
+                    results[index] = self._labelled_result(
+                        spec, "EXACT_DUPLICATE", fingerprint
+                    )
                 continue
-            remote = self._remote_duplicate(spec, fingerprint, rows=remote_rows)
+            remote = remote_duplicates.get(fingerprint)
             if remote is not None:
-                results[index] = {
-                    "status": "EXACT_DUPLICATE",
-                    "fingerprint": fingerprint,
-                    **remote,
-                }
+                results[index] = self._labelled_result(
+                    spec, "EXACT_DUPLICATE", fingerprint, **remote
+                )
                 continue
             if not self.guard.register(fingerprint):
-                results[index] = {
-                    "status": "EXACT_DUPLICATE", "fingerprint": fingerprint,
-                }
+                results[index] = self._labelled_result(
+                    spec, "EXACT_DUPLICATE", fingerprint
+                )
                 continue
             # Simulator only needs mutable transport records.  BRAIN owns the
             # remote result; these records do not become research state.
@@ -608,6 +741,11 @@ class SimulationGateway:
                     id=fingerprint[:16], expression=spec.expression,
                     settings=dict(spec.settings),
                     simulation_type=spec.simulation_type,
+                    fields=spec.fields,
+                    field_validation=("LIVE_VERIFIED" if spec.fields else "NOT_REQUESTED"),
+                    proposal_id=spec.proposal_id,
+                    note=spec.note,
+                    template_id=spec.template_id,
                     status="PENDING", alpha_id=None, progress_url=None,
                     error=None, evidence=None, elapsed_sec=0.0,
                     submission_fingerprint=fingerprint,
@@ -649,11 +787,12 @@ class SimulationGateway:
             # These records were never submitted and must not become unknown
             # remote jobs on the next process restart.
             self.guard.remove(fingerprint)
-            results[index] = {
-                "status": "NOT_DISPATCHED",
-                "fingerprint": fingerprint,
-                "error": "dispatch paused before submission",
-            }
+            spec = next(spec for candidate_index, spec, _fp in validated
+                        if candidate_index == index)
+            results[index] = self._labelled_result(
+                spec, "NOT_DISPATCHED", fingerprint,
+                error="dispatch paused before submission",
+            )
         return results
 
     def simulate_multi_batch(
@@ -717,25 +856,23 @@ class SimulationGateway:
             ):
                 raise ValueError("SIMULATION_CAPABILITY_UNAVAILABLE")
 
-        results, validated, remote_rows = self._preflight_specs(
+        results, validated, remote_duplicates = self._preflight_specs(
             normalized_specs, simulation_capability=capability
         )
         eligible = []
         seen = set()
         for index, spec, fingerprint in validated:
             if fingerprint in seen:
-                results[index] = {
-                    "status": "EXACT_DUPLICATE", "fingerprint": fingerprint,
-                }
+                results[index] = self._labelled_result(
+                    spec, "EXACT_DUPLICATE", fingerprint
+                )
                 continue
             seen.add(fingerprint)
-            remote = self._remote_duplicate(spec, fingerprint, rows=remote_rows)
+            remote = remote_duplicates.get(fingerprint)
             if remote is not None:
-                results[index] = {
-                    "status": "EXACT_DUPLICATE",
-                    "fingerprint": fingerprint,
-                    **remote,
-                }
+                results[index] = self._labelled_result(
+                    spec, "EXACT_DUPLICATE", fingerprint, **remote
+                )
                 continue
             eligible.append((index, spec, fingerprint))
 
@@ -781,14 +918,13 @@ class SimulationGateway:
                         status_path=[existing.get("status") or status],
                         guard_action="EXISTING_GUARD",
                     )
-                    for index, _spec, fingerprint in children:
-                        results[index] = {
-                            "status": status,
-                            "fingerprint": fingerprint,
-                            "batch_fingerprint": batch_fingerprint,
-                            "progress_url": existing.get("progress_url"),
-                            "parent": parent,
-                        }
+                    for index, spec, fingerprint in children:
+                        results[index] = self._labelled_result(
+                            spec, status, fingerprint,
+                            batch_fingerprint=batch_fingerprint,
+                            progress_url=existing.get("progress_url"),
+                            parent=parent,
+                        )
                     continue
                 if not self.guard.register(
                     batch_fingerprint, simulation_count=len(children)
@@ -802,13 +938,11 @@ class SimulationGateway:
                         status_path=["EXACT_DUPLICATE"],
                         guard_action="EXISTING_GUARD",
                     )
-                    for index, _spec, fingerprint in children:
-                        results[index] = {
-                            "status": "EXACT_DUPLICATE",
-                            "fingerprint": fingerprint,
-                            "batch_fingerprint": batch_fingerprint,
-                            "parent": parent,
-                        }
+                    for index, spec, fingerprint in children:
+                        results[index] = self._labelled_result(
+                            spec, "EXACT_DUPLICATE", fingerprint,
+                            batch_fingerprint=batch_fingerprint, parent=parent,
+                        )
                     continue
                 child_records = [
                     SimpleNamespace(
@@ -817,6 +951,11 @@ class SimulationGateway:
                         expression=spec.expression,
                         settings=dict(spec.settings),
                         simulation_type=spec.simulation_type,
+                        fields=spec.fields,
+                        field_validation=("LIVE_VERIFIED" if spec.fields else "NOT_REQUESTED"),
+                        proposal_id=spec.proposal_id,
+                        note=spec.note,
+                        template_id=spec.template_id,
                         status="PENDING",
                         alpha_id=None,
                         progress_url=None,
@@ -848,9 +987,17 @@ class SimulationGateway:
         # Keep the same Gateway owner for a remainder of one, but use the
         # Single POST contract instead of inventing an invalid Multi payload.
         if single_remainders:
-            single_results = self._simulate_batch([
-                spec for _index, spec, _fingerprint in single_remainders
-            ])
+            remainder_specs = [spec for _index, spec, _fingerprint in single_remainders]
+            remainder_validated = [
+                (local_index, spec, fingerprint)
+                for local_index, (_index, spec, fingerprint) in enumerate(single_remainders)
+            ]
+            remainder_preflight = (
+                [None] * len(remainder_specs), remainder_validated, remote_duplicates
+            )
+            single_results = self._simulate_batch(
+                remainder_specs, preflight=remainder_preflight
+            )
             for (index, _spec, _fingerprint), result in zip(
                 single_remainders, single_results
             ):
@@ -896,31 +1043,29 @@ class SimulationGateway:
                         "parent": parent,
                     })
                 elif batch.status == "FAILED":
-                    results[child.index] = {
-                        "status": "FAILED",
-                        "fingerprint": child.submission_fingerprint,
-                        "batch_fingerprint": batch_fingerprint,
-                        "error": batch.error,
-                        "failure_kind": getattr(child, "failure_kind", "FAILED_REMOTE"),
-                        "remote_status": getattr(child, "remote_status", None),
-                        "diagnostic": getattr(child, "diagnostic", None),
-                        "failure_scope": getattr(child, "failure_scope", None)
+                    results[child.index] = self._labelled_result(
+                        child, "FAILED", child.submission_fingerprint,
+                        batch_fingerprint=batch_fingerprint, error=batch.error,
+                        failure_kind=getattr(child, "failure_kind", "FAILED_REMOTE"),
+                        remote_status=getattr(child, "remote_status", None),
+                        diagnostic=getattr(child, "diagnostic", None),
+                        failure_scope=getattr(child, "failure_scope", None)
                         or getattr(batch, "failure_scope", None),
-                        "parent": parent,
-                    }
+                        parent=parent,
+                    )
                 else:
-                    results[child.index] = {
-                        "status": "UNKNOWN" if batch.progress_url else "SUBMIT_UNKNOWN",
-                        "fingerprint": child.submission_fingerprint,
-                        "batch_fingerprint": batch_fingerprint,
-                        "error": batch.error,
-                        "failure_kind": getattr(child, "failure_kind", None),
-                        "remote_status": getattr(child, "remote_status", None),
-                        "diagnostic": getattr(child, "diagnostic", None),
-                        "failure_scope": getattr(child, "failure_scope", None)
+                    results[child.index] = self._labelled_result(
+                        child,
+                        "UNKNOWN" if batch.progress_url else "SUBMIT_UNKNOWN",
+                        child.submission_fingerprint,
+                        batch_fingerprint=batch_fingerprint, error=batch.error,
+                        failure_kind=getattr(child, "failure_kind", None),
+                        remote_status=getattr(child, "remote_status", None),
+                        diagnostic=getattr(child, "diagnostic", None),
+                        failure_scope=getattr(child, "failure_scope", None)
                         or getattr(batch, "failure_scope", None),
-                        "parent": parent,
-                    }
+                        progress_url=batch.progress_url, parent=parent,
+                    )
         for batch_fingerprint, batch in batches:
             if batch_fingerprint in completed_fingerprints:
                 continue
@@ -935,14 +1080,12 @@ class SimulationGateway:
                 guard_action="REMOVED_NOT_DISPATCHED",
             )
             for child in batch.children:
-                results[child.index] = {
-                    "status": "NOT_DISPATCHED",
-                    "fingerprint": child.submission_fingerprint,
-                    "batch_fingerprint": batch_fingerprint,
-                    "error": "dispatch paused before submission",
-                    "failure_scope": "PARENT",
-                    "parent": parent,
-                }
+                results[child.index] = self._labelled_result(
+                    child, "NOT_DISPATCHED", child.submission_fingerprint,
+                    batch_fingerprint=batch_fingerprint,
+                    error="dispatch paused before submission",
+                    failure_scope="PARENT", parent=parent,
+                )
         return results
 
     def resume_execution(self, fingerprint):
@@ -1003,14 +1146,49 @@ class SimulationGateway:
         return result
 
     @staticmethod
-    def _result(item, fingerprint):
+    def _spec_labels(spec, *, field_validation=None):
         return {
-            "status": item.status, "fingerprint": fingerprint,
-            "alpha_id": getattr(item, "alpha_id", None),
-            "progress_url": getattr(item, "progress_url", None),
-            "evidence": getattr(item, "evidence", None),
-            "error": getattr(item, "error", None),
-            "failure_kind": getattr(item, "failure_kind", None),
-            "remote_status": getattr(item, "remote_status", None),
-            "diagnostic": getattr(item, "diagnostic", None),
+            "proposal_id": spec.proposal_id,
+            "note": spec.note,
+            "template_id": spec.template_id,
+            "field_validation": field_validation or (
+                "LIVE_VERIFIED" if spec.fields else "NOT_REQUESTED"
+            ),
         }
+
+    @classmethod
+    def _labelled_result(cls, spec, status, fingerprint, **extra):
+        result = {
+            "status": status,
+            "fingerprint": fingerprint,
+            **cls._spec_labels(spec),
+            **extra,
+        }
+        reason_code = reason_code_for_failure(
+            status, result.get("error"), progress_url=result.get("progress_url")
+        )
+        if reason_code:
+            result["reason_code"] = reason_code
+        return result
+
+    @classmethod
+    def _result(cls, item, fingerprint):
+        spec = SimpleNamespace(
+            proposal_id=getattr(item, "proposal_id", None),
+            note=getattr(item, "note", None),
+            template_id=getattr(item, "template_id", None),
+            fields=getattr(item, "fields", ()),
+        )
+        return cls._labelled_result(
+            spec, item.status, fingerprint,
+            alpha_id=getattr(item, "alpha_id", None),
+            progress_url=getattr(item, "progress_url", None),
+            evidence=getattr(item, "evidence", None),
+            error=getattr(item, "error", None),
+            failure_kind=getattr(item, "failure_kind", None),
+            remote_status=getattr(item, "remote_status", None),
+            diagnostic=getattr(item, "diagnostic", None),
+            field_validation=getattr(item, "field_validation", None) or (
+                "LIVE_VERIFIED" if getattr(item, "fields", ()) else "NOT_REQUESTED"
+            ),
+        )

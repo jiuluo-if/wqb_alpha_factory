@@ -4,11 +4,13 @@
 - Python 只负责 schema、live platform capability、exact execution safety、远端读取、缓存和隐私。
 - BRAIN 是 Simulation、Alpha、metrics、checks、aggregates、PnL 和 correlation 的事实源。
 
+研究方法、候选分组与多重检验警告由唯一核心 Skill `skills/wqb-research/SKILL.md` 提供；BRAIN 证据优先于 Skill/memory 经验。
+
 研究闭环：
 
 ```text
-list raw datasets/datafields and operators → Agent selects evidence and fields
-→ optionally generate/review an explicitly bounded SimulationSpec → simulate
+list raw datasets/datafields and operators → Agent selects fields/hypotheses
+→ optionally generate explicitly selected/reviewed SimulationSpecs → batch/Multi simulate
 → read live Alpha evidence → AI 比较、解释并创建下一份 spec
 ```
 

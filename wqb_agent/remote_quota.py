@@ -138,6 +138,20 @@ def _official_projection(observation):
     }
 
 
+def _cache_freshness(repository):
+    """Read repository cache freshness without creating a second quota state."""
+    reader = getattr(repository, "cache_status", None)
+    if not callable(reader):
+        return "UNKNOWN", {}
+    try:
+        snapshot = reader()
+    except Exception:
+        return "UNKNOWN", {}
+    if not isinstance(snapshot, Mapping):
+        return "UNKNOWN", {}
+    return str(snapshot.get("freshness") or "UNKNOWN").upper(), dict(snapshot)
+
+
 class SimulationQuota:
     """Project remote usage without creating a local quota state machine."""
 
@@ -233,9 +247,19 @@ class SimulationQuota:
         }
         official = _official_projection(self.official_observation)
         official_available = official["status"] in {"AVAILABLE", "PARTIAL"}
+        cache_freshness, _cache = _cache_freshness(self.repository)
+        if official_available:
+            status, freshness = "LIVE", "LIVE"
+        elif window_days is not None and cache_freshness == "FRESH":
+            status, freshness = "APPROXIMATE", "CACHE"
+        else:
+            status, freshness = "UNKNOWN", cache_freshness
         return {
             **estimate,
             "source": official["source"] if official_available else estimate["source"],
+            "status": status,
+            "freshness": freshness,
+            "reason_code": None if status != "UNKNOWN" else "CAPABILITY_UNAVAILABLE",
             "evidence_status": (
                 official["evidence_status"] if official_available
                 else estimate["evidence_status"]

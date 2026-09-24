@@ -6,6 +6,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest import mock
 
+from wqb_agent import research_api
 from wqb_agent.alpha_grouping import variant_family_fingerprint
 from wqb_agent.config import normalize_config
 from wqb_agent.research_api import (
@@ -88,6 +89,97 @@ class TestResearchApi(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "UNSUPPORTED_SIMULATION_TYPE"):
             build_simulation_variant(base, template, "window", 22)
+
+    def test_agent_default_manifest_is_core_and_full_manifest_is_opt_in(self):
+        core = research_api.research_tool_manifest()
+        full = research_api.research_tool_manifest(profile="full")
+        core_names = {item["name"] for item in core}
+        full_names = {item["name"] for item in full}
+        expected_full = set(research_api.__all__) - {
+            "SimulationSpec", "research_tool_manifest",
+        }
+        self.assertEqual(full_names, expected_full | {"alpha_submission"})
+        self.assertLessEqual(len(core), 22)
+        self.assertTrue({
+            "get_live_preflight", "list_datasets", "list_datafields",
+            "build_simulation_spec", "validate_simulation_spec",
+            "simulate_batch", "simulate_multi_batch", "get_alpha_summary",
+            "get_alpha_evidence", "get_alpha_prod_correlation",
+            "simulation_quota", "get_pending_executions",
+            "reconcile_execution", "find_duplicate_alphas",
+            "find_similar_alphas",
+        } <= core_names)
+        dangerous = {"create_template", "sync_alpha_colors", "alpha_submission"}
+        self.assertTrue(dangerous <= full_names)
+        self.assertFalse(dangerous & core_names)
+
+    def test_generated_probe_api_requires_agent_selected_raw_inputs(self):
+        import inspect
+
+        params = inspect.signature(research_api.generate_probes).parameters
+        for name in ("fields", "template_ids", "count"):
+            with self.subTest(parameter=name):
+                self.assertIs(params[name].default, inspect.Parameter.empty)
+        self.assertFalse(hasattr(research_api, "discover_fields"))
+
+    def test_summary_evidence_uses_alpha_detail_only_and_full_is_explicit(self):
+        from wqb_agent.research_api import get_alpha_evidence, get_alpha_summary
+
+        client = mock.Mock()
+        client.get_alpha.return_value = {"id": "a1", "is": {"sharpe": 1.2}}
+        client.get_aggregates.return_value = {"years": []}
+        client.get_pnl.return_value = {"records": []}
+        client.get_self_correlation.return_value = {"status": "PASS"}
+
+        summary = get_alpha_summary("a1", client=client)
+        self.assertEqual(summary["alpha"]["id"], "a1")
+        self.assertEqual(summary["depth"], "SUMMARY")
+        client.get_alpha.assert_called_once_with("a1")
+        client.get_aggregates.assert_not_called()
+        client.get_pnl.assert_not_called()
+        client.get_self_correlation.assert_not_called()
+
+        full = get_alpha_evidence("a1", client=client, depth="full")
+        self.assertEqual(client.get_alpha.call_count, 2)
+        self.assertEqual(full["depth"], "FULL")
+        self.assertEqual(client.get_aggregates.call_count, 1)
+        self.assertEqual(client.get_pnl.call_count, 1)
+        self.assertEqual(client.get_self_correlation.call_count, 1)
+
+    def test_named_metrics_and_correlation_reads_call_only_requested_endpoint(self):
+        from wqb_agent.research_api import (
+            get_alpha_metrics,
+            get_alpha_pnl,
+            get_alpha_prod_correlation,
+        )
+
+        client = mock.Mock()
+        client.get_pnl.return_value = {"records": [1]}
+        client.get_correlation.return_value = {"is": {"correlation": 0.2}}
+        client.get_alpha.return_value = {"id": "a1", "is": {"sharpe": 1.2}}
+        self.assertEqual(get_alpha_metrics("a1", client=client), {"sharpe": 1.2})
+        client.get_alpha.assert_called_once_with("a1")
+        self.assertEqual(get_alpha_pnl("a1", client=client), {"records": [1]})
+        self.assertEqual(get_alpha_prod_correlation("a1", client=client),
+                         {"is": {"correlation": 0.2}})
+        client.get_pnl.assert_called_once_with("a1")
+        client.get_correlation.assert_called_once_with("a1", kind="prod")
+        client.get_aggregates.assert_not_called()
+        client.get_self_correlation.assert_not_called()
+
+    def test_batch_comparison_defaults_to_summary_evidence(self):
+        client = mock.Mock()
+        client.get_alpha.side_effect = lambda alpha_id: {
+            "id": alpha_id, "is": {"sharpe": 1.0},
+        }
+
+        result = research_api.compare_alphas(["a1", "a2"], client=client)
+
+        self.assertEqual([row["alpha"]["id"] for row in result["alphas"]], ["a1", "a2"])
+        self.assertEqual(client.get_alpha.call_count, 2)
+        client.get_aggregates.assert_not_called()
+        client.get_pnl.assert_not_called()
+        client.get_self_correlation.assert_not_called()
 
     def test_field_classification_exposes_type_dataset_and_semantics(self):
         from wqb_agent.research_api import classify_fields
@@ -740,7 +832,7 @@ class TestResearchApi(unittest.TestCase):
             {
                 "alpha_id", "source", "fetched_at", "age_sec", "alpha",
                 "aggregates", "pnl", "self_correlation", "recordsets",
-                "status", "availability",
+                "status", "availability", "depth",
             },
         )
         self.assertEqual(result["source"], "LIVE")
@@ -958,6 +1050,7 @@ class TestResearchApi(unittest.TestCase):
         result = find_similar_alphas("rank(close)", rows=rows)
         self.assertEqual(result["kind"], "STRUCTURALLY_SIMILAR")
         self.assertEqual([item["alpha_id"] for item in result["matches"]], ["a2"])
+
     def test_ranked_field_discovery_is_not_a_public_tool(self):
         import wqb_agent
         import wqb_agent.research_api as api
@@ -988,7 +1081,7 @@ class TestResearchApi(unittest.TestCase):
         with mock.patch("wqb_agent.research_api.FieldDiscovery", create=True) as discovery_type, \
                 mock.patch("wqb_agent.research_api.AlphaFactory", return_value=factory):
             result = generate_probes(
-                fields=[{"id": "close", "type": "MATRIX"}],
+                fields=[{"id": "close", "dataset": "pv1", "type": "MATRIX"}],
                 template_ids=["explicit-template"], count=1, client=client,
             )
         self.assertEqual(result, [SimulationSpec("rank(close)")])
@@ -996,7 +1089,10 @@ class TestResearchApi(unittest.TestCase):
         factory.generate_probe_specs.assert_called_once()
         call = factory.generate_probe_specs.call_args
         self.assertEqual(call.args[0]["template_ids"], ["explicit-template"])
-        self.assertEqual(call.args[1], [{"id": "close", "type": "MATRIX"}])
+        self.assertEqual(
+            call.args[1],
+            [{"id": "close", "dataset": "pv1", "type": "MATRIX"}],
+        )
         self.assertEqual(call.kwargs["target"], 1)
 
     def test_generate_probes_bounds_template_selection(self):
@@ -1029,14 +1125,16 @@ class TestResearchApi(unittest.TestCase):
         })
         factory = mock.Mock()
         factory.generate_probe_specs.return_value = []
+        selected_fields = [{"id": "field_a", "dataset": "dataset_a"}]
         with mock.patch("wqb_agent.research_api.AlphaFactory", return_value=factory):
             generate_probes(
-                fields=[{"id": "field_a"}],
-                template_ids=["explicit-template"], count=2,
+                fields=selected_fields, template_ids=["template-a"], count=2,
                 client=client, config=config,
             )
         factory.generate_probe_specs.assert_called_once()
         call = factory.generate_probe_specs.call_args
+        self.assertEqual(call.args[0], {"template_ids": ["template-a"]})
+        self.assertEqual(call.args[1], selected_fields)
         self.assertEqual(call.kwargs["target"], 2)
         self.assertEqual(call.kwargs["simulation_settings"],
                          config["simulation"])

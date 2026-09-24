@@ -31,7 +31,7 @@ from wqb_agent.client import (
     WQBSubmitUnknownError,
     WQBTimeoutError,
 )
-from wqb_agent.failures import FailureKind
+from wqb_agent.failures import FailureKind, reason_code_for_failure
 
 
 class TestProgressUrlSafety(unittest.TestCase):
@@ -130,6 +130,96 @@ def make_client():
     c.max_retries = 2
     c.base_url = "https://api.worldquantbrain.com"
     return c
+
+
+class TestBoundedAlphaHistoryShards(unittest.TestCase):
+    def test_broad_user_alpha_history_is_split_and_rows_are_yielded(self):
+        client = make_client()
+        from wqb_agent.client import WQBQueryTooBroadError
+
+        calls = []
+
+        def read(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise WQBQueryTooBroadError("wide history")
+            return [{"id": f"alpha-{len(calls)}", "regular": "rank(close)"}]
+
+        client.get_all_user_alphas = read
+        batches = list(client.iter_user_alpha_history_shards(max_shards=3))
+
+        self.assertEqual([row["id"] for row in batches], ["alpha-2", "alpha-3"])
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(all(
+            "date_created_after" in call and "date_created_before" in call
+            for call in calls
+        ))
+
+    def test_history_shard_budget_exhaustion_does_not_claim_complete(self):
+        client = make_client()
+        from wqb_agent.client import WQBQueryTooBroadError
+
+        client.get_all_user_alphas = lambda **_kwargs: (_ for _ in ()).throw(
+            WQBQueryTooBroadError("too broad")
+        )
+        with self.assertRaisesRegex(WQBQueryTooBroadError, "shard budget"):
+            list(client.iter_user_alpha_history_shards(max_shards=1))
+
+
+class TestLiveFieldCapability(unittest.TestCase):
+    def test_selected_field_is_verified_from_its_live_dataset(self):
+        client = make_client()
+        calls = []
+
+        def get_datafields(dataset_id, **kwargs):
+            calls.append((dataset_id, kwargs))
+            return ([{"id": "field_a", "dataset": {"id": dataset_id}}], 1)
+
+        client.get_datafields = get_datafields
+        capability = client.get_field_capability(
+            {"dataset_a": ["field_a"]},
+            scope={"instrumentType": "EQUITY", "region": "USA",
+                   "delay": 1, "universe": "TOP3000"},
+        )
+
+        self.assertTrue(capability["valid"])
+        self.assertEqual(capability["fields"], ["field_a"])
+        self.assertEqual(capability["source"], "BRAIN_LIVE_ONLY")
+        self.assertEqual(calls[0][0], "dataset_a")
+
+    def test_unknown_field_is_not_live_verified(self):
+        client = make_client()
+        client.get_datafields = lambda dataset_id, **kwargs: ([{"id": "other_field"}], 1)
+
+        capability = client.get_field_capability(
+            {"dataset_a": ["field_a"]},
+            scope={"instrumentType": "EQUITY", "region": "USA",
+                   "delay": 1, "universe": "TOP3000"},
+        )
+
+        self.assertFalse(capability["valid"])
+        self.assertEqual(capability["missing"], ["field_a"])
+        self.assertEqual(capability["reason_code"], "CAPABILITY_UNAVAILABLE")
+
+    def test_field_lookup_page_cap_keeps_unknown_inconclusive(self):
+        client = make_client()
+        calls = []
+
+        def get_datafields(dataset_id, **kwargs):
+            calls.append(kwargs["offset"])
+            return ([{"id": f"field_{kwargs['offset']}"}], 3)
+
+        client.get_datafields = get_datafields
+        capability = client.get_field_capability(
+            {"dataset_a": ["field_missing"]},
+            scope={"instrumentType": "EQUITY", "region": "USA",
+                   "delay": 1, "universe": "TOP3000"},
+            max_pages=2,
+        )
+
+        self.assertFalse(capability["valid"])
+        self.assertEqual(capability["reason_code"], "CAPABILITY_UNAVAILABLE")
+        self.assertEqual(calls, [0, 1])
 
 
 class TestPollProgressRejectsErrorStatus(unittest.TestCase):
@@ -1001,6 +1091,27 @@ class TestClassifiedExceptions(unittest.TestCase):
     def test_remote_simulation_error_exposes_remote_timeout_failure_kind(self):
         error = WQBRemoteSimulationError({"remote_status": "TIMEOUT"})
         self.assertEqual(error.failure_kind, FailureKind.TIMEOUT)
+
+    def test_small_stable_reason_codes_preserve_human_error_categories(self):
+        self.assertEqual(reason_code_for_failure("EXACT_DUPLICATE"), "EXACT_DUPLICATE")
+        self.assertEqual(reason_code_for_failure("NOT_DISPATCHED"), "NOT_DISPATCHED")
+        self.assertEqual(reason_code_for_failure("SUBMIT_UNKNOWN"),
+                         "RATE_LIMIT_OR_SUBMIT_UNKNOWN")
+        self.assertEqual(reason_code_for_failure(
+            "FAILED", RuntimeError("WQBAuthError: authentication failed")
+        ), "AUTH_FAILURE")
+        self.assertEqual(reason_code_for_failure(
+            "UNKNOWN", RuntimeError("progress pending"), progress_url="/progress/1"
+        ), "POLL_PENDING")
+        self.assertEqual(reason_code_for_failure(
+            "INVALID", RuntimeError("FIELD_CAPABILITY_UNAVAILABLE")
+        ), "CAPABILITY_UNAVAILABLE")
+        self.assertEqual(reason_code_for_failure(
+            "INVALID", RuntimeError("NEW_PROBE_REQUIRED: topology changed")
+        ), "NEW_PROBE_REQUIRED")
+        self.assertEqual(reason_code_for_failure(
+            "FAILED", RuntimeError("invalid expression")
+        ), "INVALID_SPEC")
 
 class TestSharedRateLimitGate(unittest.TestCase):
     def test_simulation_post_429_is_unknown_without_transport_retry(self):

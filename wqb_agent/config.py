@@ -13,6 +13,7 @@ DEFAULT_DAILY_SIMULATION_LIMIT = 5000
 MAX_DATAFIELD_PAGES = 100
 
 
+
 @dataclass(frozen=True)
 class SimulationConfig:
     settings: dict = field(default_factory=lambda: {"neutralization": "SUBINDUSTRY"})

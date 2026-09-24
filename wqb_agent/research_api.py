@@ -25,6 +25,7 @@ import json
 import os
 import tomllib
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from .alpha_factory import AlphaFactory
@@ -49,6 +50,7 @@ from .expression import (
     operator_occurrence_count,
     operator_occurrence_signature,
 )
+from .failures import reason_code_for_failure
 from .operator_reference import (
     load_operator_syntax_reference,
     load_packaged_operator_syntax_reference,
@@ -218,8 +220,9 @@ def list_all_datafields(
     }
 
 
-def generate_probes(*, template_ids, count, fields, client=None, config=None):
-    """Render explicitly selected fields/templates into bounded specs."""
+def generate_probes(*, template_ids, count, fields, dataset_id=None,
+                    client=None, config=None):
+    """Render only Agent-selected BRAIN fields and templates into specs."""
     if not isinstance(fields, (list, tuple)) or not fields:
         raise ValueError("fields must be a non-empty Agent-selected list")
     if len(fields) > MAX_PROBE_FIELDS:
@@ -245,6 +248,27 @@ def generate_probes(*, template_ids, count, fields, client=None, config=None):
         raise ValueError("count must be an explicit integer")
     if not 0 <= target <= MAX_PROBE_COUNT:
         raise ValueError(f"count must be between 0 and {MAX_PROBE_COUNT}")
+
+    selected_fields = []
+    for item in fields:
+        if isinstance(item, Mapping):
+            field = dict(item)
+            field_id = field.get("id") or field.get("field_id")
+            dataset = field.get("dataset_id") or field.get("dataset")
+            if isinstance(dataset, Mapping):
+                dataset = dataset.get("id") or dataset.get("name")
+            dataset = dataset or dataset_id
+        else:
+            field_id = item
+            dataset = dataset_id
+            field = {"id": field_id}
+        if field_id is None or dataset is None or not str(dataset).strip():
+            raise ValueError("each selected field requires a BRAIN dataset id")
+        field["id"] = str(field_id).strip()
+        field["dataset"] = str(dataset).strip()
+        selected_fields.append(field)
+    if target == 0:
+        return []
     if client is None:
         from .client import WQBClient
         client = WQBClient()
@@ -255,12 +279,11 @@ def generate_probes(*, template_ids, count, fields, client=None, config=None):
         require_private=True,
     )
     reference = get_operator_reference(client=client, config=config)
-    hypothesis = {"template_ids": template_ids}
     if callable(reference):
         reference = reference()
     return factory.generate_probe_specs(
-        hypothesis, fields, reference, target=target,
-        simulation_settings=typed.simulation_config.settings,
+        {"template_ids": template_ids}, selected_fields, reference,
+        target=target, simulation_settings=typed.simulation_config.settings,
     )
 
 
@@ -389,11 +412,13 @@ def validate_simulation_settings(settings, *, client=None, config=None, capabili
     )
 
 
-def build_simulation_spec(expression, *, settings=None, fields=(), note=None, template_id=None,
+def build_simulation_spec(expression, *, settings=None, fields=(), field_datasets=None,
+                          note=None, template_id=None, proposal_id=None,
                           client=None, config=None, anchor_spec=None,
                           simulation_type="REGULAR"):
     """Build a validated, non-submitting SimulationSpec."""
     effective_fields = tuple(str(item) for item in (fields or ()) if str(item).strip())
+    effective_field_datasets = dict(field_datasets or {})
     effective_template_id = template_id
     effective_simulation_type = str(simulation_type or "REGULAR").strip().upper()
     if anchor_spec is not None:
@@ -403,6 +428,10 @@ def build_simulation_spec(expression, *, settings=None, fields=(), note=None, te
         if effective_fields and effective_fields != anchor_spec.fields:
             raise ValueError("NEW_PROBE_REQUIRED: fields changed during optimization")
         effective_fields = anchor_spec.fields
+        # A settings variant keeps the anchor's live field provenance so the
+        # Gateway can still verify the very same fields before any POST.
+        if not effective_field_datasets:
+            effective_field_datasets = dict(anchor_spec.field_datasets)
         if template_id is not None and template_id != anchor_spec.template_id:
             raise ValueError("NEW_PROBE_REQUIRED: template changed during optimization")
         effective_template_id = anchor_spec.template_id
@@ -418,8 +447,9 @@ def build_simulation_spec(expression, *, settings=None, fields=(), note=None, te
     effective_settings.pop("fields", None)
     spec = SimulationSpec(
         expression=expression, settings=effective_settings, fields=effective_fields,
-        note=note, template_id=effective_template_id,
-        simulation_type=effective_simulation_type,
+        field_datasets=effective_field_datasets, note=note,
+        template_id=effective_template_id, simulation_type=effective_simulation_type,
+        proposal_id=proposal_id,
     )
     SimulationGateway.validate_simulation_spec(spec)
     return spec
@@ -469,6 +499,8 @@ def build_simulation_variant(base_spec, template, slot_name, value):
         settings=dict(base_spec.settings), fields=base_spec.fields,
         note=base_spec.note, template_id=base_spec.template_id,
         simulation_type=base_spec.simulation_type,
+        field_datasets=dict(base_spec.field_datasets),
+        proposal_id=base_spec.proposal_id,
     )
     SimulationGateway.validate_simulation_spec(result)
     return result
@@ -891,15 +923,24 @@ def get_activity_diversity(*, client=None, config=None, user_id=None,
     }
 
 
+def get_alpha_summary(alpha_id, *, client=None, config=None):
+    """Read only the cheap BRAIN Alpha detail used for broad first-pass screening."""
+    return RemoteAlphaEvidenceProvider(
+        _remote_client(client=client)
+    ).get_alpha_summary(str(alpha_id).strip())
+
+
 def get_alpha_evidence(alpha_id, *, client=None, config=None,
-                       live=True, recordsets=()):
+                       live=True, recordsets=(), depth="summary"):
+    if not live:
+        raise ValueError("LIVE_EVIDENCE_REQUIRED")
     return _evidence_provider(client=client).get_alpha_evidence(
-        alpha_id, live=live, recordsets=recordsets,
+        str(alpha_id).strip(), live=True, recordsets=recordsets, depth=depth
     )
 
 
 def get_alpha_metrics(alpha_id, *, client=None, config=None):
-    return _evidence_provider(client=client).get_alpha_metrics(alpha_id)
+    return _evidence_provider(client=client).get_alpha_metrics(str(alpha_id).strip())
 
 
 def get_alpha_aggregates(alpha_id, *, client=None, config=None):
@@ -914,15 +955,41 @@ def get_alpha_self_correlation(alpha_id, *, client=None, config=None):
     return _evidence_provider(client=client).get_alpha_self_correlation(alpha_id)
 
 
+def get_alpha_prod_correlation(alpha_id, *, client=None, config=None):
+    """Read PROD correlation only when the Agent requests a finalist check."""
+    return RemoteAlphaEvidenceProvider(
+        _remote_client(client=client)
+    ).get_alpha_prod_correlation(str(alpha_id).strip())
+
+
 def get_alpha_recordsets(alpha_id, names, *, client=None, config=None):
     """Read only explicitly selected, currently discoverable Alpha recordsets."""
-    return _evidence_provider(client=client).get_alpha_evidence(
-        alpha_id, recordsets=names,
-    )["recordsets"]
+    return _evidence_provider(client=client).get_alpha_recordsets(
+        str(alpha_id).strip(), names,
+    )
 
 
-def compare_alphas(alpha_ids, *, client=None, config=None):
-    return _evidence_provider(client=client).compare_alphas(alpha_ids)
+def compare_alphas(alpha_ids, *, client=None, config=None, depth="summary",
+                   max_concurrent=4):
+    ids = [str(item).strip() for item in (alpha_ids or ()) if str(item).strip()]
+    try:
+        concurrency = int(max_concurrent)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("max_concurrent must be an integer") from exc
+    if isinstance(max_concurrent, bool) or not 1 <= concurrency <= 4:
+        raise ValueError("max_concurrent must be between 1 and 4")
+    if not ids:
+        return {"source": "LIVE", "status": "AVAILABLE",
+                "evidence_status": "AVAILABLE", "depth": str(depth).upper(),
+                "alphas": []}
+    provider = _evidence_provider(client=client)
+    with ThreadPoolExecutor(max_workers=min(concurrency, len(ids))) as pool:
+        alphas = list(pool.map(
+            lambda item: provider.get_alpha_evidence(item, depth=depth), ids
+        ))
+    return {"source": "LIVE", "status": "AVAILABLE",
+            "evidence_status": "AVAILABLE", "depth": str(depth).upper(),
+            "alphas": alphas}
 
 
 def _remote_repository(*, client=None, config=None, state_dir=None,
@@ -975,21 +1042,47 @@ def purge_remote_cache(*, client=None, config=None, state_dir=None):
     ).purge_remote_cache()}
 
 
-def simulation_quota(*, client=None, config=None, state_dir=None):
-    """Return official client quota observation plus an approximate fallback."""
+def simulation_quota(*, client=None, config=None, state_dir=None,
+                     refresh_if_stale=True):
+    """Return a source/freshness-labeled quota projection.
+
+    BRAIN's own rate-limit headers stay the fact source; the rebuildable remote
+    metadata feed is refreshed once when missing or stale. If that bounded
+    GET-only refresh fails, remaining values stay UNKNOWN instead of showing a
+    full budget.
+    """
+    typed = _normalized_config(config)
+    directory = _state_directory(typed, state_dir)
     repository = _remote_repository(
-        client=client, config=config, state_dir=state_dir,
+        client=client, config=typed, state_dir=directory,
         require_client=False,
     )
-    quota = _normalized_config(config).quota
-    typed = _normalized_config(config)
+    freshness = repository.cache_status().get("freshness", "UNKNOWN")
+    refresh_error = None
+    if refresh_if_stale and str(freshness).upper() != "FRESH" and client is not None:
+        try:
+            repository = _remote_repository(
+                client=client, config=typed, state_dir=directory,
+                require_client=True,
+            )
+            repository.refresh_remote_alphas()
+        except Exception as exc:
+            refresh_error = exc
     observation_reader = getattr(client, "get_simulation_quota_observation", None)
     observation = observation_reader() if callable(observation_reader) else None
-    return SimulationQuota(
-        repository, ExecutionGuard(_state_directory(typed, state_dir), reconcile=False),
-        daily_cap=quota.daily,
+    snapshot = SimulationQuota(
+        repository, ExecutionGuard(directory, reconcile=False),
+        daily_cap=typed.quota.daily,
         official_observation=observation,
     ).snapshot()
+    if refresh_error is not None and snapshot.get("status") != "LIVE":
+        snapshot.update({
+            "status": "UNKNOWN",
+            "today_remaining": None,
+            "reason_code": reason_code_for_failure("UNKNOWN", refresh_error),
+            "error": f"bounded live quota refresh failed ({type(refresh_error).__name__})",
+        })
+    return snapshot
 
 
 def get_remote_alpha(alpha_id, *, live=False, client=None,
@@ -1002,12 +1095,12 @@ def get_remote_alpha(alpha_id, *, live=False, client=None,
 
 
 def get_remote_alpha_evidence(alpha_id, *, live=True, client=None,
-                              config=None, state_dir=None):
-    """Return remote evidence; live reads are the default and source-labeled."""
+                              config=None, state_dir=None, depth="full"):
+    """Return source-labeled evidence at explicit summary/full depth."""
     return _remote_repository(
         client=client, config=config, state_dir=state_dir,
         require_client=True,
-    ).get_remote_alpha_evidence(alpha_id, live=live)
+    ).get_remote_alpha_evidence(alpha_id, live=live, depth=depth)
 
 
 def group_alphas(alpha_ids=None, *, rows=None, client=None,
@@ -1019,7 +1112,7 @@ def group_alphas(alpha_ids=None, *, rows=None, client=None,
         ids = alpha_ids or [
             item["alpha_id"] for item in repository.list_remote_alphas(days=days)
         ]
-        rows = [repository.get_remote_alpha_evidence(item) for item in ids]
+        rows = [repository.get_remote_alpha_evidence(item, depth="summary") for item in ids]
     return group_remote_evidence(rows)
 
 
@@ -1031,7 +1124,9 @@ def find_duplicate_alphas(alpha_id, *, rows=None, client=None,
             client=client, config=config, state_dir=state_dir
         )
         for item in repository.list_remote_alphas():
-            rows.append(repository.get_remote_alpha_evidence(item["alpha_id"]))
+            rows.append(repository.get_remote_alpha_evidence(
+                item["alpha_id"], depth="summary"
+            ))
     return find_remote_duplicates(rows, alpha_id)
 
 
@@ -1042,7 +1137,7 @@ def find_similar_alphas(expression_or_alpha_id, *, rows=None,
         repository = _remote_repository(
             client=client, config=config, state_dir=state_dir
         )
-        rows = [repository.get_remote_alpha_evidence(item["alpha_id"])
+        rows = [repository.get_remote_alpha_evidence(item["alpha_id"], depth="summary")
                 for item in repository.list_remote_alphas(days=days)]
     return find_remote_similar(rows, expression_or_alpha_id)
 
@@ -1079,15 +1174,16 @@ def sync_alpha_colors(plan=None, *, exact_plan=None, client=None, config=None,
     )
 
 
-def research_tool_manifest():
-    return [
-        {"name": "get_operator_syntax_reference", "mode": "READ_ONLY", "owner": "operator_reference"},
-        {"name": "get_operator_reference", "mode": "READ_ONLY", "owner": "BRAIN"},
+def research_tool_manifest(profile="core"):
+    """Return a deterministic default CORE surface or the opt-in full catalog."""
+    rows: list[dict[str, Any]] = [
         {"name": "get_capabilities", "mode": "READ_ONLY", "owner": "BRAIN"},
+        {"name": "get_operators", "mode": "READ_ONLY", "owner": "BRAIN"},
+        {"name": "get_operator_reference", "mode": "READ_ONLY", "owner": "BRAIN"},
+        {"name": "get_operator_syntax_reference", "mode": "READ_ONLY", "owner": "operator_reference"},
         {"name": "list_datasets", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "list_datafields", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "list_all_datafields", "mode": "READ_ONLY", "owner": "BRAIN"},
-        {"name": "get_operators", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "list_templates", "mode": "READ_ONLY", "owner": "AlphaFactory"},
         {"name": "inspect_template", "mode": "READ_ONLY", "owner": "AlphaFactory"},
         {"name": "create_template", "mode": "PRIVATE_CATALOG_WRITE", "owner": "AlphaFactory"},
@@ -1101,7 +1197,7 @@ def research_tool_manifest():
         {"name": "build_simulation_variant", "mode": "PURE", "owner": "SimulationGateway"},
         {"name": "generate_probes", "mode": "READ_ONLY", "owner": "AlphaFactory"},
         {"name": "validate_simulation_spec", "mode": "READ_ONLY", "owner": "SimulationGateway"},
-        {"name": "execution_fingerprint", "mode": "READ_ONLY", "owner": "SimulationGateway"},
+        {"name": "execution_fingerprint", "mode": "PURE", "owner": "SimulationGateway"},
         {"name": "simulate", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
         {"name": "simulate_single", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
         {"name": "simulate_batch", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
@@ -1111,12 +1207,15 @@ def research_tool_manifest():
         {"name": "get_pending_executions", "mode": "READ_ONLY", "owner": "ExecutionGuard"},
         {"name": "resume_execution", "mode": "READ_ONLY", "remote_write": False, "owner": "ExecutionGuard"},
         {"name": "reconcile_execution", "mode": "READ_ONLY", "remote_write": False, "owner": "ExecutionGuard"},
+        {"name": "simulation_quota", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
         {"name": "get_alpha", "mode": "READ_ONLY", "owner": "BRAIN"},
+        {"name": "get_alpha_summary", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "get_alpha_evidence", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "get_alpha_metrics", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "get_alpha_aggregates", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "get_alpha_pnl", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "get_alpha_self_correlation", "mode": "READ_ONLY", "owner": "BRAIN"},
+        {"name": "get_alpha_prod_correlation", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "get_alpha_recordsets", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "get_activity_diversity", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "compare_alphas", "mode": "READ_ONLY", "owner": "BRAIN"},
@@ -1125,14 +1224,29 @@ def research_tool_manifest():
         {"name": "get_remote_alpha", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
         {"name": "get_remote_alpha_evidence", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
         {"name": "remote_cache_status", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
-        {"name": "simulation_quota", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
         {"name": "purge_remote_cache", "mode": "LOCAL_CACHE_WRITE", "local_write": True, "owner": "RemoteAlphaRepository"},
         {"name": "find_duplicate_alphas", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
         {"name": "find_similar_alphas", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
-        {"name": "group_alphas", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
-        {"name": "preview_alpha_colors", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
+        {"name": "group_alphas", "mode": "PURE", "owner": "RemoteAlphaRepository"},
+        {"name": "preview_alpha_colors", "mode": "PURE", "owner": "RemoteAlphaRepository"},
         {"name": "sync_alpha_colors", "mode": "REMOTE_METADATA_WRITE", "owner": "BRAIN"},
+        {"name": "alpha_submission", "mode": "MANUAL_ONLY", "owner": "user"},
     ]
+    if profile == "full":
+        return rows
+    if profile != "core":
+        raise ValueError("profile must be 'core' or 'full'")
+    core_names = {
+        "get_live_preflight",
+        "list_datasets", "list_datafields", "list_all_datafields",
+        "build_simulation_spec", "build_simulation_variant",
+        "validate_simulation_spec", "simulate", "simulate_single",
+        "simulate_batch", "simulate_multi_batch", "get_alpha_summary",
+        "get_alpha_evidence", "compare_alphas", "get_alpha_prod_correlation",
+        "simulation_quota", "get_pending_executions", "resume_execution",
+        "reconcile_execution", "find_duplicate_alphas", "find_similar_alphas",
+    }
+    return [row for row in rows if row["name"] in core_names]
 
 
 __all__ = [
@@ -1148,8 +1262,9 @@ __all__ = [
     "simulate_multi_batch", "get_simulation_modes", "get_live_preflight",
     "get_pending_executions", "resume_execution",
     "reconcile_execution",
-    "get_alpha", "get_alpha_evidence", "get_alpha_metrics",
+    "get_alpha", "get_alpha_summary", "get_alpha_evidence", "get_alpha_metrics",
     "get_alpha_aggregates", "get_alpha_pnl", "get_alpha_self_correlation",
+    "get_alpha_prod_correlation",
     "get_alpha_recordsets",
     "compare_alphas", "refresh_remote_alphas", "list_remote_alphas",
     "get_activity_diversity",

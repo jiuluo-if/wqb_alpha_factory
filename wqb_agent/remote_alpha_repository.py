@@ -13,6 +13,7 @@ from .query_errors import QueryTooBroadError
 from .remote_evidence import RemoteAlphaEvidenceProvider
 
 NEW_YORK = ZoneInfo("America/New_York")
+MAX_REMOTE_FEED_SHARDS = 256
 
 
 def _remote_local_date(value):
@@ -49,19 +50,29 @@ class RemoteAlphaRepository:
             if evidence_client is not None else None
         )
 
-    def refresh_remote_alphas(self, *, limit=100):
+    def refresh_remote_alphas(self, *, limit=100, max_shards=MAX_REMOTE_FEED_SHARDS):
         if self.alpha_reader is None:
             raise RuntimeError("REMOTE_ALPHA_CLIENT_REQUIRED")
+        if (isinstance(max_shards, bool) or not isinstance(max_shards, int)
+                or not 1 <= max_shards <= MAX_REMOTE_FEED_SHARDS):
+            raise ValueError(
+                f"max_shards must be between 1 and {MAX_REMOTE_FEED_SHARDS}"
+            )
         refreshed_at = self._now()
         current_day = date.fromisoformat(self.cache.local_date)
         window_start = current_day - timedelta(days=self.retention_days - 1)
         days: dict[str, dict[str, list[dict[str, object]]]] = {}
+        shards_used = 0
 
         def fetch(status, date_field):
             start = datetime.combine(window_start, datetime.min.time(), tzinfo=NEW_YORK) - timedelta(seconds=1)
             end = datetime.combine(current_day + timedelta(days=1), datetime.min.time(), tzinfo=NEW_YORK)
 
             def read(start_at, end_at, depth):
+                nonlocal shards_used
+                if shards_used >= max_shards:
+                    raise QueryTooBroadError("remote Alpha refresh exceeded shard budget")
+                shards_used += 1
                 kwargs = {"status": status, "limit": limit, "max_results": 1000}
                 kwargs[f"date_{date_field}_after"] = start_at.isoformat()
                 kwargs[f"date_{date_field}_before"] = end_at.isoformat()
@@ -165,10 +176,12 @@ class RemoteAlphaRepository:
                 return row
         return None
 
-    def get_remote_alpha_evidence(self, alpha_id, *, live=True):
+    def get_remote_alpha_evidence(self, alpha_id, *, live=True, depth="full"):
         if self.evidence is None:
             raise RuntimeError("LIVE_ALPHA_CLIENT_REQUIRED")
-        return self.evidence.get_alpha_evidence(alpha_id, live=live)
+        return self.evidence.get_alpha_evidence(
+            alpha_id, live=live, depth=depth
+        )
 
     def cache_status(self):
         return {"retention_days": self.retention_days, **self.cache.freshness_snapshot()}

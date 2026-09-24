@@ -50,11 +50,12 @@ Alpha detail 是完成后的 cheap evidence。`get_alpha_aggregates`、`get_alph
 
 `GET /users/self/alphas` 仅用于有界只读同步，按配置的 retention window 分页读取用户 Alpha 的 `id`、`status`、`dateCreated` 和 `dateSubmitted`；提交 Alpha 与模拟 Alpha 使用同一次刷新触发，并按 `America/New_York` 本地日分桶。`APPROXIMATE` Simulation usage estimate 按 Alpha 的 `dateCreated` 归属日期；`dateSubmitted` 只表示 Alpha submission lifecycle，不作为 Simulation usage day。平台单窗口超过 1000 条时自动切分时间窗口；只写入轻量元数据缓存，不写入结果侧车。
 
-`list_datasets()`、`list_datafields()` 和有页数上限的 `list_all_datafields()`
-只返回当前 BRAIN scope 下的原始平台记录；单次页大小最多 50，all-pages 页数
-最多 100。它们不对字段打分、排序或筛选，也
-不建立本地字段目录或 cache；字段取舍由 Agent 根据研究假设完成。Simulation
-执行前的实时 field/operator 能力仍由 SimulationGateway 校验。
+Agent 使用 `list_datasets()`、`list_datafields()` 和有页数上限的
+`list_all_datafields()` 读取原始平台列表并自主选择字段。字段 capability 校验
+使用所选 BRAIN dataset 的 live `data_fields` 页面，保留 ID 与 dataset provenance；
+静态字段表、缓存或字段名猜测都不能替代 live response。没有 dataset provenance、
+能力 reader 缺失或分页未完整时保持 `CAPABILITY_UNAVAILABLE`，不提交 Simulation。
+平台 `alphaCount` 是一个字段元数据，不是字段优先级或经济价值排序信号。
 
 仅观察登记：`operators`、`alpha_check`、`pnl`。这些接口没有被生产 client 自动调用；只有 capability probe 或脱敏 fixture 可以证明其当前可用性。
 

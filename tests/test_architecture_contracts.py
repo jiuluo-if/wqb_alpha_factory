@@ -58,12 +58,14 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
 
     def test_research_surface_and_manifest_are_exactly_aligned(self):
         expected = set(research_api.__all__) - {"SimulationSpec", "research_tool_manifest"}
-        rows = research_api.research_tool_manifest()
+        rows = research_api.research_tool_manifest(profile="full")
         names = [row["name"] for row in rows]
 
         self.assertEqual(len(names), len(set(names)))
-        self.assertEqual(set(names), expected)
+        self.assertEqual(set(names) - {"alpha_submission"}, expected)
         for name in names:
+            if name == "alpha_submission":
+                continue
             self.assertTrue(callable(getattr(research_api, name)), name)
 
     def test_package_root_matches_research_surface_and_lazy_exports(self):
@@ -78,13 +80,18 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
 
     def test_manifest_modes_reflect_possible_io(self):
         rows = {
-            row["name"]: row for row in research_api.research_tool_manifest()
+            row["name"]: row
+            for row in research_api.research_tool_manifest(profile="full")
         }
         for name in (
             "generate_probes", "validate_simulation_settings",
-            "build_simulation_spec", "group_alphas", "preview_alpha_colors",
+            "build_simulation_spec",
         ):
             self.assertEqual(rows[name]["mode"], "READ_ONLY", name)
+        for name in (
+            "build_simulation_variant", "group_alphas", "preview_alpha_colors",
+        ):
+            self.assertEqual(rows[name]["mode"], "PURE", name)
         for name in ("refresh_remote_alphas", "purge_remote_cache"):
             self.assertEqual(rows[name]["mode"], "LOCAL_CACHE_WRITE", name)
             self.assertTrue(rows[name].get("local_write"), name)
@@ -93,7 +100,8 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
 
     def test_manifest_preserves_write_boundaries_and_has_one_public_name_per_operation(self):
         rows = {
-            row["name"]: row for row in research_api.research_tool_manifest()
+            row["name"]: row
+            for row in research_api.research_tool_manifest(profile="full")
         }
         import wqb_agent
 
@@ -122,7 +130,9 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         for name in canonical:
             self.assertTrue(hasattr(research_api, name), name)
             self.assertTrue(hasattr(wqb_agent, name), name)
-        manifest = {item["name"] for item in research_api.research_tool_manifest()}
+        manifest = {
+            item["name"] for item in research_api.research_tool_manifest(profile="full")
+        }
         self.assertTrue(canonical <= manifest)
 
     def test_legacy_runtime_and_optimizer_modules_are_absent(self):
@@ -134,13 +144,12 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         for name in retired:
             self.assertFalse((PACKAGE / name).exists(), name)
 
-    def test_raw_field_listing_replaces_ranked_discovery(self):
-        self.assertFalse((PACKAGE / "discovery.py").exists())
-        self.assertFalse((PACKAGE / "discovery_selection.py").exists())
-        self.assertFalse((PACKAGE / "field_catalog.py").exists())
+    def test_agent_field_discovery_is_raw_and_ranked_selector_is_retired(self):
+        for name in ("discovery.py", "discovery_selection.py", "field_catalog.py"):
+            self.assertFalse((PACKAGE / name).exists(), name)
         self.assertFalse(hasattr(research_api, "discover_fields"))
-        self.assertTrue(callable(research_api.list_datasets))
-        self.assertTrue(callable(research_api.list_datafields))
+        for name in ("list_datasets", "list_datafields", "list_all_datafields"):
+            self.assertTrue(callable(getattr(research_api, name)), name)
 
     def test_public_simulation_path_is_gateway_to_simulator_to_client(self):
         gateway_imports = _imports(PACKAGE / "simulation_gateway.py")

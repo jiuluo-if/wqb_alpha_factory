@@ -55,6 +55,9 @@ class FakeGatewayClient:
     def get_pnl(self, alpha_id):
         return {"alpha_id": alpha_id, "records": []}
 
+    def get_all_user_alphas(self, **_kwargs):
+        return []
+
     def get_self_correlation(self, alpha_id):
         return {"alpha_id": alpha_id, "status": "AVAILABLE", "value": 0.1}
 
@@ -115,6 +118,23 @@ class UnavailableCapabilityGatewayClient(FakeGatewayClient):
         return None
 
 
+class MissingFieldCapabilityGatewayClient(FakeGatewayClient):
+    get_field_capability = None
+
+
+class UnknownFieldCapabilityGatewayClient(FakeGatewayClient):
+    def get_field_capability(self, field_sources, *, scope=None):
+        requested = [field for fields in field_sources.values() for field in fields]
+        return {"valid": False, "fields": [], "missing": requested,
+                "source": "BRAIN_LIVE_ONLY"}
+
+
+class VerifiedFieldCapabilityGatewayClient(FakeGatewayClient):
+    def get_field_capability(self, field_sources, *, scope=None):
+        fields = [field for selected in field_sources.values() for field in selected]
+        return {"valid": True, "fields": fields, "source": "BRAIN_LIVE_ONLY"}
+
+
 class RemoteHistoryGatewayClient(FakeGatewayClient):
     def __init__(self):
         super().__init__()
@@ -126,6 +146,19 @@ class RemoteHistoryGatewayClient(FakeGatewayClient):
             "id": "alpha-existing", "regular": "rank(close)",
             "settings": {"delay": 1}, "status": "UNSUBMITTED",
         }]
+
+
+class ShardedRemoteHistoryGatewayClient(FakeGatewayClient):
+    def get_all_user_alphas(self, **_kwargs):
+        from wqb_agent.client import WQBQueryTooBroadError
+        raise WQBQueryTooBroadError("wide history needs date shards")
+
+    def iter_user_alpha_history_shards(self, **_kwargs):
+        for index in range(1000):
+            yield {"id": f"older-alpha-{index}", "regular": "rank(open)",
+                   "settings": {"delay": 1}, "status": "UNSUBMITTED"}
+        yield {"id": "old-exact", "regular": "rank(close)",
+               "settings": {"delay": 1}, "status": "UNSUBMITTED"}
 
 
 class ConcurrentGatewayClient(FakeGatewayClient):
@@ -655,6 +688,7 @@ class TestSimulationGateway(unittest.TestCase):
 
             not_dispatched = results[2]
             self.assertEqual(not_dispatched["status"], "NOT_DISPATCHED")
+            self.assertEqual(not_dispatched["reason_code"], "NOT_DISPATCHED")
             self.assertEqual(not_dispatched["parent"]["status"], "NOT_DISPATCHED")
             self.assertIsNone(not_dispatched["parent"]["progress_url"])
             self.assertEqual(
@@ -805,6 +839,7 @@ class TestSimulationGateway(unittest.TestCase):
 
             self.assertEqual(result["status"], "SUBMIT_UNKNOWN")
             self.assertEqual(result["fingerprint"], fingerprint)
+            self.assertEqual(result["reason_code"], "RATE_LIMIT_OR_SUBMIT_UNKNOWN")
             self.assertEqual(client.submissions, [])
 
     def test_recent_remote_exact_fingerprint_is_rejected_without_post(self):
@@ -815,7 +850,106 @@ class TestSimulationGateway(unittest.TestCase):
             )
             self.assertEqual(result["status"], "EXACT_DUPLICATE")
             self.assertEqual(result["alpha_id"], "alpha-existing")
+            self.assertEqual(result["reason_code"], "EXACT_DUPLICATE")
             self.assertEqual(client.submissions, [])
+
+    def test_exact_duplicate_after_1000_rows_is_found_by_sharded_history_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = ShardedRemoteHistoryGatewayClient()
+            result = SimulationGateway(client, state_dir=tmp).simulate(
+                SimulationSpec("rank(close)", {"delay": 1})
+            )
+            self.assertEqual(result["status"], "EXACT_DUPLICATE")
+            self.assertEqual(result["alpha_id"], "old-exact")
+            self.assertEqual(client.submissions, [])
+
+    def test_incomplete_remote_history_scan_fails_closed_before_post(self):
+        from wqb_agent.client import WQBQueryTooBroadError
+
+        class IncompleteHistoryClient(ShardedRemoteHistoryGatewayClient):
+            def iter_user_alpha_history_shards(self, **_kwargs):
+                raise WQBQueryTooBroadError("bounded history scan incomplete")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = IncompleteHistoryClient()
+            with self.assertRaisesRegex(WQBQueryTooBroadError, "incomplete"):
+                SimulationGateway(client, state_dir=tmp).simulate(
+                    SimulationSpec("rank(close)", {"delay": 1})
+                )
+            self.assertEqual(client.submissions, [])
+
+    def test_field_validation_fails_closed_when_reader_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = MissingFieldCapabilityGatewayClient()
+            spec = SimulationSpec(
+                "rank(close)", {"delay": 1}, fields=("close",),
+                field_datasets={"close": "synthetic-dataset"},
+            )
+            with self.assertRaisesRegex(ValueError, "FIELD_CAPABILITY_UNAVAILABLE"):
+                SimulationGateway(client, state_dir=tmp).simulate(spec)
+            self.assertEqual(client.submissions, [])
+
+    def test_unknown_field_from_live_dataset_is_rejected_before_post(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = UnknownFieldCapabilityGatewayClient()
+            spec = SimulationSpec(
+                "rank(close)", {"delay": 1}, fields=("close",),
+                field_datasets={"close": "synthetic-dataset"},
+            )
+            with self.assertRaisesRegex(ValueError, "FIELD_CAPABILITY_UNAVAILABLE"):
+                SimulationGateway(client, state_dir=tmp).simulate(spec)
+            self.assertEqual(client.submissions, [])
+
+    def test_expression_field_without_declared_fields_is_not_claimed_verified(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = VerifiedFieldCapabilityGatewayClient()
+            requests = []
+
+            def record_fields(fields, **kwargs):
+                requests.append(fields)
+                return {"valid": True, "source": "BRAIN_LIVE_ONLY", "fields": ["close"]}
+
+            client.get_field_capability = record_fields
+            result = SimulationGateway(client, state_dir=tmp).simulate(
+                SimulationSpec("rank(close)", {"delay": 1})
+            )
+            self.assertEqual(result["status"], "DONE")
+            self.assertEqual(requests, [])
+
+    def test_batch_and_multi_results_echo_transient_proposal_labels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeGatewayClient()
+            specs = [
+                SimulationSpec(
+                    "rank(close)", {"delay": 1}, note="hypothesis A control",
+                    template_id="control-template", proposal_id="proposal-a",
+                ),
+                SimulationSpec(
+                    "rank(open)", {"delay": 1}, note="hypothesis B probe",
+                    template_id="probe-template", proposal_id="proposal-b",
+                ),
+            ]
+            single_results = SimulationGateway(client, state_dir=tmp).simulate_batch(specs)
+            self.assertEqual([row["proposal_id"] for row in single_results],
+                             ["proposal-a", "proposal-b"])
+            self.assertEqual([row["note"] for row in single_results],
+                             ["hypothesis A control", "hypothesis B probe"])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = MultiGatewayClient()
+            specs = [
+                SimulationSpec(
+                    f"rank(field_{index})", {"delay": 1},
+                    note="same hypothesis family", template_id="synthetic-template",
+                    proposal_id=f"multi-{index}",
+                )
+                for index in range(2)
+            ]
+            multi_results = SimulationGateway(client, state_dir=tmp).simulate_multi_batch(specs)
+            self.assertEqual([row["proposal_id"] for row in multi_results],
+                             ["multi-0", "multi-1"])
+            self.assertEqual([row["template_id"] for row in multi_results],
+                             ["synthetic-template", "synthetic-template"])
 
     def test_ambiguous_submit_is_persisted_and_restart_cannot_post_again(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1070,6 +1204,7 @@ class SimulationWriteContractTests(unittest.TestCase):
     def test_settings_variant_preserves_fields_for_field_capability_preflight(self):
         anchor = SimulationSpec(
             "rank(field_a)", settings={"delay": 1}, fields=("field_a",),
+            field_datasets={"field_a": "synthetic-dataset"},
         )
         variant = research_api.build_simulation_spec(
             "rank(field_a)", settings={"delay": 2}, anchor_spec=anchor,
@@ -1077,7 +1212,7 @@ class SimulationWriteContractTests(unittest.TestCase):
         client = FakeGatewayClient()
         field_requests = []
 
-        def unavailable_fields(fields):
+        def unavailable_fields(fields, **_kwargs):
             field_requests.append(fields)
             return {"valid": False, "fields": []}
 
@@ -1089,7 +1224,7 @@ class SimulationWriteContractTests(unittest.TestCase):
             self.assertEqual(client.submissions, [])
             self.assertEqual(gateway.guard.entries(), [])
 
-        self.assertEqual(field_requests, [["field_a"]])
+        self.assertEqual(field_requests, [{"synthetic-dataset": ["field_a"]}])
 
     def test_non_regular_types_are_rejected_before_guard_or_post(self):
         for simulation_type in ("REGION_AGNOSTIC", "SUPER", "BOGUS"):

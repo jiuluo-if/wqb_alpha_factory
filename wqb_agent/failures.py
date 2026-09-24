@@ -6,6 +6,22 @@ research outcomes or persist failure facts for an optimizer.
 
 import re
 
+REASON_CODES = frozenset({
+    "INVALID_SPEC", "CAPABILITY_UNAVAILABLE", "EXACT_DUPLICATE",
+    "RATE_LIMIT_OR_SUBMIT_UNKNOWN", "AUTH_FAILURE", "POLL_PENDING",
+    "NOT_DISPATCHED", "NEW_PROBE_REQUIRED",
+})
+
+
+class ResearchReasonError(ValueError):
+    """Human-readable validation error with one stable Agent reason code."""
+
+    def __init__(self, message, reason_code):
+        if reason_code not in REASON_CODES:
+            raise ValueError(f"unsupported reason_code: {reason_code}")
+        super().__init__(str(message))
+        self.reason_code = reason_code
+
 
 # 失败类别
 class FailureKind:
@@ -62,3 +78,38 @@ def classify_error(error_text, status_code=None):
     if _INFRA_RE.search(text):
         return FailureKind.INFRA
     return FailureKind.INFRA
+
+
+def reason_code_for_failure(status, error=None, *, progress_url=None):
+    """Project common execution failures into a small stable Agent vocabulary."""
+    status = str(status or "").strip().upper()
+    explicit = getattr(error, "reason_code", None)
+    if explicit in REASON_CODES:
+        return explicit
+    if status == "EXACT_DUPLICATE":
+        return "EXACT_DUPLICATE"
+    if status == "NOT_DISPATCHED":
+        return "NOT_DISPATCHED"
+    text = str(error or "")
+    if "NEW_PROBE_REQUIRED" in text:
+        return "NEW_PROBE_REQUIRED"
+    if "CAPABILITY" in text or "PERMISSION_UNAVAILABLE" in text:
+        return "CAPABILITY_UNAVAILABLE"
+    if progress_url and status in {"PENDING", "RUNNING", "UNKNOWN"}:
+        return "POLL_PENDING"
+    if status == "SUBMIT_UNKNOWN":
+        return "RATE_LIMIT_OR_SUBMIT_UNKNOWN"
+    kind = str(getattr(error, "kind", "") or "").upper()
+    if kind == FailureKind.AUTH or classify_error(text) == FailureKind.AUTH:
+        return "AUTH_FAILURE"
+    if kind == FailureKind.RATE_LIMIT or (
+        status in {"UNKNOWN", "FAILED"}
+        and classify_error(text) in {FailureKind.RATE_LIMIT, FailureKind.TIMEOUT, FailureKind.INFRA}
+    ):
+        return "RATE_LIMIT_OR_SUBMIT_UNKNOWN"
+    if status in {"INVALID", "INVALID_SPEC", "FAILED"} and (
+        kind in {FailureKind.SYNTAX, FailureKind.DATA}
+        or classify_error(text) in {FailureKind.SYNTAX, FailureKind.DATA}
+    ):
+        return "INVALID_SPEC"
+    return None

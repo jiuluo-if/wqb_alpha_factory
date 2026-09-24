@@ -35,6 +35,7 @@ import random
 import threading
 import time
 from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
 import requests
@@ -61,6 +62,13 @@ CREDENTIALS_FILE = DEFAULT_CREDENTIALS_FILE
 # Status codes that indicate a permanent, non-retryable rejection.
 FAIL_FAST_STATUSES = (400, 403, 404, 422)
 ALPHA_COLOR_VALUES = frozenset({"BLUE", "GREEN", "PURPLE", "RED", "YELLOW"})
+MAX_FIELD_CAPABILITY_PAGES = 100
+MAX_ALPHA_HISTORY_SHARDS = 256
+# Wall-clock ceiling for enumerating the account's Alpha history. The shard walk
+# is bounded by request count alone, so a slow platform can otherwise stall a
+# submission indefinitely; this bound turns that into a QueryTooBroad error the
+# caller can degrade from.
+MAX_ALPHA_HISTORY_SECONDS = 90
 OFFICIAL_RECORDSET_NAMES = frozenset({
     "yearly-stats", "coverage", "turnover", "pnl", "sharpe",
     "coverage-by-sector", "coverage-by-industry", "coverage-by-capitalization",
@@ -886,7 +894,8 @@ class WQBClient:
             "GET /users/self/alphas exceeded the bounded pagination limit."
         )
 
-    def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
+    def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None,
+                       scope=None):
         """Fetch datafields of a dataset. ``field_type`` optionally filters by
         BRAIN field type (MATRIX / VECTOR / SCALAR / ...).
 
@@ -896,11 +905,12 @@ class WQBClient:
         它们。传 ``field_type=None`` 时不加过滤（保持向后兼容：默认与
         旧行为一致）。
         """
+        scope = scope if isinstance(scope, Mapping) else {}
         params = {
-            "instrumentType": self.instrument_type,
-            "region": self.region,
-            "delay": self.delay,
-            "universe": self.universe,
+            "instrumentType": scope.get("instrumentType", self.instrument_type),
+            "region": scope.get("region", self.region),
+            "delay": scope.get("delay", self.delay),
+            "universe": scope.get("universe", self.universe),
             "dataset.id": dataset_id,
             "limit": limit,
             "offset": offset,
@@ -915,6 +925,159 @@ class WQBClient:
         )
         payload = resp.json()
         return payload.get("results", []), payload.get("count", 0)
+
+    def get_field_capability(
+        self, field_ids_by_dataset, *, scope=None, max_pages=20,
+    ):
+        """Verify selected field IDs through bounded live `data_fields` reads.
+
+        The request uses each field's BRAIN dataset provenance. It stops
+        reading a dataset as soon as all requested IDs have been observed;
+        if the page budget is exhausted, the result remains unavailable.
+        """
+        if not isinstance(field_ids_by_dataset, Mapping) or not field_ids_by_dataset:
+            return {
+                "valid": False, "status": "UNAVAILABLE",
+                "source": "BRAIN_LIVE_ONLY", "fields": [], "missing": [],
+                "reason_code": "CAPABILITY_UNAVAILABLE",
+            }
+        if isinstance(max_pages, bool) or not isinstance(max_pages, int) or not (
+            1 <= max_pages <= MAX_FIELD_CAPABILITY_PAGES
+        ):
+            raise ValueError(
+                f"max_pages must be between 1 and {MAX_FIELD_CAPABILITY_PAGES}"
+            )
+        normalized_scope = dict(scope or {})
+        requested: dict[str, set[str]] = {}
+        for dataset_id, field_ids in field_ids_by_dataset.items():
+            dataset = str(dataset_id or "").strip()
+            if not dataset or not isinstance(field_ids, (list, tuple, set, frozenset)):
+                return {
+                    "valid": False, "status": "UNAVAILABLE",
+                    "source": "BRAIN_LIVE_ONLY", "fields": [],
+                    "missing": [], "reason_code": "CAPABILITY_UNAVAILABLE",
+                }
+            ids = {str(item).strip() for item in field_ids if str(item).strip()}
+            if ids:
+                requested.setdefault(dataset, set()).update(ids)
+
+        verified: set[str] = set()
+        missing: set[str] = set()
+        for dataset_id, requested_ids in requested.items():
+            found: set[str] = set()
+            offset = 0
+            expected_count = None
+            for _page_index in range(max_pages):
+                rows, count = self.get_datafields(
+                    dataset_id, limit=50, offset=offset,
+                    scope=normalized_scope,
+                )
+                if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                    missing.update(requested_ids - found)
+                    break
+                if expected_count is None:
+                    expected_count = count
+                elif count != expected_count:
+                    missing.update(requested_ids - found)
+                    break
+                page_rows = [row for row in (rows or ()) if isinstance(row, Mapping)]
+                for row in page_rows:
+                    if row.get("id") is None or not str(row["id"]).strip():
+                        continue
+                    returned_dataset = row.get("dataset")
+                    if isinstance(returned_dataset, Mapping):
+                        returned_dataset = (returned_dataset.get("id")
+                                            or returned_dataset.get("name"))
+                    if (returned_dataset is not None
+                            and str(returned_dataset).casefold() != dataset_id.casefold()):
+                        continue
+                    found.add(str(row["id"]).strip())
+                if requested_ids <= found:
+                    verified.update(requested_ids)
+                    break
+                if not page_rows:
+                    missing.update(requested_ids - found)
+                    break
+                offset += len(page_rows)
+                if offset >= expected_count:
+                    missing.update(requested_ids - found)
+                    break
+            else:
+                missing.update(requested_ids - found)
+
+        return {
+            "valid": not missing and verified == {
+                item for field_ids in requested.values() for item in field_ids
+            },
+            "status": "LIVE_VERIFIED" if not missing else "UNAVAILABLE",
+            "source": "BRAIN_LIVE_ONLY",
+            "fields": sorted(verified),
+            "missing": sorted(missing),
+            "reason_code": None if not missing else "CAPABILITY_UNAVAILABLE",
+        }
+
+    def iter_user_alpha_history_shards(
+        self, *, result_cap=1000, max_shards=MAX_ALPHA_HISTORY_SHARDS,
+        min_window_sec=60, time_budget_sec=MAX_ALPHA_HISTORY_SECONDS,
+    ):
+        """Yield complete user Alpha history from bounded date shards.
+
+        A broad date range is bisected only when BRAIN explicitly reports the
+        result cap was exceeded. The method fails closed if it cannot finish
+        inside the shard/depth budget. Each leaf remains result-cap bounded.
+
+        ``time_budget_sec`` bounds the wall-clock cost of the whole walk so a slow
+        platform surfaces as a QueryTooBroad error instead of an unbounded stall.
+        """
+        if isinstance(result_cap, bool) or not isinstance(result_cap, int) or result_cap < 1:
+            raise ValueError("result_cap must be a positive integer")
+        if isinstance(max_shards, bool) or not isinstance(max_shards, int) or max_shards < 1:
+            raise ValueError("max_shards must be a positive integer")
+        if isinstance(min_window_sec, bool) or not isinstance(min_window_sec, int) or min_window_sec < 1:
+            raise ValueError("min_window_sec must be a positive integer")
+        if (time_budget_sec is not None
+                and (isinstance(time_budget_sec, bool)
+                     or not isinstance(time_budget_sec, (int, float))
+                     or time_budget_sec <= 0)):
+            raise ValueError("time_budget_sec must be a positive number or None")
+
+        start = datetime(1970, 1, 1, tzinfo=UTC)
+        end = datetime.now(UTC) + timedelta(seconds=1)
+        pending = [(start, end, 0)]
+        requests_used = 0
+        deadline = (None if time_budget_sec is None
+                    else time.monotonic() + float(time_budget_sec))
+        while pending:
+            if deadline is not None and time.monotonic() > deadline:
+                raise WQBQueryTooBroadError(
+                    "Complete Alpha history exceeded the time budget."
+                )
+            if requests_used >= max_shards:
+                raise WQBQueryTooBroadError(
+                    "Complete Alpha history exceeded the bounded date-shard budget."
+                )
+            window_start, window_end, depth = pending.pop()
+            requests_used += 1
+            try:
+                rows = self.get_all_user_alphas(
+                    max_results=result_cap,
+                    date_created_after=window_start.isoformat(),
+                    date_created_before=window_end.isoformat(),
+                )
+            except WQBQueryTooBroadError as exc:
+                if (depth >= 32
+                        or window_end - window_start <= timedelta(seconds=min_window_sec)):
+                    raise WQBQueryTooBroadError(
+                        "Complete Alpha history contains an unsplittable broad date window."
+                    ) from exc
+                midpoint = window_start + (window_end - window_start) / 2
+                # One-second overlap avoids excluding boundary timestamps; the
+                # caller de-duplicates remote rows by ID while matching.
+                overlap = timedelta(seconds=1)
+                pending.append((midpoint - overlap, window_end, depth + 1))
+                pending.append((window_start, midpoint + overlap, depth + 1))
+                continue
+            yield from rows
 
     def submit_simulation(self, expression, settings, alpha_type="REGULAR",
                           idempotency_key=None):

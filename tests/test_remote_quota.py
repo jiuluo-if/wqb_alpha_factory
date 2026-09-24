@@ -2,7 +2,7 @@ import json
 import math
 import tempfile
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timezone
 from zoneinfo import ZoneInfo
 
 from wqb_agent import research_api
@@ -33,13 +33,25 @@ def _register_at(guard, fingerprint, local_date, *, simulation_count=1,
 
 
 class _Repository:
-    def __init__(self, rows, retention_days=None):
+    def __init__(self, rows, retention_days=None, freshness="FRESH"):
         self.rows = rows
+        self.freshness = freshness
         if retention_days is not None:
             self.retention_days = retention_days
 
     def list_remote_alphas(self):
         return list(self.rows)
+
+    def cache_status(self):
+        return {"freshness": self.freshness, "last_success_at": 1, "age_sec": 0}
+
+
+class _Guard:
+    def __init__(self, entries=()):
+        self._entries = list(entries)
+
+    def entries(self):
+        return list(self._entries)
 
 
 class TestSimulationQuota(unittest.TestCase):
@@ -266,6 +278,29 @@ class TestSimulationQuota(unittest.TestCase):
         self.assertEqual(snapshot["estimate"]["active_guard_simulation_count"], 24)
 
     def test_quota_projects_remote_rows_and_active_guards_without_state(self):
+        guard = _Guard([{
+            "status": "RUNNING",
+            "created_at": datetime(2026, 9, 17, 3, 30, tzinfo=UTC).timestamp(),
+        }])
+        quota = SimulationQuota(
+            _Repository([
+                {"alpha_id": "today", "local_date": "2026-09-16"},
+                {"alpha_id": "older", "local_date": "2026-09-10"},
+            ]), guard, daily_cap=3,
+            local_date=lambda: "2026-09-16",
+        )
+
+        snapshot = quota.snapshot()
+
+        self.assertEqual(snapshot["today_used"], 2)
+        self.assertEqual(snapshot["window_used"], 3)
+        self.assertEqual(snapshot["today_remaining"], 1)
+        self.assertEqual(snapshot["status"], "UNKNOWN")
+        self.assertEqual(snapshot["reason_code"], "CAPABILITY_UNAVAILABLE")
+        self.assertEqual(snapshot["active_guard_count"], 1)
+        self.assertFalse(snapshot["persisted_quota_state"])
+
+    def test_public_quota_api_refreshes_missing_feed_through_fake_client(self):
         with tempfile.TemporaryDirectory() as tmp:
             guard = ExecutionGuard(tmp)
             _register_at(guard, "active", "2026-09-16")
@@ -651,6 +686,42 @@ class TestSimulationQuota(unittest.TestCase):
                 result["estimate"]["window_source"],
                 "REMOTE_CACHE_RETENTION",
             )
+
+    def test_stale_or_missing_cache_reports_unknown_status(self):
+        for freshness in ("STALE", "UNKNOWN"):
+            with self.subTest(freshness=freshness):
+                snapshot = SimulationQuota(
+                    _Repository([], retention_days=7, freshness=freshness),
+                    _Guard(), daily_cap=50, local_date=lambda: "2026-09-16",
+                ).snapshot()
+                self.assertEqual(snapshot["status"], "UNKNOWN")
+                self.assertEqual(snapshot["freshness"], freshness)
+                self.assertEqual(snapshot["reason_code"], "CAPABILITY_UNAVAILABLE")
+
+    def test_fresh_cache_reports_cache_backed_approximate_status(self):
+        snapshot = SimulationQuota(
+            _Repository([], retention_days=7, freshness="FRESH"),
+            _Guard(), daily_cap=50, local_date=lambda: "2026-09-16",
+        ).snapshot()
+
+        self.assertEqual(snapshot["status"], "APPROXIMATE")
+        self.assertEqual(snapshot["freshness"], "CACHE")
+        self.assertIsNone(snapshot["reason_code"])
+
+    def test_official_headers_win_the_status_projection(self):
+        snapshot = SimulationQuota(
+            _Repository([], retention_days=7, freshness="STALE"), _Guard(),
+            daily_cap=50, local_date=lambda: "2026-09-16",
+            official_observation={
+                "source": "BRAIN_SIMULATION_HEADERS", "status": "AVAILABLE",
+                "limit": 100, "remaining": 42, "reset": 60,
+            },
+        ).snapshot()
+
+        self.assertEqual(snapshot["status"], "LIVE")
+        self.assertEqual(snapshot["freshness"], "LIVE")
+        self.assertEqual(snapshot["source"], "BRAIN_SIMULATION_HEADERS")
+        self.assertEqual(snapshot["official"]["remaining"], 42)
 
 
 if __name__ == "__main__":

@@ -2,21 +2,28 @@ import os
 import tempfile
 import time
 import unittest
+from datetime import UTC, datetime, timedelta
 
 from wqb_agent import research_api
+from wqb_agent.client import WQBQueryTooBroadError
+from wqb_agent.query_errors import QueryTooBroadError
 from wqb_agent.remote_alpha_repository import RemoteAlphaRepository
+
+FAKE_NOW = datetime(2026, 9, 24, 12, tzinfo=UTC)
 
 
 class FakeAlphaReader:
     def __call__(self, **kwargs):
+        now = FAKE_NOW.isoformat().replace("+00:00", "Z")
         if kwargs.get("status") == "SUBMITTED":
             return [{
                 "id": "submitted-1",
                 "status": "SUBMITTED",
                 "dateCreated": "2026-09-16T12:00:00Z",
-                "dateSubmitted": "2026-09-16T12:00:00Z",
+                "dateSubmitted": now,
             }]
-        return [{"id": "simulated-1", "dateCreated": "2026-09-15T12:00:00Z"}]
+        created = (FAKE_NOW - timedelta(days=2)).isoformat().replace("+00:00", "Z")
+        return [{"id": "simulated-1", "dateCreated": created}]
 
     get_all_user_alphas = __call__
 
@@ -77,11 +84,29 @@ class TestRemoteAlphaRepository(unittest.TestCase):
             self.assertNotIn("pruned_simulation_count", refreshed)
             self.assertEqual(len(repository.list_remote_alphas()), 1601)
 
+    def test_remote_feed_refresh_has_a_total_shard_budget(self):
+        class BroadReader:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, **_kwargs):
+                self.calls += 1
+                raise WQBQueryTooBroadError("too broad")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            reader = BroadReader()
+            repository = RemoteAlphaRepository(
+                reader, cache_path=f"{tmp}/remote.json", clock=lambda: 1789560000,
+            )
+            with self.assertRaisesRegex(QueryTooBroadError, "shard budget"):
+                repository.refresh_remote_alphas(max_shards=3)
+            self.assertEqual(reader.calls, 3)
+
     def test_refresh_and_list_use_configured_rolling_window(self):
         with tempfile.TemporaryDirectory() as tmp:
             repository = RemoteAlphaRepository(
                 FakeAlphaReader(), cache_path=f"{tmp}/remote.json",
-                retention_days=3, clock=lambda: 1789560000,
+                retention_days=3, clock=lambda: FAKE_NOW.timestamp(),
             )
 
             refreshed = repository.refresh_remote_alphas()
@@ -140,7 +165,7 @@ class TestRemoteAlphaRepository(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repository = RemoteAlphaRepository(
                 FakeAlphaReader(), cache_path=f"{tmp}/remote.json",
-                retention_days=3, clock=lambda: 1789560000,
+                retention_days=3, clock=lambda: FAKE_NOW.timestamp(),
             )
             repository.refresh_remote_alphas()
 
