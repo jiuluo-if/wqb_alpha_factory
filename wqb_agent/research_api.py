@@ -66,6 +66,7 @@ from .simulation_gateway import (
     MULTI_MAX_CHILDREN,
     MULTI_MAX_CONCURRENCY,
     MULTI_MIN_CHILDREN,
+    SUPPORTED_WRITE_SIMULATION_TYPES,
     ExecutionGuard,
     SimulationGateway,
     SimulationSpec,
@@ -79,6 +80,13 @@ MAX_PROBE_COUNT = 100
 # single research Skill and this runtime.  A Skill that declares a different
 # ``compatible_research_contract`` is stale and must be re-read, not reused.
 RESEARCH_CONTRACT_VERSION = "2026-09-24"
+
+# Region-Agnostic simulations are written through the same gateway as REGULAR ones;
+# whether the writer accepts them is a property of the gateway's supported set, not
+# of this module, so it is derived rather than hard-coded.
+_REGION_AGNOSTIC_WRITE_SUPPORTED = (
+    "REGION_AGNOSTIC" in SUPPORTED_WRITE_SIMULATION_TYPES
+)
 
 
 def _load_config(config: Mapping[str, Any] | str | None) -> dict[str, Any]:
@@ -820,9 +828,23 @@ def _simulation_modes_from_capabilities(authentication, simulation_capability):
         "source": source, "evidence_status": "INCONCLUSIVE",
         "simulation_type": "REGION_AGNOSTIC",
         "platform_advertised": "REGION_AGNOSTIC" in choices,
-        "writer_supported": False,
-        "reason": "WRITER_UNSUPPORTED",
+        "writer_supported": _REGION_AGNOSTIC_WRITE_SUPPORTED,
+        "reason": (None if _REGION_AGNOSTIC_WRITE_SUPPORTED
+                   else "WRITER_UNSUPPORTED"),
     }
+    ra_reason = _mode_unavailable_reason(
+        authentication,
+        options_available=options_available,
+        regular_available="REGION_AGNOSTIC" in choices,
+    )
+    if ra_reason is None and not _REGION_AGNOSTIC_WRITE_SUPPORTED:
+        ra_reason = "WRITER_UNSUPPORTED"
+    if ra_reason is None:
+        region_agnostic.update({
+            "available": True, "status": "AVAILABLE", "reason": None,
+        })
+    else:
+        region_agnostic["reason"] = ra_reason
     return {
         "single": single,
         "multi": multi,

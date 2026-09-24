@@ -25,7 +25,13 @@ _CAPABILITY_UNCHECKED = object()
 _CAPABILITY_READER_ABSENT = object()
 _REMOTE_ROWS_UNCHECKED = object()
 REGULAR_SIMULATION_TYPE = "REGULAR"
-SUPPORTED_WRITE_SIMULATION_TYPES = frozenset({REGULAR_SIMULATION_TYPE})
+# Region-Agnostic writes return an RA_PARENT plus its RA_CHILD alphas for several
+# regions. The platform advertises the type through /simulations/options; keeping it
+# in this set is what allows `simulation_type="REGION_AGNOSTIC"` specs to be written.
+REGION_AGNOSTIC_SIMULATION_TYPE = "REGION_AGNOSTIC"
+SUPPORTED_WRITE_SIMULATION_TYPES = frozenset(
+    {REGULAR_SIMULATION_TYPE, REGION_AGNOSTIC_SIMULATION_TYPE}
+)
 MULTI_MIN_CHILDREN = 2
 MULTI_MAX_CHILDREN = 10
 MULTI_DEFAULT_CHILD_BATCH_SIZE = 10
@@ -42,7 +48,9 @@ def _validate_write_simulation_type(spec):
     simulation_type = _spec_simulation_type(spec)
     if simulation_type not in SUPPORTED_WRITE_SIMULATION_TYPES:
         raise ValueError(
-            "UNSUPPORTED_SIMULATION_TYPE: production writer supports REGULAR only"
+            "UNSUPPORTED_SIMULATION_TYPE: production writer supports "
+            + ", ".join(sorted(SUPPORTED_WRITE_SIMULATION_TYPES))
+            + f" only (got {simulation_type})"
         )
 
 

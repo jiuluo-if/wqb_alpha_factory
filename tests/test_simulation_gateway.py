@@ -1408,7 +1408,7 @@ class SimulationWriteContractTests(unittest.TestCase):
         client = FakeGatewayClient()
         with tempfile.TemporaryDirectory() as state:
             gateway = SimulationGateway(client, state_dir=state)
-            for simulation_type in ("REGION_AGNOSTIC", "SUPER", "BOGUS"):
+            for simulation_type in ("SUPER", "BOGUS"):
                 with self.subTest(simulation_type=simulation_type):
                     spec = SimulationSpec(
                         "rank(close)", {"delay": 1},
@@ -1489,7 +1489,7 @@ class SimulationWriteContractTests(unittest.TestCase):
         self.assertEqual(field_requests, [{"synthetic-dataset": ["field_a"]}])
 
     def test_non_regular_types_are_rejected_before_guard_or_post(self):
-        for simulation_type in ("REGION_AGNOSTIC", "SUPER", "BOGUS"):
+        for simulation_type in ("SUPER", "BOGUS"):
             with self.subTest(simulation_type=simulation_type):
                 client = FakeGatewayClient()
                 with tempfile.TemporaryDirectory() as state:

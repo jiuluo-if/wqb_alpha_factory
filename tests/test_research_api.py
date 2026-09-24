@@ -46,7 +46,7 @@ class TestResearchApi(unittest.TestCase):
         )
 
         client = SimpleNamespace()
-        for simulation_type in ("REGION_AGNOSTIC", "SUPER", "BOGUS"):
+        for simulation_type in ("SUPER", "BOGUS"):
             with self.subTest(simulation_type=simulation_type):
                 with self.assertRaisesRegex(
                     ValueError, "UNSUPPORTED_SIMULATION_TYPE"
@@ -495,7 +495,7 @@ class TestResearchApi(unittest.TestCase):
     def test_settings_variant_rejects_non_regular_anchor_before_construction(self):
         from wqb_agent.research_api import build_simulation_spec
 
-        for simulation_type in ("SUPER", "REGION_AGNOSTIC"):
+        for simulation_type in ("SUPER",):
             with self.subTest(simulation_type=simulation_type):
                 anchor = SimulationSpec(
                     "rank(field_a)", fields=("field_a",),
@@ -756,7 +756,7 @@ class TestResearchApi(unittest.TestCase):
         )
         self.assertFalse(result["network_write"])
 
-    def test_platform_advertised_non_regular_type_is_not_writer_available(self):
+    def test_platform_advertised_region_agnostic_is_writer_available(self):
         client = SimpleNamespace(
             get_authentication_status=lambda: {
                 "authenticated": True, "user_id": "user-1",
@@ -774,9 +774,11 @@ class TestResearchApi(unittest.TestCase):
 
         modes = get_simulation_modes(client=client)
 
-        self.assertFalse(modes["region_agnostic"]["available"])
-        self.assertEqual(modes["region_agnostic"]["status"], "UNAVAILABLE")
-        self.assertEqual(modes["region_agnostic"]["reason"], "WRITER_UNSUPPORTED")
+        self.assertTrue(modes["region_agnostic"]["available"])
+        self.assertEqual(modes["region_agnostic"]["status"], "AVAILABLE")
+        self.assertTrue(modes["region_agnostic"]["writer_supported"])
+        self.assertTrue(modes["region_agnostic"]["platform_advertised"])
+        self.assertIsNone(modes["region_agnostic"]["reason"])
 
     def test_multi_mode_requires_live_permission(self):
         client = SimpleNamespace(
