@@ -48,7 +48,7 @@ def analyze_expression(expression, known_fields=None):
     """Return one shared expression analysis for validation and routing.
 
     ``known_fields`` is optional because callers that only need operator or
-    identity facts should not have to perform discovery first.  Field matching
+    identity facts should not need a field list first.  Field matching
     is case-insensitive and boundary-aware, so ``close`` is not reported from
     ``close_5d``.  The returned tuples are sorted for stable evidence and
     cache keys.

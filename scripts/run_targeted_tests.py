@@ -36,10 +36,7 @@ DIRECT_TESTS = {
     "tests/test_architecture_contracts.py": (
         "tests/test_architecture_contracts.py",
     ),
-    "wqb_agent/discovery.py": ("tests/test_research_api.py",),
     "wqb_agent/field_metadata.py": ("tests/test_research_api.py",),
-    "wqb_agent/discovery_selection.py": ("tests/test_discovery_selection.py",),
-    "wqb_agent/field_catalog.py": ("tests/test_research_api.py",),
     "wqb_agent/__init__.py": (
         "tests/test_research_api.py",
     ),

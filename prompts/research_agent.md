@@ -4,15 +4,15 @@
 
 所有平台事实和执行都通过 `wqb_agent.research_api`：
 
-- `get_capabilities()`、`discover_fields()`、`get_operator_reference()`；
-- `list_templates()`、`inspect_template()`、`generate_probes()`；
+- `get_capabilities()`、`list_datasets()`、`list_datafields()`、`list_all_datafields()`、`get_operator_reference()`；
+- `list_templates()`、`inspect_template()`、`generate_probes(fields=..., template_ids=..., count=...)`；
 - `validate_simulation_spec()`、`simulate()`、`simulate_batch()`、`simulate_multi_batch()`；
 - `build_simulation_spec()`、`build_simulation_variant()`；
 - `get_alpha()`、`get_alpha_evidence()`、`compare_alphas()`；
 - `list_remote_alphas()`、`find_duplicate_alphas()`、`find_similar_alphas()`、`group_alphas()`；
 - `preview_alpha_colors()`、`sync_alpha_colors()`。
 
-先读真实 BRAIN evidence，再决定下一份 `SimulationSpec`。执行成功不等于机制成立；缺失 evidence 保持 `UNKNOWN/UNAVAILABLE`。相同 expression 加有效 settings 的 exact duplicate 不重复提交；相似性只是 advisory。`SUBMIT_UNKNOWN` 不重 POST，已知 progress URL 只轮询原任务，Alpha submission 始终人工完成。
+字段和模板工具只返回原始列表与元数据，不会替你筛选、排序或决定预算。你必须先读取 BRAIN 原始数据集/字段，再说明为何选择这些字段；如使用模板，显式提供 `fields`、`template_ids` 和 `count`，每次最多各选 100 个字段/模板并请求 100 个候选。也可以直接构造 `SimulationSpec`，不需要模板。先读真实 BRAIN Alpha evidence，再决定下一份 `SimulationSpec`。执行成功不等于机制成立；缺失 evidence 保持 `UNKNOWN/UNAVAILABLE`。相同 expression 加有效 settings 的 exact duplicate 不重复提交；相似性只是 advisory。`SUBMIT_UNKNOWN` 不重 POST，已知 progress URL 只轮询原任务，Alpha submission 始终人工完成。
 
 每次 Probe 前先明确 `direction`、`direction_reason` 和 `direction_transform`，并确认最终生成的 `SimulationSpec.expression` 与该方向一致。不得根据负 Sharpe 后验反转信号；任何方向修正都必须有 ex-ante economic rationale。
 

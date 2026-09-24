@@ -50,19 +50,11 @@ Alpha detail 是完成后的 cheap evidence。`get_alpha_aggregates`、`get_alph
 
 `GET /users/self/alphas` 仅用于有界只读同步，按配置的 retention window 分页读取用户 Alpha 的 `id`、`status`、`dateCreated` 和 `dateSubmitted`；提交 Alpha 与模拟 Alpha 使用同一次刷新触发，并按 `America/New_York` 本地日分桶。`APPROXIMATE` Simulation usage estimate 按 Alpha 的 `dateCreated` 归属日期；`dateSubmitted` 只表示 Alpha submission lifecycle，不作为 Simulation usage day。平台单窗口超过 1000 条时自动切分时间窗口；只写入轻量元数据缓存，不写入结果侧车。
 
-字段查重使用 `data_fields` 响应中的平台 `alphaCount`（兼容内部标准化键
-`alpha_count`）。查重键必须是 `(dataset_id, field_id)`，不能只用字段名；它表示字段在平台现有 Alpha 中的使用量，是本地不保留
-Simulation/Alpha 结果时的唯一字段使用事实源。字段发现命中本地目录或
-`fields_cache.json` 时，生产配置仍会对候选数据集发起只读刷新；刷新失败或
-缺少 `alphaCount` 保持 `UNKNOWN`，严格模式不进入工厂批次。该刷新不保存
-Simulation 结果、Alpha payload 或提交历史。
-
-字段目录按 `America/New_York` 本地日固化为
-`platform_field_catalog_YYYYMMDD/manifest.json` 加数据集字段文件。manifest
-记录查询范围、抓取时间、字段数量、字段哈希和平台使用量状态；目录只包含
-平台字段元数据，不包含 Simulation/Alpha 结果。多数据集发现使用可复现种子做
-分层轮询，优先保证配置的 `min_datasets` 覆盖，再按字段评分和随机扰动取样。
-当前选择必须在 discovery bundle 中暴露数据集池、顺序、选中数量和拒绝原因。
+`list_datasets()`、`list_datafields()` 和有页数上限的 `list_all_datafields()`
+只返回当前 BRAIN scope 下的原始平台记录；单次页大小最多 50，all-pages 页数
+最多 100。它们不对字段打分、排序或筛选，也
+不建立本地字段目录或 cache；字段取舍由 Agent 根据研究假设完成。Simulation
+执行前的实时 field/operator 能力仍由 SimulationGateway 校验。
 
 仅观察登记：`operators`、`alpha_check`、`pnl`。这些接口没有被生产 client 自动调用；只有 capability probe 或脱敏 fixture 可以证明其当前可用性。
 

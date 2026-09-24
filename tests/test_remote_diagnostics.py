@@ -37,6 +37,13 @@ class TestRemoteDiagnostics(unittest.TestCase):
         self.assertFalse(hasattr(parsed.quota, "rolling_days"))
         self.assertFalse(hasattr(parsed.quota, "rolling_limit"))
 
+    def test_datafield_page_budget_has_hard_ceiling(self):
+        with self.assertRaisesRegex(ValueError, "max_pagination_pages"):
+            parse_config({
+                "simulation": {},
+                "runtime": {"max_pagination_pages": 101},
+            })
+
     def test_quota_ignores_legacy_rolling_limit_without_typed_field(self):
         parsed = parse_config({
             "simulation": {},

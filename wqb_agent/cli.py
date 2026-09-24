@@ -52,11 +52,11 @@ def build_parser():
     )
     commands = parser.add_subparsers(dest="_command", required=True)
 
-    suggest = commands.add_parser(
-        "suggest",
-        help="形成假设并发现真实 fields，不运行 Simulation",
+    datasets = commands.add_parser(
+        "datasets",
+        help="列出当前 BRAIN scope 的原始数据集",
     )
-    _set_command(suggest, "research", "suggest")
+    _set_command(datasets, "research", "list-datasets")
 
     diagnostics = commands.add_parser(
         "diagnostics", help="ExecutionGuard 与远端缓存的只读诊断"

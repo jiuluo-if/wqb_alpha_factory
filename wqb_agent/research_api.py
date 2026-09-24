@@ -43,8 +43,7 @@ from .alpha_templates import (
     validate_template_contract,
 )
 from .artifacts import _atomic_replace
-from .config import AppConfig, normalize_config
-from .discovery import FieldDiscovery
+from .config import MAX_DATAFIELD_PAGES, AppConfig, normalize_config
 from .expression import (
     canonical_expression,
     operator_occurrence_count,
@@ -70,6 +69,10 @@ from .simulation_gateway import (
     SimulationSpec,
 )
 
+MAX_PROBE_FIELDS = 100
+MAX_PROBE_TEMPLATES = 100
+MAX_PROBE_COUNT = 100
+
 
 def _load_config(config: Mapping[str, Any] | str | None) -> dict[str, Any]:
     if config is None:
@@ -93,70 +96,6 @@ def _normalized_config(config=None) -> AppConfig:
 
 def _state_directory(config: AppConfig, state_dir=None) -> str:
     return state_dir or config.runtime.state_dir
-
-
-def _remote_research_components(*, client, config=None, state_dir=None,
-                                include_factory=False):
-    """Build only rebuildable components for public discovery/probe tools."""
-    typed = _normalized_config(config)
-    runtime = typed.runtime
-    directory = _state_directory(typed, state_dir)
-    selection = runtime.field_selection
-    discovery = FieldDiscovery(
-        client,
-        pagination_limit=runtime.pagination_limit,
-        max_pages=runtime.max_pagination_pages,
-        cache_path=os.path.join(directory, "fields_cache.json"),
-        cache_ttl_sec=runtime.fields_cache_ttl_sec,
-        catalog_root=directory,
-        max_alpha_count=runtime.max_field_alpha_count,
-        selection_mode=selection["mode"],
-        random_fraction=selection["random_fraction"],
-        random_seed=selection["random_seed"],
-        platform_usage_refresh=selection["platform_usage_refresh"],
-        require_platform_alpha_count=selection["require_platform_alpha_count"],
-        dataset_sampling=selection["dataset_sampling"],
-        min_datasets=selection["min_datasets"],
-        dataset_pool=selection["dataset_pool"],
-        persist_catalog=selection["persist_catalog"],
-    )
-    factory = None
-    if include_factory:
-        factory = AlphaFactory(
-            neutralization=typed.simulation_config.settings["neutralization"],
-            catalog_path=runtime.alpha_template_catalog,
-            require_private=True,
-        )
-    return typed, discovery, factory
-
-
-def discover_fields(query, *, client=None, config=None, state_dir=None, limit=None):
-    """Discover fields through the existing BRAIN-backed discovery component."""
-    if client is None:
-        from .client import WQBClient
-        client = WQBClient()
-    _typed, discovery, _factory = _remote_research_components(
-        client=client, config=config, state_dir=state_dir
-    )
-    default_limit = _typed.runtime.fields_per_discovery
-    if isinstance(query, str):
-        hypothesis = {"id": "agent-query", "statement": query, "tags": query.split(), "datasets": []}
-    elif isinstance(query, Mapping):
-        hypothesis = dict(query)
-    else:
-        raise TypeError("query must be a string or object")
-    fields = discovery.discover(
-        hypothesis,
-        target_count=limit or default_limit,
-    )
-    return {
-        "source": "BRAIN_LIVE_ONLY",
-        "status": "AVAILABLE",
-        "evidence_status": "AVAILABLE" if fields else "UNAVAILABLE",
-        "fields": fields,
-        "field_source": discovery.source_provenance(),
-        "query": hypothesis,
-    }
 
 
 def _client_scope(client):
@@ -226,20 +165,26 @@ def list_datafields(
 
 def list_all_datafields(
     dataset_id, *, client=None, config=None, page_limit=None,
-    field_type=None, max_pages=100,
+    field_type=None, max_pages=None,
 ):
     """Read every live datafield page within a bounded pagination budget."""
+    typed = _normalized_config(config)
     try:
-        page_cap = int(max_pages)
+        page_cap = (
+            typed.runtime.max_pagination_pages
+            if max_pages is None else int(max_pages)
+        )
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError("max_pages must be an integer") from exc
-    if page_cap < 1:
-        raise ValueError("max_pages must be positive")
+    if isinstance(max_pages, bool) or not 1 <= page_cap <= MAX_DATAFIELD_PAGES:
+        raise ValueError(
+            f"max_pages must be between 1 and {MAX_DATAFIELD_PAGES}"
+        )
 
     first = list_datafields(
         dataset_id,
         client=client,
-        config=config,
+        config=typed,
         limit=page_limit,
         offset=0,
         field_type=field_type,
@@ -254,7 +199,7 @@ def list_all_datafields(
         page = list_datafields(
             dataset_id,
             client=client,
-            config=config,
+            config=typed,
             limit=first["limit"],
             offset=offset,
             field_type=field_type,
@@ -273,44 +218,49 @@ def list_all_datafields(
     }
 
 
-def generate_probes(query=None, *, template_ids=None, count=None,
-                    fields=None, client=None, config=None, state_dir=None):
-    """Generate reviewable ``SimulationSpec`` probes without an inbox write."""
+def generate_probes(*, template_ids, count, fields, client=None, config=None):
+    """Render explicitly selected fields/templates into bounded specs."""
+    if not isinstance(fields, (list, tuple)) or not fields:
+        raise ValueError("fields must be a non-empty Agent-selected list")
+    if len(fields) > MAX_PROBE_FIELDS:
+        raise ValueError(f"fields cannot exceed {MAX_PROBE_FIELDS} entries")
+    if isinstance(template_ids, str):
+        template_ids = [template_ids]
+    if not isinstance(template_ids, (list, tuple)) or not template_ids or any(
+        not isinstance(item, str) or not item.strip() for item in template_ids
+    ):
+        raise ValueError("template_ids must be a non-empty explicit list")
+    template_ids = [item.strip() for item in template_ids]
+    if len(template_ids) > MAX_PROBE_TEMPLATES:
+        raise ValueError(
+            f"template_ids cannot exceed {MAX_PROBE_TEMPLATES} entries"
+        )
+    if len(set(template_ids)) != len(template_ids):
+        raise ValueError("template_ids must not contain duplicates")
+    try:
+        target = int(count)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("count must be an explicit integer") from exc
+    if isinstance(count, bool) or str(target) != str(count).strip():
+        raise ValueError("count must be an explicit integer")
+    if not 0 <= target <= MAX_PROBE_COUNT:
+        raise ValueError(f"count must be between 0 and {MAX_PROBE_COUNT}")
     if client is None:
         from .client import WQBClient
         client = WQBClient()
-    _typed, discovery, factory = _remote_research_components(
-        client=client, config=config, state_dir=state_dir,
-        include_factory=True,
+    typed = _normalized_config(config)
+    factory = AlphaFactory(
+        neutralization=typed.simulation_config.settings["neutralization"],
+        catalog_path=typed.runtime.alpha_template_catalog,
+        require_private=True,
     )
     reference = get_operator_reference(client=client, config=config)
-    try:
-        target = (_typed.factory.default_probe_count if count is None else int(count))
-    except (TypeError, ValueError) as exc:
-        raise ValueError("count 必须是整数") from exc
-    if target < 0:
-        raise ValueError("count 必须是非负整数")
-    if query is None:
-        hypothesis = {"id": "agent-query", "statement": "", "tags": [], "datasets": []}
-    elif isinstance(query, str):
-        hypothesis = {
-            "id": "agent-query", "statement": query,
-            "tags": query.split(), "datasets": [],
-        }
-    elif isinstance(query, Mapping):
-        hypothesis = dict(query)
-    else:
-        raise TypeError("query must be a string, object, or None")
-    requested_templates = list(template_ids or [])
-    hypothesis["template_ids"] = requested_templates
-    fields = fields if fields is not None else discovery.discover(
-        hypothesis, target_count=_typed.runtime.fields_per_discovery
-    )
+    hypothesis = {"template_ids": template_ids}
     if callable(reference):
         reference = reference()
     return factory.generate_probe_specs(
         hypothesis, fields, reference, target=target,
-        simulation_settings=_typed.simulation_config.settings,
+        simulation_settings=typed.simulation_config.settings,
     )
 
 
@@ -1137,7 +1087,6 @@ def research_tool_manifest():
         {"name": "list_datasets", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "list_datafields", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "list_all_datafields", "mode": "READ_ONLY", "owner": "BRAIN"},
-        {"name": "discover_fields", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "get_operators", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "list_templates", "mode": "READ_ONLY", "owner": "AlphaFactory"},
         {"name": "inspect_template", "mode": "READ_ONLY", "owner": "AlphaFactory"},
@@ -1188,7 +1137,6 @@ def research_tool_manifest():
 
 __all__ = [
     "SimulationSpec", "list_datasets", "list_datafields", "list_all_datafields",
-    "discover_fields",
     "generate_probes",
     "get_capabilities", "get_operators", "get_operator_reference", "get_operator_syntax_reference",
     "list_templates", "inspect_template",

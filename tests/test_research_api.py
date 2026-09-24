@@ -10,7 +10,6 @@ from wqb_agent.alpha_grouping import variant_family_fingerprint
 from wqb_agent.config import normalize_config
 from wqb_agent.research_api import (
     SimulationSpec,
-    discover_fields,
     find_similar_alphas,
     generate_probes,
     get_alpha_aggregates,
@@ -413,17 +412,6 @@ class TestResearchApi(unittest.TestCase):
                 instrument_type="EQUITY", region="GLB", universe="TOP3000", delay=1,
                 get_datafields=lambda _dataset_id, **kwargs: ([], 0),
             )
-            with mock.patch("wqb_agent.research_api.FieldDiscovery") as discovery_type:
-                discovery_type.return_value.discover.return_value = [{"id": "close"}]
-                discovery_type.return_value.source_provenance.return_value = {"kind": "synthetic"}
-                for config in forms:
-                    discovery_type.reset_mock()
-                    result = discover_fields("reversal", client=client, config=config,
-                                            state_dir=tmp)
-                    self.assertEqual(result["fields"], [{"id": "close"}])
-                    self.assertEqual(
-                        discovery_type.call_args.kwargs["pagination_limit"], 7
-                    )
             for config in forms:
                 result = list_datafields("analyst69", client=client, config=config)
                 self.assertEqual(result["limit"], 7)
@@ -856,6 +844,23 @@ class TestResearchApi(unittest.TestCase):
         self.assertEqual(result["fields"], rows)
         self.assertEqual([call[1]["offset"] for call in calls], [0, 2, 4])
 
+    def test_list_all_datafields_uses_configured_page_cap(self):
+        client = SimpleNamespace(
+            get_datafields=lambda _dataset_id, **_kwargs: ([{"id": "f1"}], 2),
+        )
+        with self.assertRaisesRegex(RuntimeError, "PAGINATION_INCOMPLETE"):
+            list_all_datafields(
+                "dataset", client=client,
+                config={"simulation": {}, "runtime": {"max_pagination_pages": 1}},
+            )
+
+    def test_list_all_datafields_rejects_oversized_page_cap(self):
+        client = SimpleNamespace(
+            get_datafields=lambda _dataset_id, **_kwargs: ([], 0),
+        )
+        with self.assertRaisesRegex(ValueError, "max_pages"):
+            list_all_datafields("dataset", client=client, max_pages=101)
+
     def test_list_datasets_exposes_live_scope(self):
         client = SimpleNamespace(
             instrument_type="EQUITY",
@@ -953,35 +958,70 @@ class TestResearchApi(unittest.TestCase):
         result = find_similar_alphas("rank(close)", rows=rows)
         self.assertEqual(result["kind"], "STRUCTURALLY_SIMILAR")
         self.assertEqual([item["alpha_id"] for item in result["matches"]], ["a2"])
-    def test_discovery_without_agent_does_not_construct_legacy_runtime(self):
-        client = SimpleNamespace()
-        with mock.patch("wqb_agent.research_api.FieldDiscovery") as discovery_type:
-            discovery = discovery_type.return_value
-            discovery.discover.return_value = [{"id": "close", "type": "MATRIX"}]
-            discovery.source_provenance.return_value = {"kind": "brain_api"}
-            result = discover_fields("price reversal", client=client)
-        self.assertEqual(result["fields"][0]["id"], "close")
-        discovery_type.assert_called_once()
+    def test_ranked_field_discovery_is_not_a_public_tool(self):
+        import wqb_agent
+        import wqb_agent.research_api as api
 
-    def test_generate_probes_without_agent_does_not_construct_legacy_runtime(self):
+        self.assertFalse(hasattr(api, "discover_fields"))
+        self.assertFalse(hasattr(wqb_agent, "discover_fields"))
+
+    def test_generate_probes_requires_agent_selected_inputs(self):
+        for kwargs in (
+            {"fields": [{"id": "close"}], "template_ids": ["t"]},
+            {"fields": [{"id": "close"}], "count": 1},
+            {"template_ids": ["t"], "count": 1},
+            {"fields": [], "template_ids": ["t"], "count": 1},
+            {"fields": [{"id": "close"}], "template_ids": [], "count": 1},
+            {"fields": [{"id": f"field_{index}"} for index in range(101)],
+             "template_ids": ["t"], "count": 1},
+            {"fields": [{"id": "close"}], "template_ids": ["t"], "count": 101},
+        ):
+            with self.subTest(kwargs=kwargs), self.assertRaises((TypeError, ValueError)):
+                generate_probes(**kwargs)
+
+    def test_generate_probes_uses_only_explicit_agent_selected_inputs(self):
         client = SimpleNamespace(get_operator_capability=lambda: {
             "valid": True, "operators": ["rank"],
         })
         factory = mock.Mock()
         factory.generate_probe_specs.return_value = [SimulationSpec("rank(close)")]
-        with mock.patch("wqb_agent.research_api.FieldDiscovery") as discovery_type, \
+        with mock.patch("wqb_agent.research_api.FieldDiscovery", create=True) as discovery_type, \
                 mock.patch("wqb_agent.research_api.AlphaFactory", return_value=factory):
-            discovery = discovery_type.return_value
-            discovery.discover.return_value = [{"id": "close", "type": "MATRIX"}]
-            result = generate_probes(client=client, count=1)
+            result = generate_probes(
+                fields=[{"id": "close", "type": "MATRIX"}],
+                template_ids=["explicit-template"], count=1, client=client,
+            )
         self.assertEqual(result, [SimulationSpec("rank(close)")])
+        discovery_type.assert_not_called()
+        factory.generate_probe_specs.assert_called_once()
+        call = factory.generate_probe_specs.call_args
+        self.assertEqual(call.args[0]["template_ids"], ["explicit-template"])
+        self.assertEqual(call.args[1], [{"id": "close", "type": "MATRIX"}])
+        self.assertEqual(call.kwargs["target"], 1)
 
-    def test_generate_probes_decouples_discovery_target_and_probe_target(self):
+    def test_generate_probes_bounds_template_selection(self):
+        client = SimpleNamespace(get_operator_capability=lambda: {
+            "valid": True, "status": "LIVE_VERIFIED", "availability": "AVAILABLE",
+            "source": "BRAIN_LIVE_ONLY", "operators": ["rank"],
+        })
+        with mock.patch("wqb_agent.research_api.AlphaFactory") as factory:
+            for template_ids in (
+                [f"template-{index}" for index in range(101)],
+                ["template-a", "template-a"],
+            ):
+                with self.subTest(template_ids=len(template_ids)), \
+                        self.assertRaisesRegex(ValueError, "template_ids"):
+                    generate_probes(
+                        fields=[{"id": "close"}], template_ids=template_ids,
+                        count=1, client=client,
+                    )
+        factory.assert_not_called()
+
+    def test_generate_probes_keeps_simulation_config_with_explicit_fields(self):
         config = {
             "simulation": {"region": "USA", "universe": "TOP3000", "delay": 1,
                             "decay": 4, "neutralization": "SUBINDUSTRY"},
-            "runtime": {"fields_per_discovery": 5},
-            "factory": {"default_probe_count": 9},
+            "runtime": {},
         }
         client = SimpleNamespace(get_operator_capability=lambda: {
             "valid": True, "status": "LIVE_VERIFIED", "availability": "AVAILABLE",
@@ -989,39 +1029,17 @@ class TestResearchApi(unittest.TestCase):
         })
         factory = mock.Mock()
         factory.generate_probe_specs.return_value = []
-        with mock.patch("wqb_agent.research_api.FieldDiscovery") as discovery_type, \
-                mock.patch("wqb_agent.research_api.AlphaFactory", return_value=factory):
-            discovery_type.return_value.discover.return_value = [{"id": "field_a"}]
-            generate_probes("query", count=2, client=client, config=config)
-        discovery_type.return_value.discover.assert_called_once_with(
-            mock.ANY, target_count=5
-        )
+        with mock.patch("wqb_agent.research_api.AlphaFactory", return_value=factory):
+            generate_probes(
+                fields=[{"id": "field_a"}],
+                template_ids=["explicit-template"], count=2,
+                client=client, config=config,
+            )
         factory.generate_probe_specs.assert_called_once()
         call = factory.generate_probe_specs.call_args
         self.assertEqual(call.kwargs["target"], 2)
         self.assertEqual(call.kwargs["simulation_settings"],
                          config["simulation"])
-
-    def test_generate_probes_uses_factory_default_when_count_is_omitted(self):
-        config = {
-            "simulation": {},
-            "runtime": {"fields_per_discovery": 4},
-            "factory": {"default_probe_count": 3},
-        }
-        client = SimpleNamespace(get_operator_capability=lambda: {
-            "valid": True, "status": "LIVE_VERIFIED", "availability": "AVAILABLE",
-            "source": "BRAIN_LIVE_ONLY", "operators": ["rank"],
-        })
-        factory = mock.Mock()
-        factory.generate_probe_specs.return_value = []
-        with mock.patch("wqb_agent.research_api.FieldDiscovery") as discovery_type, \
-                mock.patch("wqb_agent.research_api.AlphaFactory", return_value=factory):
-            discovery_type.return_value.discover.return_value = []
-            generate_probes(client=client, config=config)
-        self.assertEqual(factory.generate_probe_specs.call_args.kwargs["target"], 3)
-        discovery_type.return_value.discover.assert_called_once_with(
-            mock.ANY, target_count=4
-        )
 
     def test_operator_reference_requires_a_live_client(self):
         with self.assertRaises(RuntimeError):

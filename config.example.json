@@ -18,31 +18,16 @@
     "alpha_template_catalog": null,
     "smoke_dataset": null,
     "max_concurrent_sims": 10,
-    "fields_per_discovery": 100,
     "pagination_limit": 50,
     "max_pagination_pages": 20,
     "poll_timeout_sec": 1500,
     "repoll_attempts": 3,
-    "repoll_backoff_sec": 60,
-    "field_selection": {
-      "mode": "semantic_random",
-      "random_fraction": 0.35,
-      "random_seed": "synthetic-example",
-      "platform_usage_refresh": false,
-      "require_platform_alpha_count": false,
-      "dataset_sampling": "stratified",
-      "dataset_pool": [],
-      "min_datasets": 1,
-      "persist_catalog": false
-    }
+    "repoll_backoff_sec": 60
   },
   "remote_cache": {
     "retention_days": 7
   },
   "quota": {
     "daily": 5000
-  },
-  "factory": {
-    "default_probe_count": 100
   }
 }

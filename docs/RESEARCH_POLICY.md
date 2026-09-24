@@ -7,7 +7,8 @@
 研究闭环：
 
 ```text
-discover fields/operators → generate/review SimulationSpec → simulate
+list raw datasets/datafields and operators → Agent selects evidence and fields
+→ optionally generate/review an explicitly bounded SimulationSpec → simulate
 → read live Alpha evidence → AI 比较、解释并创建下一份 spec
 ```
 

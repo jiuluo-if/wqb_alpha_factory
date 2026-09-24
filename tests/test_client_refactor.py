@@ -4,14 +4,12 @@ Covers what the git_selfbqr comparison contributed:
 - classified client exceptions (WQBRejectedError / WQBRateLimitError /
   WQBNotFoundError / WQBTimeoutError) and their failure-kind mapping
 - thread-local sessions (concurrent-safe authentication)
-- FieldDiscovery disk cache (cross-run, TTL-bounded)
 - classify_experiment recognizes the new exception names
 """
 
 import json
 import os
 import sys
-import tempfile
 import threading
 import time
 import unittest
@@ -33,7 +31,6 @@ from wqb_agent.client import (
     WQBSubmitUnknownError,
     WQBTimeoutError,
 )
-from wqb_agent.discovery import FieldDiscovery
 from wqb_agent.failures import FailureKind
 
 
@@ -1098,7 +1095,6 @@ class TestSharedRateLimitGate(unittest.TestCase):
             times.append(time.monotonic())
             return FakeResponse(201, headers={"Location": "/sim/1"})
 
-        import time
         with mock.patch.object(c, "_request", side_effect=fake_request):
             c.submit_simulation("rank(a)", {})
             c.submit_simulation("rank(b)", {})
@@ -1135,7 +1131,6 @@ class TestSharedRateLimitGate(unittest.TestCase):
             post_gate_state.append(c._rate_limit_until > time.monotonic())
             return FakeResponse(201, headers={"Location": "/sim/1"})
 
-        import time
         with mock.patch.object(c, "_wait_rate_limit_gate", side_effect=wait_gate), \
              mock.patch.object(c, "_request", side_effect=fake_request):
             worker = threading.Thread(
@@ -1161,107 +1156,6 @@ class TestSharedRateLimitGate(unittest.TestCase):
              mock.patch.object(c, "_ensure_auth"):
             with self.assertRaises(WQBRateLimitError):
                 c._request("POST", "/simulations", context="submit", rate_limit_budget_sec=5)
-
-
-class TestDiscoveryDiskCache(unittest.TestCase):
-    class FakeClient:
-        def __init__(self):
-            self.calls = []
-
-        def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
-            # field_type 用于区分两轮拉取（MATRIX/VECTOR），生成不同 id，
-            # 以便验证两类型字段都被发现且按 id 去重。
-            prefix = (field_type or "MATRIX").lower()
-            self.calls.append((dataset_id, offset, field_type))
-            results = [
-                {"id": f"{prefix}_{dataset_id}_f{offset + i}", "name": f"n{i}",
-                 "description": "d", "dataset": {"id": dataset_id}}
-                for i in range(limit)
-            ]
-            return results, 200
-
-    def test_cache_hits_disk(self):
-        tmp = tempfile.mkdtemp(prefix="wqb_test_disc_")
-        cache_path = os.path.join(tmp, "fields_cache.json")
-        client = self.FakeClient()
-        d = FieldDiscovery(client, pagination_limit=50, max_pages=20,
-                           cache_path=cache_path, cache_ttl_sec=3600)
-        fields1 = d._fields_for("news18")
-        # MATRIX + VECTOR 各 4 页（count=200），共 400 字段
-        self.assertEqual(len(fields1), 400)
-        self.assertTrue(os.path.exists(cache_path))
-        with open(cache_path, encoding="utf-8") as f:
-            payload = json.load(f)
-        self.assertEqual(payload["schema"], FieldDiscovery.CACHE_SCHEMA)
-        self.assertNotIn("schema_version", payload)
-        self.assertNotIn("created_by_version", payload)
-        # 两类型都被拉取（探索 Vector 字段族的前提）
-        self.assertEqual({c[2] for c in client.calls}, {"MATRIX", "VECTOR"})
-        # second instance should hit the disk cache: no API calls
-        client2 = self.FakeClient()
-        d2 = FieldDiscovery(client2, pagination_limit=50, max_pages=20,
-                            cache_path=cache_path, cache_ttl_sec=3600)
-        fields2 = d2._fields_for("news18")
-        self.assertEqual(len(fields2), 400)
-        self.assertEqual(client2.calls, [])
-
-    def test_wrong_active_schema_is_ignored_and_refetched(self):
-        tmp = tempfile.mkdtemp(prefix="wqb_test_disc_schema_")
-        cache_path = os.path.join(tmp, "fields_cache.json")
-        with open(cache_path, "w", encoding="utf-8") as f:
-            json.dump({
-                "schema": FieldDiscovery.CACHE_SCHEMA + 1,
-                "saved_at": time.time(),
-                "datasets": {"news18": [{"id": "stale"}]},
-            }, f)
-
-        client = self.FakeClient()
-        discovery = FieldDiscovery(
-            client, cache_path=cache_path, cache_ttl_sec=3600,
-        )
-        fields = discovery._fields_for("news18")
-
-        self.assertEqual(len(fields), 400)
-        self.assertTrue(client.calls)
-        self.assertNotEqual(fields, [{"id": "stale"}])
-
-    def test_legacy_extra_cache_metadata_remains_readable(self):
-        tmp = tempfile.mkdtemp(prefix="wqb_test_disc_legacy_")
-        cache_path = os.path.join(tmp, "fields_cache.json")
-        legacy_fields = [{"id": "legacy", "dataset": {"id": "news18"}}]
-        with open(cache_path, "w", encoding="utf-8") as f:
-            json.dump({
-                "schema": FieldDiscovery.CACHE_SCHEMA,
-                "schema_version": 1,
-                "created_by_version": "alpha-factory",
-                "saved_at": time.time(),
-                "datasets": {"news18": legacy_fields},
-            }, f)
-
-        client = self.FakeClient()
-        discovery = FieldDiscovery(
-            client, cache_path=cache_path, cache_ttl_sec=3600,
-        )
-
-        self.assertEqual(discovery._fields_for("news18"), legacy_fields)
-        self.assertEqual(client.calls, [])
-
-    def test_stale_cache_refetches(self):
-        tmp = tempfile.mkdtemp(prefix="wqb_test_disc2_")
-        cache_path = os.path.join(tmp, "fields_cache.json")
-        client = self.FakeClient()
-        d = FieldDiscovery(client, cache_path=cache_path, cache_ttl_sec=3600)
-        d._fields_for("pv1")
-        # rewrite saved_at to the past so the cache is stale
-        with open(cache_path, encoding="utf-8") as f:
-            data = json.load(f)
-        data["saved_at"] = 0
-        with open(cache_path, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-        client2 = self.FakeClient()
-        d2 = FieldDiscovery(client2, cache_path=cache_path, cache_ttl_sec=3600)
-        d2._fields_for("pv1")
-        self.assertTrue(client2.calls)  # refetched from the API
 
 
 if __name__ == "__main__":
