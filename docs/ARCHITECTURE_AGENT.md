@@ -27,7 +27,7 @@ research_api.simulate_multi_batch
  → BRAIN
 ```
 
-Simulation 模式边界是显式的：生产 writer 当前只支持已验证的 `REGULAR` 请求 schema。Single Simulation 小规模优化默认 10 个 worker 窗口；Multi-Simulation 每个 parent 2–10 个 REGULAR child，默认并发 dispatch 2 个 parent，显式硬上限 8 个 parent 供大规模探针使用。Region-Agnostic 与 SUPER 可以是平台广告的能力，但不是 writer 支持的模式，在它们各自的独立写入契约实现并验证之前，永不作为回退或 Multi 窗口的一部分。
+Simulation 模式边界是显式的：生产 writer 当前支持已验证的 `REGULAR` 与 `REGION_AGNOSTIC` 请求 schema；`REGION_AGNOSTIC` 由客户端 scope 提供 `region="ALL"` 等约束，一次写入返回一个 Region-Agnostic parent 和它的多个地区 child。Single Simulation 小规模优化默认 10 个 worker 窗口；Multi-Simulation 每个 parent 2–10 个 REGULAR child，默认并发 dispatch 2 个 parent，显式硬上限 8 个 parent 供大规模探针使用。SUPER 可以是平台广告的能力，但不是 writer 支持的模式，在其独立 `combo`/`selection` 写入契约实现并验证之前，永不作为回退或 Multi 窗口的一部分。
 
 任何其他模块不得直接提交 Simulation。
 
