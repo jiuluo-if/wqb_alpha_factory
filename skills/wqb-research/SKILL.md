@@ -28,6 +28,14 @@ frontmatter 中 `compatible_research_contract` 是本文件编写时所针对的
 - 失败归因到假设、字段、算子、horizon、实现、相关性或稳健性。没有新证据不得重跑已明确失败的形态。
 - Skill、记忆教训或历史运行不是 BRAIN 事实。记忆只保留少量可迁移研究教训；永不存完整转录。
 
+## 方向与局部优化
+
+- Probe 开始前声明 `direction`、`direction_reason` 和 `direction_transform`，理由必须先于结果；不得因 Sharpe 为负而事后反转方向。
+- 复杂度按最终表达式的 effective operator occurrence 计算，`direction_transform` 等机械 wrapper 也计数。CONTROL 为 1–3，PROBE 为 4–6；上限是硬约束，不是目标，不加无经济理由的算子凑数。
+- 局部优化先声明 immutable anchor。每个 variant 只改一个已声明的 numeric slot 或一个 settings key；字段、template、mechanism、算子顺序/拓扑和 operator count 保持不变。需要改拓扑时另立 `NEW_PROBE` 假设。
+- numeric slot 先用 `inspect_template()` 核对 `default`、`allowed_values` 与 `economic_role`；优先比较当前值相邻且有经济理由的 allowed value，不生成 grid 或笛卡尔积。
+- baseline 已有证据时不重复提交它。解释时比较 baseline 与所有 variants，不自动选 winner；若邻近变化没有一致、可解释的支持证据，停止该优化维度并保留其他解释。
+
 ## 研究工作集
 
 为当前问题保持一个简短工作集，每轮覆盖：
