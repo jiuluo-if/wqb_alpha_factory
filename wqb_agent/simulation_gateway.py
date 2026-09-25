@@ -335,8 +335,15 @@ class SimulationGateway:
         )
 
     @staticmethod
-    def validate_simulation_settings(settings, *, client=None, capability=None):
+    def validate_simulation_settings(
+        settings, *, client=None, capability=None,
+        simulation_type=REGULAR_SIMULATION_TYPE,
+    ):
         """Return the canonical bounded Simulation settings validation report."""
+        simulation_type = str(
+            simulation_type or REGULAR_SIMULATION_TYPE
+        ).strip().upper()
+        region_agnostic = simulation_type == "REGION_AGNOSTIC"
         errors = []
         if not isinstance(settings, Mapping):
             return {
@@ -387,6 +394,8 @@ class SimulationGateway:
                 ("universe", "universe"),
                 ("instrumentType", "instrument_type"),
             ):
+                if region_agnostic and key in {"region", "universe"}:
+                    continue
                 expected = getattr(client, attr, None)
                 if (
                     key in normalized
@@ -429,10 +438,13 @@ class SimulationGateway:
             for key, spec in (capability.get("settings") or {}).items():
                 if key not in normalized or not isinstance(spec, Mapping):
                     continue
-                if not scope_dependent_applies and key in (
-                    "universe", "delay", "neutralization", "decay",
-                    "truncation", "pasteurization", "unitHandling",
-                    "nanHandling",
+                if not scope_dependent_applies and (
+                    key in (
+                        "universe", "delay", "neutralization", "decay",
+                        "truncation", "pasteurization", "unitHandling",
+                        "nanHandling",
+                    )
+                    or (region_agnostic and key == "region")
                 ):
                     continue
                 allowed = spec.get("allowed_values")
@@ -518,7 +530,8 @@ class SimulationGateway:
 
     def _validate_settings(self, spec, capability):
         report = self.validate_simulation_settings(
-            spec.settings, client=self.client, capability=capability
+            spec.settings, client=self.client, capability=capability,
+            simulation_type=spec.simulation_type,
         )
         if not report["valid"]:
             raise ValueError("invalid simulation settings: " + "; ".join(report["errors"]))
