@@ -559,6 +559,41 @@ class TestResearchApi(unittest.TestCase):
                 delete_template("private_round_trip", catalog_path=catalog)["status"],
                 "DELETED",
             )
+
+    def test_private_catalog_nested_dict_lists_round_trip_as_toml_inline_tables(self):
+        from wqb_agent.alpha_templates.loader import load_builtin_templates
+        from wqb_agent.research_api import create_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = pathlib.Path("wqb_agent/alpha_templates/catalog/builtin.toml")
+            catalog = pathlib.Path(tmp) / "private.toml"
+            catalog.write_text(
+                source.read_text(encoding="utf-8").replace(
+                    'semantic_contract = "SYNTHETIC_FIXTURE"',
+                    'semantic_contract = "DATA_QUALITY"',
+                ),
+                encoding="utf-8",
+            )
+            binding = {
+                "slot": "p",
+                "field_id": "field_a",
+                "metadata": {"source": "synthetic", "labels": ["one", "two"]},
+            }
+            template = replace(
+                load_builtin_templates()[0],
+                template_id="private_nested_toml",
+                semantic_contract="DATA_QUALITY",
+                fixed_field_bindings=(binding,),
+            )
+
+            create_template(template, catalog_path=catalog)
+            entry = inspect_template(
+                "private_nested_toml", catalog_path=catalog, require_private=True
+            )
+
+            self.assertEqual(entry["fixed_field_bindings"], [binding])
+            written = catalog.read_text(encoding="utf-8")
+            self.assertIn('metadata = {source = "synthetic", labels = ["one", "two"]}', written)
     def test_discovery_simulation_and_remote_boundaries_accept_equivalent_configs(self):
         raw = {
             "simulation": {},

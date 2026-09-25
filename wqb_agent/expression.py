@@ -170,10 +170,25 @@ def variant_family_fingerprint(expression):
     return expression_identity_keys(expression)[1]
 
 
-def submission_fingerprint(expression, settings):
-    """Return the stable expression/settings identity used by checkpoints."""
+def submission_fingerprint(expression, settings, *, simulation_type="REGULAR"):
+    """Return the stable typed Simulation identity used by execution guards.
+
+    Keep the historical REGULAR payload byte-for-byte stable so persisted
+    unresolved guards continue to match. Other request schemas use an explicit
+    type namespace in the identity payload.
+    """
+    simulation_type = str(simulation_type or "REGULAR").strip().upper()
+    material = {
+        "expression": canonical_expression(expression),
+        "settings": settings,
+    }
+    if simulation_type != "REGULAR":
+        material = {
+            "identity_contract": "typed-simulation-v1",
+            "simulation_type": simulation_type,
+            **material,
+        }
     canonical = json.dumps(
-        {"expression": canonical_expression(expression), "settings": settings},
-        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        material, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

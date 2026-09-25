@@ -168,8 +168,10 @@ class ExecutionGuard:
                 self._write(rows)
 
     @staticmethod
-    def fingerprint(expression, settings):
-        return submission_fingerprint(expression, settings)
+    def fingerprint(expression, settings, *, simulation_type=REGULAR_SIMULATION_TYPE):
+        return submission_fingerprint(
+            expression, settings, simulation_type=simulation_type
+        )
 
     @staticmethod
     def _normalize_simulation_count(value):
@@ -675,7 +677,9 @@ class SimulationGateway:
     def execution_fingerprint(self, spec):
         spec = spec if isinstance(spec, SimulationSpec) else SimulationSpec(**dict(spec))
         self.validate_simulation_spec(spec)
-        return self.guard.fingerprint(spec.expression, spec.settings)
+        return self.guard.fingerprint(
+            spec.expression, spec.settings, simulation_type=spec.simulation_type
+        )
 
     def _preflight_specs(self, specs, *, simulation_capability=_CAPABILITY_UNCHECKED):
         normalized = [
@@ -907,6 +911,15 @@ class SimulationGateway:
             else SimulationSpec(**dict(item))
             for item in (specs or ())
         ]
+        if len(normalized_specs) > 1:
+            for spec in normalized_specs:
+                simulation_type = _spec_simulation_type(spec)
+                if (simulation_type != REGULAR_SIMULATION_TYPE
+                        and simulation_type in SUPPORTED_WRITE_SIMULATION_TYPES):
+                    raise ResearchReasonError(
+                        "Multi-Simulation only accepts REGULAR children",
+                        "INVALID_SPEC",
+                    )
         if isinstance(child_batch_size, bool) or not isinstance(child_batch_size, int):
             raise TypeError("child_batch_size must be an integer")
         if child_batch_size < MULTI_MIN_CHILDREN or child_batch_size > MULTI_MAX_CHILDREN:

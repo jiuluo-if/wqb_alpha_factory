@@ -1482,6 +1482,11 @@ class SimulationWriteContractTests(unittest.TestCase):
     def test_regular_fingerprint_is_unchanged_by_the_type_field(self):
         # Guards persisted before this change must still match.
         guard_material = SimulationSpec("rank(close)", {"delay": 1})
+        legacy_fingerprint = "819d6287c44ea8a479470662d06428a7e4d47c74a7f3dff0875563556187be96"
+        self.assertEqual(
+            ExecutionGuard.fingerprint("rank(close)", {"delay": 1}),
+            legacy_fingerprint,
+        )
         self.assertEqual(
             ExecutionGuard.fingerprint("rank(close)", {"delay": 1}),
             ExecutionGuard.fingerprint(
@@ -1494,6 +1499,44 @@ class SimulationWriteContractTests(unittest.TestCase):
                 gateway.execution_fingerprint(guard_material),
                 ExecutionGuard.fingerprint("rank(close)", {"delay": 1}),
             )
+
+    def test_region_agnostic_fingerprint_has_stable_type_namespace(self):
+        client = FakeGatewayClient()
+        with tempfile.TemporaryDirectory() as state:
+            gateway = SimulationGateway(client, state_dir=state)
+            regular = SimulationSpec("rank(close)", {"delay": 1})
+            region_agnostic = SimulationSpec(
+                "rank(close)", {"delay": 1}, simulation_type="REGION_AGNOSTIC"
+            )
+
+            regular_fingerprint = gateway.execution_fingerprint(regular)
+            ra_fingerprint = gateway.execution_fingerprint(region_agnostic)
+
+            self.assertEqual(
+                regular_fingerprint,
+                ExecutionGuard.fingerprint("rank(close)", {"delay": 1}),
+            )
+            self.assertNotEqual(regular_fingerprint, ra_fingerprint)
+            self.assertEqual(
+                ra_fingerprint,
+                gateway.execution_fingerprint(SimulationSpec(
+                    "rank(close)", {"delay": 1},
+                    simulation_type="REGION_AGNOSTIC",
+                )),
+            )
+
+    def test_unresolved_legacy_regular_guard_blocks_replacement_post(self):
+        with tempfile.TemporaryDirectory() as state:
+            client = FakeGatewayClient()
+            fingerprint = ExecutionGuard.fingerprint("rank(close)", {"delay": 1})
+            ExecutionGuard(state).register(fingerprint)
+            gateway = SimulationGateway(client, state_dir=state)
+
+            result = gateway.simulate(SimulationSpec("rank(close)", {"delay": 1}))
+
+            self.assertEqual(result["status"], "SUBMIT_UNKNOWN")
+            self.assertEqual(result["fingerprint"], fingerprint)
+            self.assertEqual(client.submissions, [])
 
     def test_public_regular_build_validate_fingerprint_and_simulate_chain(self):
         spec = research_api.build_simulation_spec(
@@ -1574,6 +1617,27 @@ class SimulationWriteContractTests(unittest.TestCase):
                     ),
                     SimulationSpec("rank(field_b)", {"delay": 1}),
                 ])
+            self.assertEqual(client.multi_submissions, [])
+            self.assertEqual(client.submissions, [])
+            self.assertEqual(gateway.guard.entries(), [])
+
+    def test_multi_region_agnostic_child_is_invalid_before_any_guard_or_post(self):
+        from wqb_agent.failures import ResearchReasonError
+
+        client = MultiGatewayClient()
+        with tempfile.TemporaryDirectory() as state:
+            gateway = SimulationGateway(client, state_dir=state)
+
+            with self.assertRaises(ResearchReasonError) as raised:
+                gateway.simulate_multi_batch([
+                    SimulationSpec(
+                        "rank(field_a)", {"delay": 1},
+                        simulation_type="REGION_AGNOSTIC",
+                    ),
+                    SimulationSpec("rank(field_b)", {"delay": 1}),
+                ])
+
+            self.assertEqual(raised.exception.reason_code, "INVALID_SPEC")
             self.assertEqual(client.multi_submissions, [])
             self.assertEqual(client.submissions, [])
             self.assertEqual(gateway.guard.entries(), [])
