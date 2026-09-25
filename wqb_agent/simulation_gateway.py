@@ -41,10 +41,13 @@ MULTI_MAX_CONCURRENCY = 8
 # answers one `/users/self/alphas` page in ~6 s and serialises concurrent pages,
 # so walking the complete history of a large library needs tens of minutes and
 # can never finish inside a usable budget — it used to abort every POST before
-# dispatch.  The scan is therefore bounded to the most recent days and reports
-# itself as a window rather than as complete history.
-REMOTE_DUPLICATE_LOOKBACK_DAYS = 2
-REMOTE_DUPLICATE_SCAN_BUDGET_SEC = 300
+# dispatch.  The scan is therefore bounded to the most recent day and reports
+# itself as a window rather than as complete history.  One day of this account's
+# library holds ~700-900 alphas, which fits the platform's 1000-row query window
+# in a single shard; a two-day span already exceeds that window and forces
+# bisection, whose extra pages cost more time than the budget allows.
+REMOTE_DUPLICATE_LOOKBACK_DAYS = 1
+REMOTE_DUPLICATE_SCAN_BUDGET_SEC = 900
 REMOTE_DUPLICATE_SCAN_KEY = "__remote_duplicate_scan__"
 
 
