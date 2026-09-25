@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tomllib
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -598,7 +599,38 @@ def _template_raw(template):
     return raw
 
 
+_TOML_BARE_KEY_RE = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def _toml_key(key: object) -> str:
+    key = str(key)
+    if _TOML_BARE_KEY_RE.fullmatch(key):
+        return key
+    return json.dumps(key, ensure_ascii=False)
+
+
+def _toml_inline(value) -> str:
+    """Render nested structures with TOML inline-table syntax, never JSON."""
+    if isinstance(value, Mapping):
+        inner = ", ".join(
+            f"{_toml_key(key)} = {_toml_inline(item)}" for key, item in value.items()
+        )
+        return "{" + inner + "}"
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_toml_inline(item) for item in value) + "]"
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return json.dumps(value)
+
+
 def _toml_value(value):
+    if isinstance(value, Mapping) or (
+        isinstance(value, (list, tuple))
+        and any(isinstance(item, Mapping) for item in value)
+    ):
+        return _toml_inline(value)
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
