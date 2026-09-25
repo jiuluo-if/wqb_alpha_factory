@@ -336,7 +336,9 @@ def _write_result_envelope(results, *, expected_count: int) -> dict[str, Any]:
     """Return required proposal attribution and follow-up identities only."""
     malformed = not isinstance(results, (list, tuple))
     results = [] if malformed else list(results)
-    projected, scan, clipped = [], None, False
+    projected: list[dict[str, Any]] = []
+    scan: dict[str, Any] | None = None
+    clipped = False
     for item in results:
         if not isinstance(item, Mapping):
             clipped = True
