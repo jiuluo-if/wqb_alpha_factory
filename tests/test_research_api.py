@@ -761,7 +761,8 @@ class TestResearchApi(unittest.TestCase):
             )
         self.assertEqual(result["source"], "GATEWAY")
         validator.assert_called_once_with(
-            {"delay": 1}, client=client, capability=capability
+            {"delay": 1}, client=client, capability=capability,
+            simulation_type="REGULAR",
         )
 
     def test_live_preflight_reuses_mode_reason_projection(self):

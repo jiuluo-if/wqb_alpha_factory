@@ -419,10 +419,14 @@ def get_simulation_config(*, config=None):
     }
 
 
-def validate_simulation_settings(settings, *, client=None, config=None, capability=None):
+def validate_simulation_settings(
+    settings, *, client=None, config=None, capability=None,
+    simulation_type="REGULAR",
+):
     """Compatibility facade for the canonical Gateway-owned validator."""
     return SimulationGateway.validate_simulation_settings(
-        settings, client=client, capability=capability
+        settings, client=client, capability=capability,
+        simulation_type=simulation_type,
     )
 
 
@@ -454,7 +458,10 @@ def build_simulation_spec(expression, *, settings=None, fields=(), field_dataset
         effective_simulation_type = anchor_spec.simulation_type
         if canonical_expression(expression) != canonical_expression(anchor_spec.expression):
             raise ValueError("NEW_PROBE_REQUIRED: settings variant changed expression")
-    result = validate_simulation_settings(settings or {}, client=client, config=config)
+    result = validate_simulation_settings(
+        settings or {}, client=client, config=config,
+        simulation_type=effective_simulation_type,
+    )
     if not result["valid"]:
         raise ValueError("invalid simulation settings: " + "; ".join(result["errors"]))
     effective_settings = dict(result["settings"])

@@ -1595,6 +1595,36 @@ class SimulationWriteContractTests(unittest.TestCase):
                 )),
             )
 
+    def test_region_agnostic_single_allows_non_client_region_scope(self):
+        client = FakeGatewayClient()
+        client.region = "USA"
+        client.universe = "TOP3000"
+        client.instrument_type = "EQUITY"
+        client.get_simulation_capability = lambda: {
+            "status": "AVAILABLE",
+            "simulation_type_choices": ["REGULAR", "REGION_AGNOSTIC"],
+            "settings": {},
+            "required_settings": [],
+        }
+        settings = {
+            "region": "GLB", "universe": "MINVOL1M",
+            "instrumentType": "EQUITY", "delay": 1,
+        }
+
+        with tempfile.TemporaryDirectory() as state:
+            spec = research_api.build_simulation_spec(
+                "rank(close)", settings=settings, client=client,
+                simulation_type="REGION_AGNOSTIC",
+            )
+            result = SimulationGateway(client, state_dir=state).simulate(spec)
+
+        self.assertEqual(result["status"], "DONE")
+        self.assertEqual(client.submissions[0][2]["alpha_type"], "REGION_AGNOSTIC")
+        with self.assertRaisesRegex(ValueError, "does not match client scope"):
+            research_api.build_simulation_spec(
+                "rank(close)", settings=settings, client=client,
+            )
+
     def test_unresolved_legacy_regular_guard_blocks_replacement_post(self):
         with tempfile.TemporaryDirectory() as state:
             client = FakeGatewayClient()
