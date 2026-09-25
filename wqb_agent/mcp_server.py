@@ -1,4 +1,4 @@
-"""Optional, read-only MCP transport over the public research facade.
+"""Optional read-only and explicitly enabled Research MCP transports.
 
 This module owns transport, bounded projection, and error presentation only.
 Research and platform semantics remain in :mod:`wqb_agent.research_api`.
@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import sys
 from collections.abc import Mapping
 from typing import Any
@@ -28,8 +29,14 @@ _WRITE_RESULT_KEYS = (
     "proposal_id", "note", "template_id", "status", "reason_code",
     "fingerprint", "batch_fingerprint", "alpha_id", "field_validation",
 )
-_IDENTITY_RESULT_LIMITS = {"proposal_id": 48, "template_id": 12, "fingerprint": 64, "batch_fingerprint": 64, "alpha_id": 56}
-_RESULT_TEXT_LIMITS = {"note": 12, "status": 32, "reason_code": 32, "field_validation": 16}
+_WRITE_IDENTITY_LIMITS = {
+    "proposal_id": 48, "template_id": 48, "fingerprint": 64,
+    "batch_fingerprint": 64, "alpha_id": 128,
+}
+_WRITE_TEXT_LIMITS = {"note": 64, "status": 32, "reason_code": 32, "field_validation": 32}
+_INLINE_SECRET = re.compile(
+    r"(?i)(?:password|credential|token|secret|authorization|cookie|api[_-]?key)\s*[:=]\s*\S+"
+)
 
 
 def _is_secret_key(key: object) -> bool:
@@ -334,38 +341,62 @@ def build_server(*, api=research_api, client=None, config=None, state_dir=None):
 
 
 def _write_result_envelope(results, *, expected_count: int) -> dict[str, Any]:
-    """Keep one small status row per input without returning evidence or URLs."""
+    """Return bounded proposal labels, outcomes and recovery identities."""
     malformed = not isinstance(results, (list, tuple))
     results = [] if malformed else list(results)
     projected, scan, clipped = [], None, False
+    batch_groups: dict[str, list[str]] = {}
     for item in results:
         if not isinstance(item, Mapping):
+            clipped = True
             projected.append({"status": "UNKNOWN"})
             continue
         row = {}
         for key in _WRITE_RESULT_KEYS:
             value = item.get(key)
-            if value is None or not isinstance(value, (str, bool, int, float)) or isinstance(value, float) and not math.isfinite(value):
+            if value is None:
                 continue
-            if key in _IDENTITY_RESULT_LIMITS:
-                if not isinstance(value, str) or len(value) > _IDENTITY_RESULT_LIMITS[key]:
+            if not isinstance(value, str):
+                clipped = True
+                continue
+            if _INLINE_SECRET.search(value):
+                clipped = True
+                if key in _WRITE_IDENTITY_LIMITS and key != "template_id":
+                    continue
+                value = _INLINE_SECRET.sub("[REDACTED]", value)
+            if key in _WRITE_IDENTITY_LIMITS:
+                if not value or len(value) > _WRITE_IDENTITY_LIMITS[key]:
                     clipped = True
                     continue
+                if key == "batch_fingerprint":
+                    proposal_id = row.get("proposal_id")
+                    if isinstance(proposal_id, str) and proposal_id:
+                        batch_groups.setdefault(value, []).append(proposal_id)
+                    continue
                 row[key] = value
-                continue
-            if key == "note" and isinstance(value, str) and _is_secret_key(value):
-                value = "[REDACTED]"
-            text_limit = _RESULT_TEXT_LIMITS.get(key, 48)
-            clipped |= isinstance(value, str) and len(value) > text_limit
-            row[key] = value[:text_limit] if isinstance(value, str) else value
+            else:
+                limit = _WRITE_TEXT_LIMITS[key]
+                clipped |= len(value) > limit
+                row[key] = value[:limit]
         row.setdefault("status", "UNKNOWN")
+        clipped |= (
+            not row.get("proposal_id") or not row.get("fingerprint")
+            or not isinstance(item.get("status"), str)
+            or not row.get("field_validation")
+            or item.get("alpha_id") is not None and not isinstance(item.get("alpha_id"), str)
+        )
         projected.append(row)
         duplicate_scan = item.get("remote_duplicate_scan")
+        if duplicate_scan is not None and not isinstance(duplicate_scan, Mapping):
+            clipped = True
         if scan is None and isinstance(duplicate_scan, Mapping):
             scan = {}
             for key in ("status", "lookback_days", "complete", "elapsed_sec", "rows_scanned", "matched_count", "candidate_count"):
                 value = duplicate_scan.get(key)
                 if isinstance(value, str):
+                    if _INLINE_SECRET.search(value):
+                        value = _INLINE_SECRET.sub("[REDACTED]", value)
+                        clipped = True
                     clipped |= len(value) > 32
                     scan[key] = value[:32]
                 elif isinstance(value, (bool, int)) or isinstance(value, float) and math.isfinite(value):
@@ -381,7 +412,49 @@ def _write_result_envelope(results, *, expected_count: int) -> dict[str, Any]:
     }
     if scan is not None:
         envelope["remote_duplicate_scan"] = scan
+    if len(batch_groups) == 1:
+        envelope["batch_fingerprint"] = next(iter(batch_groups))
+    elif batch_groups:
+        envelope["batch_fingerprints"] = [
+            {"batch_fingerprint": fingerprint, "proposal_ids": proposal_ids}
+            for fingerprint, proposal_ids in batch_groups.items()
+        ]
+    if _write_envelope_size(envelope) > MAX_RESULT_BYTES:
+        envelope["truncated"] = True
+        envelope["truncation_reason"] = "MAX_RESULT_BYTES"
+        for row in projected:
+            row.pop("note", None)
+            row.pop("template_id", None)
+        if _write_envelope_size(envelope) > MAX_RESULT_BYTES:
+            envelope.pop("batch_fingerprint", None)
+            envelope.pop("batch_fingerprints", None)
+        if _write_envelope_size(envelope) > MAX_RESULT_BYTES:
+            envelope.pop("remote_duplicate_scan", None)
+        if _write_envelope_size(envelope) > MAX_RESULT_BYTES:
+            for row in projected:
+                row.pop("alpha_id", None)
+        if _write_envelope_size(envelope) > MAX_RESULT_BYTES:
+            for row in projected:
+                row.pop("reason_code", None)
+                row.pop("field_validation", None)
+        if _write_envelope_size(envelope) > MAX_RESULT_BYTES:
+            for row in projected:
+                proposal_id = row.get("proposal_id")
+                fingerprint = row.get("fingerprint")
+                row.clear()
+                if isinstance(proposal_id, str):
+                    row["proposal_id"] = proposal_id
+                if isinstance(fingerprint, str) and fingerprint.isascii():
+                    row["fingerprint"] = fingerprint
+                row["status"] = "TRUNCATED"
     return envelope
+
+
+def _write_envelope_size(envelope: Mapping[str, Any]) -> int:
+    try:
+        return len(json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    except (TypeError, ValueError):
+        return MAX_RESULT_BYTES + 1
 
 
 def build_research_server(*, api=research_api, client=None, config=None, state_dir=None):
@@ -440,11 +513,22 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
             return result
         return _write_result_envelope(results, expected_count=count)
 
-    def parse_specs(specs, *, minimum, maximum):
+    def parse_specs(specs, *, minimum, maximum, require_proposal_ids=False):
         if not isinstance(specs, list) or not minimum <= len(specs) <= maximum:
             return None
         if any(not isinstance(spec, Mapping) or set(spec) - _SPEC_KEYS for spec in specs):
             return None
+        if require_proposal_ids:
+            proposal_ids = [spec.get("proposal_id") for spec in specs]
+            if any(
+                not isinstance(value, str) or not value.strip() or len(value.strip()) > 48
+                or _INLINE_SECRET.search(value)
+                for value in proposal_ids
+            ):
+                return None
+            normalized_ids = [value.strip() for value in proposal_ids]
+            if len(set(normalized_ids)) != len(normalized_ids):
+                return None
         try:
             return [research_api.SimulationSpec(**spec) for spec in specs]
         except (TypeError, ValueError):
@@ -481,7 +565,7 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
     @server.tool(annotations=remote_write)
     def simulate_batch(specs: list[dict[str, Any]]) -> dict[str, Any]:
         """[REMOTE_WRITE] Start 1–50 BRAIN Simulations through SimulationGateway."""
-        parsed = parse_specs(specs, minimum=1, maximum=MAX_SIMULATION_BATCH)
+        parsed = parse_specs(specs, minimum=1, maximum=MAX_SIMULATION_BATCH, require_proposal_ids=True)
         if parsed is None:
             return _invalid_result(owner="research_api.simulate_batch", access_mode="SIMULATION_WRITE", remote_write=True)
         return write_facade("simulate_batch", parsed)
@@ -489,7 +573,7 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
     @server.tool(annotations=remote_write)
     def simulate_multi_batch(specs: list[dict[str, Any]]) -> dict[str, Any]:
         """[REMOTE_WRITE] Start 2–100 compatible candidates through Gateway Multi batching."""
-        parsed = parse_specs(specs, minimum=2, maximum=MAX_MULTI_BATCH)
+        parsed = parse_specs(specs, minimum=2, maximum=MAX_MULTI_BATCH, require_proposal_ids=True)
         if parsed is None:
             return _invalid_result(owner="research_api.simulate_multi_batch", access_mode="SIMULATION_WRITE", remote_write=True)
         return write_facade("simulate_multi_batch", parsed)
@@ -498,7 +582,7 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
     def get_alpha_evidence(alpha_id: str, recordsets: list[str] | None = None) -> dict[str, Any]:
         """[READ_ONLY] Read one live Alpha evidence projection on request."""
         selected = recordsets or []
-        if not alpha_id or len(selected) > MAX_RECORDSETS:
+        if not alpha_id or len(alpha_id) > 128 or len(selected) > MAX_RECORDSETS:
             return _invalid_result(owner="research_api.get_alpha_evidence")
         return read_facade("get_alpha_evidence", alpha_id, live=True, recordsets=selected, depth="full" if selected else "summary", allow_expression=True)
 

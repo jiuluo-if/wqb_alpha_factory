@@ -358,6 +358,10 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             "simulate_batch", "simulate_multi_batch", "get_alpha_evidence",
             "reconcile_execution",
         })
+        self.assertEqual(
+            set(by_name),
+            {row["name"] for row in mcp_server.research_api.research_tool_manifest(profile="core")},
+        )
         self.assertFalse(by_name["simulate_batch"].annotations.read_only_hint)
         self.assertFalse(by_name["simulate_multi_batch"].annotations.read_only_hint)
         self.assertTrue(by_name["research_status"].annotations.read_only_hint)
@@ -407,11 +411,12 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
     async def test_simulation_batch_routes_facade_and_returns_only_small_projection(self):
         submit = Mock(return_value=[{
             "status": "SUBMIT_UNKNOWN", "reason_code": "SUBMIT_UNKNOWN",
-            "proposal_id": "p-1", "note": "token=secret-token", "template_id": "t-1",
+            "proposal_id": "p-1", "note": "token=secret-token", "template_id": "toy_regression_residual",
             "fingerprint": "fp-1", "alpha_id": None,
             "progress_url": "https://brain.invalid/?token=secret-token",
             "evidence": {"expression": "private-expression", "metrics": {"x": 1}},
             "field_validation": "LIVE_VERIFIED",
+            "batch_fingerprint": "parent-fingerprint",
             "remote_duplicate_scan": {"status": "BOUNDED_RECENT_WINDOW"},
         }])
         multi = Mock()
@@ -440,8 +445,228 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("private-expression", str(data))
         self.assertNotIn("secret-token", str(data))
         self.assertEqual(data["results"][0]["note"], "[REDACTED]")
+        self.assertEqual(data["results"][0]["template_id"], "toy_regression_residual")
+        self.assertEqual(data["batch_fingerprint"], "parent-fingerprint")
         self.assertNotIn("evidence", data["results"][0])
         multi.assert_not_called()
+
+    async def test_write_specs_require_unique_nonempty_proposal_ids_before_facade(self):
+        submit = Mock(return_value=[])
+        multi = Mock(return_value=[])
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(
+                api=self.api(simulate_batch=submit, simulate_multi_batch=multi), client=object(),
+            )
+        invalid_single_batches = (
+            [{"expression": "rank(close)"}],
+            [{"expression": "rank(close)", "proposal_id": "  "}],
+            [{"expression": "rank(close)", "proposal_id": "p" * 49}],
+            [{"expression": "rank(close)", "proposal_id": "token=secret-value"}],
+            [
+                {"expression": "rank(close)", "proposal_id": "same"},
+                {"expression": "rank(volume)", "proposal_id": " same "},
+            ],
+        )
+        async with Client(server) as client:
+            for specs in invalid_single_batches:
+                result = await client.call_tool("simulate_batch", {"specs": specs})
+                self.assertEqual(result.structured_content["error"], "INVALID_ARGUMENT")
+                self.assertEqual(result.structured_content["access_mode"], "SIMULATION_WRITE")
+                self.assertTrue(result.structured_content["remote_write"])
+            invalid_multi = await client.call_tool("simulate_multi_batch", {"specs": [
+                {"expression": "rank(close)", "proposal_id": "dup"},
+                {"expression": "rank(volume)", "proposal_id": "dup"},
+            ]})
+        self.assertEqual(invalid_multi.structured_content["error"], "INVALID_ARGUMENT")
+        self.assertEqual(invalid_multi.structured_content["access_mode"], "SIMULATION_WRITE")
+        self.assertTrue(invalid_multi.structured_content["remote_write"])
+        submit.assert_not_called()
+        multi.assert_not_called()
+
+    async def test_valid_proposal_identity_and_bounded_labels_round_trip(self):
+        proposal_id = "proposal-42"
+        submit = Mock(return_value=[{
+            "proposal_id": proposal_id, "note": "H7:FALSIFY",
+            "template_id": "toy_regression_residual", "status": "DONE",
+            "reason_code": "COMPLETED", "fingerprint": "f" * 64,
+            "field_validation": "LIVE_VERIFIED",
+        }])
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(api=self.api(simulate_batch=submit), client=object())
+        async with Client(server) as client:
+            result = await client.call_tool("simulate_batch", {"specs": [{
+                "expression": "rank(close)", "proposal_id": proposal_id,
+                "note": "H7:FALSIFY", "template_id": "toy_regression_residual",
+            }]})
+        row = result.structured_content["results"][0]
+        self.assertEqual(row["proposal_id"], proposal_id)
+        self.assertTrue({"status", "reason_code", "fingerprint", "field_validation"} <= set(row))
+        self.assertEqual(row["note"], "H7:FALSIFY")
+        self.assertEqual(row["template_id"], "toy_regression_residual")
+
+    async def test_alpha_id_at_owner_limit_round_trips_to_evidence(self):
+        alpha_id = "a" * 128
+        submit = Mock(return_value=[{
+            "proposal_id": "proposal-1", "status": "DONE", "reason_code": "COMPLETED",
+            "fingerprint": "f" * 64, "alpha_id": alpha_id,
+            "field_validation": "LIVE_VERIFIED", "template_id": "toy_regression_residual",
+        }])
+        evidence = Mock(return_value={"source": "LIVE", "alpha": {"id": alpha_id}})
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(
+                api=self.api(simulate_batch=submit, get_alpha_evidence=evidence), client=object(),
+            )
+        async with Client(server) as client:
+            simulated = await client.call_tool("simulate_batch", {"specs": [{
+                "expression": "rank(close)", "proposal_id": "proposal-1",
+            }]})
+            returned_alpha_id = simulated.structured_content["results"][0]["alpha_id"]
+            await client.call_tool("get_alpha_evidence", {"alpha_id": returned_alpha_id})
+        self.assertEqual(returned_alpha_id, alpha_id)
+        self.assertEqual(evidence.call_args.args[0], alpha_id)
+        self.assertEqual(simulated.structured_content["results"][0]["proposal_id"], "proposal-1")
+        self.assertEqual(simulated.structured_content["results"][0]["template_id"], "toy_regression_residual")
+
+    async def test_alpha_id_over_owner_limit_is_rejected_before_evidence_facade(self):
+        evidence = Mock(return_value={"source": "LIVE", "alpha": {}})
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(api=self.api(get_alpha_evidence=evidence), client=object())
+        async with Client(server) as client:
+            result = await client.call_tool("get_alpha_evidence", {"alpha_id": "a" * 129})
+        self.assertEqual(result.structured_content["error"], "INVALID_ARGUMENT")
+        evidence.assert_not_called()
+
+    async def test_nonstring_alpha_id_is_not_emitted_as_a_recovery_identity(self):
+        submit = Mock(return_value=[{
+            "proposal_id": "proposal-1", "status": "DONE", "reason_code": "COMPLETED",
+            "fingerprint": "f" * 64, "alpha_id": 123,
+            "field_validation": "LIVE_VERIFIED",
+        }])
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(api=self.api(simulate_batch=submit), client=object())
+        async with Client(server) as client:
+            result = await client.call_tool("simulate_batch", {"specs": [{
+                "expression": "rank(close)", "proposal_id": "proposal-1",
+            }]})
+        row = result.structured_content["results"][0]
+        self.assertNotIn("alpha_id", row)
+        self.assertTrue(result.structured_content["truncated"])
+
+    async def test_multi_child_fingerprint_reconciles_parent_with_shared_batch_fingerprint(self):
+        from tempfile import TemporaryDirectory
+
+        from wqb_agent.simulation_gateway import ExecutionGuard
+
+        parent = "p" * 64
+        children = ("a" * 64, "b" * 64)
+        multi = Mock(return_value=[
+            {"status": "SUBMIT_UNKNOWN", "reason_code": "SUBMIT_UNKNOWN",
+             "proposal_id": f"proposal-{i}", "fingerprint": child,
+             "batch_fingerprint": parent, "field_validation": "LIVE_VERIFIED"}
+            for i, child in enumerate(children)
+        ])
+        with TemporaryDirectory() as state_dir:
+            guard = ExecutionGuard(state_dir)
+            guard.register(parent, status="SUBMIT_UNKNOWN", kind=ExecutionGuard.MULTI_PARENT, simulation_count=2)
+            for child in children:
+                guard.register(child, status="SUBMIT_UNKNOWN", kind=ExecutionGuard.MULTI_CHILD, parent_fingerprint=parent)
+            api = self.api(
+                simulate_multi_batch=multi,
+                reconcile_execution=mcp_server.research_api.reconcile_execution,
+            )
+            with patch.dict(os.environ, {self.ENV: "1"}):
+                server = mcp_server.build_research_server(api=api, client=object(), state_dir=state_dir)
+            specs = [
+                {"expression": "rank(close)", "proposal_id": "proposal-0"},
+                {"expression": "rank(volume)", "proposal_id": "proposal-1"},
+            ]
+            async with Client(server) as client:
+                simulated = await client.call_tool("simulate_multi_batch", {"specs": specs})
+                row = simulated.structured_content["results"][0]
+                self.assertEqual(simulated.structured_content["batch_fingerprint"], parent)
+                self.assertEqual(row["fingerprint"], children[0])
+                recovered = await client.call_tool("reconcile_execution", {"fingerprint": row["fingerprint"]})
+        self.assertEqual(recovered.structured_content["data"]["status"], "SUBMIT_UNKNOWN")
+        self.assertEqual(recovered.structured_content["data"]["fingerprint"], parent)
+
+    def test_split_multi_parent_fingerprints_are_grouped_by_proposal(self):
+        envelope = mcp_server._write_result_envelope([
+            {"proposal_id": "p-1", "status": "RUNNING", "fingerprint": "a" * 64,
+             "batch_fingerprint": "x" * 64, "field_validation": "LIVE_VERIFIED"},
+            {"proposal_id": "p-2", "status": "RUNNING", "fingerprint": "b" * 64,
+             "batch_fingerprint": "y" * 64, "field_validation": "LIVE_VERIFIED"},
+        ], expected_count=2)
+        self.assertEqual(envelope["batch_fingerprints"], [
+            {"batch_fingerprint": "x" * 64, "proposal_ids": ["p-1"]},
+            {"batch_fingerprint": "y" * 64, "proposal_ids": ["p-2"]},
+        ])
+        self.assertNotIn("batch_fingerprint", envelope)
+
+    def test_write_projection_enforces_byte_limit_without_dropping_candidates(self):
+        rows = [{
+            "proposal_id": "提案" * 24,
+            "note": "假设说明" * 6,
+            "template_id": "模板标识" * 12,
+            "status": "SUBMIT_UNKNOWN",
+            "reason_code": "SUBMIT_UNKNOWN",
+            "fingerprint": f"{index:064x}",
+            "batch_fingerprint": f"{index:064x}",
+            "alpha_id": f"alpha-{index:03d}",
+            "field_validation": "LIVE_VERIFIED",
+        } for index in range(100)]
+        envelope = mcp_server._write_result_envelope(rows, expected_count=100)
+        payload = json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        self.assertLessEqual(len(payload), mcp_server.MAX_RESULT_BYTES)
+        self.assertTrue(envelope["truncated"])
+        self.assertEqual(len(envelope["results"]), 100)
+        self.assertEqual([row.get("proposal_id") for row in envelope["results"]], [row["proposal_id"] for row in rows])
+
+    def test_write_projection_redacts_credentials_in_freeform_labels(self):
+        envelope = mcp_server._write_result_envelope([{
+            "proposal_id": "proposal-1",
+            "note": "H4:EXPLORE token=private cookie=private",
+            "template_id": "toy cookie=private",
+            "status": "RUNNING",
+            "reason_code": "SUBMIT_UNKNOWN",
+            "fingerprint": "a" * 64,
+            "field_validation": "LIVE_VERIFIED",
+        }], expected_count=1)
+        rendered = json.dumps(envelope)
+        self.assertNotIn("private", rendered)
+        self.assertEqual(envelope["results"][0]["note"], "H4:EXPLORE [REDACTED] [REDACTED]")
+        self.assertEqual(envelope["results"][0]["template_id"], "toy [REDACTED]")
+        self.assertTrue(envelope["truncated"])
+
+    def test_malformed_result_keeps_candidate_slot_and_marks_truncated(self):
+        envelope = mcp_server._write_result_envelope([None], expected_count=1)
+        self.assertEqual(envelope["result_count"], 1)
+        self.assertEqual(len(envelope["results"]), 1)
+        self.assertTrue(envelope["truncated"])
+
+    def test_redacted_proposal_id_is_not_reintroduced_by_batch_grouping(self):
+        envelope = mcp_server._write_result_envelope([
+            {"proposal_id": "token=private", "status": "SUBMIT_UNKNOWN",
+             "fingerprint": "a" * 64, "batch_fingerprint": "b" * 64,
+             "field_validation": "LIVE_VERIFIED"},
+            {"proposal_id": "safe-id", "status": "SUBMIT_UNKNOWN",
+             "fingerprint": "c" * 64, "batch_fingerprint": "d" * 64,
+             "field_validation": "LIVE_VERIFIED"},
+        ], expected_count=2)
+        rendered = json.dumps(envelope)
+        self.assertNotIn("private", rendered)
+        self.assertEqual(envelope["batch_fingerprint"], "d" * 64)
+        self.assertNotIn("batch_fingerprints", envelope)
+        self.assertTrue(envelope["truncated"])
+
+    def test_remote_duplicate_scan_redacts_credential_shaped_text(self):
+        envelope = mcp_server._write_result_envelope([{
+            "proposal_id": "proposal-1", "status": "RUNNING",
+            "fingerprint": "a" * 64, "field_validation": "LIVE_VERIFIED",
+            "remote_duplicate_scan": {"status": "token=private"},
+        }], expected_count=1)
+        self.assertNotIn("private", json.dumps(envelope))
+        self.assertEqual(envelope["remote_duplicate_scan"]["status"], "[REDACTED]")
+        self.assertTrue(envelope["truncated"])
 
     async def test_unknown_single_fingerprint_round_trips_through_reconcile(self):
         fingerprint = "a" * 64
@@ -545,45 +770,35 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_multi_batch_keeps_full_recovery_identity_for_100_results_under_limit(self):
         expected = [
-            {"status": "SUBMIT_UNKNOWN", "reason_code": "SUBMIT_UNKNOWN",
-            "proposal_id": f"{i:03d}" + "p" * 45, "note": "n" * 600,
-             "template_id": "template-x", "fingerprint": f"{i:064x}",
-             "batch_fingerprint": "b" * 64, "alpha_id": f"{i:02d}" + "a" * 54,
-             "field_validation": "LIVE_VERIFIED",
+            {"status": "SUBMIT_UNKNOWN", "reason_code": "OPERATOR_CAPABILITY_UNAVAILABLE",
+             "proposal_id": f"{i:02d}" + "p" * 46, "fingerprint": f"{i:064x}",
+             "alpha_id": "a" * 128, "field_validation": "LIVE_VERIFIED",
+             "note": f"H{i}:FALSIFY", "template_id": "toy_regression_residual",
+             "batch_fingerprint": "b" * 64,
              "remote_duplicate_scan": {"status": "BOUNDED_RECENT_WINDOW", "lookback_days": 1, "complete": False, "rows_scanned": 1000}}
             for i in range(100)
         ]
         multi = Mock(return_value=expected)
         with patch.dict(os.environ, {self.ENV: "1"}):
             server = mcp_server.build_research_server(api=self.api(simulate_multi_batch=multi), client=object())
-        specs = [{"expression": "rank(close)", "proposal_id": f"p-{i}"} for i in range(100)]
+        specs = [
+            {"expression": "rank(close)", "proposal_id": row["proposal_id"],
+             "note": row["note"], "template_id": row["template_id"]}
+            for row in expected
+        ]
         async with Client(server) as client:
             result = await client.call_tool("simulate_multi_batch", {"specs": specs})
         payload = json.dumps(result.structured_content, separators=(",", ":"))
         self.assertLessEqual(len(payload.encode("utf-8")), MAX_RESULT_BYTES)
         self.assertEqual(len(result.structured_content["results"]), 100)
-        self.assertTrue(result.structured_content["truncated"])
+        self.assertFalse(result.structured_content["truncated"])
+        self.assertEqual(result.structured_content["batch_fingerprint"], "b" * 64)
         for actual, expected_row in zip(result.structured_content["results"], expected, strict=True):
-            for key in ("proposal_id", "status", "reason_code", "fingerprint", "batch_fingerprint", "alpha_id", "field_validation"):
+            for key in ("proposal_id", "status", "reason_code", "fingerprint", "alpha_id", "field_validation"):
                 self.assertEqual(actual[key], expected_row[key])
-            self.assertEqual(actual["note"], "n" * 12)
-
-    async def test_oversized_identity_is_omitted_whole_instead_of_clipped(self):
-        fingerprint = "f" * 64
-        submit = Mock(return_value=[{
-            "status": "SUBMIT_UNKNOWN", "reason_code": "SUBMIT_UNKNOWN",
-            "proposal_id": "p" * 49, "fingerprint": fingerprint,
-        }])
-        with patch.dict(os.environ, {self.ENV: "1"}):
-            server = mcp_server.build_research_server(api=self.api(simulate_batch=submit), client=object())
-        async with Client(server) as client:
-            result = await client.call_tool("simulate_batch", {"specs": [{
-                "expression": "rank(close)", "proposal_id": "p" * 49,
-            }]})
-        row = result.structured_content["results"][0]
-        self.assertNotIn("proposal_id", row)
-        self.assertEqual(row["fingerprint"], fingerprint)
-        self.assertTrue(result.structured_content["truncated"])
+            self.assertEqual(actual["note"], expected_row["note"])
+            self.assertEqual(actual["template_id"], "toy_regression_residual")
+            self.assertNotIn("batch_fingerprint", actual)
 
     async def test_write_failures_do_not_return_exception_messages_or_drop_candidates(self):
         def fail(*_, **__):

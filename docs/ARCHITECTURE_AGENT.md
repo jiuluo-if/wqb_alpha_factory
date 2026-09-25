@@ -12,20 +12,22 @@ BRAIN 负责 Alpha 模拟证据。
 
 `wqb_agent.research_api` 是唯一 Agent-facing facade，提供原始 dataset/datafield 列表、operator capability、可选 template/probe、Simulation、remote Alpha evidence、dedupe、group 和 color 工具。字段/机制筛选由 Agent 负责；执行前只有确定性的 live schema 与 field/operator capability 校验。
 
-`research_status()` 是 Agent 的唯一起步调用：它只读地聚合 live capability、simulation modes、带 freshness 的 quota、pending executions、cache freshness 和 `research_contract_version`，不给出任何研究建议。`research_tool_manifest()` 默认只披露 CORE profile；模板维护、颜色同步、similarity 等低频能力需显式请求 `profile="full"`。
+`research_status()` 是 Agent 的唯一起步调用：它只读地聚合 live capability、simulation modes、带 freshness 的 quota、pending executions、cache freshness 和 `research_contract_version`，不给出任何研究建议。`research_tool_manifest()` 默认只披露 canonical Agent Core；direct facade 的低频能力需显式请求 `profile="full"`。
 
-`wqb_agent.mcp_server` 是对该 facade 一小部分只读工具可选的 stdio 传输，不暴露任何写操作，也不为研究语义或 BRAIN 访问增设第二负责方；见 [`MCP_READ_ONLY.md`](MCP_READ_ONLY.md)。
+MCP stdio 入口有两个模式：`alpha-factory-mcp` 仅提供 READ_ONLY tools；显式 opt-in 的 `alpha-factory-research-mcp` 提供 canonical Agent Core，Simulation writes 仍只能经 `research_api → SimulationGateway → Simulator → WQBClient → BRAIN`。它们是同一 facade 的 transport，不创建第二研究语义或 BRAIN 访问负责方；详见 [`MCP_READ_ONLY.md`](MCP_READ_ONLY.md)。
 
 ## 唯一 Simulation 写链
 
 ```text
-research_api.simulate / simulate_single / simulate_batch
+research_api.simulate_batch
 research_api.simulate_multi_batch
  → SimulationGateway
  → Simulator
  → WQBClient
  → BRAIN
 ```
+
+`simulate` 与 `simulate_single` 继续作为兼容 Python API，但不进入默认 Agent CORE。
 
 Simulation 模式边界是显式的：生产 writer 当前支持已验证的 `REGULAR` 与 `REGION_AGNOSTIC` 请求 schema；`REGION_AGNOSTIC` 由客户端 scope 提供 `region="ALL"` 等约束，一次写入返回一个 Region-Agnostic parent 和它的多个地区 child。Single Simulation 小规模优化默认 10 个 worker 窗口；Multi-Simulation 每个 parent 2–10 个 REGULAR child，默认并发 dispatch 2 个 parent，显式硬上限 8 个 parent 供大规模探针使用。SUPER 可以是平台广告的能力，但不是 writer 支持的模式，在其独立 `combo`/`selection` 写入契约实现并验证之前，永不作为回退或 Multi 窗口的一部分。
 
