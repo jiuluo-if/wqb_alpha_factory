@@ -21,7 +21,7 @@ frontmatter 中 `compatible_research_contract` 是本文件编写时所针对的
 
 - 从多个竞争假设起步。使用 BRAIN 原始 dataset/datafield 列表，并解释每个 Agent 选定字段。
 - 每个 proposal 给 `proposal_id`、有用的 `note`，适用时加模板/家族标签。Research MCP 要求 proposal ID 是 1–48 字符且同一 batch 唯一；提交前维护 `proposal_id → hypothesis/note/template` 映射。批次按对照组、本地兄弟组、证伪组与新探针分组。
-- `note` 使用 `H2:EXPLORE`、`H3:CONTROL`、`H2:FALSIFY`、`H2:LOCAL` 等假设标签，由 Agent 在 batch mapping 中解释。Research MCP write result 保留完整 `proposal_id` 并回显有界 note/template；凭证样式赋值会脱敏，长文本会截断并显式标记。Multi parent 指纹按 proposal ID 分组返回；direct Python facade 的既有返回兼容行为保持不变。
+- `note` 使用 `H2:EXPLORE`、`H3:CONTROL`、`H2:FALSIFY`、`H2:LOCAL` 等假设标签，由 Agent 在 batch mapping 中解释。Research MCP 要求 proposal ID 在 batch 内唯一且不超过 48 字符；提交前保留 `proposal_id → hypothesis/note/template` 映射。MCP 结果只回传完整 proposal ID 和六项必要状态/identity 字段；不回显 note、template 或 batch fingerprint。Multi child 使用 child fingerprint 通过 `reconcile_execution` 恢复 parent；direct Python facade 的既有返回兼容行为保持不变。
 - 说明每组测试什么机制、什么结果会改变下一次决策、使用多少 Simulation。大量有目的的 Simulation 受欢迎；不可追溯的随机表达式不受欢迎。
 - 保留探索。高结果只是比较候选，不是大举开发该方向的许可。
 - 本地变体保持字段、算子与表达式拓扑不变；拓扑变化是带独立假设的 `NEW_PROBE`。

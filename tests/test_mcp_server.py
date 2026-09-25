@@ -444,9 +444,12 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("progress_url", data["results"][0])
         self.assertNotIn("private-expression", str(data))
         self.assertNotIn("secret-token", str(data))
-        self.assertEqual(data["results"][0]["note"], "[REDACTED]")
-        self.assertEqual(data["results"][0]["template_id"], "toy_regression_residual")
-        self.assertEqual(data["batch_fingerprint"], "parent-fingerprint")
+        self.assertEqual(set(data["results"][0]), {
+            "proposal_id", "status", "reason_code", "fingerprint", "field_validation",
+        })
+        self.assertNotIn("note", data["results"][0])
+        self.assertNotIn("template_id", data["results"][0])
+        self.assertNotIn("batch_fingerprint", data)
         self.assertNotIn("evidence", data["results"][0])
         multi.assert_not_called()
 
@@ -461,7 +464,6 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             [{"expression": "rank(close)"}],
             [{"expression": "rank(close)", "proposal_id": "  "}],
             [{"expression": "rank(close)", "proposal_id": "p" * 49}],
-            [{"expression": "rank(close)", "proposal_id": "token=secret-value"}],
             [
                 {"expression": "rank(close)", "proposal_id": "same"},
                 {"expression": "rank(volume)", "proposal_id": " same "},
@@ -483,7 +485,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         submit.assert_not_called()
         multi.assert_not_called()
 
-    async def test_valid_proposal_identity_and_bounded_labels_round_trip(self):
+    async def test_valid_proposal_identity_round_trips_without_echoing_agent_labels(self):
         proposal_id = "proposal-42"
         submit = Mock(return_value=[{
             "proposal_id": proposal_id, "note": "H7:FALSIFY",
@@ -501,8 +503,8 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         row = result.structured_content["results"][0]
         self.assertEqual(row["proposal_id"], proposal_id)
         self.assertTrue({"status", "reason_code", "fingerprint", "field_validation"} <= set(row))
-        self.assertEqual(row["note"], "H7:FALSIFY")
-        self.assertEqual(row["template_id"], "toy_regression_residual")
+        self.assertNotIn("note", row)
+        self.assertNotIn("template_id", row)
 
     async def test_alpha_id_at_owner_limit_round_trips_to_evidence(self):
         alpha_id = "a" * 128
@@ -525,7 +527,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(returned_alpha_id, alpha_id)
         self.assertEqual(evidence.call_args.args[0], alpha_id)
         self.assertEqual(simulated.structured_content["results"][0]["proposal_id"], "proposal-1")
-        self.assertEqual(simulated.structured_content["results"][0]["template_id"], "toy_regression_residual")
+        self.assertNotIn("template_id", simulated.structured_content["results"][0])
 
     async def test_alpha_id_over_owner_limit_is_rejected_before_evidence_facade(self):
         evidence = Mock(return_value={"source": "LIVE", "alpha": {}})
@@ -552,7 +554,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("alpha_id", row)
         self.assertTrue(result.structured_content["truncated"])
 
-    async def test_multi_child_fingerprint_reconciles_parent_with_shared_batch_fingerprint(self):
+    async def test_multi_child_fingerprint_reconciles_parent_without_batch_fingerprint_echo(self):
         from tempfile import TemporaryDirectory
 
         from wqb_agent.simulation_gateway import ExecutionGuard
@@ -583,45 +585,37 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             async with Client(server) as client:
                 simulated = await client.call_tool("simulate_multi_batch", {"specs": specs})
                 row = simulated.structured_content["results"][0]
-                self.assertEqual(simulated.structured_content["batch_fingerprint"], parent)
+                self.assertNotIn("batch_fingerprint", simulated.structured_content)
                 self.assertEqual(row["fingerprint"], children[0])
                 recovered = await client.call_tool("reconcile_execution", {"fingerprint": row["fingerprint"]})
         self.assertEqual(recovered.structured_content["data"]["status"], "SUBMIT_UNKNOWN")
         self.assertEqual(recovered.structured_content["data"]["fingerprint"], parent)
 
-    def test_split_multi_parent_fingerprints_are_grouped_by_proposal(self):
-        envelope = mcp_server._write_result_envelope([
-            {"proposal_id": "p-1", "status": "RUNNING", "fingerprint": "a" * 64,
-             "batch_fingerprint": "x" * 64, "field_validation": "LIVE_VERIFIED"},
-            {"proposal_id": "p-2", "status": "RUNNING", "fingerprint": "b" * 64,
-             "batch_fingerprint": "y" * 64, "field_validation": "LIVE_VERIFIED"},
-        ], expected_count=2)
-        self.assertEqual(envelope["batch_fingerprints"], [
-            {"batch_fingerprint": "x" * 64, "proposal_ids": ["p-1"]},
-            {"batch_fingerprint": "y" * 64, "proposal_ids": ["p-2"]},
-        ])
-        self.assertNotIn("batch_fingerprint", envelope)
-
     def test_write_projection_enforces_byte_limit_without_dropping_candidates(self):
         rows = [{
-            "proposal_id": "提案" * 24,
-            "note": "假设说明" * 6,
-            "template_id": "模板标识" * 12,
+            "proposal_id": f"{index:02d}" + "p" * 46,
+            "note": "n" * 600,
+            "template_id": "toy_regression_residual",
             "status": "SUBMIT_UNKNOWN",
-            "reason_code": "SUBMIT_UNKNOWN",
+            "reason_code": "OPERATOR_CAPABILITY_UNAVAILABLE",
             "fingerprint": f"{index:064x}",
             "batch_fingerprint": f"{index:064x}",
-            "alpha_id": f"alpha-{index:03d}",
+            "alpha_id": "a" * 128,
             "field_validation": "LIVE_VERIFIED",
         } for index in range(100)]
         envelope = mcp_server._write_result_envelope(rows, expected_count=100)
         payload = json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         self.assertLessEqual(len(payload), mcp_server.MAX_RESULT_BYTES)
-        self.assertTrue(envelope["truncated"])
+        self.assertFalse(envelope["truncated"])
         self.assertEqual(len(envelope["results"]), 100)
         self.assertEqual([row.get("proposal_id") for row in envelope["results"]], [row["proposal_id"] for row in rows])
+        self.assertTrue(all(len(row["fingerprint"]) == 64 for row in envelope["results"]))
+        self.assertTrue(all(row["alpha_id"] == "a" * 128 for row in envelope["results"]))
+        self.assertTrue(all(set(row) == {
+            "proposal_id", "status", "reason_code", "fingerprint", "alpha_id", "field_validation",
+        } for row in envelope["results"]))
 
-    def test_write_projection_redacts_credentials_in_freeform_labels(self):
+    def test_write_projection_does_not_echo_note_or_template_labels(self):
         envelope = mcp_server._write_result_envelope([{
             "proposal_id": "proposal-1",
             "note": "H4:EXPLORE token=private cookie=private",
@@ -633,39 +627,14 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         }], expected_count=1)
         rendered = json.dumps(envelope)
         self.assertNotIn("private", rendered)
-        self.assertEqual(envelope["results"][0]["note"], "H4:EXPLORE [REDACTED] [REDACTED]")
-        self.assertEqual(envelope["results"][0]["template_id"], "toy [REDACTED]")
-        self.assertTrue(envelope["truncated"])
+        self.assertNotIn("note", envelope["results"][0])
+        self.assertNotIn("template_id", envelope["results"][0])
+        self.assertFalse(envelope["truncated"])
 
     def test_malformed_result_keeps_candidate_slot_and_marks_truncated(self):
         envelope = mcp_server._write_result_envelope([None], expected_count=1)
         self.assertEqual(envelope["result_count"], 1)
         self.assertEqual(len(envelope["results"]), 1)
-        self.assertTrue(envelope["truncated"])
-
-    def test_redacted_proposal_id_is_not_reintroduced_by_batch_grouping(self):
-        envelope = mcp_server._write_result_envelope([
-            {"proposal_id": "token=private", "status": "SUBMIT_UNKNOWN",
-             "fingerprint": "a" * 64, "batch_fingerprint": "b" * 64,
-             "field_validation": "LIVE_VERIFIED"},
-            {"proposal_id": "safe-id", "status": "SUBMIT_UNKNOWN",
-             "fingerprint": "c" * 64, "batch_fingerprint": "d" * 64,
-             "field_validation": "LIVE_VERIFIED"},
-        ], expected_count=2)
-        rendered = json.dumps(envelope)
-        self.assertNotIn("private", rendered)
-        self.assertEqual(envelope["batch_fingerprint"], "d" * 64)
-        self.assertNotIn("batch_fingerprints", envelope)
-        self.assertTrue(envelope["truncated"])
-
-    def test_remote_duplicate_scan_redacts_credential_shaped_text(self):
-        envelope = mcp_server._write_result_envelope([{
-            "proposal_id": "proposal-1", "status": "RUNNING",
-            "fingerprint": "a" * 64, "field_validation": "LIVE_VERIFIED",
-            "remote_duplicate_scan": {"status": "token=private"},
-        }], expected_count=1)
-        self.assertNotIn("private", json.dumps(envelope))
-        self.assertEqual(envelope["remote_duplicate_scan"]["status"], "[REDACTED]")
         self.assertTrue(envelope["truncated"])
 
     async def test_unknown_single_fingerprint_round_trips_through_reconcile(self):
@@ -792,12 +761,15 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(len(payload.encode("utf-8")), MAX_RESULT_BYTES)
         self.assertEqual(len(result.structured_content["results"]), 100)
         self.assertFalse(result.structured_content["truncated"])
-        self.assertEqual(result.structured_content["batch_fingerprint"], "b" * 64)
+        self.assertNotIn("batch_fingerprint", result.structured_content)
         for actual, expected_row in zip(result.structured_content["results"], expected, strict=True):
             for key in ("proposal_id", "status", "reason_code", "fingerprint", "alpha_id", "field_validation"):
                 self.assertEqual(actual[key], expected_row[key])
-            self.assertEqual(actual["note"], expected_row["note"])
-            self.assertEqual(actual["template_id"], "toy_regression_residual")
+            self.assertEqual(set(actual), {
+                "proposal_id", "status", "reason_code", "fingerprint", "alpha_id", "field_validation",
+            })
+            self.assertNotIn("note", actual)
+            self.assertNotIn("template_id", actual)
             self.assertNotIn("batch_fingerprint", actual)
 
     async def test_write_failures_do_not_return_exception_messages_or_drop_candidates(self):

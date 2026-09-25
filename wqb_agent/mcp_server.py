@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import math
 import os
-import re
 import sys
 from collections.abc import Mapping
 from typing import Any
@@ -26,16 +25,8 @@ RESEARCH_WRITE_OPT_IN = "ALPHA_FACTORY_ENABLE_SIMULATION_WRITES"
 _SECRET_PARTS = ("password", "credential", "token", "secret", "authorization", "cookie", "api_key", "apikey")
 _SPEC_KEYS = frozenset({"expression", "settings", "fields", "field_datasets", "proposal_id", "note", "template_id", "simulation_type"})
 _WRITE_RESULT_KEYS = (
-    "proposal_id", "note", "template_id", "status", "reason_code",
-    "fingerprint", "batch_fingerprint", "alpha_id", "field_validation",
-)
-_WRITE_IDENTITY_LIMITS = {
-    "proposal_id": 48, "template_id": 48, "fingerprint": 64,
-    "batch_fingerprint": 64, "alpha_id": 128,
-}
-_WRITE_TEXT_LIMITS = {"note": 64, "status": 32, "reason_code": 32, "field_validation": 32}
-_INLINE_SECRET = re.compile(
-    r"(?i)(?:password|credential|token|secret|authorization|cookie|api[_-]?key)\s*[:=]\s*\S+"
+    "proposal_id", "status", "reason_code", "fingerprint", "alpha_id",
+    "field_validation",
 )
 
 
@@ -341,43 +332,16 @@ def build_server(*, api=research_api, client=None, config=None, state_dir=None):
 
 
 def _write_result_envelope(results, *, expected_count: int) -> dict[str, Any]:
-    """Return bounded proposal labels, outcomes and recovery identities."""
+    """Return required proposal attribution and follow-up identities only."""
     malformed = not isinstance(results, (list, tuple))
     results = [] if malformed else list(results)
     projected, scan, clipped = [], None, False
-    batch_groups: dict[str, list[str]] = {}
     for item in results:
         if not isinstance(item, Mapping):
             clipped = True
             projected.append({"status": "UNKNOWN"})
             continue
-        row = {}
-        for key in _WRITE_RESULT_KEYS:
-            value = item.get(key)
-            if value is None:
-                continue
-            if not isinstance(value, str):
-                clipped = True
-                continue
-            if _INLINE_SECRET.search(value):
-                clipped = True
-                if key in _WRITE_IDENTITY_LIMITS and key != "template_id":
-                    continue
-                value = _INLINE_SECRET.sub("[REDACTED]", value)
-            if key in _WRITE_IDENTITY_LIMITS:
-                if not value or len(value) > _WRITE_IDENTITY_LIMITS[key]:
-                    clipped = True
-                    continue
-                if key == "batch_fingerprint":
-                    proposal_id = row.get("proposal_id")
-                    if isinstance(proposal_id, str) and proposal_id:
-                        batch_groups.setdefault(value, []).append(proposal_id)
-                    continue
-                row[key] = value
-            else:
-                limit = _WRITE_TEXT_LIMITS[key]
-                clipped |= len(value) > limit
-                row[key] = value[:limit]
+        row = {key: item[key] for key in _WRITE_RESULT_KEYS if isinstance(item.get(key), str)}
         row.setdefault("status", "UNKNOWN")
         clipped |= (
             not row.get("proposal_id") or not row.get("fingerprint")
@@ -387,16 +351,11 @@ def _write_result_envelope(results, *, expected_count: int) -> dict[str, Any]:
         )
         projected.append(row)
         duplicate_scan = item.get("remote_duplicate_scan")
-        if duplicate_scan is not None and not isinstance(duplicate_scan, Mapping):
-            clipped = True
         if scan is None and isinstance(duplicate_scan, Mapping):
             scan = {}
             for key in ("status", "lookback_days", "complete", "elapsed_sec", "rows_scanned", "matched_count", "candidate_count"):
                 value = duplicate_scan.get(key)
                 if isinstance(value, str):
-                    if _INLINE_SECRET.search(value):
-                        value = _INLINE_SECRET.sub("[REDACTED]", value)
-                        clipped = True
                     clipped |= len(value) > 32
                     scan[key] = value[:32]
                 elif isinstance(value, (bool, int)) or isinstance(value, float) and math.isfinite(value):
@@ -412,49 +371,7 @@ def _write_result_envelope(results, *, expected_count: int) -> dict[str, Any]:
     }
     if scan is not None:
         envelope["remote_duplicate_scan"] = scan
-    if len(batch_groups) == 1:
-        envelope["batch_fingerprint"] = next(iter(batch_groups))
-    elif batch_groups:
-        envelope["batch_fingerprints"] = [
-            {"batch_fingerprint": fingerprint, "proposal_ids": proposal_ids}
-            for fingerprint, proposal_ids in batch_groups.items()
-        ]
-    if _write_envelope_size(envelope) > MAX_RESULT_BYTES:
-        envelope["truncated"] = True
-        envelope["truncation_reason"] = "MAX_RESULT_BYTES"
-        for row in projected:
-            row.pop("note", None)
-            row.pop("template_id", None)
-        if _write_envelope_size(envelope) > MAX_RESULT_BYTES:
-            envelope.pop("batch_fingerprint", None)
-            envelope.pop("batch_fingerprints", None)
-        if _write_envelope_size(envelope) > MAX_RESULT_BYTES:
-            envelope.pop("remote_duplicate_scan", None)
-        if _write_envelope_size(envelope) > MAX_RESULT_BYTES:
-            for row in projected:
-                row.pop("alpha_id", None)
-        if _write_envelope_size(envelope) > MAX_RESULT_BYTES:
-            for row in projected:
-                row.pop("reason_code", None)
-                row.pop("field_validation", None)
-        if _write_envelope_size(envelope) > MAX_RESULT_BYTES:
-            for row in projected:
-                proposal_id = row.get("proposal_id")
-                fingerprint = row.get("fingerprint")
-                row.clear()
-                if isinstance(proposal_id, str):
-                    row["proposal_id"] = proposal_id
-                if isinstance(fingerprint, str) and fingerprint.isascii():
-                    row["fingerprint"] = fingerprint
-                row["status"] = "TRUNCATED"
     return envelope
-
-
-def _write_envelope_size(envelope: Mapping[str, Any]) -> int:
-    try:
-        return len(json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
-    except (TypeError, ValueError):
-        return MAX_RESULT_BYTES + 1
 
 
 def build_research_server(*, api=research_api, client=None, config=None, state_dir=None):
@@ -522,7 +439,6 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
             proposal_ids = [spec.get("proposal_id") for spec in specs]
             if any(
                 not isinstance(value, str) or not value.strip() or len(value.strip()) > 48
-                or _INLINE_SECRET.search(value)
                 for value in proposal_ids
             ):
                 return None
