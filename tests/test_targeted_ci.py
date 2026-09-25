@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import unittest
 
 from scripts.run_targeted_tests import (
@@ -43,3 +44,11 @@ class TargetedCiSelectionTests(unittest.TestCase):
 
         self.assertNotIn("tests/test_targeted_ci.py", inventory["unreachable_tests"])
         self.assertNotIn("tests/test_dependency_constraints.py", inventory["unreachable_tests"])
+
+    def test_push_ci_is_limited_to_main(self):
+        workflow = Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml"
+        contents = workflow.read_text(encoding="utf-8")
+        push = contents.split("  push:\n", 1)[1].split("  pull_request:", 1)[0]
+
+        self.assertIn('branches: ["main"]', push)
+        self.assertNotIn("v0.2", push)
