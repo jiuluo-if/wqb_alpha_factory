@@ -36,6 +36,7 @@ def main(argv=None):
     readonly_local = command_key in {
         ("diagnostics", "doctor"),
         ("diagnostics", "audit"),
+        ("diagnostics", "platform"),
     }
 
     config = None
@@ -77,6 +78,22 @@ def main(argv=None):
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if not result.get("ok"):
             sys.exit(2)
+        return
+    if command_key == ("diagnostics", "platform"):
+        from wqb_agent import WQBClient, research_api
+        try:
+            client = WQBClient()
+            result = research_api.get_live_preflight(
+                client=client, config=typed_config,
+                state_dir=typed_config.runtime.state_dir,
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        except Exception as exc:
+            print(json.dumps({
+                "network_write": False, "status": "UNAVAILABLE",
+                "reason": str(exc),
+            }, ensure_ascii=False, indent=2))
+            sys.exit(1)
         return
     if command_key == ("smoke", "readonly"):
         from wqb_agent import WQBClient
@@ -133,13 +150,8 @@ def main(argv=None):
         print(f"Credentials error: {exc}")
         sys.exit(1)
 
-    if command_key == ("research", "suggest"):
-        # Suggestion is a read-only discovery projection; it does not build
-        # the retired Agent runtime or emit a local proposals artifact.
-        result = research_api.discover_fields(
-            "", client=client, config=typed_config,
-            state_dir=typed_config.runtime.state_dir,
-        )
+    if command_key == ("research", "list-datasets"):
+        result = research_api.list_datasets(client=client, config=typed_config)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
     if command_key == ("alpha", "sync-feed"):
@@ -161,7 +173,7 @@ def main(argv=None):
         finally:
             release_single_instance_lock(feed_lock)
         return
-    print("未指定研究动作。请使用：\n  python main.py suggest")
+    print("未指定研究动作。请使用：\n  python main.py datasets")
     sys.exit(1)
 
 

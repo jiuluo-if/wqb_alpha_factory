@@ -52,11 +52,11 @@ def build_parser():
     )
     commands = parser.add_subparsers(dest="_command", required=True)
 
-    suggest = commands.add_parser(
-        "suggest",
-        help="形成假设并发现真实 fields，不运行 Simulation",
+    datasets = commands.add_parser(
+        "datasets",
+        help="列出当前 BRAIN scope 的原始数据集",
     )
-    _set_command(suggest, "research", "suggest")
+    _set_command(datasets, "research", "list-datasets")
 
     diagnostics = commands.add_parser(
         "diagnostics", help="ExecutionGuard 与远端缓存的只读诊断"
@@ -72,6 +72,10 @@ def build_parser():
     )
     _add_offline(audit)
     _set_command(audit, "diagnostics", "audit")
+    platform = diagnostic_commands.add_parser(
+        "platform", help="只读检查账户、Simulation capability 与执行前置条件"
+    )
+    _set_command(platform, "diagnostics", "platform")
 
     smoke = commands.add_parser(
         "smoke", help="执行只读平台 smoke 检查"

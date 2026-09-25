@@ -1,32 +1,23 @@
-# Alpha template generation constraints
+# Alpha 模板生成约束
 
-## Mandatory pre-read
+## 强制预读
 
 这是模板目录的最近约束。任何 Agent 在本目录新增、修改、迁移、审查或扩展模板及其 schema/catalog/operator/horizon/settings 规则前，必须先阅读根目录 `AGENTS.md`、[`wqb_agent/AGENTS.md`](../AGENTS.md) 和本文件，并在工作记录中确认。未阅读不得变更；无法阅读时报告 `TEMPLATE_CONSTRAINTS_NOT_READ`。
 
 tracked catalog 只能包含 TOY/SYNTHETIC/NON-RESEARCH 示例；真实模板、字段、表达式、经验和 evidence 只能存在本地私有目录。私有 catalog 仅按显式绝对路径、`WQB_ALPHA_TEMPLATE_CATALOG` 或用户 home 默认路径加载，缺失必须 fail-closed。
 
-This directory owns the template schema, fail-closed loaders, registry, and numeric/operator audits. The tracked catalog is public synthetic material only; it must never contain production expressions, private field IDs, fixed private pairings, research evidence, or learned priors.
+## 模板 owner 与契约
 
-`family` and `template_id` are provenance/grouping metadata only and never
-dispatch semantic or relationship admission. `semantic_contract` is the bounded
-machine selector for unary/primary-field suitability; `relationship_contract` is
-the separate bounded selector for multi-field relations. `field_relationship`
-and mechanism text are human-readable only. Legacy templates may load with
-`UNDECLARED`, but remain review-only until the user explicitly declares a
-supported contract.
+本目录拥有模板 schema、fail-closed loader、registry 与数值/算子审计。tracked catalog 只含公开 synthetic 素材；绝不包含生产表达式、私有字段 ID、固定私有配对、研究证据或习得先验。
 
-Private templates are loaded only from an explicit absolute constructor path, `WQB_ALPHA_TEMPLATE_CATALOG`, or `~/.wqb_alpha_factory/private/alpha_templates.toml`. Missing private input is `PRIVATE_TEMPLATE_CATALOG_MISSING`; never search cwd/parents or fall back to the public package catalog.
+`family` 与 `template_id` 只是出处/分组元数据，永不做语义或关系准入的分发依据。`semantic_contract` 是一元/主字段适配性的有界机器选择器；`relationship_contract` 是多字段关系的独立有界选择器。`field_relationship` 与机制文本只面向人读。旧模板可以按 `UNDECLARED` 加载，但在用户显式声明受支持的契约前保持仅审阅。
 
-Every private template declares `role`, field roles/relationships, mechanism, direction and reason, expected horizon, falsification, self-correlation impact, novelty family, settings arms, and horizon profiles. `required_slots` contains every render binding: `p`/`data_field`, `s`, and `t` are economic field slots, while `g` is a control binding. `p` and `data_field` are aliases and cannot coexist. Probe templates require 4–6 operator occurrences and 2–4 conceptual economic fields; controls are the only 1–3 operator / single-field exception. Horizon values are restricted to `[5, 22, 66, 120, 255]`; multi-window profiles are ordered adjacent lattice periods and are not Cartesian products.
+私有模板只从显式绝对构造器路径、`WQB_ALPHA_TEMPLATE_CATALOG` 或 `~/.wqb_alpha_factory/private/alpha_templates.toml` 加载。私有输入缺失报 `PRIVATE_TEMPLATE_CATALOG_MISSING`；绝不搜索 cwd/上级目录，也绝不回退到公开包 catalog。
 
-Operator coverage is a diversity objective, never a reason to add an operator without an explicit economic mechanism. Prefer broad coverage of verified operators across independent mechanisms, while preserving arity, semantic relation, novelty, and complexity gates. Numeric literals are classified fail-closed; only declared `RESEARCH_HORIZON` slots may rotate.
+每个私有模板声明 `role`、字段角色/关系、机制、方向与理由、期望 horizon、证伪、自相关影响、novelty 家族、settings 分支与 horizon profiles。`required_slots` 含全部渲染绑定：`p`/`data_field`、`s`、`t` 是经济字段槽，`g` 是控制绑定；`p` 与 `data_field` 是别名且不可共存。Probe 模板要求 4–6 个算子出现与 2–4 个概念经济字段；对照组是唯一允许 1–3 个算子/单字段的例外。Horizon 取值限定为 `[5, 22, 66, 120, 255]`；多窗口 profile 是有序相邻 lattice 周期，不是笛卡尔积。
 
-Templates default to `CONCRETE`. Only explicit `PARTIAL_OPERATOR` probe siblings may
-declare exactly one bounded `TemplateOperatorSlot`; the sibling must retain its concrete
-parent's mechanism, field relationship, direction, numeric profiles, settings arms and
-family. Materialization uses only declared operators intersected with the current
-`LIVE_VERIFIED` BRAIN capability. Static syntax and fixture data are never availability
-truth, and recovery never re-renders an already materialized proposal.
+算子覆盖是多样性目标，永不是在没有明确经济机制时添加算子的理由。优先在独立机制间广覆盖已验证算子，同时保持 arity、语义关系、novelty 与复杂度 gate。数值字面量按 fail-closed 分类；只有声明的 `RESEARCH_HORIZON` 槽可轮换。
 
-`AlphaFactory` consumes this owner. Do not add skeletons, fixed field combinations, parameter grids, or historical success rationale elsewhere.
+模板默认 `CONCRETE`。只有显式 `PARTIAL_OPERATOR` probe 兄弟模板可声明恰好一个有界 `TemplateOperatorSlot`；该兄弟必须保留其 concrete 父模板的机制、字段关系、方向、数值 profile、settings 分支与家族。物化只用声明算子与当前 `LIVE_VERIFIED` BRAIN 能力的交集。静态语法与 fixture 数据永不是可用性事实；恢复永不重渲染已物化的 proposal。
+
+`AlphaFactory` 消费本 owner。不得在其他地方添加骨架、固定字段组合、参数网格或历史成功理由。

@@ -4,15 +4,14 @@ Covers what the git_selfbqr comparison contributed:
 - classified client exceptions (WQBRejectedError / WQBRateLimitError /
   WQBNotFoundError / WQBTimeoutError) and their failure-kind mapping
 - thread-local sessions (concurrent-safe authentication)
-- FieldDiscovery disk cache (cross-run, TTL-bounded)
 - classify_experiment recognizes the new exception names
 """
 
 import json
 import os
 import sys
-import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -27,12 +26,12 @@ from wqb_agent.client import (
     WQBQueryTooBroadError,
     WQBRateLimitError,
     WQBRejectedError,
+    WQBRemoteSimulationError,
     WQBSimulationError,
     WQBSubmitUnknownError,
     WQBTimeoutError,
 )
-from wqb_agent.discovery import FieldDiscovery
-from wqb_agent.failures import FailureKind
+from wqb_agent.failures import FailureKind, reason_code_for_failure
 
 
 class TestProgressUrlSafety(unittest.TestCase):
@@ -56,6 +55,39 @@ class TestProgressUrlSafety(unittest.TestCase):
         with self.assertRaises(WQBSubmitUnknownError):
             self.client.submit_simulation("rank(x)", {})
         self.client._request.assert_called_once()
+
+    def test_malformed_location_preserves_real_quota_observation(self):
+        self.client._wait_submission_slot = mock.Mock()
+        self.client._request = mock.Mock(return_value=mock.Mock(headers={
+            "Location": "https://evil.example/job",
+            "X-Ratelimit-Limit": "1600",
+            "X-Ratelimit-Remaining": "987",
+            "X-Ratelimit-Reset": "12345",
+        }))
+        with self.assertRaises(WQBSubmitUnknownError):
+            self.client.submit_simulation("rank(x)", {})
+        self.assertEqual(
+            self.client.get_simulation_quota_observation()["remaining"], 987
+        )
+        self.assertEqual(
+            self.client.get_simulation_quota_observation()["reset"], 12345
+        )
+
+    def test_missing_location_preserves_real_quota_observation(self):
+        self.client._wait_submission_slot = mock.Mock()
+        self.client._request = mock.Mock(return_value=mock.Mock(headers={
+            "X-Ratelimit-Limit": "1600",
+            "X-Ratelimit-Remaining": "986",
+            "X-Ratelimit-Reset": "12345",
+        }))
+        with self.assertRaises(WQBSubmitUnknownError):
+            self.client.submit_simulation("rank(x)", {})
+        self.assertEqual(
+            self.client.get_simulation_quota_observation()["remaining"], 986
+        )
+        self.assertEqual(
+            self.client.get_simulation_quota_observation()["reset"], 12345
+        )
 
     def test_invalid_persisted_url_makes_no_get(self):
         self.client._session = mock.Mock()
@@ -98,6 +130,160 @@ def make_client():
     c.max_retries = 2
     c.base_url = "https://api.worldquantbrain.com"
     return c
+
+
+class TestBoundedAlphaHistoryShards(unittest.TestCase):
+    def test_broad_user_alpha_history_is_split_and_rows_are_yielded(self):
+        client = make_client()
+        from wqb_agent.client import WQBQueryTooBroadError
+
+        calls = []
+
+        def read(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise WQBQueryTooBroadError("wide history")
+            return [{"id": f"alpha-{len(calls)}", "regular": "rank(close)"}]
+
+        client.get_all_user_alphas = read
+        batches = list(client.iter_user_alpha_history_shards(max_shards=3))
+
+        self.assertEqual([row["id"] for row in batches], ["alpha-2", "alpha-3"])
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(all(
+            "date_created_after" in call and "date_created_before" in call
+            for call in calls
+        ))
+
+    def test_history_shard_budget_exhaustion_does_not_claim_complete(self):
+        client = make_client()
+        from wqb_agent.client import WQBQueryTooBroadError
+
+        client.get_all_user_alphas = lambda **_kwargs: (_ for _ in ()).throw(
+            WQBQueryTooBroadError("too broad")
+        )
+        with self.assertRaisesRegex(WQBQueryTooBroadError, "shard budget"):
+            list(client.iter_user_alpha_history_shards(max_shards=1))
+
+    def test_lookback_days_starts_the_walk_in_the_recent_window(self):
+        from datetime import UTC, datetime
+
+        client = make_client()
+        calls = []
+
+        def read(**kwargs):
+            calls.append(kwargs)
+            return [{"id": "alpha-recent", "regular": "rank(close)"}]
+
+        client.get_all_user_alphas = read
+        rows = list(client.iter_user_alpha_history_shards(lookback_days=2))
+
+        self.assertEqual([row["id"] for row in rows], ["alpha-recent"])
+        self.assertEqual(len(calls), 1)
+        started = datetime.fromisoformat(calls[0]["date_created_after"])
+        age_sec = (datetime.now(UTC) - started).total_seconds()
+        self.assertLess(abs(age_sec - 2 * 86400), 300)
+
+    def test_without_lookback_days_the_walk_still_starts_at_epoch(self):
+        from datetime import UTC, datetime
+
+        client = make_client()
+        calls = []
+
+        def read(**kwargs):
+            calls.append(kwargs)
+            return []
+
+        client.get_all_user_alphas = read
+        list(client.iter_user_alpha_history_shards())
+        started = datetime.fromisoformat(calls[0]["date_created_after"])
+        self.assertEqual(started.astimezone(UTC).year, 1970)
+
+    def test_non_positive_lookback_days_is_rejected(self):
+        client = make_client()
+        for value in (0, -1, "2", True):
+            with self.assertRaisesRegex(ValueError, "lookback_days"):
+                list(client.iter_user_alpha_history_shards(lookback_days=value))
+
+
+class TestLiveFieldCapability(unittest.TestCase):
+    def test_selected_field_is_verified_from_its_live_dataset(self):
+        client = make_client()
+        calls = []
+
+        def get_datafields(dataset_id, **kwargs):
+            calls.append((dataset_id, kwargs))
+            return ([{"id": "field_a", "dataset": {"id": dataset_id}}], 1)
+
+        client.get_datafields = get_datafields
+        capability = client.get_field_capability(
+            {"dataset_a": ["field_a"]},
+            scope={"instrumentType": "EQUITY", "region": "USA",
+                   "delay": 1, "universe": "TOP3000"},
+        )
+
+        self.assertTrue(capability["valid"])
+        self.assertEqual(capability["fields"], ["field_a"])
+        self.assertEqual(capability["source"], "BRAIN_LIVE_ONLY")
+        self.assertEqual(calls[0][0], "dataset_a")
+
+    def test_unknown_field_is_not_live_verified(self):
+        client = make_client()
+        client.get_datafields = lambda dataset_id, **kwargs: ([{"id": "other_field"}], 1)
+
+        capability = client.get_field_capability(
+            {"dataset_a": ["field_a"]},
+            scope={"instrumentType": "EQUITY", "region": "USA",
+                   "delay": 1, "universe": "TOP3000"},
+        )
+
+        self.assertFalse(capability["valid"])
+        self.assertEqual(capability["missing"], ["field_a"])
+        self.assertEqual(capability["reason_code"], "CAPABILITY_UNAVAILABLE")
+
+    def test_field_late_in_a_large_dataset_is_still_verified(self):
+        client = make_client()
+        total = 1748
+        pages = []
+
+        def get_datafields(dataset_id, **kwargs):
+            offset = kwargs["offset"]
+            pages.append(offset)
+            return ([
+                {"id": f"field_{index}", "dataset": {"id": dataset_id}}
+                for index in range(offset, min(offset + 50, total))
+            ], total)
+
+        client.get_datafields = get_datafields
+        capability = client.get_field_capability(
+            {"dataset_a": ["field_1700"]},
+            scope={"instrumentType": "EQUITY", "region": "USA",
+                   "delay": 1, "universe": "TOP3000"},
+        )
+
+        self.assertTrue(capability["valid"])
+        self.assertEqual(capability["fields"], ["field_1700"])
+        self.assertGreater(len(pages), 20)
+
+    def test_field_lookup_page_cap_keeps_unknown_inconclusive(self):
+        client = make_client()
+        calls = []
+
+        def get_datafields(dataset_id, **kwargs):
+            calls.append(kwargs["offset"])
+            return ([{"id": f"field_{kwargs['offset']}"}], 3)
+
+        client.get_datafields = get_datafields
+        capability = client.get_field_capability(
+            {"dataset_a": ["field_missing"]},
+            scope={"instrumentType": "EQUITY", "region": "USA",
+                   "delay": 1, "universe": "TOP3000"},
+            max_pages=2,
+        )
+
+        self.assertFalse(capability["valid"])
+        self.assertEqual(capability["reason_code"], "CAPABILITY_UNAVAILABLE")
+        self.assertEqual(calls, [0, 1])
 
 
 class TestPollProgressRejectsErrorStatus(unittest.TestCase):
@@ -167,6 +353,38 @@ class TestPollProgressRejectsErrorStatus(unittest.TestCase):
         with self.assertRaises(WQBSimulationError):
             c.poll_progress("/simulations/abc")
 
+    def test_warning_with_alpha_is_success(self):
+        c = make_client()
+        c._local.session = FakeSession([FakeResponse(
+            status_code=200, payload={
+                "id": "sim-warning", "status": "WARNING", "alpha": "alpha-warning",
+                "message": "non-fatal warning",
+            },
+        )])
+        self.assertEqual(c.poll_progress("/simulations/abc"), "alpha-warning")
+
+    def test_remote_terminal_timeout_is_not_local_poll_timeout(self):
+        c = make_client()
+        c._local.session = FakeSession([FakeResponse(
+            status_code=200, payload={"id": "sim-timeout", "status": "TIMEOUT"},
+        )])
+        with self.assertRaises(WQBRemoteSimulationError) as raised:
+            c.poll_progress("/simulations/abc")
+        self.assertEqual(raised.exception.diagnostic["remote_status"], "TIMEOUT")
+
+    def test_remote_error_keeps_structured_location(self):
+        c = make_client()
+        c._local.session = FakeSession([FakeResponse(
+            status_code=200, payload={
+                "id": "sim-error", "status": "ERROR", "message": "bad field",
+                "location": {"property": "regular", "line": 4, "start": 2, "end": 7},
+            },
+        )])
+        with self.assertRaises(WQBRemoteSimulationError) as raised:
+            c.poll_progress("/simulations/abc")
+        self.assertEqual(raised.exception.diagnostic["property"], "regular")
+        self.assertEqual(raised.exception.diagnostic["line"], 4)
+
     def test_repeated_progress_401_is_bounded(self):
         c = make_client()
         c._local.session = FakeSession([
@@ -188,6 +406,229 @@ class TestOperatorCapabilityClient(unittest.TestCase):
         result = c.get_operator_capability()
         self.assertEqual(result["status"], "LIVE_VERIFIED")
         self.assertEqual(result["availability"], "AVAILABLE")
+
+
+class TestOfficialReadOnlyClientAdapters(unittest.TestCase):
+    def test_authentication_status_projects_account_without_token_or_cookie(self):
+        c = make_client()
+        c._local.session = FakeSession([FakeResponse(
+            200,
+            payload={
+                "status": "authenticated",
+                "user": {"id": "user-1", "email": "private@example.test"},
+                "token": {"expiry": "2099-01-01T00:00:00Z", "value": "jwt"},
+                "permissions": ["MULTI_SIMULATION", "EXTRA_VENDOR_PERMISSION"],
+                "cookie": "session-cookie",
+            },
+        )])
+
+        result = c.get_authentication_status()
+
+        self.assertEqual(result["authenticated"], True)
+        self.assertEqual(result["user_id"], "user-1")
+        self.assertEqual(result["token_expiry"], "2099-01-01T00:00:00Z")
+        self.assertEqual(result["permissions"], [
+            "MULTI_SIMULATION", "EXTRA_VENDOR_PERMISSION",
+        ])
+        self.assertNotIn("token", result)
+        self.assertNotIn("cookie", result)
+        self.assertNotIn("email", result)
+
+    def test_authentication_status_204_is_unauthenticated(self):
+        c = make_client()
+        c._local.session = FakeSession([FakeResponse(204)])
+        result = c.get_authentication_status()
+        self.assertEqual(result["authenticated"], False)
+        self.assertEqual(result["permissions"], [])
+
+    def test_authentication_status_reports_biometric_challenge_without_following_it(self):
+        c = make_client()
+        c._local.session = FakeSession([FakeResponse(
+            401,
+            headers={"WWW-Authenticate": "persona", "Location": "/persona/start"},
+        )])
+        with mock.patch.object(c, "_ensure_auth", side_effect=WQBAuthError("persona")):
+            result = c.get_authentication_status()
+        self.assertFalse(result["authenticated"])
+        self.assertEqual(result["reason"], "BIOMETRIC_AUTH_REQUIRED")
+        self.assertTrue(result["location_available"])
+        self.assertNotIn("cookie", result)
+
+    def test_simulation_options_projects_post_schema_and_ignores_vendor_fields(self):
+        c = make_client()
+        c._local.session = FakeSession([FakeResponse(200, payload={
+            "actions": {"POST": {
+                "properties": {
+                    "type": {"enum": ["REGULAR", "SUPER"]},
+                    "settings": {
+                        "required": ["region", "universe"],
+                        "properties": {
+                            "region": {"enum": ["USA", "GLB"]},
+                            "universe": {"enum": ["TOP3000"]},
+                            "delay": {"type": "integer"},
+                        },
+                    },
+                },
+                "required": ["type", "settings"],
+                "x-vendor-private": {"secret": "ignore"},
+            }},
+            "x-vendor-envelope": "ignore",
+        })])
+
+        result = c.get_simulation_capability()
+
+        self.assertEqual(result["status"], "AVAILABLE")
+        self.assertEqual(result["source"], "BRAIN_LIVE")
+        self.assertEqual(result["simulation_type_choices"], ["REGULAR", "SUPER"])
+        self.assertEqual(result["required_fields"], ["type", "settings"])
+        self.assertEqual(result["settings"]["region"]["allowed_values"], ["USA", "GLB"])
+        self.assertEqual(result["settings"]["universe"]["allowed_values"], ["TOP3000"])
+        self.assertNotIn("x-vendor-private", str(result))
+
+    def test_simulation_options_malformed_response_is_unknown(self):
+        c = make_client()
+        c._local.session = FakeSession([FakeResponse(200, payload={"actions": {}})])
+        result = c.get_simulation_capability()
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(result["capability_status"], "UNKNOWN")
+
+    def test_simulation_options_without_type_enum_is_unknown(self):
+        c = make_client()
+        c._local.session = FakeSession([FakeResponse(200, payload={
+            "actions": {"POST": {"properties": {
+                "type": {},
+                "settings": {"properties": {}},
+            }}}
+        })])
+        result = c.get_simulation_capability()
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(result["reason"], "MISSING_TYPE_ENUM")
+
+    def test_simulation_options_accepts_live_choices_and_children_projection(self):
+        # Live BRAIN advertises the POST projection with ``type.choices``
+        # ({value,label} objects) and ``settings.children`` whose choices are
+        # keyed by instrumentType/region.  A projection this client cannot
+        # read silently downgrades live settings validation and blocks the
+        # documented Multi probe path, so both shapes must resolve.
+        c = make_client()
+        c.instrument_type = "EQUITY"
+        c.region = "USA"
+        c.universe = "TOP3000"
+        c._local.session = FakeSession([FakeResponse(200, payload={
+            "actions": {"POST": {
+                "type": {
+                    "type": "choice", "required": True, "readOnly": False,
+                    "label": "Type",
+                    "choices": [
+                        {"value": "REGULAR", "label": "Regular"},
+                        {"value": "REGION_AGNOSTIC", "label": "Region Agnostic"},
+                    ],
+                },
+                "settings": {
+                    "type": "nested object", "required": True,
+                    "readOnly": False, "label": "Settings",
+                    "children": {
+                        "region": {
+                            "type": "choice", "required": True,
+                            "choices": {"instrumentType": {"EQUITY": [
+                                {"value": "USA", "label": "USA"},
+                                {"value": "GLB", "label": "GLB"},
+                            ]}},
+                        },
+                        "universe": {
+                            "type": "choice", "required": True,
+                            "choices": {"instrumentType": {"EQUITY": {"region": {
+                                "USA": [{"value": "TOP3000", "label": "TOP3000"}],
+                                "GLB": [{"value": "MINVOL1M", "label": "MINVOL1M"}],
+                            }}}},
+                        },
+                        "pasteurization": {
+                            "type": "choice", "required": True,
+                            "choices": [{"value": "ON", "label": "On"},
+                                        {"value": "OFF", "label": "Off"}],
+                        },
+                        "decay": {
+                            "type": "integer", "required": True,
+                            "minValue": 0, "maxValue": 512,
+                        },
+                    },
+                },
+            }},
+        })])
+
+        result = c.get_simulation_capability()
+
+        self.assertEqual(result["status"], "AVAILABLE")
+        self.assertEqual(result["capability_status"], "AVAILABLE")
+        self.assertEqual(
+            result["simulation_type_choices"], ["REGULAR", "REGION_AGNOSTIC"]
+        )
+        self.assertEqual(
+            result["settings"]["region"]["allowed_values"], ["USA", "GLB"]
+        )
+        # Nested scope choices resolve against this client's own scope.
+        self.assertEqual(
+            result["settings"]["universe"]["allowed_values"], ["TOP3000"]
+        )
+        self.assertEqual(
+            result["settings"]["pasteurization"]["allowed_values"], ["ON", "OFF"]
+        )
+        self.assertEqual(result["settings"]["decay"]["type"], "integer")
+        self.assertNotIn("allowed_values", result["settings"]["decay"])
+
+    def test_unresolvable_nested_scope_choices_omit_allowed_values(self):
+        # When the nested projection cannot be resolved for this client scope,
+        # the capability must stay fail-safe: no invented allowed-value set
+        # that would wrongly reject a valid setting.
+        c = make_client()
+        c.instrument_type = "EQUITY"
+        c.region = "EUR"
+        c.universe = "TOP800"
+        c._local.session = FakeSession([FakeResponse(200, payload={
+            "actions": {"POST": {
+                "type": {"choices": [{"value": "REGULAR", "label": "Regular"}]},
+                "settings": {"children": {
+                    "universe": {
+                        "type": "choice",
+                        "choices": {"instrumentType": {"EQUITY": {"region": {
+                            "USA": [{"value": "TOP3000", "label": "TOP3000"}],
+                        }}}},
+                    },
+                }},
+            }},
+        })])
+        result = c.get_simulation_capability()
+        self.assertEqual(result["status"], "AVAILABLE")
+        self.assertNotIn(
+            "allowed_values", result["settings"].get("universe", {})
+        )
+
+    def test_recordset_discovery_and_read_share_bounded_contract(self):
+        c = make_client()
+        c._local.session = FakeSession([
+            FakeResponse(200, payload={"recordsets": [
+                {"name": "yearly-stats", "title": "Yearly Stats", "x": "ignore"},
+            ]}),
+            FakeResponse(200, payload={
+                "schema": {"properties": {"year": {}, "sharpe": {}}},
+                "records": [[2025, 1.2]],
+            }),
+        ])
+        available = c.list_alpha_recordsets("alpha-1")
+        payload = c.get_recordset("alpha-1", "yearly-stats", available=available)
+        self.assertEqual(available, [{"name": "yearly-stats", "title": "Yearly Stats"}])
+        self.assertEqual(payload["records"], [[2025, 1.2]])
+
+    def test_activity_diversity_is_a_read_only_bounded_payload(self):
+        c = make_client()
+        c._local.session = FakeSession([FakeResponse(200, payload={
+            "region": {"USA": 2}, "delay": {"1": 2},
+            "dataCategory": {"analyst": 2}, "vendor-extra": "ignore",
+        })])
+        result = c.get_activity_diversity("user-1")
+        self.assertEqual(result["region"], {"USA": 2})
+        self.assertEqual(result["delay"], {"1": 2})
+        self.assertNotIn("vendor-extra", result)
 
     def test_multi_submission_posts_an_array_with_one_idempotency_key(self):
         c = make_client()
@@ -212,6 +653,296 @@ class TestOperatorCapabilityClient(unittest.TestCase):
         self.assertFalse(request.call_args.kwargs.get("retry_rate_limit"))
         c._wait_submission_slot.assert_called_once_with()
 
+    def test_successful_single_submission_keeps_progress_url_and_quota_observation(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        response = FakeResponse(201, headers={
+            "Location": "/sim/1",
+            "X-Ratelimit-Limit": "1600",
+            "x-ratelimit-remaining": "987",
+            "X-RATELIMIT-RESET": "12345",
+        })
+        with mock.patch.object(c, "_request", return_value=response):
+            self.assertEqual(c.submit_simulation("rank(a)", {}),
+                             "https://api.worldquantbrain.com/sim/1")
+
+        self.assertEqual(c.get_simulation_quota_observation(), {
+            "status": "AVAILABLE",
+            "evidence_status": "AVAILABLE",
+            "source": "BRAIN_SIMULATION_HEADERS",
+            "limit": 1600,
+            "remaining": 987,
+            "reset": 12345,
+        })
+        self.assertNotIn(
+            "reset" + "_seconds", c.get_simulation_quota_observation()
+        )
+
+    def test_successful_multi_submission_keeps_progress_url_and_quota_observation(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        response = FakeResponse(201, headers={
+            "Location": "/multi/1",
+            "X-Ratelimit-Limit": "1600",
+            "X-Ratelimit-Remaining": "985",
+            "X-Ratelimit-Reset": "12345",
+        })
+        with mock.patch.object(c, "_request", return_value=response):
+            result = c.submit_multi_simulation([
+                {"expression": "rank(a)", "settings": {}},
+                {"expression": "rank(b)", "settings": {}},
+            ])
+
+        self.assertEqual(result, "https://api.worldquantbrain.com/multi/1")
+        self.assertEqual(c.get_simulation_quota_observation()["remaining"], 985)
+        self.assertEqual(c.get_simulation_quota_observation()["reset"], 12345)
+        self.assertNotIn(
+            "reset" + "_seconds", c.get_simulation_quota_observation()
+        )
+
+    def test_successful_response_without_headers_replaces_available_observation(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        responses = [
+            FakeResponse(201, headers={
+                "Location": "/sim/1",
+                "X-Ratelimit-Limit": "1600",
+                "X-Ratelimit-Remaining": "987",
+                "X-Ratelimit-Reset": "12345",
+            }),
+            FakeResponse(201, headers={"Location": "/sim/2"}),
+        ]
+        with mock.patch.object(c, "_request", side_effect=responses):
+            c.submit_simulation("rank(a)", {})
+            self.assertEqual(
+                c.get_simulation_quota_observation()["remaining"], 987
+            )
+            c.submit_simulation("rank(b)", {})
+
+        self.assertEqual(c.get_simulation_quota_observation(), {
+            "status": "UNKNOWN",
+            "evidence_status": "UNAVAILABLE",
+            "source": "BRAIN_SIMULATION_HEADERS",
+            "limit": None,
+            "remaining": None,
+            "reset": None,
+        })
+
+    def test_successful_partial_response_does_not_merge_with_available_observation(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        responses = [
+            FakeResponse(201, headers={
+                "Location": "/sim/1",
+                "X-Ratelimit-Limit": "1600",
+                "X-Ratelimit-Remaining": "987",
+                "X-Ratelimit-Reset": "12345",
+            }),
+            FakeResponse(201, headers={
+                "Location": "/sim/2",
+                "X-Ratelimit-Remaining": "900",
+            }),
+        ]
+        with mock.patch.object(c, "_request", side_effect=responses):
+            c.submit_simulation("rank(a)", {})
+            c.submit_simulation("rank(b)", {})
+
+        self.assertEqual(c.get_simulation_quota_observation(), {
+            "status": "PARTIAL",
+            "evidence_status": "INCONCLUSIVE",
+            "source": "BRAIN_SIMULATION_HEADERS",
+            "limit": None,
+            "remaining": 900,
+            "reset": None,
+        })
+
+    def test_successful_multi_response_without_headers_replaces_single_observation(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        responses = [
+            FakeResponse(201, headers={
+                "Location": "/sim/1",
+                "X-Ratelimit-Limit": "1600",
+                "X-Ratelimit-Remaining": "987",
+                "X-Ratelimit-Reset": "12345",
+            }),
+            FakeResponse(201, headers={"Location": "/multi/2"}),
+        ]
+        with mock.patch.object(c, "_request", side_effect=responses):
+            c.submit_simulation("rank(a)", {})
+            c.submit_multi_simulation([
+                {"expression": "rank(b)", "settings": {}},
+                {"expression": "rank(c)", "settings": {}},
+            ])
+
+        self.assertEqual(c.get_simulation_quota_observation()["status"], "UNKNOWN")
+        self.assertIsNone(c.get_simulation_quota_observation()["remaining"])
+
+    def test_success_without_headers_and_invalid_location_replaces_available_observation(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        responses = [
+            FakeResponse(201, headers={
+                "Location": "/sim/1",
+                "X-Ratelimit-Limit": "1600",
+                "X-Ratelimit-Remaining": "987",
+                "X-Ratelimit-Reset": "12345",
+            }),
+            FakeResponse(201, headers={}),
+        ]
+        with mock.patch.object(c, "_request", side_effect=responses):
+            c.submit_simulation("rank(a)", {})
+            with self.assertRaises(WQBSubmitUnknownError):
+                c.submit_simulation("rank(b)", {})
+
+        self.assertEqual(c.get_simulation_quota_observation()["status"], "UNKNOWN")
+        self.assertIsNone(c.get_simulation_quota_observation()["remaining"])
+
+    def test_success_with_malformed_headers_replaces_available_observation(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        responses = [
+            FakeResponse(201, headers={
+                "Location": "/sim/1",
+                "X-Ratelimit-Limit": "1600",
+                "X-Ratelimit-Remaining": "987",
+                "X-Ratelimit-Reset": "12345",
+            }),
+            FakeResponse(201, headers={
+                "Location": "/sim/2",
+                "X-Ratelimit-Limit": "bad",
+                "X-Ratelimit-Remaining": "bad",
+                "X-Ratelimit-Reset": "bad",
+            }),
+        ]
+        with mock.patch.object(c, "_request", side_effect=responses):
+            c.submit_simulation("rank(a)", {})
+            c.submit_simulation("rank(b)", {})
+
+        self.assertEqual(c.get_simulation_quota_observation()["status"], "UNKNOWN")
+        self.assertIsNone(c.get_simulation_quota_observation()["remaining"])
+
+    def test_timeout_after_success_does_not_create_a_new_observation(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        session = mock.Mock()
+        session.request.side_effect = [
+            FakeResponse(201, headers={
+                "Location": "/sim/1",
+                "X-Ratelimit-Limit": "1600",
+                "X-Ratelimit-Remaining": "987",
+                "X-Ratelimit-Reset": "12345",
+            }),
+            requests.exceptions.Timeout("ambiguous"),
+        ]
+        c._local.session = session
+        with mock.patch.object(
+            c, "_record_simulation_quota_observation",
+            wraps=c._record_simulation_quota_observation,
+        ) as recorder:
+            c.submit_simulation("rank(a)", {})
+            with self.assertRaises(WQBSubmitUnknownError):
+                c.submit_simulation("rank(b)", {})
+
+        self.assertEqual(recorder.call_count, 1)
+        self.assertEqual(c.get_simulation_quota_observation()["status"], "AVAILABLE")
+        self.assertEqual(c.get_simulation_quota_observation()["remaining"], 987)
+
+    def test_5xx_after_success_does_not_create_a_new_observation(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        session = mock.Mock()
+        session.request.side_effect = [
+            FakeResponse(201, headers={
+                "Location": "/sim/1",
+                "X-Ratelimit-Limit": "1600",
+                "X-Ratelimit-Remaining": "987",
+                "X-Ratelimit-Reset": "12345",
+            }),
+            FakeResponse(500, text="server error"),
+        ]
+        c._local.session = session
+        with mock.patch.object(
+            c, "_record_simulation_quota_observation",
+            wraps=c._record_simulation_quota_observation,
+        ) as recorder:
+            c.submit_simulation("rank(a)", {})
+            with self.assertRaises(WQBSubmitUnknownError):
+                c.submit_simulation("rank(b)", {})
+
+        self.assertEqual(recorder.call_count, 1)
+        self.assertEqual(c.get_simulation_quota_observation()["status"], "AVAILABLE")
+        self.assertEqual(c.get_simulation_quota_observation()["remaining"], 987)
+
+    def test_single_submission_rejects_unimplemented_type_before_post(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        with mock.patch.object(
+            c, "_request", return_value=FakeResponse(
+                201, headers={"Location": "/sim/1"}
+            )
+        ) as request:
+            with self.assertRaisesRegex(ValueError, "REGULAR"):
+                c.submit_simulation(
+                    "rank(a)", {"delay": 1}, alpha_type="SUPER"
+                )
+        request.assert_not_called()
+        c._wait_submission_slot.assert_not_called()
+
+    def test_single_submission_sends_the_region_agnostic_schema(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        settings = {"region": "ALL", "universe": "LARGE", "delay": 1}
+        with mock.patch.object(
+            c, "_request", return_value=FakeResponse(
+                201, headers={"Location": "/sim/ra-1"}
+            )
+        ) as request:
+            url = c.submit_simulation(
+                "rank(a)", settings, alpha_type="REGION_AGNOSTIC"
+            )
+
+        self.assertEqual(url, "https://api.worldquantbrain.com/sim/ra-1")
+        body = request.call_args.kwargs["json"]
+        self.assertEqual(body["type"], "REGION_AGNOSTIC")
+        self.assertEqual(body["settings"], settings)
+        self.assertEqual(body["regular"], "rank(a)")
+        c._wait_submission_slot.assert_called_once()
+
+    def test_multi_submission_rejects_non_regular_child_before_post(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        with mock.patch.object(
+            c, "_request", return_value=FakeResponse(
+                201, headers={"Location": "/multi/1"}
+            )
+        ) as request:
+            with self.assertRaisesRegex(ValueError, "REGULAR"):
+                c.submit_multi_simulation([
+                    {"type": "SUPER", "expression": "rank(a)", "settings": {}},
+                    {"type": "REGULAR", "expression": "rank(b)", "settings": {}},
+                ])
+        request.assert_not_called()
+        c._wait_submission_slot.assert_not_called()
+
+    def test_multi_submission_rejects_one_and_eleven_but_accepts_ten(self):
+        c = make_client()
+        c._wait_submission_slot = mock.Mock()
+        for size in (1, 11):
+            with self.subTest(size=size):
+                with self.assertRaises(ValueError):
+                    c.submit_multi_simulation([
+                        {"expression": f"rank(f{index})", "settings": {}}
+                        for index in range(size)
+                    ])
+        response = FakeResponse(201, headers={"Location": "/multi/10"})
+        with mock.patch.object(c, "_request", return_value=response) as request:
+            c.submit_multi_simulation([
+                {"expression": f"rank(f{index})", "settings": {}}
+                for index in range(10)
+            ])
+        self.assertEqual(len(request.call_args.kwargs["json"]), 10)
+
     def test_multi_progress_resolves_child_simulations_without_a_new_post(self):
         c = make_client()
         with mock.patch.object(c, "get_progress_snapshot", return_value={
@@ -224,12 +955,65 @@ class TestOperatorCapabilityClient(unittest.TestCase):
         ) as poll:
             result = c.poll_multi_progress(f"{c.base_url}/multi/1")
 
-        self.assertEqual(result, ["alpha-1", "alpha-2"])
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertEqual([item["alpha_id"] for item in result["children"]], ["alpha-1", "alpha-2"])
         self.assertEqual(
             [call.args[0] for call in poll.call_args_list],
             [f"{c.base_url}/simulations/sim-1",
              f"{c.base_url}/simulations/sim-2"],
         )
+
+    def test_multi_progress_does_not_treat_parent_alpha_list_as_child_confirmation(self):
+        c = make_client()
+        with mock.patch.object(c, "get_progress_snapshot", return_value={
+            "status_code": 200,
+            "headers": {},
+            "payload": {"status": "COMPLETE", "alphas": ["alpha-1"]},
+            "retry_after_seconds": 1.0,
+        }), mock.patch.object(c, "poll_progress") as poll:
+            with self.assertRaises(WQBSimulationError):
+                c.poll_multi_progress(f"{c.base_url}/multi/1")
+        poll.assert_not_called()
+
+    def test_multi_progress_treats_bare_progress_payload_as_in_flight(self):
+        # Live BRAIN reports an in-flight Multi parent as a bare progress
+        # object ({"progress": 0.35}) with no status field.  That is "still
+        # running", not an unknown remote state, so it must keep polling the
+        # same known parent instead of aborting a valid job.
+        c = make_client()
+        snapshots = [
+            {"status_code": 200, "headers": {}, "payload": {"progress": 0.35},
+             "retry_after_seconds": 5.0},
+            {"status_code": 200, "headers": {}, "payload": {"progress": 0.9},
+             "retry_after_seconds": 5.0},
+            {"status_code": 200, "headers": {},
+             "payload": {"status": "COMPLETE", "children": ["sim-1"]},
+             "retry_after_seconds": 1.0},
+        ]
+        with mock.patch.object(
+            c, "get_progress_snapshot", side_effect=snapshots
+        ), mock.patch.object(
+            c, "poll_progress", return_value="alpha-1"
+        ), mock.patch("wqb_agent.client.time.sleep") as sleep:
+            result = c.poll_multi_progress(f"{c.base_url}/multi/1")
+
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertEqual(result["children"][0]["alpha_id"], "alpha-1")
+        self.assertGreaterEqual(sleep.call_count, 2)
+
+    def test_multi_progress_still_fails_on_a_genuinely_unknown_status(self):
+        # A payload that carries an unrecognized remote status is still a real
+        # unknown remote state and must not be silently polled forever.
+        c = make_client()
+        with mock.patch.object(c, "get_progress_snapshot", return_value={
+            "status_code": 200,
+            "headers": {},
+            "payload": {"status": "SOMETHING_NEW"},
+            "retry_after_seconds": 1.0,
+        }), mock.patch.object(c, "poll_progress") as poll:
+            with self.assertRaises(WQBSimulationError):
+                c.poll_multi_progress(f"{c.base_url}/multi/1")
+        poll.assert_not_called()
 
 
 class TestPublicReadAdapters(unittest.TestCase):
@@ -383,6 +1167,36 @@ class TestClassifiedExceptions(unittest.TestCase):
                 self.assertIsInstance(expected_type("test"), WQBError)
                 self.assertEqual(expected_type.kind, expected_kind)
 
+    def test_classified_exception_preserves_structured_http_status(self):
+        error = self.client._classified_exception(429, "rate limited", "x")
+        self.assertEqual(error.status_code, 429)
+        self.assertEqual(WQBRateLimitError("rate limited", status_code=429).status_code, 429)
+
+    def test_remote_simulation_error_exposes_remote_timeout_failure_kind(self):
+        error = WQBRemoteSimulationError({"remote_status": "TIMEOUT"})
+        self.assertEqual(error.failure_kind, FailureKind.TIMEOUT)
+
+    def test_small_stable_reason_codes_preserve_human_error_categories(self):
+        self.assertEqual(reason_code_for_failure("EXACT_DUPLICATE"), "EXACT_DUPLICATE")
+        self.assertEqual(reason_code_for_failure("NOT_DISPATCHED"), "NOT_DISPATCHED")
+        self.assertEqual(reason_code_for_failure("SUBMIT_UNKNOWN"),
+                         "RATE_LIMIT_OR_SUBMIT_UNKNOWN")
+        self.assertEqual(reason_code_for_failure(
+            "FAILED", RuntimeError("WQBAuthError: authentication failed")
+        ), "AUTH_FAILURE")
+        self.assertEqual(reason_code_for_failure(
+            "UNKNOWN", RuntimeError("progress pending"), progress_url="/progress/1"
+        ), "POLL_PENDING")
+        self.assertEqual(reason_code_for_failure(
+            "INVALID", RuntimeError("FIELD_CAPABILITY_UNAVAILABLE")
+        ), "CAPABILITY_UNAVAILABLE")
+        self.assertEqual(reason_code_for_failure(
+            "INVALID", RuntimeError("NEW_PROBE_REQUIRED: topology changed")
+        ), "NEW_PROBE_REQUIRED")
+        self.assertEqual(reason_code_for_failure(
+            "FAILED", RuntimeError("invalid expression")
+        ), "INVALID_SPEC")
+
 class TestSharedRateLimitGate(unittest.TestCase):
     def test_simulation_post_429_is_unknown_without_transport_retry(self):
         c = make_client()
@@ -391,8 +1205,23 @@ class TestSharedRateLimitGate(unittest.TestCase):
         ])
         with mock.patch.object(c, "_wait_submission_slot"), \
              mock.patch.object(c, "_register_rate_limit"), \
+             self.assertRaises(WQBSubmitUnknownError) as raised:
+            c.submit_simulation("rank(a)", {})
+        self.assertEqual(raised.exception.status_code, 429)
+
+    def test_simulation_post_429_registers_the_shared_rate_limit_gate(self):
+        # One ambiguous POST 429 must not let the rest of the batch stampede:
+        # the client-wide gate has to learn Retry-After even though this POST
+        # is never retried.
+        c = make_client()
+        c._local.session = FakeSession([
+            FakeResponse(429, headers={"Retry-After": "60"}),
+        ])
+        before = getattr(c, "_rate_limit_until", 0.0)
+        with mock.patch.object(c, "_wait_submission_slot"), \
              self.assertRaises(WQBSubmitUnknownError):
             c.submit_simulation("rank(a)", {})
+        self.assertGreater(c._rate_limit_until, before)
 
     def test_simulation_post_timeout_is_unknown_and_has_one_transport_call(self):
         c = make_client()
@@ -403,6 +1232,17 @@ class TestSharedRateLimitGate(unittest.TestCase):
             with self.assertRaises(WQBSubmitUnknownError):
                 c.submit_simulation("rank(a)", {})
         self.assertEqual(session.request.call_count, 1)
+        self.assertEqual(c.get_simulation_quota_observation()["status"], "UNKNOWN")
+        self.assertIsNone(c.get_simulation_quota_observation()["reset"])
+
+    def test_simulation_post_5xx_is_unknown_without_quota_observation(self):
+        c = make_client()
+        c._local.session = FakeSession([FakeResponse(500, text="server error")])
+        with mock.patch.object(c, "_wait_submission_slot"):
+            with self.assertRaises(WQBSubmitUnknownError):
+                c.submit_simulation("rank(a)", {})
+        self.assertEqual(c.get_simulation_quota_observation()["status"], "UNKNOWN")
+        self.assertIsNone(c.get_simulation_quota_observation()["reset"])
 
     def test_retry_after_longer_than_budget_fails_without_sleeping_full_delay(self):
         c = make_client()
@@ -450,7 +1290,6 @@ class TestSharedRateLimitGate(unittest.TestCase):
             times.append(time.monotonic())
             return FakeResponse(201, headers={"Location": "/sim/1"})
 
-        import time
         with mock.patch.object(c, "_request", side_effect=fake_request):
             c.submit_simulation("rank(a)", {})
             c.submit_simulation("rank(b)", {})
@@ -487,7 +1326,6 @@ class TestSharedRateLimitGate(unittest.TestCase):
             post_gate_state.append(c._rate_limit_until > time.monotonic())
             return FakeResponse(201, headers={"Location": "/sim/1"})
 
-        import time
         with mock.patch.object(c, "_wait_rate_limit_gate", side_effect=wait_gate), \
              mock.patch.object(c, "_request", side_effect=fake_request):
             worker = threading.Thread(
@@ -513,61 +1351,6 @@ class TestSharedRateLimitGate(unittest.TestCase):
              mock.patch.object(c, "_ensure_auth"):
             with self.assertRaises(WQBRateLimitError):
                 c._request("POST", "/simulations", context="submit", rate_limit_budget_sec=5)
-
-
-class TestDiscoveryDiskCache(unittest.TestCase):
-    class FakeClient:
-        def __init__(self):
-            self.calls = []
-
-        def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
-            # field_type 用于区分两轮拉取（MATRIX/VECTOR），生成不同 id，
-            # 以便验证两类型字段都被发现且按 id 去重。
-            prefix = (field_type or "MATRIX").lower()
-            self.calls.append((dataset_id, offset, field_type))
-            results = [
-                {"id": f"{prefix}_{dataset_id}_f{offset + i}", "name": f"n{i}",
-                 "description": "d", "dataset": {"id": dataset_id}}
-                for i in range(limit)
-            ]
-            return results, 200
-
-    def test_cache_hits_disk(self):
-        tmp = tempfile.mkdtemp(prefix="wqb_test_disc_")
-        cache_path = os.path.join(tmp, "fields_cache.json")
-        client = self.FakeClient()
-        d = FieldDiscovery(client, pagination_limit=50, max_pages=20,
-                           cache_path=cache_path, cache_ttl_sec=3600)
-        fields1 = d._fields_for("news18")
-        # MATRIX + VECTOR 各 4 页（count=200），共 400 字段
-        self.assertEqual(len(fields1), 400)
-        self.assertTrue(os.path.exists(cache_path))
-        # 两类型都被拉取（探索 Vector 字段族的前提）
-        self.assertEqual({c[2] for c in client.calls}, {"MATRIX", "VECTOR"})
-        # second instance should hit the disk cache: no API calls
-        client2 = self.FakeClient()
-        d2 = FieldDiscovery(client2, pagination_limit=50, max_pages=20,
-                            cache_path=cache_path, cache_ttl_sec=3600)
-        fields2 = d2._fields_for("news18")
-        self.assertEqual(len(fields2), 400)
-        self.assertEqual(client2.calls, [])
-
-    def test_stale_cache_refetches(self):
-        tmp = tempfile.mkdtemp(prefix="wqb_test_disc2_")
-        cache_path = os.path.join(tmp, "fields_cache.json")
-        client = self.FakeClient()
-        d = FieldDiscovery(client, cache_path=cache_path, cache_ttl_sec=3600)
-        d._fields_for("pv1")
-        # rewrite saved_at to the past so the cache is stale
-        with open(cache_path, encoding="utf-8") as f:
-            data = json.load(f)
-        data["saved_at"] = 0
-        with open(cache_path, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-        client2 = self.FakeClient()
-        d2 = FieldDiscovery(client2, cache_path=cache_path, cache_ttl_sec=3600)
-        d2._fields_for("pv1")
-        self.assertTrue(client2.calls)  # refetched from the API
 
 
 if __name__ == "__main__":

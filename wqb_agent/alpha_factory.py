@@ -216,6 +216,11 @@ class AlphaFactory:
                 ref.get("id") for ref in item.get("field_refs", ())
                 if isinstance(ref, dict) and ref.get("id")
             ),
+            field_datasets={
+                str(ref["id"]): str(ref["dataset"])
+                for ref in item.get("field_refs", ())
+                if isinstance(ref, dict) and ref.get("id") and ref.get("dataset")
+            },
             note=item.get("rationale"),
             template_id=item.get("template_id"),
         ) for item in records]

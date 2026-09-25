@@ -1,4 +1,2 @@
-# Compatibility entry point. Dependency versions are authoritative in
-# pyproject.toml; install this file only when an editable local package is
-# desired.
+# 兼容入口。依赖版本以 pyproject.toml 为准；仅在需要可编辑本地包时安装本文件。
 -e .

@@ -20,11 +20,12 @@ class TestCanonicalCliGrammar(unittest.TestCase):
             self.assertEqual(getattr(command, name), value, name)
 
     def test_public_commands(self):
-        self.assert_command(["suggest"], domain="research", action="suggest")
+        self.assert_command(["datasets"], domain="research", action="list-datasets")
         for action in ("doctor", "audit"):
             self.assert_command(["diagnostics", action, "--offline"],
                                 domain="diagnostics", action=action, offline=True)
         self.assert_command(["smoke"], domain="smoke", action="readonly")
+        self.assert_command(["diagnostics", "platform"], domain="diagnostics", action="platform")
         self.assert_command(["alpha", "sync-colors", "--dry-run", "--plan", "plan.json"],
                             domain="alpha", action="sync-colors", dry_run=True,
                             color_plan="plan.json")
@@ -37,7 +38,7 @@ class TestCanonicalCliGrammar(unittest.TestCase):
         self.assertEqual(command.state_dir, "state")
 
     def test_removed_commands_and_options_are_rejected(self):
-        for argv in (["state", "doctor"], ["context"], ["--doctor"],
+        for argv in (["state", "doctor"], ["context"], ["suggest"], ["--doctor"],
                      ["--agent-context"], ["factory", "run"]):
             with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as raised:
@@ -45,7 +46,7 @@ class TestCanonicalCliGrammar(unittest.TestCase):
             self.assertEqual(raised.exception.code, 2)
 
     def test_command_specific_options_are_rejected_elsewhere(self):
-        for argv in (["suggest", "--force-new-round"], ["alpha", "sync-feed", "--dry-run"]):
+        for argv in (["datasets", "--force-new-round"], ["alpha", "sync-feed", "--dry-run"]):
             with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as raised:
                     parse_cli(argv)
@@ -84,15 +85,17 @@ class TestCliRuntimeSafety(unittest.TestCase):
                 with contextlib.redirect_stdout(io.StringIO()):
                     main_entry.main(["--config", "config.example.json", "diagnostics", action])
 
-    def test_suggest_does_not_acquire_simulation_owner_lock(self):
+    def test_dataset_list_returns_raw_rows_without_selection_or_lock(self):
         with patch("main.acquire_single_instance_lock") as acquire, \
                 patch("wqb_agent.WQBClient"), \
-                patch("wqb_agent.research_api.discover_fields", return_value={"fields": []}) as discover, \
+                patch("wqb_agent.research_api.list_datasets", return_value={
+                    "datasets": [{"id": "synthetic-dataset"}],
+                }) as list_datasets, \
                 patch.object(main_entry, "load_config", return_value={"simulation": {}, "runtime": {}}):
             with contextlib.redirect_stdout(io.StringIO()):
-                main_entry.main(["suggest"])
+                main_entry.main(["datasets"])
         acquire.assert_not_called()
-        discover.assert_called_once()
+        list_datasets.assert_called_once()
 
     def test_audit_failure_exits_two(self):
         with patch.object(main_entry, "load_config", return_value={"simulation": {}, "runtime": {}}), \
@@ -109,6 +112,17 @@ class TestCliRuntimeSafety(unittest.TestCase):
                 main_entry.main(["smoke"])
         self.assertEqual(raised.exception.code, 1)
         self.assertEqual(json.loads(output.getvalue())["status"], "UNAVAILABLE")
+
+    def test_platform_diagnostics_is_read_only_preflight(self):
+        with patch.object(main_entry, "load_config", return_value={"simulation": {}, "runtime": {}}), \
+                patch("wqb_agent.WQBClient") as client_type, \
+                patch("wqb_agent.research_api.get_live_preflight", return_value={
+                    "network_write": False, "multi_child_range": "2..10",
+                }) as preflight:
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                main_entry.main(["diagnostics", "platform"])
+        preflight.assert_called_once()
+        self.assertFalse(json.loads(output.getvalue())["network_write"])
 
 
 class TestCliSubprocessIntegration(unittest.TestCase):

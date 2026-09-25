@@ -22,7 +22,6 @@ def run_doctor(raw_config, *, offline=True):
     cache = RemoteAlphaCache(
         cache_path,
         retention_days=parsed.remote_cache.retention_days,
-        rolling_simulation_cap=parsed.quota.rolling_limit,
     )
     entries = guard.entries()
     diagnostics = []

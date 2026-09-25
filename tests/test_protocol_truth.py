@@ -4,10 +4,12 @@ import unittest
 
 from wqb_agent.protocol import (
     CapabilityStatus,
+    classify_simulation_status,
     endpoint_catalog,
     fixture_capability,
     probe_capability_response,
     retry_after_seconds,
+    simulation_rate_limit_from_headers,
 )
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "brain")
@@ -19,6 +21,64 @@ class TestProtocolTruth(unittest.TestCase):
         self.assertEqual(catalog["authentication"]["status"], "OFFICIAL")
         self.assertEqual(catalog["aggregates"]["status"], "OFFICIAL")
         self.assertEqual(catalog["operators"]["status"], "COMMUNITY_OBSERVED")
+
+    def test_official_read_only_endpoint_truth_is_registered(self):
+        catalog = {row["key"]: row for row in endpoint_catalog()}
+        for key, method, path in (
+            ("authentication_status", "GET", "/authentication"),
+            ("simulation_options", "OPTIONS", "/simulations"),
+            ("recordsets", "GET", "/alphas/{id}/recordsets"),
+            ("recordset", "GET", "/alphas/{id}/recordsets/{recordset_name}"),
+            ("activity_diversity", "GET", "/users/{userid}/activities/diversity"),
+        ):
+            with self.subTest(key=key):
+                self.assertEqual(catalog[key]["status"], "OFFICIAL")
+                self.assertEqual(catalog[key]["method"], method)
+                self.assertEqual(catalog[key]["path"], path)
+
+    def test_simulation_post_truth_includes_quota_headers(self):
+        schema = {
+            row["key"]: row["response_schema"] for row in endpoint_catalog()
+        }["simulations"]
+        for header in (
+            "Location", "X-Ratelimit-Limit", "X-Ratelimit-Remaining",
+            "X-Ratelimit-Reset",
+        ):
+            self.assertIn(header, schema)
+
+    def test_simulation_status_classifier_uses_remote_truth(self):
+        expected = {
+            "WAITING": "PENDING", "SIMULATING": "PENDING",
+            "COMPLETE": "SUCCESS", "WARNING": "SUCCESS",
+            "CANCELLED": "TERMINAL_FAILURE", "ERROR": "TERMINAL_FAILURE",
+            "TIMEOUT": "TERMINAL_FAILURE", "FAIL": "TERMINAL_FAILURE",
+        }
+        for remote_status, phase in expected.items():
+            payload = {"id": "sim-1", "status": remote_status}
+            if remote_status in {"COMPLETE", "WARNING"}:
+                payload["alpha"] = "alpha-1"
+            with self.subTest(remote_status=remote_status):
+                result = classify_simulation_status(payload)
+                self.assertEqual(result["phase"], phase)
+                self.assertEqual(result["remote_status"], remote_status)
+        self.assertEqual(
+            classify_simulation_status({"status": "VENDOR_LATER"})["phase"],
+            "UNKNOWN",
+        )
+
+    def test_simulation_status_classifier_keeps_bounded_error_location(self):
+        result = classify_simulation_status({
+            "id": "sim-1", "status": "ERROR", "message": "bad syntax",
+            "location": {
+                "property": "regular", "line": 2, "start": 3, "end": 9,
+                "private_expression": "must not escape",
+            },
+        })
+        self.assertEqual(result["diagnostic"], {
+            "remote_status": "ERROR", "message": "bad syntax",
+            "property": "regular", "line": 2, "start": 3, "end": 9,
+            "simulation_id": "sim-1",
+        })
 
     def test_fixture_and_static_operator_evidence_cannot_claim_availability(self):
         with open(os.path.join(FIXTURES, "aggregates.json"), encoding="utf-8") as handle:
@@ -110,3 +170,49 @@ class TestProtocolTruth(unittest.TestCase):
     def test_list_payload_is_rejected_for_non_operator_keys(self):
         result = probe_capability_response("data_sets", 200, [])
         self.assertNotEqual(result["availability"], "AVAILABLE")
+
+    def test_simulation_rate_limit_parser_is_case_insensitive_and_json_safe(self):
+        result = simulation_rate_limit_from_headers({
+            "x-ratelimit-limit": "1600",
+            "X-RATELIMIT-REMAINING": "987",
+            "X-RateLimit-Reset": "12345",
+        })
+
+        self.assertEqual(result, {
+            "status": "AVAILABLE",
+            "evidence_status": "AVAILABLE",
+            "source": "BRAIN_SIMULATION_HEADERS",
+            "limit": 1600,
+            "remaining": 987,
+            "reset": 12345,
+        })
+        self.assertNotIn("reset" + "_seconds", result)
+        self.assertIsInstance(json.dumps(result), str)
+
+    def test_simulation_rate_limit_parser_fails_closed_for_invalid_or_missing_headers(self):
+        for headers in (
+            {"X-Ratelimit-Limit": "-1", "X-Ratelimit-Remaining": "987", "X-Ratelimit-Reset": "12345"},
+            {"X-Ratelimit-Limit": "nan", "X-Ratelimit-Remaining": "987", "X-Ratelimit-Reset": "12345"},
+            {"X-Ratelimit-Limit": "1600", "X-Ratelimit-Remaining": "inf", "X-Ratelimit-Reset": "12345"},
+        ):
+            with self.subTest(headers=headers):
+                result = simulation_rate_limit_from_headers(headers)
+                self.assertNotEqual(result["status"], "AVAILABLE")
+
+        for value in ("-1", "nan", "inf", "9007199254740992"):
+            headers = {
+                "X-Ratelimit-Limit": "1600",
+                "X-Ratelimit-Remaining": "987",
+                "X-Ratelimit-Reset": value,
+            }
+            with self.subTest(headers=headers):
+                result = simulation_rate_limit_from_headers(headers)
+                self.assertNotEqual(result["status"], "AVAILABLE")
+                self.assertIsNone(result["reset"])
+
+        partial = simulation_rate_limit_from_headers({"X-Ratelimit-Remaining": "987"})
+        self.assertEqual(partial["status"], "PARTIAL")
+        self.assertEqual(partial["remaining"], 987)
+        unknown = simulation_rate_limit_from_headers({})
+        self.assertEqual(unknown["status"], "UNKNOWN")
+        self.assertIsNone(unknown["limit"])

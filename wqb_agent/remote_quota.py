@@ -2,59 +2,276 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import math
+from collections.abc import Mapping
+from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
+
+from .config import DEFAULT_DAILY_SIMULATION_LIMIT
+from .simulation_gateway import MULTI_MAX_CHILDREN
+
+NEW_YORK = ZoneInfo("America/New_York")
+OFFICIAL_SOURCE = "BRAIN_SIMULATION_HEADERS"
+ESTIMATE_SOURCE = "ESTIMATE_REMOTE_ALPHA_REPOSITORY+EXECUTION_GUARD"
+
+
+def _estimate_window(repository):
+    retention_days = getattr(repository, "retention_days", None)
+    if (
+        isinstance(retention_days, bool)
+        or not isinstance(retention_days, int)
+        or not 1 <= retention_days <= 90
+    ):
+        return None, "UNKNOWN"
+    return retention_days, "REMOTE_CACHE_RETENTION"
+
+
+def _valid_local_date(value):
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return date.fromisoformat(value.strip()).isoformat()
+    except ValueError:
+        return None
+
+
+def _creation_local_date(value):
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(NEW_YORK).date().isoformat()
+
+
+def _simulation_local_date(row):
+    simulation_day = _valid_local_date(row.get("simulation_local_date"))
+    if simulation_day is not None:
+        return simulation_day
+    simulation_day = _creation_local_date(row.get("date_created"))
+    if simulation_day is not None:
+        return simulation_day
+    status = str(row.get("status") or "").upper()
+    if "date_submitted" in row or status == "SUBMITTED":
+        return None
+    return _valid_local_date(row.get("local_date"))
+
+
+def _in_estimate_window(simulation_day, today, window_days):
+    if window_days is None:
+        return True
+    try:
+        current_day = date.fromisoformat(today)
+        candidate = date.fromisoformat(simulation_day)
+    except ValueError:
+        return False
+    window_start = current_day - timedelta(days=window_days - 1)
+    return window_start <= candidate <= current_day
+
+
+def _guard_simulation_count(row):
+    value = row.get("simulation_count") if isinstance(row, Mapping) else None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 1 <= value <= MULTI_MAX_CHILDREN
+    ):
+        return 1
+    return value
+
+
+def _guard_local_date(row):
+    """Return the local registration-date proxy for an unresolved guard."""
+    value = row.get("created_at") if isinstance(row, Mapping) else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        timestamp = float(value)
+        if not math.isfinite(timestamp):
+            return None
+        return datetime.fromtimestamp(timestamp, tz=UTC).astimezone(
+            NEW_YORK
+        ).date().isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _unknown_official_observation():
+    return {
+        "status": "UNKNOWN",
+        "evidence_status": "UNAVAILABLE",
+        "source": OFFICIAL_SOURCE,
+        "limit": None,
+        "remaining": None,
+        "reset": None,
+    }
+
+
+def _official_projection(observation):
+    if not isinstance(observation, Mapping):
+        return _unknown_official_observation()
+    if observation.get("source") != OFFICIAL_SOURCE:
+        return _unknown_official_observation()
+    status = str(observation.get("status") or "UNKNOWN").upper()
+    if status not in {"AVAILABLE", "PARTIAL"}:
+        return _unknown_official_observation()
+    values = {}
+    for key in ("limit", "remaining", "reset"):
+        value = observation.get(key)
+        values[key] = (
+            int(value)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            else None
+        )
+    if status == "AVAILABLE" and any(value is None for value in values.values()):
+        status = "PARTIAL"
+    return {
+        "status": status,
+        "evidence_status": (
+            "AVAILABLE" if status == "AVAILABLE" else "INCONCLUSIVE"
+        ),
+        "source": OFFICIAL_SOURCE,
+        **values,
+    }
+
+
+def _cache_freshness(repository):
+    """Read repository cache freshness without creating a second quota state."""
+    reader = getattr(repository, "cache_status", None)
+    if not callable(reader):
+        return "UNKNOWN", {}
+    try:
+        snapshot = reader()
+    except Exception:
+        return "UNKNOWN", {}
+    if not isinstance(snapshot, Mapping):
+        return "UNKNOWN", {}
+    return str(snapshot.get("freshness") or "UNKNOWN").upper(), dict(snapshot)
 
 
 class SimulationQuota:
     """Project remote usage without creating a local quota state machine."""
 
-    def __init__(self, repository, guard, *, daily_cap=1600, rolling_cap=11200,
-                 local_date=None):
+    def __init__(self, repository, guard, *, daily_cap=DEFAULT_DAILY_SIMULATION_LIMIT,
+                 local_date=None, official_observation=None):
         self.repository = repository
         self.guard = guard
         self.daily_cap = self._cap(daily_cap, "daily_cap")
-        self.rolling_cap = self._cap(rolling_cap, "rolling_cap")
-        if self.daily_cap > self.rolling_cap:
-            raise ValueError("daily_cap 不得超过 rolling_cap")
         self._local_date = local_date or self._today
+        self.official_observation = official_observation
 
     @staticmethod
     def _cap(value, name):
         if isinstance(value, bool):
             raise ValueError(f"{name} 必须是非负整数")
+        if isinstance(value, float) and (
+            not math.isfinite(value) or not value.is_integer()
+        ):
+            raise ValueError(f"{name} 必须是非负整数")
         try:
             result = int(value)
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, OverflowError) as exc:
             raise ValueError(f"{name} 必须是非负整数") from exc
         if result < 0:
             raise ValueError(f"{name} 必须是非负整数")
+        if result > DEFAULT_DAILY_SIMULATION_LIMIT:
+            raise ValueError(
+                f"{name} 必须小于或等于 {DEFAULT_DAILY_SIMULATION_LIMIT}"
+            )
         return result
 
     @staticmethod
-    def _today():
-        return datetime.now(UTC).astimezone().date().isoformat()
+    def _today(now=None):
+        current = datetime.now(NEW_YORK) if now is None else now
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=UTC)
+        return current.astimezone(NEW_YORK).date().isoformat()
 
     def snapshot(self):
         today = str(self._local_date())
         rows = [row for row in self.repository.list_remote_alphas()
                 if isinstance(row, dict)]
-        today_used = sum(1 for row in rows if str(row.get("local_date")) == today)
-        active = len(self.guard.entries())
-        rolling_used = len(rows) + active
-        return {
-            "today_used": today_used + active,
-            "rolling_used": rolling_used,
-            "today_remaining": max(0, self.daily_cap - today_used - active),
-            "rolling_remaining": max(0, self.rolling_cap - rolling_used),
+        window_days, window_source = _estimate_window(self.repository)
+        simulation_days = []
+        for row in rows:
+            simulation_day = _simulation_local_date(row)
+            if simulation_day is not None and _in_estimate_window(
+                simulation_day, today, window_days
+            ):
+                simulation_days.append(simulation_day)
+        today_used = sum(day == today for day in simulation_days)
+        # A Multi parent row already represents every child Simulation it may
+        # have started, so child rows must not be counted a second time.
+        entries = [
+            row for row in self.guard.entries()
+            if isinstance(row, Mapping)
+            and str(row.get("kind") or "").upper() != "MULTI_CHILD"
+        ]
+        active_guard_count = len(entries)
+        active_guard_simulation_count = sum(
+            _guard_simulation_count(row) for row in entries
+        )
+        today_guard_simulation_count = 0
+        window_guard_simulation_count = 0
+        unknown_guard_time_simulation_count = 0
+        for row in entries:
+            count = _guard_simulation_count(row)
+            guard_day = _guard_local_date(row)
+            if guard_day is None:
+                unknown_guard_time_simulation_count += count
+                today_guard_simulation_count += count
+                window_guard_simulation_count += count
+                continue
+            if guard_day == today:
+                today_guard_simulation_count += count
+            if window_days is None or _in_estimate_window(
+                guard_day, today, window_days
+            ):
+                window_guard_simulation_count += count
+        window_used = len(simulation_days) + window_guard_simulation_count
+        estimate = {
+            "today_used": today_used + today_guard_simulation_count,
+            "today_remaining": max(
+                0, self.daily_cap - today_used - today_guard_simulation_count
+            ),
             "daily_cap": self.daily_cap,
-            "rolling_cap": self.rolling_cap,
-            "active_guard_count": active,
-            "source": "REMOTE_ALPHA_REPOSITORY+EXECUTION_GUARD",
+            "window_used": window_used,
+            "active_guard_count": active_guard_count,
+            "active_guard_simulation_count": active_guard_simulation_count,
+            "today_guard_simulation_count": today_guard_simulation_count,
+            "window_guard_simulation_count": window_guard_simulation_count,
+            "unknown_guard_time_simulation_count": unknown_guard_time_simulation_count,
+            "window_days": window_days,
+            "window_source": window_source,
+            "source": ESTIMATE_SOURCE,
             "persisted_quota_state": False,
+            "evidence_status": "APPROXIMATE",
+            "approximate": True,
         }
-
-
-# Compatibility name for integrations migrated from the intermediate
-# Remote-First implementation.  The production owner is SimulationQuota;
-# this alias does not retain any factory/session state.
-RemoteSimulationQuota = SimulationQuota
+        official = _official_projection(self.official_observation)
+        official_available = official["status"] in {"AVAILABLE", "PARTIAL"}
+        cache_freshness, _cache = _cache_freshness(self.repository)
+        if official_available:
+            status, freshness = "LIVE", "LIVE"
+        elif window_days is not None and cache_freshness == "FRESH":
+            status, freshness = "APPROXIMATE", "CACHE"
+        else:
+            status, freshness = "UNKNOWN", cache_freshness
+        return {
+            **estimate,
+            "source": official["source"] if official_available else estimate["source"],
+            "status": status,
+            "freshness": freshness,
+            "reason_code": None if status != "UNKNOWN" else "CAPABILITY_UNAVAILABLE",
+            "evidence_status": (
+                official["evidence_status"] if official_available
+                else estimate["evidence_status"]
+            ),
+            "official": official,
+            "estimate": estimate,
+            "usage_semantics": "APPROXIMATE_ESTIMATE",
+            "legacy_fields_are_estimate": True,
+        }

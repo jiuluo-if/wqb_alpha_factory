@@ -22,6 +22,30 @@ def _imports(path):
 
 
 class RemoteFirstArchitectureTests(unittest.TestCase):
+    def test_single_research_skill_declares_the_runtime_contract(self):
+        skill_root = ROOT / "skills"
+        skill_dirs = sorted(path.parent.name for path in skill_root.glob("*/SKILL.md"))
+        self.assertEqual(skill_dirs, ["wqb-research"])
+
+        skill_path = skill_root / "wqb-research" / "SKILL.md"
+        text = skill_path.read_text(encoding="utf-8")
+        self.assertIn(
+            f'compatible_research_contract: "{research_api.RESEARCH_CONTRACT_VERSION}"',
+            text,
+        )
+        references = sorted(
+            path.name
+            for path in (skill_root / "wqb-research" / "references").glob("*.md")
+        )
+        self.assertLessEqual(len(references), 2)
+
+    def test_research_status_reports_the_contract_version(self):
+        status = research_api.research_status()
+        self.assertEqual(
+            status["research_contract_version"],
+            research_api.RESEARCH_CONTRACT_VERSION,
+        )
+
     def test_public_api_has_no_retired_agent_parameter(self):
         public = [
             value for name, value in vars(research_api).items()
@@ -48,14 +72,108 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         self.assertIn("simulate", names)
         self.assertIn("get_alpha_evidence", names)
         self.assertIn("sync_alpha_colors", names)
+        import wqb_agent
+        for name in (
+            "get_alpha_metrics", "get_alpha_aggregates", "get_alpha_pnl",
+            "get_alpha_self_correlation", "get_alpha_recordsets",
+        ):
+            self.assertIn(name, names)
+            self.assertTrue(hasattr(wqb_agent, name), name)
+
+    def test_research_surface_and_manifest_are_exactly_aligned(self):
+        expected = set(research_api.__all__) - {"SimulationSpec", "research_tool_manifest"}
+        rows = research_api.research_tool_manifest(profile="full")
+        names = [row["name"] for row in rows]
+
+        self.assertEqual(len(names), len(set(names)))
+        self.assertEqual(set(names) - {"alpha_submission"}, expected)
+        for name in names:
+            if name == "alpha_submission":
+                continue
+            self.assertTrue(callable(getattr(research_api, name)), name)
+
+    def test_package_root_matches_research_surface_and_lazy_exports(self):
+        import wqb_agent
+
+        self.assertEqual(
+            set(wqb_agent.__all__) - {"WQBClient"},
+            set(research_api.__all__),
+        )
+        for name in wqb_agent.__all__:
+            self.assertTrue(hasattr(wqb_agent, name), name)
+
+    def test_manifest_modes_reflect_possible_io(self):
+        rows = {
+            row["name"]: row
+            for row in research_api.research_tool_manifest(profile="full")
+        }
+        for name in (
+            "generate_probes", "validate_simulation_settings",
+            "build_simulation_spec",
+        ):
+            self.assertEqual(rows[name]["mode"], "READ_ONLY", name)
+        for name in (
+            "build_simulation_variant", "group_alphas", "preview_alpha_colors",
+        ):
+            self.assertEqual(rows[name]["mode"], "PURE", name)
+        for name in ("refresh_remote_alphas", "purge_remote_cache"):
+            self.assertEqual(rows[name]["mode"], "LOCAL_CACHE_WRITE", name)
+            self.assertTrue(rows[name].get("local_write"), name)
+        self.assertEqual(rows["remote_cache_status"]["mode"], "READ_ONLY")
+        self.assertFalse(rows["remote_cache_status"].get("local_write", False))
+
+    def test_manifest_preserves_write_boundaries_and_has_one_public_name_per_operation(self):
+        rows = {
+            row["name"]: row
+            for row in research_api.research_tool_manifest(profile="full")
+        }
+        import wqb_agent
+
+        self.assertIn("find_duplicate_alphas", rows)
+        self.assertNotIn("find_alpha_duplicates", rows)
+        for name in (
+            "simulate", "simulate_single", "simulate_batch",
+            "simulate_multi_batch",
+        ):
+            self.assertEqual(rows[name]["mode"], "SIMULATION_WRITE", name)
+            self.assertTrue(rows[name].get("remote_write"), name)
+        for name in (
+            "simulate_single_batch", "find_alpha_duplicates",
+        ):
+            self.assertNotIn(name, rows)
+            self.assertFalse(hasattr(research_api, name), name)
+            self.assertFalse(hasattr(wqb_agent, name), name)
+
+    def test_canonical_remote_read_surface_stays_available_at_public_facades(self):
+        canonical = {
+            "get_live_preflight", "get_simulation_modes", "get_alpha_evidence",
+            "get_alpha_recordsets", "get_activity_diversity",
+        }
+        import wqb_agent
+
+        for name in canonical:
+            self.assertTrue(hasattr(research_api, name), name)
+            self.assertTrue(hasattr(wqb_agent, name), name)
+        manifest = {
+            item["name"] for item in research_api.research_tool_manifest(profile="full")
+        }
+        self.assertTrue(canonical <= manifest)
 
     def test_legacy_runtime_and_optimizer_modules_are_absent(self):
         retired = (
             "agent.py", "runtime_components.py", "runtime_composition.py",
             "runtime_policy.py", "optimizer_workflow.py", "optimizer_selection.py",
+            "heartbeat.py",
         )
         for name in retired:
             self.assertFalse((PACKAGE / name).exists(), name)
+
+    def test_agent_field_discovery_is_raw_and_ranked_selector_is_retired(self):
+        for name in ("discovery.py", "discovery_selection.py", "field_catalog.py"):
+            self.assertFalse((PACKAGE / name).exists(), name)
+        self.assertFalse(hasattr(research_api, "discover_fields"))
+        for name in ("list_datasets", "list_datafields", "list_all_datafields"):
+            self.assertTrue(callable(getattr(research_api, name)), name)
 
     def test_public_simulation_path_is_gateway_to_simulator_to_client(self):
         gateway_imports = _imports(PACKAGE / "simulation_gateway.py")

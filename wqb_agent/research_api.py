@@ -26,6 +26,7 @@ import os
 import re
 import tomllib
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from .alpha_factory import AlphaFactory
@@ -44,22 +45,49 @@ from .alpha_templates import (
     validate_template_contract,
 )
 from .artifacts import _atomic_replace
-from .config import AppConfig, normalize_config
-from .discovery import FieldDiscovery
+from .config import MAX_DATAFIELD_PAGES, AppConfig, normalize_config
 from .expression import (
     canonical_expression,
     operator_occurrence_count,
     operator_occurrence_signature,
 )
+from .failures import reason_code_for_failure
 from .operator_reference import (
     load_operator_syntax_reference,
     load_packaged_operator_syntax_reference,
 )
+from .protocol import endpoint_truth
 from .remote_alpha_repository import RemoteAlphaRepository
 from .remote_colors import preview_remote_colors, sync_remote_colors
 from .remote_evidence import RemoteAlphaEvidenceProvider
 from .remote_quota import SimulationQuota
-from .simulation_gateway import ExecutionGuard, SimulationGateway, SimulationSpec
+from .simulation_gateway import (
+    MULTI_DEFAULT_CHILD_BATCH_SIZE,
+    MULTI_DEFAULT_CONCURRENCY,
+    MULTI_MAX_CHILDREN,
+    MULTI_MAX_CONCURRENCY,
+    MULTI_MIN_CHILDREN,
+    SUPPORTED_WRITE_SIMULATION_TYPES,
+    ExecutionGuard,
+    SimulationGateway,
+    SimulationSpec,
+)
+
+MAX_PROBE_FIELDS = 100
+MAX_PROBE_TEMPLATES = 100
+MAX_PROBE_COUNT = 100
+
+# The research contract version is the compatibility handshake between the
+# single research Skill and this runtime.  A Skill that declares a different
+# ``compatible_research_contract`` is stale and must be re-read, not reused.
+RESEARCH_CONTRACT_VERSION = "2026-09-24"
+
+# Region-Agnostic simulations are written through the same gateway as REGULAR ones;
+# whether the writer accepts them is a property of the gateway's supported set, not
+# of this module, so it is derived rather than hard-coded.
+_REGION_AGNOSTIC_WRITE_SUPPORTED = (
+    "REGION_AGNOSTIC" in SUPPORTED_WRITE_SIMULATION_TYPES
+)
 
 
 def _load_config(config: Mapping[str, Any] | str | None) -> dict[str, Any]:
@@ -84,70 +112,6 @@ def _normalized_config(config=None) -> AppConfig:
 
 def _state_directory(config: AppConfig, state_dir=None) -> str:
     return state_dir or config.runtime.state_dir
-
-
-def _remote_research_components(*, client, config=None, state_dir=None,
-                                include_factory=False):
-    """Build only rebuildable components for public discovery/probe tools."""
-    typed = _normalized_config(config)
-    runtime = typed.runtime
-    directory = _state_directory(typed, state_dir)
-    selection = runtime.field_selection
-    discovery = FieldDiscovery(
-        client,
-        pagination_limit=runtime.pagination_limit,
-        max_pages=runtime.max_pagination_pages,
-        cache_path=os.path.join(directory, "fields_cache.json"),
-        cache_ttl_sec=runtime.fields_cache_ttl_sec,
-        catalog_root=directory,
-        max_alpha_count=runtime.max_field_alpha_count,
-        selection_mode=selection["mode"],
-        random_fraction=selection["random_fraction"],
-        random_seed=selection["random_seed"],
-        platform_usage_refresh=selection["platform_usage_refresh"],
-        require_platform_alpha_count=selection["require_platform_alpha_count"],
-        dataset_sampling=selection["dataset_sampling"],
-        min_datasets=selection["min_datasets"],
-        dataset_pool=selection["dataset_pool"],
-        persist_catalog=selection["persist_catalog"],
-    )
-    factory = None
-    if include_factory:
-        factory = AlphaFactory(
-            neutralization=typed.simulation_config.settings["neutralization"],
-            catalog_path=runtime.alpha_template_catalog,
-            require_private=True,
-        )
-    return typed, discovery, factory
-
-
-def discover_fields(query, *, client=None, config=None, state_dir=None, limit=None):
-    """Discover fields through the existing BRAIN-backed discovery component."""
-    if client is None:
-        from .client import WQBClient
-        client = WQBClient()
-    _typed, discovery, _factory = _remote_research_components(
-        client=client, config=config, state_dir=state_dir
-    )
-    default_limit = _typed.runtime.fields_per_discovery
-    if isinstance(query, str):
-        hypothesis = {"id": "agent-query", "statement": query, "tags": query.split(), "datasets": []}
-    elif isinstance(query, Mapping):
-        hypothesis = dict(query)
-    else:
-        raise TypeError("query must be a string or object")
-    fields = discovery.discover(
-        hypothesis,
-        target_count=limit or default_limit,
-    )
-    return {
-        "source": "BRAIN_LIVE_ONLY",
-        "status": "AVAILABLE",
-        "evidence_status": "AVAILABLE" if fields else "UNAVAILABLE",
-        "fields": fields,
-        "field_source": discovery.source_provenance(),
-        "query": hypothesis,
-    }
 
 
 def _client_scope(client):
@@ -217,20 +181,26 @@ def list_datafields(
 
 def list_all_datafields(
     dataset_id, *, client=None, config=None, page_limit=None,
-    field_type=None, max_pages=100,
+    field_type=None, max_pages=None,
 ):
     """Read every live datafield page within a bounded pagination budget."""
+    typed = _normalized_config(config)
     try:
-        page_cap = int(max_pages)
+        page_cap = (
+            typed.runtime.max_pagination_pages
+            if max_pages is None else int(max_pages)
+        )
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError("max_pages must be an integer") from exc
-    if page_cap < 1:
-        raise ValueError("max_pages must be positive")
+    if isinstance(max_pages, bool) or not 1 <= page_cap <= MAX_DATAFIELD_PAGES:
+        raise ValueError(
+            f"max_pages must be between 1 and {MAX_DATAFIELD_PAGES}"
+        )
 
     first = list_datafields(
         dataset_id,
         client=client,
-        config=config,
+        config=typed,
         limit=page_limit,
         offset=0,
         field_type=field_type,
@@ -245,7 +215,7 @@ def list_all_datafields(
         page = list_datafields(
             dataset_id,
             client=client,
-            config=config,
+            config=typed,
             limit=first["limit"],
             offset=offset,
             field_type=field_type,
@@ -264,44 +234,70 @@ def list_all_datafields(
     }
 
 
-def generate_probes(query=None, *, template_ids=None, count=None,
-                    fields=None, client=None, config=None, state_dir=None):
-    """Generate reviewable ``SimulationSpec`` probes without an inbox write."""
+def generate_probes(*, template_ids, count, fields, dataset_id=None,
+                    client=None, config=None):
+    """Render only Agent-selected BRAIN fields and templates into specs."""
+    if not isinstance(fields, (list, tuple)) or not fields:
+        raise ValueError("fields must be a non-empty Agent-selected list")
+    if len(fields) > MAX_PROBE_FIELDS:
+        raise ValueError(f"fields cannot exceed {MAX_PROBE_FIELDS} entries")
+    if isinstance(template_ids, str):
+        template_ids = [template_ids]
+    if not isinstance(template_ids, (list, tuple)) or not template_ids or any(
+        not isinstance(item, str) or not item.strip() for item in template_ids
+    ):
+        raise ValueError("template_ids must be a non-empty explicit list")
+    template_ids = [item.strip() for item in template_ids]
+    if len(template_ids) > MAX_PROBE_TEMPLATES:
+        raise ValueError(
+            f"template_ids cannot exceed {MAX_PROBE_TEMPLATES} entries"
+        )
+    if len(set(template_ids)) != len(template_ids):
+        raise ValueError("template_ids must not contain duplicates")
+    try:
+        target = int(count)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("count must be an explicit integer") from exc
+    if isinstance(count, bool) or str(target) != str(count).strip():
+        raise ValueError("count must be an explicit integer")
+    if not 0 <= target <= MAX_PROBE_COUNT:
+        raise ValueError(f"count must be between 0 and {MAX_PROBE_COUNT}")
+
+    selected_fields = []
+    for item in fields:
+        if isinstance(item, Mapping):
+            field = dict(item)
+            field_id = field.get("id") or field.get("field_id")
+            dataset = field.get("dataset_id") or field.get("dataset")
+            if isinstance(dataset, Mapping):
+                dataset = dataset.get("id") or dataset.get("name")
+            dataset = dataset or dataset_id
+        else:
+            field_id = item
+            dataset = dataset_id
+            field = {"id": field_id}
+        if field_id is None or dataset is None or not str(dataset).strip():
+            raise ValueError("each selected field requires a BRAIN dataset id")
+        field["id"] = str(field_id).strip()
+        field["dataset"] = str(dataset).strip()
+        selected_fields.append(field)
+    if target == 0:
+        return []
     if client is None:
         from .client import WQBClient
         client = WQBClient()
-    _typed, discovery, factory = _remote_research_components(
-        client=client, config=config, state_dir=state_dir,
-        include_factory=True,
+    typed = _normalized_config(config)
+    factory = AlphaFactory(
+        neutralization=typed.simulation_config.settings["neutralization"],
+        catalog_path=typed.runtime.alpha_template_catalog,
+        require_private=True,
     )
     reference = get_operator_reference(client=client, config=config)
-    try:
-        target = (_typed.factory.default_probe_count if count is None else int(count))
-    except (TypeError, ValueError) as exc:
-        raise ValueError("count 必须是整数") from exc
-    if target < 0:
-        raise ValueError("count 必须是非负整数")
-    if query is None:
-        hypothesis = {"id": "agent-query", "statement": "", "tags": [], "datasets": []}
-    elif isinstance(query, str):
-        hypothesis = {
-            "id": "agent-query", "statement": query,
-            "tags": query.split(), "datasets": [],
-        }
-    elif isinstance(query, Mapping):
-        hypothesis = dict(query)
-    else:
-        raise TypeError("query must be a string, object, or None")
-    requested_templates = list(template_ids or [])
-    hypothesis["template_ids"] = requested_templates
-    fields = fields if fields is not None else discovery.discover(
-        hypothesis, target_count=_typed.runtime.fields_per_discovery
-    )
     if callable(reference):
         reference = reference()
     return factory.generate_probe_specs(
-        hypothesis, fields, reference, target=target,
-        simulation_settings=_typed.simulation_config.settings,
+        {"template_ids": template_ids}, selected_fields, reference,
+        target=target, simulation_settings=typed.simulation_config.settings,
     )
 
 
@@ -423,57 +419,39 @@ def get_simulation_config(*, config=None):
     }
 
 
-def validate_simulation_settings(settings, *, client=None, config=None):
-    """Validate bounded Simulation settings before Gateway construction."""
-    errors = []
-    if not isinstance(settings, Mapping):
-        return {
-            "valid": False, "status": "INVALID", "source": "LOCAL_SCHEMA",
-            "evidence_status": "UNAVAILABLE", "settings": {},
-            "errors": ["settings must be an object"],
-        }
-    normalized = dict(settings)
-    for key in ("region", "universe", "instrumentType", "neutralization"):
-        if key in normalized and (not isinstance(normalized[key], str) or not normalized[key].strip()):
-            errors.append(f"{key} must be a non-empty string")
-    for key in ("delay", "decay"):
-        if key not in normalized:
-            continue
-        value = normalized[key]
-        if isinstance(value, bool) or not isinstance(value, int) or value < (0 if key == "delay" else 1):
-            errors.append(f"{key} must be a valid non-negative integer")
-        elif key == "delay" and value not in {0, 1}:
-            errors.append("delay must be 0 or 1")
-        elif key == "decay" and value > 252:
-            errors.append("decay must be between 1 and 252")
-    fields = normalized.get("fields")
-    if fields is not None and (
-        not isinstance(fields, (list, tuple))
-        or not fields
-        or any(not isinstance(item, (str, int)) or not str(item).strip() for item in fields)
-    ):
-        errors.append("fields must be a non-empty list when provided")
-    if client is not None:
-        for key, attr in (("region", "region"), ("universe", "universe"), ("instrumentType", "instrument_type")):
-            expected = getattr(client, attr, None)
-            if key in normalized and expected is not None and str(normalized[key]) != str(expected):
-                errors.append(f"{key} does not match client scope")
-    return {
-        "valid": not errors, "status": "VALID" if not errors else "INVALID",
-        "source": "LOCAL_SCHEMA", "evidence_status": "INCONCLUSIVE",
-        "settings": normalized, "errors": errors,
-    }
+def validate_simulation_settings(settings, *, client=None, config=None, capability=None):
+    """Compatibility facade for the canonical Gateway-owned validator."""
+    return SimulationGateway.validate_simulation_settings(
+        settings, client=client, capability=capability
+    )
 
 
-def build_simulation_spec(expression, *, settings=None, fields=(), note=None, template_id=None,
-                          client=None, config=None, anchor_spec=None):
+def build_simulation_spec(expression, *, settings=None, fields=(), field_datasets=None,
+                          note=None, template_id=None, proposal_id=None,
+                          client=None, config=None, anchor_spec=None,
+                          simulation_type="REGULAR"):
     """Build a validated, non-submitting SimulationSpec."""
+    effective_fields = tuple(str(item) for item in (fields or ()) if str(item).strip())
+    effective_field_datasets = dict(field_datasets or {})
+    effective_template_id = template_id
+    effective_simulation_type = str(simulation_type or "REGULAR").strip().upper()
     if anchor_spec is not None:
         if not isinstance(anchor_spec, SimulationSpec):
             anchor_spec = SimulationSpec(**dict(anchor_spec))
-        if (template_id is not None and anchor_spec.template_id is not None
-                and template_id != anchor_spec.template_id):
+        SimulationGateway.validate_simulation_spec(anchor_spec)
+        if effective_fields and effective_fields != anchor_spec.fields:
+            raise ValueError("NEW_PROBE_REQUIRED: fields changed during optimization")
+        effective_fields = anchor_spec.fields
+        # A settings variant keeps the anchor's live field provenance so the
+        # Gateway can still verify the very same fields before any POST.
+        if not effective_field_datasets:
+            effective_field_datasets = dict(anchor_spec.field_datasets)
+        if template_id is not None and template_id != anchor_spec.template_id:
             raise ValueError("NEW_PROBE_REQUIRED: template changed during optimization")
+        effective_template_id = anchor_spec.template_id
+        if effective_simulation_type != anchor_spec.simulation_type:
+            raise ValueError("NEW_PROBE_REQUIRED: simulation type changed during optimization")
+        effective_simulation_type = anchor_spec.simulation_type
         if canonical_expression(expression) != canonical_expression(anchor_spec.expression):
             raise ValueError("NEW_PROBE_REQUIRED: settings variant changed expression")
     result = validate_simulation_settings(settings or {}, client=client, config=config)
@@ -481,10 +459,14 @@ def build_simulation_spec(expression, *, settings=None, fields=(), note=None, te
         raise ValueError("invalid simulation settings: " + "; ".join(result["errors"]))
     effective_settings = dict(result["settings"])
     effective_settings.pop("fields", None)
-    return SimulationSpec(
-        expression=expression, settings=effective_settings, fields=tuple(fields or ()),
-        note=note, template_id=template_id,
+    spec = SimulationSpec(
+        expression=expression, settings=effective_settings, fields=effective_fields,
+        field_datasets=effective_field_datasets, note=note,
+        template_id=effective_template_id, simulation_type=effective_simulation_type,
+        proposal_id=proposal_id,
     )
+    SimulationGateway.validate_simulation_spec(spec)
+    return spec
 
 
 def _optimization_operator_signatures(template):
@@ -502,6 +484,7 @@ def build_simulation_variant(base_spec, template, slot_name, value):
     """Return one bounded numeric variant without mutating or submitting."""
     if not isinstance(base_spec, SimulationSpec):
         base_spec = SimulationSpec(**dict(base_spec))
+    SimulationGateway.validate_simulation_spec(base_spec)
     template = _coerce_template(template)
     if base_spec.template_id != template.template_id:
         raise ValueError("template_id does not match base SimulationSpec")
@@ -525,11 +508,16 @@ def build_simulation_variant(base_spec, template, slot_name, value):
         raise ValueError("NEW_PROBE_REQUIRED: operator occurrence count changed")
     if operator_occurrence_signature(expression) != anchor_signature:
         raise ValueError("NEW_PROBE_REQUIRED: operator topology changed")
-    return SimulationSpec(
+    result = SimulationSpec(
         expression=expression,
         settings=dict(base_spec.settings), fields=base_spec.fields,
         note=base_spec.note, template_id=base_spec.template_id,
+        simulation_type=base_spec.simulation_type,
+        field_datasets=dict(base_spec.field_datasets),
+        proposal_id=base_spec.proposal_id,
     )
+    SimulationGateway.validate_simulation_spec(result)
+    return result
 
 
 def validate_template(template):
@@ -637,8 +625,7 @@ def _toml_inline(value) -> str:
     return json.dumps(value)
 
 
-def _toml_value(value) -> str:
-    """Render one catalog value as TOML; dict lists use inline tables."""
+def _toml_value(value):
     if isinstance(value, Mapping) or (
         isinstance(value, (list, tuple))
         and any(isinstance(item, Mapping) for item in value)
@@ -762,7 +749,7 @@ def simulate(spec, *, client=None, config=None, state_dir=None):
 
 
 def simulate_single(spec, *, client=None, config=None, state_dir=None):
-    """Explicit small-optimization alias for one Single Simulation."""
+    """Explicitly named single-request facade over the canonical writer."""
     return simulate(spec, client=client, config=config, state_dir=state_dir)
 
 
@@ -774,21 +761,16 @@ def simulate_batch(specs, *, client=None, config=None, state_dir=None):
     return gateway.simulate_batch(specs)
 
 
-def simulate_single_batch(specs, *, client=None, config=None, state_dir=None):
-    """Explicit small-optimization batch alias for Single Simulation."""
-    return simulate_batch(
-        specs, client=client, config=config, state_dir=state_dir
-    )
-
-
 def simulate_multi_batch(
     specs, *, client=None, config=None, state_dir=None,
-    child_batch_size=10, max_concurrent_multi=8,
+    child_batch_size=MULTI_DEFAULT_CHILD_BATCH_SIZE,
+    max_concurrent_multi=MULTI_DEFAULT_CONCURRENCY,
 ):
     """Execute probe windows as Multi-Simulation parents.
 
-    Each parent contains at most ten children and at most eight parent jobs
-    are dispatched concurrently.  The Gateway remains the only write path.
+    Each parent contains two to ten children. The safe default dispatches
+    two parent jobs concurrently; the supported hard maximum is eight.
+    The Gateway remains the only write path.
     """
     gateway = _simulation_gateway(
         client=client, config=config, state_dir=state_dir
@@ -800,36 +782,229 @@ def simulate_multi_batch(
     )
 
 
-def get_simulation_modes() -> dict[str, dict[str, Any]]:
-    """Describe the three UI modes without implying unverified write access."""
+def _capability_status(capability):
+    if not isinstance(capability, Mapping):
+        return "UNKNOWN"
+    return str(
+        capability.get("capability_status")
+        or capability.get("status")
+        or "UNKNOWN"
+    ).upper()
+
+
+def _mode_unavailable_reason(
+    authentication, *, options_available, regular_available, multi=False,
+    permissions=(),
+):
+    if not bool((authentication or {}).get("authenticated")):
+        reason = (authentication or {}).get("reason")
+        if isinstance(reason, str) and reason.strip():
+            return reason.strip()[:100]
+        return "AUTHENTICATION_REQUIRED"
+    if not options_available or not regular_available:
+        return "CAPABILITY_UNKNOWN"
+    if multi and "MULTI_SIMULATION" not in permissions:
+        return "PERMISSION_UNAVAILABLE"
+    return None
+
+
+def _simulation_modes_from_capabilities(authentication, simulation_capability):
+    permissions = {
+        str(item).upper() for item in (authentication or {}).get("permissions", ())
+    }
+    source = "BRAIN_LIVE" if authentication is not None else "UNKNOWN"
+    options_available = _capability_status(simulation_capability) == "AVAILABLE"
+    choices = {
+        str(item).upper()
+        for item in simulation_capability.get("simulation_type_choices", ())
+    } if options_available else set()
+    regular_child_available = "REGULAR" in choices
+    single_reason = _mode_unavailable_reason(
+        authentication,
+        options_available=options_available,
+        regular_available=regular_child_available,
+    )
+    multi_reason = _mode_unavailable_reason(
+        authentication,
+        options_available=options_available,
+        regular_available=regular_child_available,
+        multi=True,
+        permissions=permissions,
+    )
+    single_available = single_reason is None
+    multi_available = multi_reason is None
+    multi = {
+        "name": "Multi-Simulation", "available": multi_available,
+        "status": "AVAILABLE" if multi_available else "UNAVAILABLE",
+        "source": source, "evidence_status": "INCONCLUSIVE",
+        "children_per_job": MULTI_DEFAULT_CHILD_BATCH_SIZE,
+        "min_children_per_job": MULTI_MIN_CHILDREN,
+        "max_children_per_job": MULTI_MAX_CHILDREN,
+        "default_concurrent_jobs": MULTI_DEFAULT_CONCURRENCY,
+        "max_concurrent_jobs": MULTI_MAX_CONCURRENCY,
+    }
+    if multi_reason is not None:
+        multi["reason"] = multi_reason
+    single = {
+        "name": "Single Simulation", "available": single_available,
+        "status": "AVAILABLE" if single_available else "UNAVAILABLE",
+        "source": source, "evidence_status": "INCONCLUSIVE",
+        "max_concurrent": 10,
+    }
+    if single_reason is not None:
+        single["reason"] = single_reason
+    region_agnostic = {
+        "name": "Region-Agnostic Simulation",
+        "available": False,
+        "status": "UNAVAILABLE",
+        "source": source, "evidence_status": "INCONCLUSIVE",
+        "simulation_type": "REGION_AGNOSTIC",
+        "platform_advertised": "REGION_AGNOSTIC" in choices,
+        "writer_supported": _REGION_AGNOSTIC_WRITE_SUPPORTED,
+        "reason": (None if _REGION_AGNOSTIC_WRITE_SUPPORTED
+                   else "WRITER_UNSUPPORTED"),
+    }
+    ra_reason = _mode_unavailable_reason(
+        authentication,
+        options_available=options_available,
+        regular_available="REGION_AGNOSTIC" in choices,
+    )
+    if ra_reason is None and not _REGION_AGNOSTIC_WRITE_SUPPORTED:
+        ra_reason = "WRITER_UNSUPPORTED"
+    if ra_reason is None:
+        region_agnostic.update({
+            "available": True, "status": "AVAILABLE", "reason": None,
+        })
+    else:
+        region_agnostic["reason"] = ra_reason
     return {
-        "single": {
-            "name": "Single Simulation",
-            "available": True,
-            "status": "AVAILABLE",
-            "evidence_status": "INCONCLUSIVE",
-            "max_concurrent": 10,
-        },
-        "multi": {
-            "name": "Multi-Simulation",
-            "available": True,
-            "status": "AVAILABLE",
-            "evidence_status": "INCONCLUSIVE",
-            "children_per_job": 10,
-            "max_concurrent_jobs": 8,
-        },
-        "region_agnostic": {
-            "name": "Region-Agnostic Simulation",
-            "available": False,
-            "status": "UNAVAILABLE",
-            "evidence_status": "UNAVAILABLE",
-            "reason": "NO_VERIFIED_WRITE_CONTRACT",
-        },
+        "single": single,
+        "multi": multi,
+        "region_agnostic": region_agnostic,
     }
 
 
-def get_pending_executions(*, state_dir=".wqb_state"):
-    return {"entries": ExecutionGuard(state_dir, reconcile=False).entries()}
+def get_simulation_modes(*, client=None, config=None) -> dict[str, dict[str, Any]]:
+    """Describe modes from live account permission and OPTIONS capability."""
+    if client is None:
+        return _simulation_modes_from_capabilities(None, None)
+    authentication = client.get_authentication_status()
+    capability = client.get_simulation_capability()
+    return _simulation_modes_from_capabilities(authentication, capability)
+
+
+def get_live_preflight(*, client=None, config=None, state_dir=None):
+    """Compose bounded read-only account/platform readiness facts."""
+    client = _remote_client(client=client)
+    authentication = client.get_authentication_status()
+    capability = client.get_simulation_capability()
+    modes = _simulation_modes_from_capabilities(authentication, capability)
+    typed = _normalized_config(config)
+    directory = _state_directory(typed, state_dir)
+    pending = get_pending_executions(state_dir=directory)["entries"]
+    try:
+        quota = simulation_quota(client=client, config=typed, state_dir=directory)
+    except Exception as exc:
+        quota = {"status": "UNKNOWN", "reason": type(exc).__name__}
+    auth_output = dict(authentication)
+    if auth_output.get("user_id") is not None:
+        value = str(auth_output["user_id"])
+        auth_output["user_id"] = value if len(value) <= 8 else value[:2] + "***" + value[-2:]
+    recordsets = endpoint_truth("recordsets")
+    return {
+        "network_write": False,
+        "authentication": auth_output,
+        "simulation_options": capability,
+        "simulation_modes": modes,
+        "multi_child_range": "2..10",
+        "scope": _client_scope(client),
+        "recordset_api": {
+            "status": recordsets.status.value if recordsets else "UNKNOWN",
+            "availability": "NOT_PROBED", "network_write": False,
+        },
+        "remote_quota": quota,
+        "pending_execution_count": len(pending),
+    }
+
+
+def research_status(*, client=None, config=None, state_dir=None):
+    """Aggregate the read-only facts an Agent checks before starting research.
+
+    This is the single startup-readiness call: live capability, simulation
+    modes, quota with freshness, pending executions, cache freshness and the
+    research contract version.  Every section keeps its own source/status, and
+    a missing live client degrades those sections to UNKNOWN instead of failing
+    the whole call.  Python reports facts only; it never chooses the next
+    experiment.
+    """
+    typed = _normalized_config(config)
+    directory = _state_directory(typed, state_dir)
+    pending = get_pending_executions(state_dir=directory)["entries"]
+    cache = remote_cache_status(config=typed, state_dir=directory)
+    try:
+        quota = simulation_quota(client=client, config=typed, state_dir=directory)
+    except Exception as exc:
+        quota = {
+            "status": "UNKNOWN", "source": "UNAVAILABLE",
+            "reason_code": "CAPABILITY_UNAVAILABLE", "error": type(exc).__name__,
+        }
+    modes: dict[str, Any]
+    if client is None:
+        capability = {
+            "source": "UNAVAILABLE", "status": "UNKNOWN",
+            "evidence_status": "INCONCLUSIVE",
+        }
+        # Without a live client the mode report is derived from nothing, so it
+        # must not keep claiming a BRAIN_LIVE source.
+        modes = {
+            key: {
+                **value, "source": "UNAVAILABLE",
+                "evidence_status": "UNAVAILABLE",
+            }
+            for key, value in _simulation_modes_from_capabilities(None, None).items()
+        }
+    else:
+        try:
+            capability = get_capabilities(client=client, config=typed)
+        except Exception as exc:
+            capability = {
+                "source": "UNAVAILABLE", "status": "UNKNOWN",
+                "evidence_status": "INCONCLUSIVE", "error": type(exc).__name__,
+            }
+        try:
+            modes = get_simulation_modes(client=client, config=typed)
+        except Exception as exc:
+            modes = {"error": type(exc).__name__, "status": "UNKNOWN"}
+    live = client is not None
+    # A Multi child row is not an independent unresolved write: its parent row
+    # already represents that remote POST and its Simulation count.
+    pending_writes = [
+        row for row in pending
+        if str(row.get("kind") or "").upper() != "MULTI_CHILD"
+    ]
+    return {
+        "source": "LIVE" if live else "LOCAL_ONLY",
+        "status": "AVAILABLE" if live else "PARTIAL",
+        "evidence_status": "AVAILABLE" if live else "INCONCLUSIVE",
+        "research_contract_version": RESEARCH_CONTRACT_VERSION,
+        "capability": capability,
+        "simulation_modes": modes,
+        "quota": quota,
+        "pending_executions": pending,
+        "pending_execution_count": len(pending_writes),
+        "pending_simulation_count": sum(
+            int(row.get("simulation_count") or 1) for row in pending_writes
+        ),
+        "pending_multi_child_count": len(pending) - len(pending_writes),
+        "cache": cache,
+    }
+
+
+def get_pending_executions(*, state_dir=None, config=None):
+    """Read unresolved local guard entries from the configured state directory."""
+    typed = _normalized_config(config)
+    directory = _state_directory(typed, state_dir)
+    return {"entries": ExecutionGuard(directory, reconcile=False).entries()}
 
 
 def resume_execution(fingerprint, *, client=None, config=None,
@@ -855,54 +1030,98 @@ def _remote_client(*, client=None):
     return WQBClient()
 
 
+def _evidence_provider(*, client=None):
+    return RemoteAlphaEvidenceProvider(_remote_client(client=client))
+
+
 def get_alpha(alpha_id, *, client=None, config=None):
-    return _remote_client(client=client).get_alpha(str(alpha_id).strip())
+    return _evidence_provider(client=client).get_alpha(alpha_id)
 
 
-def get_alpha_evidence(alpha_id, *, client=None, config=None,
-                       live=True):
-    if not live:
-        raise ValueError("LIVE_EVIDENCE_REQUIRED")
-    import time as _time
-    snapshot = RemoteAlphaEvidenceProvider(
-        _remote_client(client=client)
-    ).collect(str(alpha_id).strip())
+def get_activity_diversity(*, client=None, config=None, user_id=None,
+                           region=None, delay=None, data_category=None):
+    """Return live account activity distribution for AI coverage diagnosis only."""
+    client = _remote_client(client=client)
+    if user_id is None:
+        user_id = client.get_authentication_status().get("user_id")
     return {
-        "alpha_id": snapshot.alpha_id, "source": "LIVE",
-        "fetched_at": _time.time(), "age_sec": 0.0,
-        "alpha": dict(snapshot.alpha_detail),
-        "aggregates": snapshot.aggregates, "pnl": snapshot.pnl,
-        "self_correlation": snapshot.self_correlation,
-        "status": dict(snapshot.status), "availability": dict(snapshot.availability),
+        "source": "BRAIN_LIVE",
+        "status": "AVAILABLE",
+        "network_write": False,
+        "user_id": user_id,
+        "diversity": client.get_activity_diversity(
+            user_id, region=region, delay=delay, data_category=data_category,
+        ),
     }
 
 
+def get_alpha_summary(alpha_id, *, client=None, config=None):
+    """Read only the cheap BRAIN Alpha detail used for broad first-pass screening."""
+    return RemoteAlphaEvidenceProvider(
+        _remote_client(client=client)
+    ).get_alpha_summary(str(alpha_id).strip())
+
+
+def get_alpha_evidence(alpha_id, *, client=None, config=None,
+                       live=True, recordsets=(), depth="summary"):
+    if not live:
+        raise ValueError("LIVE_EVIDENCE_REQUIRED")
+    return _evidence_provider(client=client).get_alpha_evidence(
+        str(alpha_id).strip(), live=True, recordsets=recordsets, depth=depth
+    )
+
+
 def get_alpha_metrics(alpha_id, *, client=None, config=None):
-    return get_alpha_evidence(alpha_id, client=client,
-                              config=config)["alpha"].get("is", {})
+    return _evidence_provider(client=client).get_alpha_metrics(str(alpha_id).strip())
 
 
 def get_alpha_aggregates(alpha_id, *, client=None, config=None):
-    return get_alpha_evidence(alpha_id, client=client,
-                              config=config)["aggregates"]
+    return _evidence_provider(client=client).get_alpha_aggregates(alpha_id)
 
 
 def get_alpha_pnl(alpha_id, *, client=None, config=None):
-    return get_alpha_evidence(alpha_id, client=client,
-                              config=config)["pnl"]
+    return _evidence_provider(client=client).get_alpha_pnl(alpha_id)
 
 
 def get_alpha_self_correlation(alpha_id, *, client=None, config=None):
-    return get_alpha_evidence(alpha_id, client=client,
-                              config=config)["self_correlation"]
+    return _evidence_provider(client=client).get_alpha_self_correlation(alpha_id)
 
 
-def compare_alphas(alpha_ids, *, client=None, config=None):
-    return {"source": "LIVE", "status": "AVAILABLE", "evidence_status": "AVAILABLE",
-            "alphas": [
-        get_alpha_evidence(item, client=client, config=config)
-        for item in (alpha_ids or ())
-    ]}
+def get_alpha_prod_correlation(alpha_id, *, client=None, config=None):
+    """Read PROD correlation only when the Agent requests a finalist check."""
+    return RemoteAlphaEvidenceProvider(
+        _remote_client(client=client)
+    ).get_alpha_prod_correlation(str(alpha_id).strip())
+
+
+def get_alpha_recordsets(alpha_id, names, *, client=None, config=None):
+    """Read only explicitly selected, currently discoverable Alpha recordsets."""
+    return _evidence_provider(client=client).get_alpha_recordsets(
+        str(alpha_id).strip(), names,
+    )
+
+
+def compare_alphas(alpha_ids, *, client=None, config=None, depth="summary",
+                   max_concurrent=4):
+    ids = [str(item).strip() for item in (alpha_ids or ()) if str(item).strip()]
+    try:
+        concurrency = int(max_concurrent)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("max_concurrent must be an integer") from exc
+    if isinstance(max_concurrent, bool) or not 1 <= concurrency <= 4:
+        raise ValueError("max_concurrent must be between 1 and 4")
+    if not ids:
+        return {"source": "LIVE", "status": "AVAILABLE",
+                "evidence_status": "AVAILABLE", "depth": str(depth).upper(),
+                "alphas": []}
+    provider = _evidence_provider(client=client)
+    with ThreadPoolExecutor(max_workers=min(concurrency, len(ids))) as pool:
+        alphas = list(pool.map(
+            lambda item: provider.get_alpha_evidence(item, depth=depth), ids
+        ))
+    return {"source": "LIVE", "status": "AVAILABLE",
+            "evidence_status": "AVAILABLE", "depth": str(depth).upper(),
+            "alphas": alphas}
 
 
 def _remote_repository(*, client=None, config=None, state_dir=None,
@@ -955,19 +1174,47 @@ def purge_remote_cache(*, client=None, config=None, state_dir=None):
     ).purge_remote_cache()}
 
 
-def simulation_quota(*, client=None, config=None, state_dir=None):
-    """Return a read-only quota projection from remote usage and active guards."""
+def simulation_quota(*, client=None, config=None, state_dir=None,
+                     refresh_if_stale=True):
+    """Return a source/freshness-labeled quota projection.
+
+    BRAIN's own rate-limit headers stay the fact source; the rebuildable remote
+    metadata feed is refreshed once when missing or stale. If that bounded
+    GET-only refresh fails, remaining values stay UNKNOWN instead of showing a
+    full budget.
+    """
+    typed = _normalized_config(config)
+    directory = _state_directory(typed, state_dir)
     repository = _remote_repository(
-        client=client, config=config, state_dir=state_dir,
+        client=client, config=typed, state_dir=directory,
         require_client=False,
     )
-    quota = _normalized_config(config).quota
-    typed = _normalized_config(config)
-    return SimulationQuota(
-        repository, ExecutionGuard(_state_directory(typed, state_dir), reconcile=False),
-        daily_cap=quota.daily,
-        rolling_cap=quota.rolling_limit,
+    freshness = repository.cache_status().get("freshness", "UNKNOWN")
+    refresh_error = None
+    if refresh_if_stale and str(freshness).upper() != "FRESH" and client is not None:
+        try:
+            repository = _remote_repository(
+                client=client, config=typed, state_dir=directory,
+                require_client=True,
+            )
+            repository.refresh_remote_alphas()
+        except Exception as exc:
+            refresh_error = exc
+    observation_reader = getattr(client, "get_simulation_quota_observation", None)
+    observation = observation_reader() if callable(observation_reader) else None
+    snapshot = SimulationQuota(
+        repository, ExecutionGuard(directory, reconcile=False),
+        daily_cap=typed.quota.daily,
+        official_observation=observation,
     ).snapshot()
+    if refresh_error is not None and snapshot.get("status") != "LIVE":
+        snapshot.update({
+            "status": "UNKNOWN",
+            "today_remaining": None,
+            "reason_code": reason_code_for_failure("UNKNOWN", refresh_error),
+            "error": f"bounded live quota refresh failed ({type(refresh_error).__name__})",
+        })
+    return snapshot
 
 
 def get_remote_alpha(alpha_id, *, live=False, client=None,
@@ -980,12 +1227,12 @@ def get_remote_alpha(alpha_id, *, live=False, client=None,
 
 
 def get_remote_alpha_evidence(alpha_id, *, live=True, client=None,
-                              config=None, state_dir=None):
-    """Return remote evidence; live reads are the default and source-labeled."""
+                              config=None, state_dir=None, depth="full"):
+    """Return source-labeled evidence at explicit summary/full depth."""
     return _remote_repository(
         client=client, config=config, state_dir=state_dir,
         require_client=True,
-    ).get_remote_alpha_evidence(alpha_id, live=live)
+    ).get_remote_alpha_evidence(alpha_id, live=live, depth=depth)
 
 
 def group_alphas(alpha_ids=None, *, rows=None, client=None,
@@ -997,11 +1244,11 @@ def group_alphas(alpha_ids=None, *, rows=None, client=None,
         ids = alpha_ids or [
             item["alpha_id"] for item in repository.list_remote_alphas(days=days)
         ]
-        rows = [repository.get_remote_alpha_evidence(item) for item in ids]
+        rows = [repository.get_remote_alpha_evidence(item, depth="summary") for item in ids]
     return group_remote_evidence(rows)
 
 
-def find_alpha_duplicates(alpha_id, *, rows=None, client=None,
+def find_duplicate_alphas(alpha_id, *, rows=None, client=None,
                           config=None, state_dir=None):
     if rows is None:
         rows = []
@@ -1009,17 +1256,10 @@ def find_alpha_duplicates(alpha_id, *, rows=None, client=None,
             client=client, config=config, state_dir=state_dir
         )
         for item in repository.list_remote_alphas():
-            rows.append(repository.get_remote_alpha_evidence(item["alpha_id"]))
+            rows.append(repository.get_remote_alpha_evidence(
+                item["alpha_id"], depth="summary"
+            ))
     return find_remote_duplicates(rows, alpha_id)
-
-
-def find_duplicate_alphas(alpha_id, *, rows=None, client=None,
-                          config=None, state_dir=None):
-    """Public name for exact execution duplicate lookup."""
-    return find_alpha_duplicates(
-        alpha_id, rows=rows, client=client,
-        config=config, state_dir=state_dir,
-    )
 
 
 def find_similar_alphas(expression_or_alpha_id, *, rows=None,
@@ -1029,7 +1269,7 @@ def find_similar_alphas(expression_or_alpha_id, *, rows=None,
         repository = _remote_repository(
             client=client, config=config, state_dir=state_dir
         )
-        rows = [repository.get_remote_alpha_evidence(item["alpha_id"])
+        rows = [repository.get_remote_alpha_evidence(item["alpha_id"], depth="summary")
                 for item in repository.list_remote_alphas(days=days)]
     return find_remote_similar(rows, expression_or_alpha_id)
 
@@ -1066,14 +1306,17 @@ def sync_alpha_colors(plan=None, *, exact_plan=None, client=None, config=None,
     )
 
 
-def research_tool_manifest():
-    return [
+def research_tool_manifest(profile="core"):
+    """Return a deterministic default CORE surface or the opt-in full catalog."""
+    rows: list[dict[str, Any]] = [
+        {"name": "research_status", "mode": "READ_ONLY", "owner": "research_api"},
         {"name": "get_capabilities", "mode": "READ_ONLY", "owner": "BRAIN"},
+        {"name": "get_operators", "mode": "READ_ONLY", "owner": "BRAIN"},
+        {"name": "get_operator_reference", "mode": "READ_ONLY", "owner": "BRAIN"},
+        {"name": "get_operator_syntax_reference", "mode": "READ_ONLY", "owner": "operator_reference"},
         {"name": "list_datasets", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "list_datafields", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "list_all_datafields", "mode": "READ_ONLY", "owner": "BRAIN"},
-        {"name": "discover_fields", "mode": "READ_ONLY", "owner": "BRAIN"},
-        {"name": "get_operators", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "list_templates", "mode": "READ_ONLY", "owner": "AlphaFactory"},
         {"name": "inspect_template", "mode": "READ_ONLY", "owner": "AlphaFactory"},
         {"name": "create_template", "mode": "PRIVATE_CATALOG_WRITE", "owner": "AlphaFactory"},
@@ -1082,23 +1325,39 @@ def research_tool_manifest():
         {"name": "validate_template", "mode": "PURE", "owner": "AlphaFactory"},
         {"name": "classify_fields", "mode": "PURE", "owner": "field_metadata"},
         {"name": "get_simulation_config", "mode": "READ_ONLY", "owner": "config"},
-        {"name": "validate_simulation_settings", "mode": "PURE", "owner": "SimulationGateway"},
-        {"name": "build_simulation_spec", "mode": "PURE", "owner": "SimulationGateway"},
+        {"name": "validate_simulation_settings", "mode": "READ_ONLY", "owner": "SimulationGateway"},
+        {"name": "build_simulation_spec", "mode": "READ_ONLY", "owner": "SimulationGateway"},
         {"name": "build_simulation_variant", "mode": "PURE", "owner": "SimulationGateway"},
-        {"name": "generate_probes", "mode": "PURE", "owner": "AlphaFactory"},
+        {"name": "generate_probes", "mode": "READ_ONLY", "owner": "AlphaFactory"},
         {"name": "validate_simulation_spec", "mode": "READ_ONLY", "owner": "SimulationGateway"},
+        {"name": "execution_fingerprint", "mode": "PURE", "owner": "SimulationGateway"},
         {"name": "simulate", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
-        {"name": "simulate_batch", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
         {"name": "simulate_single", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
-        {"name": "simulate_single_batch", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
+        {"name": "simulate_batch", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
         {"name": "simulate_multi_batch", "mode": "SIMULATION_WRITE", "remote_write": True, "owner": "SimulationGateway"},
         {"name": "get_simulation_modes", "mode": "READ_ONLY", "owner": "SimulationGateway"},
+        {"name": "get_live_preflight", "mode": "READ_ONLY", "owner": "BRAIN"},
+        {"name": "get_pending_executions", "mode": "READ_ONLY", "owner": "ExecutionGuard"},
         {"name": "resume_execution", "mode": "READ_ONLY", "remote_write": False, "owner": "ExecutionGuard"},
         {"name": "reconcile_execution", "mode": "READ_ONLY", "remote_write": False, "owner": "ExecutionGuard"},
+        {"name": "simulation_quota", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
+        {"name": "get_alpha", "mode": "READ_ONLY", "owner": "BRAIN"},
+        {"name": "get_alpha_summary", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "get_alpha_evidence", "mode": "READ_ONLY", "owner": "BRAIN"},
+        {"name": "get_alpha_metrics", "mode": "READ_ONLY", "owner": "BRAIN"},
+        {"name": "get_alpha_aggregates", "mode": "READ_ONLY", "owner": "BRAIN"},
+        {"name": "get_alpha_pnl", "mode": "READ_ONLY", "owner": "BRAIN"},
+        {"name": "get_alpha_self_correlation", "mode": "READ_ONLY", "owner": "BRAIN"},
+        {"name": "get_alpha_prod_correlation", "mode": "READ_ONLY", "owner": "BRAIN"},
+        {"name": "get_alpha_recordsets", "mode": "READ_ONLY", "owner": "BRAIN"},
+        {"name": "get_activity_diversity", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "compare_alphas", "mode": "READ_ONLY", "owner": "BRAIN"},
-        {"name": "refresh_remote_alphas", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
+        {"name": "refresh_remote_alphas", "mode": "LOCAL_CACHE_WRITE", "local_write": True, "owner": "RemoteAlphaRepository"},
         {"name": "list_remote_alphas", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
+        {"name": "get_remote_alpha", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
+        {"name": "get_remote_alpha_evidence", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
+        {"name": "remote_cache_status", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
+        {"name": "purge_remote_cache", "mode": "LOCAL_CACHE_WRITE", "local_write": True, "owner": "RemoteAlphaRepository"},
         {"name": "find_duplicate_alphas", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
         {"name": "find_similar_alphas", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
         {"name": "group_alphas", "mode": "PURE", "owner": "RemoteAlphaRepository"},
@@ -1106,11 +1365,23 @@ def research_tool_manifest():
         {"name": "sync_alpha_colors", "mode": "REMOTE_METADATA_WRITE", "owner": "BRAIN"},
         {"name": "alpha_submission", "mode": "MANUAL_ONLY", "owner": "user"},
     ]
+    if profile == "full":
+        return rows
+    if profile != "core":
+        raise ValueError("profile must be 'core' or 'full'")
+    core_names = {
+        "research_status",
+        "list_datasets", "list_datafields",
+        "build_simulation_spec", "validate_simulation_spec",
+        "simulate", "simulate_batch", "simulate_multi_batch",
+        "get_alpha_summary", "get_alpha_evidence",
+        "find_duplicate_alphas", "resume_execution",
+    }
+    return [row for row in rows if row["name"] in core_names]
 
 
 __all__ = [
     "SimulationSpec", "list_datasets", "list_datafields", "list_all_datafields",
-    "discover_fields",
     "generate_probes",
     "get_capabilities", "get_operators", "get_operator_reference", "get_operator_syntax_reference",
     "list_templates", "inspect_template",
@@ -1118,16 +1389,19 @@ __all__ = [
     "classify_fields", "get_simulation_config", "validate_simulation_settings",
     "build_simulation_spec", "build_simulation_variant",
     "validate_simulation_spec", "execution_fingerprint",
-    "simulate", "simulate_single", "simulate_batch", "simulate_single_batch",
-    "simulate_multi_batch", "get_simulation_modes",
+    "simulate", "simulate_single", "simulate_batch",
+    "simulate_multi_batch", "get_simulation_modes", "get_live_preflight",
     "get_pending_executions", "resume_execution",
-    "reconcile_execution",
-    "get_alpha", "get_alpha_evidence", "get_alpha_metrics",
+    "reconcile_execution", "research_status",
+    "get_alpha", "get_alpha_summary", "get_alpha_evidence", "get_alpha_metrics",
     "get_alpha_aggregates", "get_alpha_pnl", "get_alpha_self_correlation",
+    "get_alpha_prod_correlation",
+    "get_alpha_recordsets",
     "compare_alphas", "refresh_remote_alphas", "list_remote_alphas",
+    "get_activity_diversity",
     "get_remote_alpha", "get_remote_alpha_evidence", "remote_cache_status",
     "purge_remote_cache", "simulation_quota", "group_alphas",
-    "find_alpha_duplicates", "find_duplicate_alphas", "find_similar_alphas",
+    "find_duplicate_alphas", "find_similar_alphas",
     "preview_alpha_colors", "sync_alpha_colors",
     "research_tool_manifest",
 ]

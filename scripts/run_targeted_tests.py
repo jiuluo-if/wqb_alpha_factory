@@ -36,10 +36,7 @@ DIRECT_TESTS = {
     "tests/test_architecture_contracts.py": (
         "tests/test_architecture_contracts.py",
     ),
-    "wqb_agent/discovery.py": ("tests/test_research_api.py",),
     "wqb_agent/field_metadata.py": ("tests/test_research_api.py",),
-    "wqb_agent/discovery_selection.py": ("tests/test_discovery_selection.py",),
-    "wqb_agent/field_catalog.py": ("tests/test_research_api.py",),
     "wqb_agent/__init__.py": (
         "tests/test_research_api.py",
     ),
@@ -90,6 +87,7 @@ DIRECT_TESTS = {
         "tests/test_alpha_grouping.py",
         "tests/test_remote_colors.py",
     ),
+    "wqb_agent/mcp_server.py": ("tests/test_mcp_server.py",),
     "wqb_agent/remote_quota.py": ("tests/test_remote_quota.py",),
     "wqb_agent/credentials.py": (
         "tests/test_credentials.py",
@@ -99,12 +97,7 @@ DIRECT_TESTS = {
     "wqb_agent/diagnostics.py": ("tests/test_remote_diagnostics.py",),
     "wqb_agent/evidence_status.py": ("tests/test_protocol_truth.py",),
     "wqb_agent/failures.py": ("tests/test_client_refactor.py",),
-    "wqb_agent/schema.py": (
-        "tests/test_client_refactor.py",
-        "tests/test_client_refactor.py",
-    ),
     "wqb_agent/expression.py": ("tests/test_expression.py",),
-    "wqb_agent/heartbeat.py": ("tests/test_heartbeat.py",),
     "wqb_agent/remote_evidence.py": ("tests/test_remote_evidence.py",),
     "wqb_agent/simulation_gateway.py": ("tests/test_simulation_gateway.py",),
     "wqb_agent/remote_alpha_repository.py": ("tests/test_remote_alpha_repository.py",),

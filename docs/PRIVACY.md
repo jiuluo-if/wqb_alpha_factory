@@ -1,36 +1,23 @@
-# Repository privacy
+# 仓库隐私边界
 
-## Public repository
+## 公开仓库
 
-Tracked files may contain stable code, synthetic fixtures, evergreen contracts,
-sanitized platform references and minimal operational documentation. Public
-examples must use placeholders such as `field_a`, `field_b`, `signal_x`, `X`,
-`Y` and `GROUP`.
+tracked 文件只允许：稳定代码、synthetic fixtures、常青契约、脱敏的平台引用和最小运维文档。公开示例必须使用占位符，如 `field_a`、`field_b`、`signal_x`、`X`、`Y`、`GROUP`。
 
-## Local private research
+## 本地私有研究
 
-Real Alpha expressions, field IDs and pairings, metrics, Simulation evidence,
-reports and generated exports are local-only. Keep them under ignored
-`.wqb_state/`, `research_data/`, `reports/` or `.planning/` paths.
+真实 Alpha 表达式、字段 ID 与配对、指标、Simulation 证据、报告和生成导出仅限本地，必须放在被忽略的 `.wqb_state/`、`research_data/`、`reports/` 或 `.planning/` 路径下。
 
-Only `execution_guard.json`, rebuildable remote metadata cache, external
-credentials references and process locks are allowed for the Remote-First path.
+Remote-First 路径只允许：`execution_guard.json`、可重建的远端元数据缓存、外部 credentials 引用和进程锁。
 
-## Documentation and commit hygiene
+## 文档与提交卫生
 
-Do not put research history, dated round reports, private paths, credentials or
-platform identifiers in tracked docs, prompts, tests, logs or commit messages.
-Prefer editing the canonical owner and deleting obsolete historical artifacts;
-do not create versioned copies or tracked archives.
+tracked 文档、prompts、测试、日志或提交信息中不得出现研究历史、带日期的轮次报告、私有路径、credentials 或平台标识符。优先修改权威 owner 并删除过期历史产物；不得创建版本化副本或 tracked 归档。
 
-## Automated enforcement
+## 自动执行
 
-Run `python scripts/check_repo_privacy.py` before delivery. It scans
-`git ls-files`, so ignored local research remains available without becoming a
-public artifact. Run `git diff --check` and inspect staged changes separately.
+交付前运行 `python scripts/check_repo_privacy.py`。它扫描 `git ls-files`，因此被忽略的本地研究保持可用且不成为公开产物。另需运行 `git diff --check` 并单独检查已暂存变更。
 
-## Git history limitation
+## Git 历史限制
 
-Current-tree cleanup does not purge previously published Git history. This
-repository uses `HISTORY_REWRITE = NO`; past history remains an archive and
-must not be represented as current public research evidence.
+当前树清理不会清除已发布的 Git 历史。本仓库采用 `HISTORY_REWRITE = NO`；历史只是归档，不得被表述为当前公开研究证据。
