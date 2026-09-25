@@ -15,6 +15,7 @@ from .artifacts import atomic_write_json_if_changed
 from .client import (
     REGULAR_SIMULATION_TYPE,
     SUPPORTED_SIMULATION_REQUEST_TYPES,
+    WQBSimulationError,
 )
 from .expression import (
     analyze_expression,
@@ -1275,18 +1276,77 @@ class SimulationGateway:
             )
             alpha_ids = poller(progress_url)
             if is_multi:
-                if not isinstance(alpha_ids, (list, tuple)) or not alpha_ids:
-                    raise ValueError("Multi-Simulation recovery returned no child alpha ids")
-                payload = [self.client.get_alpha(alpha_id) for alpha_id in alpha_ids]
-                result = {"status": "DONE", "fingerprint": str(fingerprint),
-                          "progress_url": progress_url, "alpha_ids": list(alpha_ids),
-                          "evidence": payload}
+                if isinstance(alpha_ids, Mapping):
+                    children = alpha_ids.get("children")
+                    if (str(alpha_ids.get("status") or "").upper() != "SUCCESS"
+                            or not isinstance(children, list) or not children):
+                        raise WQBSimulationError(
+                            "Multi-Simulation recovery returned an invalid child result"
+                        )
+                    if any(
+                        not isinstance(child, Mapping)
+                        or str(child.get("status") or "").upper()
+                        not in {"DONE", "FAILED"}
+                        for child in children
+                    ):
+                        raise WQBSimulationError(
+                            "Multi-Simulation recovery has unresolved children"
+                        )
+                    child_alpha_ids = [
+                        str(child.get("alpha_id"))
+                        for child in children
+                        if str(child.get("status") or "").upper() == "DONE"
+                        and child.get("alpha_id")
+                    ]
+                    if sum(
+                        str(child.get("status") or "").upper() == "DONE"
+                        for child in children
+                    ) != len(child_alpha_ids):
+                        raise WQBSimulationError(
+                            "Multi-Simulation DONE child has no alpha id"
+                        )
+                    payload = [
+                        self.client.get_alpha(alpha_id)
+                        for alpha_id in child_alpha_ids
+                    ]
+                    failed = any(
+                        str(child.get("status") or "").upper() == "FAILED"
+                        for child in children
+                    )
+                    result = {
+                        "status": "FAILED" if failed else "DONE",
+                        "fingerprint": str(fingerprint),
+                        "progress_url": progress_url,
+                        "alpha_ids": child_alpha_ids,
+                        "children": [dict(child) for child in children],
+                        "evidence": payload,
+                    }
+                elif isinstance(alpha_ids, (list, tuple)) and alpha_ids:
+                    # Compatibility for clients that expose the legacy flat
+                    # child-id projection rather than the canonical result map.
+                    payload = [self.client.get_alpha(alpha_id) for alpha_id in alpha_ids]
+                    result = {
+                        "status": "DONE", "fingerprint": str(fingerprint),
+                        "progress_url": progress_url,
+                        "alpha_ids": list(alpha_ids), "evidence": payload,
+                    }
+                else:
+                    raise WQBSimulationError(
+                        "Multi-Simulation recovery returned no child results"
+                    )
             else:
                 payload = self.client.get_alpha(alpha_ids)
                 result = {"status": "DONE", "fingerprint": str(fingerprint),
                           "progress_url": progress_url, "alpha_id": alpha_ids,
                           "evidence": payload}
         except Exception as exc:
+            if not remote_terminal_error and is_multi:
+                diagnostic = getattr(exc, "diagnostic", None)
+                remote_status = (
+                    str(diagnostic.get("remote_status") or "").upper()
+                    if isinstance(diagnostic, Mapping) else ""
+                )
+                remote_terminal_error = remote_status in {"ERROR", "FAILED", "TIMEOUT"}
             if remote_terminal_error:
                 self.guard.remove_batch(str(fingerprint))
                 return {"status": "FAILED", "fingerprint": str(fingerprint),

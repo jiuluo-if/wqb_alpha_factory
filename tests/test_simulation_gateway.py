@@ -1345,6 +1345,76 @@ class TestSimulationGateway(unittest.TestCase):
             self.assertEqual(len(result["alpha_ids"]), 2)
             self.assertEqual(gateway.guard.entries(), [])
 
+    def test_multi_parent_recovery_accepts_client_child_result_mapping(self):
+        class MappingResultMultiClient(MultiGatewayClient):
+            def poll_multi_progress(self, progress_url, **kwargs):
+                return {
+                    "status": "SUCCESS",
+                    "remote_status": "COMPLETE",
+                    "children": [
+                        {"status": "DONE", "alpha_id": "multi-alpha-1"},
+                        {"status": "DONE", "alpha_id": "multi-alpha-2"},
+                    ],
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = MappingResultMultiClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            parent = "multi-parent-mapping"
+            gateway.guard.register(
+                parent, progress_url="multi-progress-mapping", status="RUNNING",
+                simulation_count=2, kind=ExecutionGuard.MULTI_PARENT,
+            )
+            for index in range(2):
+                gateway.guard.register(
+                    f"child-{index}", kind=ExecutionGuard.MULTI_CHILD,
+                    parent_fingerprint=parent,
+                )
+
+            result = gateway.resume_execution(parent)
+
+            self.assertEqual(result["status"], "DONE")
+            self.assertEqual(result["alpha_ids"], ["multi-alpha-1", "multi-alpha-2"])
+            self.assertEqual(
+                [item["id"] for item in result["evidence"]],
+                ["multi-alpha-1", "multi-alpha-2"],
+            )
+            self.assertEqual(gateway.guard.entries(), [])
+            self.assertEqual(client.multi_submissions, [])
+
+    def test_multi_parent_terminal_failure_clears_its_unresolved_child_guards(self):
+        class TerminalErrorMultiClient(MultiGatewayClient):
+            def poll_multi_progress(self, progress_url, **kwargs):
+                raise WQBRemoteSimulationError({
+                    "remote_status": "ERROR",
+                    "simulation_id": "synthetic-parent",
+                    "message": "synthetic terminal parent failure",
+                })
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = TerminalErrorMultiClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            parent = "multi-parent-terminal-error"
+            gateway.guard.register(
+                parent, progress_url="multi-progress-terminal-error", status="RUNNING",
+                simulation_count=2, kind=ExecutionGuard.MULTI_PARENT,
+            )
+            gateway.guard.register(
+                "child-terminal-1", kind=ExecutionGuard.MULTI_CHILD,
+                parent_fingerprint=parent,
+            )
+            gateway.guard.register(
+                "child-terminal-2", kind=ExecutionGuard.MULTI_CHILD,
+                parent_fingerprint=parent,
+            )
+
+            result = gateway.resume_execution(parent)
+
+            self.assertEqual(result["status"], "FAILED")
+            self.assertIn("synthetic terminal parent failure", result["error"])
+            self.assertEqual(gateway.guard.entries(), [])
+            self.assertEqual(client.multi_submissions, [])
+
     def test_multi_child_recovery_follows_its_parent(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = MultiGatewayClient()
