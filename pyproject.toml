@@ -25,6 +25,7 @@ perf = ["py-spy", "pytest", "pytest-xdist"]
 
 [project.scripts]
 alpha-factory-mcp = "wqb_agent.mcp_server:main"
+alpha-factory-research-mcp = "wqb_agent.mcp_server:research_main"
 
 [tool.coverage.run]
 branch = true
