@@ -38,14 +38,10 @@ MULTI_DEFAULT_CHILD_BATCH_SIZE = 10
 MULTI_DEFAULT_CONCURRENCY = 2
 MULTI_MAX_CONCURRENCY = 8
 
-# The preflight exact-duplicate scan reads the remote Alpha library.  BRAIN
-# answers one `/users/self/alphas` page in ~6 s and serialises concurrent pages,
-# so walking the complete history of a large library needs tens of minutes and
-# can never finish inside a usable budget — it used to abort every POST before
-# dispatch.  The scan is therefore bounded to the most recent days and reports
-# itself as a window rather than as complete history.
-REMOTE_DUPLICATE_LOOKBACK_DAYS = 2
-REMOTE_DUPLICATE_SCAN_BUDGET_SEC = 300
+# Current bounded scan policy follows verified platform behavior.  Widening
+# the window requires new live evidence; scan results remain explicitly incomplete.
+REMOTE_DUPLICATE_LOOKBACK_DAYS = 1
+REMOTE_DUPLICATE_SCAN_BUDGET_SEC = 900
 REMOTE_DUPLICATE_SCAN_KEY = "__remote_duplicate_scan__"
 
 
@@ -348,10 +344,14 @@ class SimulationGateway:
         if not isinstance(settings, Mapping):
             return {
                 "valid": False, "status": "INVALID", "source": "LOCAL_SCHEMA",
+                "validation_source": "LOCAL_SCHEMA",
                 "evidence_status": "UNAVAILABLE", "settings": {},
+                "validated_live_keys": [], "unverified_settings": [],
                 "errors": ["settings must be an object"],
             }
         normalized = dict(settings)
+        validated_live_keys = set()
+        unverified_settings = set(normalized)
         for key in ("region", "universe", "instrumentType", "neutralization",
                     "pasteurization", "unitHandling", "nanHandling", "language"):
             if key in normalized and (
@@ -448,13 +448,23 @@ class SimulationGateway:
                 ):
                     continue
                 allowed = spec.get("allowed_values")
-                if isinstance(allowed, list) and normalized[key] not in allowed:
-                    errors.append(f"{key} is not allowed by live OPTIONS")
+                if isinstance(allowed, list):
+                    validated_live_keys.add(key)
+                    unverified_settings.discard(key)
+                    if normalized[key] not in allowed:
+                        errors.append(f"{key} is not allowed by live OPTIONS")
+        evidence_status = (
+            "PARTIAL" if validation_source == "LIVE_OPTIONS" and unverified_settings
+            else "AVAILABLE" if validation_source == "LIVE_OPTIONS"
+            else "INCONCLUSIVE"
+        )
         return {
             "valid": not errors, "status": "VALID" if not errors else "INVALID",
             "source": validation_source, "validation_source": validation_source,
             "capability_status": capability_status,
-            "evidence_status": "INCONCLUSIVE", "settings": normalized, "errors": errors,
+            "evidence_status": evidence_status, "settings": normalized, "errors": errors,
+            "validated_live_keys": sorted(str(key) for key in validated_live_keys),
+            "unverified_settings": sorted(str(key) for key in unverified_settings),
         }
 
     @staticmethod
@@ -596,12 +606,13 @@ class SimulationGateway:
         instead of failing the whole preflight.
         """
         try:
-            return shard_reader(
+            rows = shard_reader(
                 lookback_days=REMOTE_DUPLICATE_LOOKBACK_DAYS,
                 time_budget_sec=REMOTE_DUPLICATE_SCAN_BUDGET_SEC,
             )
+            return rows, REMOTE_DUPLICATE_LOOKBACK_DAYS
         except TypeError:
-            return shard_reader()
+            return shard_reader(), None
 
     @staticmethod
     def _attach_scan_evidence(results, remote_duplicates):
@@ -618,9 +629,11 @@ class SimulationGateway:
         targets = {fingerprint for _index, _spec, fingerprint in validated}
         if not targets:
             return {}
+        scan_started = time.monotonic()
+        rows_scanned = 0
         shard_reader = getattr(self.client, "iter_user_alpha_history_shards", None)
         if callable(shard_reader):
-            rows = self._recent_history_rows(shard_reader)
+            rows, scan_lookback_days = self._recent_history_rows(shard_reader)
         else:
             reader = getattr(self.client, "get_all_user_alphas", None)
             if not callable(reader):
@@ -631,6 +644,7 @@ class SimulationGateway:
             # Compatibility path remains bounded. QueryTooBroad and transport
             # failures propagate; an incomplete scan is never treated as clear.
             rows = reader(max_results=1000)
+            scan_lookback_days = None
         try:
             iterator = iter(rows)
         except TypeError as exc:
@@ -641,6 +655,7 @@ class SimulationGateway:
 
         matches = {}
         for row in iterator:
+            rows_scanned += 1
             if not isinstance(row, Mapping):
                 continue
             alpha_payload = row.get("alpha")
@@ -666,9 +681,16 @@ class SimulationGateway:
         # The scan evidence travels with the batch results: it states which
         # window was scanned, so no reader can mistake it for complete history.
         matches[REMOTE_DUPLICATE_SCAN_KEY] = {
-            "status": "BOUNDED_RECENT_WINDOW",
-            "lookback_days": REMOTE_DUPLICATE_LOOKBACK_DAYS,
+            "status": (
+                "BOUNDED_RECENT_WINDOW" if scan_lookback_days is not None
+                else "LEGACY_SCOPE_UNKNOWN"
+            ),
+            "lookback_days": scan_lookback_days,
             "complete": False,
+            "elapsed_sec": round(time.monotonic() - scan_started, 3),
+            "rows_scanned": rows_scanned,
+            "matched_count": len(matches),
+            "candidate_count": len(validated),
         }
         return matches
 
