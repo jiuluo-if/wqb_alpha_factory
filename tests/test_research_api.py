@@ -866,6 +866,38 @@ class TestResearchApi(unittest.TestCase):
         self.assertEqual(offline["capability_status"], "UNKNOWN")
         self.assertEqual(offline["validation_source"], "LOCAL_ONLY")
 
+    def test_region_agnostic_cross_scope_validation_reports_partial_live_evidence(self):
+        client = SimpleNamespace(
+            region="USA", universe="TOP3000", instrument_type="EQUITY",
+            get_simulation_capability=lambda: {
+                "status": "AVAILABLE", "capability_status": "AVAILABLE",
+                "settings": {
+                    "region": {"allowed_values": ["USA"]},
+                    "universe": {"allowed_values": ["TOP3000"]},
+                    "instrumentType": {"allowed_values": ["EQUITY"]},
+                    "delay": {"allowed_values": [1]},
+                },
+                "required_fields": [], "required_settings": [],
+            },
+        )
+
+        report = validate_simulation_settings(
+            {
+                "region": "GLB", "universe": "MINVOL1M",
+                "instrumentType": "EQUITY", "delay": 1,
+            },
+            client=client,
+            simulation_type="REGION_AGNOSTIC",
+        )
+
+        self.assertTrue(report["valid"])
+        self.assertEqual(report["validation_source"], "LIVE_OPTIONS")
+        self.assertEqual(report["evidence_status"], "PARTIAL")
+        self.assertEqual(report["validated_live_keys"], ["instrumentType"])
+        self.assertEqual(
+            set(report["unverified_settings"]), {"region", "universe", "delay"}
+        )
+
     def test_live_preflight_is_read_only_and_contains_pending_guards(self):
         client = SimpleNamespace(
             instrument_type="EQUITY", region="USA", universe="TOP3000", delay=1,

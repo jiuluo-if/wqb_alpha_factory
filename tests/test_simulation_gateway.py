@@ -25,9 +25,6 @@ from wqb_agent.simulation_gateway import (
     MULTI_MAX_CHILDREN,
     MULTI_MAX_CONCURRENCY,
     MULTI_MIN_CHILDREN,
-    REMOTE_DUPLICATE_LOOKBACK_DAYS,
-    REMOTE_DUPLICATE_SCAN_BUDGET_SEC,
-    REMOTE_DUPLICATE_SCAN_KEY,
     ExecutionGuard,
     SimulationGateway,
     SimulationSpec,
@@ -871,6 +868,11 @@ class TestSimulationGateway(unittest.TestCase):
             self.assertEqual(result["alpha_id"], "alpha-existing")
             self.assertEqual(result["reason_code"], "EXACT_DUPLICATE")
             self.assertEqual(client.submissions, [])
+            scan = result["remote_duplicate_scan"]
+            self.assertEqual(scan["rows_scanned"], 1)
+            self.assertEqual(scan["matched_count"], 1)
+            self.assertEqual(scan["candidate_count"], 1)
+            self.assertGreaterEqual(scan["elapsed_sec"], 0.0)
 
     def test_exact_duplicate_after_1000_rows_is_found_by_sharded_history_read(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -882,16 +884,20 @@ class TestSimulationGateway(unittest.TestCase):
             self.assertEqual(result["alpha_id"], "old-exact")
             self.assertEqual(client.submissions, [])
 
-    def test_duplicate_scan_reports_its_bounded_recent_window(self):
+    def test_legacy_duplicate_scan_does_not_claim_a_recent_window(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = RemoteHistoryGatewayClient()
             result = SimulationGateway(client, state_dir=tmp).simulate(
                 SimulationSpec("rank(open)", {"delay": 1})
             )
             scan = result["remote_duplicate_scan"]
-            self.assertEqual(scan["status"], "BOUNDED_RECENT_WINDOW")
-            self.assertEqual(scan["lookback_days"], REMOTE_DUPLICATE_LOOKBACK_DAYS)
+            self.assertEqual(scan["status"], "LEGACY_SCOPE_UNKNOWN")
+            self.assertIsNone(scan["lookback_days"])
             self.assertFalse(scan["complete"])
+            self.assertEqual(scan["rows_scanned"], 1)
+            self.assertEqual(scan["matched_count"], 0)
+            self.assertEqual(scan["candidate_count"], 1)
+            self.assertGreaterEqual(scan["elapsed_sec"], 0.0)
 
     def test_duplicate_scan_asks_the_shard_reader_for_a_bounded_window(self):
         class RecordingHistoryClient(ShardedRemoteHistoryGatewayClient):
@@ -905,15 +911,19 @@ class TestSimulationGateway(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             client = RecordingHistoryClient()
-            SimulationGateway(client, state_dir=tmp).simulate(
+            result = SimulationGateway(client, state_dir=tmp).simulate(
                 SimulationSpec("rank(close)", {"delay": 1})
             )
             self.assertEqual(
-                client.scan_kwargs["lookback_days"], REMOTE_DUPLICATE_LOOKBACK_DAYS
+                client.scan_kwargs["lookback_days"], 1
             )
             self.assertEqual(
-                client.scan_kwargs["time_budget_sec"], REMOTE_DUPLICATE_SCAN_BUDGET_SEC
+                client.scan_kwargs["time_budget_sec"], 900
             )
+            self.assertEqual(
+                result["remote_duplicate_scan"]["status"], "BOUNDED_RECENT_WINDOW"
+            )
+            self.assertEqual(result["remote_duplicate_scan"]["lookback_days"], 1)
 
     def test_legacy_shard_reader_without_window_argument_still_scans(self):
         class LegacyHistoryClient(ShardedRemoteHistoryGatewayClient):
