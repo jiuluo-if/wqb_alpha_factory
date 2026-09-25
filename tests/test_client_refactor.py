@@ -132,6 +132,49 @@ def make_client():
     return c
 
 
+class TestAlphaPathSegmentSafety(unittest.TestCase):
+    def test_path_traversal_ids_are_rejected_before_any_alpha_request(self):
+        alpha_methods = (
+            lambda client, alpha_id: client.list_alpha_recordsets(alpha_id),
+            lambda client, alpha_id: client.get_alpha(alpha_id),
+            lambda client, alpha_id: client.get_recordset(alpha_id, "pnl"),
+            lambda client, alpha_id: client.set_alpha_color(
+                alpha_id, "BLUE", verify=False
+            ),
+            lambda client, alpha_id: client.get_aggregates(alpha_id),
+            lambda client, alpha_id: client.get_correlation(alpha_id),
+        )
+        for invoke in alpha_methods:
+            with self.subTest(invoke=invoke):
+                client = make_client()
+                client._request = mock.Mock(return_value=FakeResponse(
+                    headers={}, payload={"recordsets": []}
+                ))
+                with self.assertRaises(ValueError):
+                    invoke(client, "../../users/self/alphas")
+                client._request.assert_not_called()
+
+    def test_valid_alpha_id_is_encoded_as_one_path_segment(self):
+        client = make_client()
+        client._request = mock.Mock(return_value=FakeResponse(payload={}))
+
+        client.get_alpha("alpha:123")
+
+        self.assertEqual(
+            client._request.call_args.args[:2],
+            ("GET", "https://api.worldquantbrain.com/alphas/alpha%3A123"),
+        )
+
+    def test_encoded_separators_and_url_controls_are_rejected(self):
+        for alpha_id in ("%2fusers", "alpha?x=1", "alpha#fragment", "a\\b", "..", "alpha\x7f"):
+            with self.subTest(alpha_id=alpha_id):
+                client = make_client()
+                client._request = mock.Mock()
+                with self.assertRaises(ValueError):
+                    client.get_alpha(alpha_id)
+                client._request.assert_not_called()
+
+
 class TestBoundedAlphaHistoryShards(unittest.TestCase):
     def test_broad_user_alpha_history_is_split_and_rows_are_yielded(self):
         client = make_client()

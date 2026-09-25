@@ -101,6 +101,22 @@ def _finite_nonnegative(value, default):
     return parsed if math.isfinite(parsed) and parsed >= 0 else float(default)
 
 
+def _alpha_path_segment(alpha_id):
+    """Validate and encode an Alpha ID as exactly one URL path segment."""
+    if not isinstance(alpha_id, (str, int)) or isinstance(alpha_id, bool):
+        raise ValueError("alpha_id must be a non-empty string or integer")
+    value = str(alpha_id).strip()
+    if (
+        not value
+        or len(value) > 128
+        or value in {".", ".."}
+        or any(char in value for char in ("/", "\\", "?", "#", "%"))
+        or any(ord(char) < 0x20 or ord(char) == 0x7F for char in value)
+    ):
+        raise ValueError("alpha_id must be a safe single path segment")
+    return quote(value, safe="")
+
+
 def _bounded_choice_values(choices, *, instrument_type=None, region=None):
     """Normalize one live OPTIONS choice projection to a flat value list.
 
@@ -797,9 +813,10 @@ class WQBClient:
 
     def list_alpha_recordsets(self, alpha_id):
         """Discover available official recordsets for one Alpha."""
+        alpha_segment = _alpha_path_segment(alpha_id)
         resp = self._request(
-            "GET", f"{self.base_url}/alphas/{alpha_id}/recordsets",
-            context=f"GET alpha recordsets {alpha_id}",
+            "GET", f"{self.base_url}/alphas/{alpha_segment}/recordsets",
+            context=f"GET alpha recordsets {alpha_segment}",
         )
         payload = resp.json()
         rows = payload.get("recordsets") if isinstance(payload, Mapping) else None
@@ -1505,8 +1522,10 @@ class WQBClient:
         }
 
     def get_alpha(self, alpha_id):
+        alpha_segment = _alpha_path_segment(alpha_id)
         resp = self._request(
-            "GET", f"{self.base_url}/alphas/{alpha_id}", context=f"GET alpha {alpha_id}"
+            "GET", f"{self.base_url}/alphas/{alpha_segment}",
+            context=f"GET alpha {alpha_segment}"
         )
         return resp.json()
 
@@ -1531,9 +1550,10 @@ class WQBClient:
             available_names is None and name not in OFFICIAL_RECORDSET_NAMES
         ):
             raise ValueError(f"unsupported alpha recordset: {name}")
+        alpha_segment = _alpha_path_segment(alpha_id)
         resp = self._request(
-            "GET", f"{self.base_url}/alphas/{alpha_id}/recordsets/{quote(name, safe='')}",
-            context=f"GET alpha recordset {name} {alpha_id}",
+            "GET", f"{self.base_url}/alphas/{alpha_segment}/recordsets/{quote(name, safe='')}",
+            context=f"GET alpha recordset {name} {alpha_segment}",
         )
         try:
             return resp.json()
@@ -1588,9 +1608,10 @@ class WQBClient:
                 f"{sorted(ALPHA_COLOR_VALUES)} or None"
             )
         alpha_id = str(alpha_id).strip()
+        alpha_segment = _alpha_path_segment(alpha_id)
         resp = self._request(
             "PATCH",
-            f"{self.base_url}/alphas/{alpha_id}",
+            f"{self.base_url}/alphas/{alpha_segment}",
             json={"color": normalized},
             accepted=(200, 201, 204),
             context=f"PATCH alpha color {alpha_id}",
@@ -1615,15 +1636,17 @@ class WQBClient:
         Returns the raw payload (typically {'is': {'yearlyData': [...]}}) so the
         caller can inspect year-by-year sharpe/returns/turnover stability.
         """
+        alpha_segment = _alpha_path_segment(alpha_id)
         resp = self._request(
             "GET",
-            f"{self.base_url}/alphas/{alpha_id}/aggregates",
-            context=f"GET alpha aggregates {alpha_id}",
+            f"{self.base_url}/alphas/{alpha_segment}/aggregates",
+            context=f"GET alpha aggregates {alpha_segment}",
         )
         return resp.json()
 
     def get_correlation(self, alpha_id, kind="self", timeout_sec=300):
         """Poll a read-only alpha-correlation endpoint until it settles."""
+        alpha_segment = _alpha_path_segment(alpha_id)
         if kind not in ("self", "prod"):
             raise ValueError("kind must be 'self' or 'prod'")
         budget = _finite_nonnegative(timeout_sec, 300.0)
@@ -1631,10 +1654,10 @@ class WQBClient:
         while True:
             resp = self._request(
                 "GET",
-                f"{self.base_url}/alphas/{alpha_id}/correlations/{kind}",
+                f"{self.base_url}/alphas/{alpha_segment}/correlations/{kind}",
                 timeout=60,
                 rate_limit_budget_sec=budget,
-                context=f"GET {kind} correlation {alpha_id}",
+                context=f"GET {kind} correlation {alpha_segment}",
             )
             retry_after = resp.headers.get("Retry-After")
             if retry_after is None:
