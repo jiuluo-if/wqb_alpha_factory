@@ -212,7 +212,8 @@ def build_server(*, api=research_api, client=None, config=None, state_dir=None):
             "wqb_agent.research_api; it never submits simulations or Alphas."
         ),
     )
-    readonly = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+    remote_read = ToolAnnotations(readOnlyHint=True, openWorldHint=True)
+    local_read = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
     active_client = client
 
     def resolve_client():
@@ -235,7 +236,7 @@ def build_server(*, api=research_api, client=None, config=None, state_dir=None):
             }
         return _envelope(payload, owner=owner, allow_expression=allow_expression)
 
-    @server.tool(annotations=readonly)
+    @server.tool(annotations=remote_read)
     def get_capabilities() -> dict[str, Any]:
         """[READ_ONLY] Read current BRAIN operator capability through research_api."""
         return wrap(
@@ -243,7 +244,7 @@ def build_server(*, api=research_api, client=None, config=None, state_dir=None):
             owner="research_api.get_capabilities",
         )
 
-    @server.tool(annotations=readonly)
+    @server.tool(annotations=remote_read)
     def get_simulation_modes() -> dict[str, Any]:
         """[READ_ONLY] Read account authentication and advertised Simulation permissions; unknown stays unknown."""
         def read_modes():
@@ -265,7 +266,7 @@ def build_server(*, api=research_api, client=None, config=None, state_dir=None):
             owner="research_api.get_simulation_modes",
         )
 
-    @server.tool(annotations=readonly)
+    @server.tool(annotations=remote_read)
     def list_datafields(dataset_id: str, limit: int = 20, offset: int = 0, field_type: str | None = None) -> dict[str, Any]:
         """[READ_ONLY] Read one live data-field page; output is capped at 20 rows."""
         if (
@@ -282,7 +283,7 @@ def build_server(*, api=research_api, client=None, config=None, state_dir=None):
             owner="research_api.list_datafields",
         )
 
-    @server.tool(annotations=readonly)
+    @server.tool(annotations=remote_read)
     def get_alpha_evidence(alpha_id: str, recordsets: list[str] | None = None) -> dict[str, Any]:
         """[READ_ONLY] Read one live Alpha evidence snapshot.
 
@@ -309,7 +310,7 @@ def build_server(*, api=research_api, client=None, config=None, state_dir=None):
             allow_expression=True,
         )
 
-    @server.tool(annotations=readonly)
+    @server.tool(annotations=local_read)
     def get_pending_executions() -> dict[str, Any]:
         """[READ_ONLY] Read bounded unresolved ExecutionGuard summaries from local state; never resumes or edits them."""
         def read_guard():
@@ -335,7 +336,9 @@ def _write_result_envelope(results, *, expected_count: int) -> dict[str, Any]:
     """Return required proposal attribution and follow-up identities only."""
     malformed = not isinstance(results, (list, tuple))
     results = [] if malformed else list(results)
-    projected, scan, clipped = [], None, False
+    projected: list[dict[str, Any]] = []
+    scan: dict[str, Any] | None = None
+    clipped = False
     for item in results:
         if not isinstance(item, Mapping):
             clipped = True
@@ -393,8 +396,13 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
             "only through wqb_agent.research_api and SimulationGateway. Alpha submission is unavailable."
         ),
     )
-    readonly = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
-    remote_write = ToolAnnotations(readOnlyHint=False, openWorldHint=True)
+    remote_read = ToolAnnotations(readOnlyHint=True, openWorldHint=True)
+    simulation_write = ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=True,
+    )
     active_client = client
 
     def resolve_client():
@@ -450,27 +458,27 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
         except (TypeError, ValueError):
             return None
 
-    @server.tool(annotations=readonly)
+    @server.tool(annotations=remote_read)
     def research_status() -> dict[str, Any]:
         """[READ_ONLY] First call: live readiness and unresolved remote state."""
         return read_facade("research_status", state_dir=state_dir)
 
-    @server.tool(annotations=readonly)
+    @server.tool(annotations=remote_read)
     def list_datasets() -> dict[str, Any]:
         """[READ_ONLY] List live datasets in the authorized account scope."""
         return read_facade("list_datasets")
 
-    @server.tool(annotations=readonly)
+    @server.tool(annotations=remote_read)
     def list_datafields(dataset_id: str, limit: int = 20, offset: int = 0, field_type: str | None = None) -> dict[str, Any]:
         """[READ_ONLY] Read one bounded live datafield page."""
         return read_facade("list_datafields", dataset_id, limit=limit, offset=offset, field_type=field_type)
 
-    @server.tool(annotations=readonly)
+    @server.tool(annotations=remote_read)
     def get_operator_reference() -> dict[str, Any]:
         """[READ_ONLY] Read current live operator capability and syntax facts."""
         return read_facade("get_operator_reference")
 
-    @server.tool(annotations=readonly)
+    @server.tool(annotations=remote_read)
     def validate_simulation_spec(spec: dict[str, Any]) -> dict[str, Any]:
         """[READ_ONLY] Validate a SimulationSpec using the existing Gateway facade."""
         parsed = parse_specs([spec] if isinstance(spec, dict) else spec, minimum=1, maximum=1)
@@ -478,7 +486,7 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
             return _invalid_result(owner="research_api.validate_simulation_spec")
         return read_facade("validate_simulation_spec", parsed[0], state_dir=state_dir)
 
-    @server.tool(annotations=remote_write)
+    @server.tool(annotations=simulation_write)
     def simulate_batch(specs: list[dict[str, Any]]) -> dict[str, Any]:
         """[REMOTE_WRITE] Start 1–50 BRAIN Simulations through SimulationGateway."""
         parsed = parse_specs(specs, minimum=1, maximum=MAX_SIMULATION_BATCH, require_proposal_ids=True)
@@ -486,7 +494,7 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
             return _invalid_result(owner="research_api.simulate_batch", access_mode="SIMULATION_WRITE", remote_write=True)
         return write_facade("simulate_batch", parsed)
 
-    @server.tool(annotations=remote_write)
+    @server.tool(annotations=simulation_write)
     def simulate_multi_batch(specs: list[dict[str, Any]]) -> dict[str, Any]:
         """[REMOTE_WRITE] Start 2–100 compatible candidates through Gateway Multi batching."""
         parsed = parse_specs(specs, minimum=2, maximum=MAX_MULTI_BATCH, require_proposal_ids=True)
@@ -494,7 +502,7 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
             return _invalid_result(owner="research_api.simulate_multi_batch", access_mode="SIMULATION_WRITE", remote_write=True)
         return write_facade("simulate_multi_batch", parsed)
 
-    @server.tool(annotations=readonly)
+    @server.tool(annotations=remote_read)
     def get_alpha_evidence(alpha_id: str, recordsets: list[str] | None = None) -> dict[str, Any]:
         """[READ_ONLY] Read one live Alpha evidence projection on request."""
         selected = recordsets or []
@@ -502,7 +510,7 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
             return _invalid_result(owner="research_api.get_alpha_evidence")
         return read_facade("get_alpha_evidence", alpha_id, live=True, recordsets=selected, depth="full" if selected else "summary", allow_expression=True)
 
-    @server.tool(annotations=readonly)
+    @server.tool(annotations=remote_read)
     def reconcile_execution(fingerprint: str) -> dict[str, Any]:
         """[READ_ONLY] Reconcile one existing guard; never submit again."""
         return read_facade("reconcile_execution", fingerprint, state_dir=state_dir)
