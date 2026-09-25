@@ -125,6 +125,25 @@ class ReadOnlyMCPServerTests(unittest.IsolatedAsyncioTestCase):
                 "UNKNOWN",
             )
 
+    async def test_annotations_distinguish_remote_brain_reads_from_local_guard_reads(self):
+        server = build_server(api=SimpleNamespace(), client=object(), state_dir="synthetic-state")
+
+        async with Client(server) as client:
+            listed = await client.list_tools()
+
+        by_name = {tool.name: tool for tool in listed.tools}
+        for name in (
+            "get_capabilities", "get_simulation_modes", "list_datafields",
+            "get_alpha_evidence",
+        ):
+            annotations = by_name[name].annotations
+            self.assertIs(annotations.read_only_hint, True, name)
+            self.assertIs(annotations.open_world_hint, True, name)
+
+        guard = by_name["get_pending_executions"].annotations
+        self.assertIs(guard.read_only_hint, True)
+        self.assertIs(guard.open_world_hint, False)
+
     async def test_datafields_are_bounded_and_secrets_are_removed(self):
         seen = {}
 
@@ -368,6 +387,30 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         for tool in listed.tools:
             self.assertNotIn("state_dir", tool.input_schema.get("properties", {}))
         self.assertNotIn("alpha_submission", by_name)
+
+    async def test_research_annotations_mark_reads_remote_and_simulations_additive_non_idempotent(self):
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(api=self.api(), client=object())
+        async with Client(server) as client:
+            listed = await client.list_tools()
+
+        by_name = {tool.name: tool for tool in listed.tools}
+        remote_read_names = {
+            "research_status", "list_datasets", "list_datafields",
+            "get_operator_reference", "validate_simulation_spec",
+            "get_alpha_evidence", "reconcile_execution",
+        }
+        for name in remote_read_names:
+            annotations = by_name[name].annotations
+            self.assertIs(annotations.read_only_hint, True, name)
+            self.assertIs(annotations.open_world_hint, True, name)
+
+        for name in ("simulate_batch", "simulate_multi_batch"):
+            annotations = by_name[name].annotations
+            self.assertIs(annotations.read_only_hint, False, name)
+            self.assertIs(annotations.destructive_hint, False, name)
+            self.assertIs(annotations.idempotent_hint, False, name)
+            self.assertIs(annotations.open_world_hint, True, name)
 
     async def test_research_status_is_first_tool_and_performs_live_handshake(self):
         status = Mock(return_value={"source": "LIVE", "status": "AVAILABLE", "capability": {"status": "LIVE_VERIFIED"}})
