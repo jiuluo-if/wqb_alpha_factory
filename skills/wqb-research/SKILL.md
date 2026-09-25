@@ -1,7 +1,7 @@
 ---
 name: wqb-research
 description: "用于 WorldQuant BRAIN Alpha 研究：实验批次设计、Simulation 证据、结果解释与下一次实验选择。"
-compatible_research_contract: "2026-09-24"
+compatible_research_contract: "2026-09-25"
 ---
 
 # WQB 研究
@@ -20,8 +20,8 @@ frontmatter 中 `compatible_research_contract` 是本文件编写时所针对的
 ## 每个研究批次
 
 - 从多个竞争假设起步。使用 BRAIN 原始 dataset/datafield 列表，并解释每个 Agent 选定字段。
-- 每个 proposal 给 `proposal_id`、有用的 `note`，适用时加模板/家族标签。批次按对照组、本地兄弟组、证伪组与新探针分组。
-- `note` 是每个结果回显的假设链接，如 `H2:EXPLORE`、`H3:CONTROL`、`H2:FALSIFY`、`H2:LOCAL`。Python 原样返回该标签，永不解释它。
+- 每个 proposal 给 `proposal_id`、有用的 `note`，适用时加模板/家族标签。Research MCP 要求 proposal ID 是 1–48 字符且同一 batch 唯一；提交前维护 `proposal_id → hypothesis/note/template` 映射。批次按对照组、本地兄弟组、证伪组与新探针分组。
+- `note` 使用 `H2:EXPLORE`、`H3:CONTROL`、`H2:FALSIFY`、`H2:LOCAL` 等假设标签，由 Agent 在 batch mapping 中解释。Research MCP write result 保留完整 `proposal_id` 并回显有界 note/template；凭证样式赋值会脱敏，长文本会截断并显式标记。Multi parent 指纹按 proposal ID 分组返回；direct Python facade 的既有返回兼容行为保持不变。
 - 说明每组测试什么机制、什么结果会改变下一次决策、使用多少 Simulation。大量有目的的 Simulation 受欢迎；不可追溯的随机表达式不受欢迎。
 - 保留探索。高结果只是比较候选，不是大举开发该方向的许可。
 - 本地变体保持字段、算子与表达式拓扑不变；拓扑变化是带独立假设的 `NEW_PROBE`。

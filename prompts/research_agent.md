@@ -10,6 +10,6 @@
 
 `research_status` 返回 live capability、simulation modes、带新鲜度的 quota、pending executions、cache 新鲜度与 `research_contract_version`。把该版本与 Skill 的 `compatible_research_contract` 比对；不匹配说明 Skill 过期，必须重新阅读而不是复用。不得把 `WAITING_FOR_CAPABILITY` 与 `BLOCKED_BY_REMOTE_STATE` 混为同一个 blocked 状态。
 
-使用 `wqb_agent.research_api` 与其默认 `research_tool_manifest()` CORE profile（12 个工具）；只有任务需要低频工具（如模板维护、颜色元数据或相似度分析）时才显式请求 `profile="full"`。读取 BRAIN 原始 datasets/datafields 并自行选择字段；每个字段的 dataset provenance 必须进入 `SimulationSpec`。
+当前实际 tool inventory 是本会话事实。Research MCP 会话按 inventory 使用 canonical Agent Core；direct facade 集成按 `research_tool_manifest(profile="core")` 使用同一组语义。只有任务需要低频工具（如模板维护、颜色元数据或相似度分析）时，direct facade 才显式请求 `profile="full"`。读取 BRAIN 原始 datasets/datafields 并自行选择字段；每个字段的 dataset provenance 必须进入 `SimulationSpec`。
 
-用 `get_alpha_evidence(alpha_id)` 做宽面筛选；该调用默认返回 summary。只为选定的终选候选传入 recordsets 请求深证据与 PROD correlation。假设链接写进 `note`（例如 `H2:EXPLORE`），使每个返回结果可映射回其 proposal。执行、隐私与人工提交约束由根 `AGENTS.md` 定义，此处不得复制或覆盖该契约。
+用 `get_alpha_evidence(alpha_id)` 做宽面筛选；该调用默认返回 summary。只为选定的终选候选传入 recordsets 请求深证据与 PROD correlation。Research MCP 的每个 SimulationSpec 必须有 1–48 字符、batch 内唯一的 `proposal_id`；在提交前维护 `proposal_id → hypothesis/note/template` 映射。MCP write results 回传完整 `proposal_id` 与 execution fingerprints，并回显有界 note/template 标签；note 中的凭证样式赋值会脱敏。`batch_fingerprint` 对同一 parent 只返回一次；多个 parent 按 proposal ID 分组。direct Python facade 的兼容返回契约保持原样。执行、隐私与人工提交约束由根 `AGENTS.md` 定义，此处不得复制或覆盖该契约。

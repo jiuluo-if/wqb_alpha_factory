@@ -80,7 +80,7 @@ MAX_PROBE_COUNT = 100
 # The research contract version is the compatibility handshake between the
 # single research Skill and this runtime.  A Skill that declares a different
 # ``compatible_research_contract`` is stale and must be re-read, not reused.
-RESEARCH_CONTRACT_VERSION = "2026-09-24"
+RESEARCH_CONTRACT_VERSION = "2026-09-25"
 
 # Region-Agnostic simulations are written through the same gateway as REGULAR ones;
 # whether the writer accepts them is a property of the gateway's supported set, not
@@ -1313,6 +1313,14 @@ def sync_alpha_colors(plan=None, *, exact_plan=None, client=None, config=None,
     )
 
 
+_AGENT_CORE_TOOL_NAMES = frozenset({
+    "research_status", "list_datasets", "list_datafields",
+    "get_operator_reference", "validate_simulation_spec",
+    "simulate_batch", "simulate_multi_batch", "get_alpha_evidence",
+    "reconcile_execution",
+})
+
+
 def research_tool_manifest(profile="core"):
     """Return a deterministic default CORE surface or the opt-in full catalog."""
     rows: list[dict[str, Any]] = [
@@ -1376,15 +1384,7 @@ def research_tool_manifest(profile="core"):
         return rows
     if profile != "core":
         raise ValueError("profile must be 'core' or 'full'")
-    core_names = {
-        "research_status",
-        "list_datasets", "list_datafields",
-        "build_simulation_spec", "validate_simulation_spec",
-        "simulate", "simulate_batch", "simulate_multi_batch",
-        "get_alpha_summary", "get_alpha_evidence",
-        "find_duplicate_alphas", "resume_execution",
-    }
-    return [row for row in rows if row["name"] in core_names]
+    return [row for row in rows if row["name"] in _AGENT_CORE_TOOL_NAMES]
 
 
 __all__ = [

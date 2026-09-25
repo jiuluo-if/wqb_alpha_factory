@@ -99,21 +99,19 @@ class TestResearchApi(unittest.TestCase):
             "SimulationSpec", "research_tool_manifest",
         }
         self.assertEqual(full_names, expected_full | {"alpha_submission"})
-        self.assertEqual(len(core), 12)
-        self.assertTrue({
+        self.assertEqual(core_names, {
             "research_status", "list_datasets", "list_datafields",
-            "build_simulation_spec", "validate_simulation_spec",
-            "simulate", "simulate_batch", "simulate_multi_batch",
-            "get_alpha_summary", "get_alpha_evidence",
-            "find_duplicate_alphas", "resume_execution",
-        } <= core_names)
+            "get_operator_reference", "validate_simulation_spec",
+            "simulate_batch", "simulate_multi_batch", "get_alpha_evidence",
+            "reconcile_execution",
+        })
         dangerous = {"create_template", "sync_alpha_colors", "alpha_submission"}
         self.assertTrue(dangerous <= full_names)
         self.assertFalse(dangerous & core_names)
         # Aliases and low-frequency maintenance tools stay reachable through the
         # public API but never occupy the default Agent surface.
         self.assertFalse(core_names & {
-            "simulate_single", "find_similar_alphas", "reconcile_execution",
+            "simulate_single", "find_similar_alphas",
             "list_all_datafields", "get_live_preflight", "simulation_quota",
         })
 
@@ -188,7 +186,7 @@ class TestResearchApi(unittest.TestCase):
 
     def test_core_manifest_is_a_small_startup_surface(self):
         core = research_api.research_tool_manifest()
-        self.assertEqual(len(core), 12)
+        self.assertEqual(len(core), 9)
         self.assertEqual(core[0]["name"], "research_status")
 
     def test_generated_probe_api_requires_agent_selected_raw_inputs(self):
@@ -1372,6 +1370,9 @@ class TestResearchApi(unittest.TestCase):
         # The alias stays callable but is not part of the default Agent surface.
         self.assertIn("simulate_single", full_names)
         self.assertNotIn("simulate_single", core_names)
+        for name in ("build_simulation_spec", "simulate", "get_alpha_summary", "resume_execution", "find_duplicate_alphas"):
+            self.assertIn(name, full_names)
+            self.assertNotIn(name, core_names)
 
 if __name__ == "__main__":
     unittest.main()
