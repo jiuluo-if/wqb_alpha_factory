@@ -167,13 +167,24 @@ class ConcurrentGatewayClient(FakeGatewayClient):
         self._active = 0
         self._active_lock = threading.Lock()
         self.max_active = 0
+        self.overlap_barrier = None
+        self._overlap_wait_count = 0
 
     def submit_simulation(self, expression, settings, **kwargs):
         with self._active_lock:
             self._active += 1
             self.max_active = max(self.max_active, self._active)
+            wait_for_overlap = (
+                self.overlap_barrier is not None
+                and self._overlap_wait_count < self.overlap_barrier.parties
+            )
+            if wait_for_overlap:
+                self._overlap_wait_count += 1
         try:
-            time.sleep(0.03)
+            if not wait_for_overlap:
+                time.sleep(0.03)
+            else:
+                self.overlap_barrier.wait(timeout=15)
             return super().submit_simulation(expression, settings, **kwargs)
         finally:
             with self._active_lock:
@@ -342,6 +353,7 @@ class TestSimulationGateway(unittest.TestCase):
     def test_single_batch_defaults_to_ten_concurrent_simulations(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = ConcurrentGatewayClient()
+            client.overlap_barrier = threading.Barrier(10)
             gateway = SimulationGateway(client, state_dir=tmp)
             specs = [
                 SimulationSpec(f"rank(field_{index})", {"delay": 1})
