@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sys
 from collections.abc import Mapping
 from typing import Any
@@ -18,7 +19,15 @@ MAX_RESULT_BYTES = 48 * 1024
 MAX_LIST_ITEMS = 20
 MAX_STRING_CHARS = 8 * 1024
 MAX_RECORDSETS = 2
+MAX_SIMULATION_BATCH = 50
+MAX_MULTI_BATCH = 100
+RESEARCH_WRITE_OPT_IN = "ALPHA_FACTORY_ENABLE_SIMULATION_WRITES"
 _SECRET_PARTS = ("password", "credential", "token", "secret", "authorization", "cookie", "api_key", "apikey")
+_SPEC_KEYS = frozenset({"expression", "settings", "fields", "field_datasets", "proposal_id", "note", "template_id", "simulation_type"})
+_WRITE_RESULT_KEYS = (
+    "proposal_id", "note", "template_id", "status", "reason_code",
+    "fingerprint", "batch_fingerprint", "alpha_id", "field_validation",
+)
 
 
 def _is_secret_key(key: object) -> bool:
@@ -319,6 +328,205 @@ def build_server(*, api=research_api, client=None, config=None, state_dir=None):
         )
 
     return server
+
+
+def _write_result_envelope(results, *, expected_count: int) -> dict[str, Any]:
+    """Keep one small status row per input without returning evidence or URLs."""
+    malformed = not isinstance(results, (list, tuple))
+    results = [] if malformed else list(results)
+    projected, scan, clipped = [], None, False
+    for item in results:
+        if not isinstance(item, Mapping):
+            projected.append({"status": "UNKNOWN"})
+            continue
+        row = {}
+        for key in _WRITE_RESULT_KEYS:
+            value = item.get(key)
+            if value is None or not isinstance(value, (str, bool, int, float)) or isinstance(value, float) and not math.isfinite(value):
+                continue
+            if key == "note" and isinstance(value, str) and _is_secret_key(value):
+                value = "[REDACTED]"
+            clipped |= isinstance(value, str) and len(value) > 48
+            row[key] = value[:48] if isinstance(value, str) else value
+        row.setdefault("status", "UNKNOWN")
+        projected.append(row)
+        duplicate_scan = item.get("remote_duplicate_scan")
+        if scan is None and isinstance(duplicate_scan, Mapping):
+            scan = {}
+            for key in ("status", "lookback_days", "complete", "elapsed_sec", "rows_scanned", "matched_count", "candidate_count"):
+                value = duplicate_scan.get(key)
+                if isinstance(value, str):
+                    clipped |= len(value) > 48
+                    scan[key] = value[:48]
+                elif isinstance(value, (bool, int)) or isinstance(value, float) and math.isfinite(value):
+                    scan[key] = value
+    projected.extend({"status": "UNKNOWN"} for _ in range(max(0, expected_count - len(projected))))
+    envelope = {
+        "access_mode": "SIMULATION_WRITE",
+        "remote_write": True,
+        "truncated": malformed or clipped or len(projected) != len(results) or len(results) != expected_count,
+        "candidate_count": expected_count,
+        "result_count": len(projected),
+        "results": projected,
+    }
+    if scan is not None:
+        envelope["remote_duplicate_scan"] = scan
+    size = len(json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    if size > MAX_RESULT_BYTES:
+        for row in projected:
+            for key in ("note", "template_id", "alpha_id", "batch_fingerprint", "fingerprint"):
+                row.pop(key, None)
+        envelope["truncated"] = True
+        envelope["truncation_reason"] = "OPTIONAL_RESULT_FIELDS"
+    return envelope
+
+
+def build_research_server(*, api=research_api, client=None, config=None, state_dir=None):
+    """Build the separately authorized MCP transport for live research writes."""
+    if os.environ.get(RESEARCH_WRITE_OPT_IN) != "1":
+        raise RuntimeError("RESEARCH_WRITE_MODE_NOT_ENABLED")
+    try:
+        from mcp.server import MCPServer
+        from mcp.types import ToolAnnotations
+    except ImportError as exc:
+        raise RuntimeError(
+            "MCP support is optional; install alpha-factory[mcp] to run this server."
+        ) from exc
+
+    server = MCPServer(
+        "alpha-factory-research",
+        instructions=(
+            "Explicitly authorized Research Mode. Simulation tools perform remote BRAIN writes "
+            "only through wqb_agent.research_api and SimulationGateway. Alpha submission is unavailable."
+        ),
+    )
+    readonly = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+    remote_write = ToolAnnotations(readOnlyHint=False, openWorldHint=True)
+    active_client = client
+
+    def resolve_client():
+        nonlocal active_client
+        if active_client is None:
+            from .client import WQBClient
+            active_client = WQBClient()
+        return active_client
+
+    def read(call, *, owner, allow_expression=False):
+        try:
+            payload = call()
+        except Exception as exc:  # Do not return remote messages, URLs, or secrets.
+            return _failed_result(exc, owner=owner)
+        if not isinstance(payload, Mapping):
+            payload = {"source": "UNKNOWN", "status": "UNKNOWN", "result": payload}
+        return _envelope(payload, owner=owner, allow_expression=allow_expression)
+
+    def read_facade(name, *args, allow_expression=False, **kwargs):
+        return read(lambda: getattr(api, name)(
+            *args, client=resolve_client(), config=config, **kwargs,
+        ), owner=f"research_api.{name}", allow_expression=allow_expression)
+
+    def write(call, *, count):
+        try:
+            results = call()
+        except Exception as exc:  # Never serialize exception text from a write path.
+            code = getattr(exc, "reason_code", None)
+            if not isinstance(code, str) or not code.replace("_", "").isalnum() or not code.isupper():
+                code = "REMOTE_WRITE_FAILED"
+            result = _write_result_envelope([{"status": "UNAVAILABLE"}] * count, expected_count=count)
+            result.update(status="UNAVAILABLE", reason_code=code[:64], error="REMOTE_WRITE_FAILED")
+            return result
+        return _write_result_envelope(results, expected_count=count)
+
+    def write_facade(name, specs):
+        return write(lambda: getattr(api, name)(
+            specs, client=resolve_client(), config=config, state_dir=state_dir,
+        ), count=len(specs))
+
+    def parse_specs(specs, *, minimum, maximum):
+        if not isinstance(specs, list) or not minimum <= len(specs) <= maximum:
+            return None
+        if any(not isinstance(spec, Mapping) or set(spec) - _SPEC_KEYS for spec in specs):
+            return None
+        try:
+            return [research_api.SimulationSpec(**spec) for spec in specs]
+        except (TypeError, ValueError):
+            return None
+
+    @server.tool(annotations=readonly)
+    def research_status() -> dict[str, Any]:
+        """[READ_ONLY] First call: live readiness and unresolved remote state."""
+        return read_facade("research_status", state_dir=state_dir)
+
+    @server.tool(annotations=readonly)
+    def list_datasets() -> dict[str, Any]:
+        """[READ_ONLY] List live datasets in the authorized account scope."""
+        return read_facade("list_datasets")
+
+    @server.tool(annotations=readonly)
+    def list_datafields(dataset_id: str, limit: int = 20, offset: int = 0, field_type: str | None = None) -> dict[str, Any]:
+        """[READ_ONLY] Read one bounded live datafield page."""
+        return read_facade("list_datafields", dataset_id, limit=limit, offset=offset, field_type=field_type)
+
+    @server.tool(annotations=readonly)
+    def get_operator_reference() -> dict[str, Any]:
+        """[READ_ONLY] Read current live operator capability and syntax facts."""
+        return read_facade("get_operator_reference")
+
+    @server.tool(annotations=readonly)
+    def validate_simulation_spec(spec: dict[str, Any]) -> dict[str, Any]:
+        """[READ_ONLY] Validate a SimulationSpec using the existing Gateway facade."""
+        parsed = parse_specs([spec] if isinstance(spec, dict) else spec, minimum=1, maximum=1)
+        if parsed is None:
+            return _invalid_result(owner="research_api.validate_simulation_spec")
+        return read_facade("validate_simulation_spec", parsed[0], state_dir=state_dir)
+
+    @server.tool(annotations=remote_write)
+    def simulate_batch(specs: list[dict[str, Any]]) -> dict[str, Any]:
+        """[REMOTE_WRITE] Start 1–50 BRAIN Simulations through SimulationGateway."""
+        parsed = parse_specs(specs, minimum=1, maximum=MAX_SIMULATION_BATCH)
+        if parsed is None:
+            return _invalid_result(owner="research_api.simulate_batch")
+        return write_facade("simulate_batch", parsed)
+
+    @server.tool(annotations=remote_write)
+    def simulate_multi_batch(specs: list[dict[str, Any]]) -> dict[str, Any]:
+        """[REMOTE_WRITE] Start 2–100 compatible candidates through Gateway Multi batching."""
+        parsed = parse_specs(specs, minimum=2, maximum=MAX_MULTI_BATCH)
+        if parsed is None:
+            return _invalid_result(owner="research_api.simulate_multi_batch")
+        return write_facade("simulate_multi_batch", parsed)
+
+    @server.tool(annotations=readonly)
+    def get_alpha_summary(alpha_id: str) -> dict[str, Any]:
+        """[READ_ONLY] Read one live Alpha summary."""
+        if not alpha_id:
+            return _invalid_result(owner="research_api.get_alpha_summary")
+        return read_facade("get_alpha_summary", alpha_id)
+
+    @server.tool(annotations=readonly)
+    def get_alpha_evidence(alpha_id: str, recordsets: list[str] | None = None) -> dict[str, Any]:
+        """[READ_ONLY] Read one live Alpha evidence projection on request."""
+        selected = recordsets or []
+        if not alpha_id or len(selected) > MAX_RECORDSETS:
+            return _invalid_result(owner="research_api.get_alpha_evidence")
+        return read_facade("get_alpha_evidence", alpha_id, live=True, recordsets=selected, depth="full" if selected else "summary", allow_expression=True)
+
+    @server.tool(annotations=readonly)
+    def reconcile_execution(fingerprint: str) -> dict[str, Any]:
+        """[READ_ONLY] Reconcile one existing guard; never submit again."""
+        return read_facade("reconcile_execution", fingerprint, state_dir=state_dir)
+
+    return server
+
+
+def research_main() -> None:
+    """Run the explicitly enabled Research MCP server on stdio."""
+    try:
+        server = build_research_server()
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
+    server.run(transport="stdio")
 
 
 def main() -> None:
