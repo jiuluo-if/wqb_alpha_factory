@@ -275,6 +275,8 @@ class ReadOnlyMCPServerTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(result.structured_content["error"], "INVALID_ARGUMENT")
+        self.assertEqual(result.structured_content["access_mode"], "READ_ONLY")
+        self.assertNotIn("remote_write", result.structured_content)
         field_reader.assert_not_called()
 
     async def test_auth_and_rate_limit_errors_are_classified_without_raw_messages(self):
@@ -328,7 +330,6 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                 {"status": "DONE", "proposal_id": spec.proposal_id, "fingerprint": f"fp-{i}"}
                 for i, spec in enumerate(specs)
             ],
-            "get_alpha_summary": lambda *_, **__: {"source": "LIVE", "alpha": {}},
             "get_alpha_evidence": lambda *_, **__: {"source": "LIVE", "alpha": {}},
             "reconcile_execution": lambda fingerprint, **_: {"status": "SUBMIT_UNKNOWN", "fingerprint": fingerprint},
         }
@@ -354,8 +355,8 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(by_name), {
             "research_status", "list_datasets", "list_datafields",
             "get_operator_reference", "validate_simulation_spec",
-            "simulate_batch", "simulate_multi_batch", "get_alpha_summary",
-            "get_alpha_evidence", "reconcile_execution",
+            "simulate_batch", "simulate_multi_batch", "get_alpha_evidence",
+            "reconcile_execution",
         })
         self.assertFalse(by_name["simulate_batch"].annotations.read_only_hint)
         self.assertFalse(by_name["simulate_multi_batch"].annotations.read_only_hint)
@@ -389,7 +390,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         async with Client(parameters) as client:
             listed = await client.list_tools()
         names = {tool.name for tool in listed.tools}
-        self.assertEqual(len(names), 10)
+        self.assertEqual(len(names), 9)
         self.assertTrue({"research_status", "simulate_batch", "simulate_multi_batch"} <= names)
 
     async def test_alpha_expression_is_available_only_through_requested_evidence(self):
@@ -442,6 +443,40 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("evidence", data["results"][0])
         multi.assert_not_called()
 
+    async def test_unknown_single_fingerprint_round_trips_through_reconcile(self):
+        fingerprint = "a" * 64
+        submit = Mock(return_value=[{
+            "status": "SUBMIT_UNKNOWN", "reason_code": "SUBMIT_UNKNOWN",
+            "proposal_id": "proposal-1", "fingerprint": fingerprint,
+            "field_validation": "LIVE_VERIFIED",
+        }])
+        reconcile = Mock(return_value={"source": "LOCAL_EXECUTION_GUARD", "status": "SUBMIT_UNKNOWN", "fingerprint": fingerprint})
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(
+                api=self.api(simulate_batch=submit, reconcile_execution=reconcile),
+                client=object(), state_dir="synthetic-state",
+            )
+        async with Client(server) as client:
+            simulation = await client.call_tool("simulate_batch", {"specs": [{
+                "expression": "rank(close)", "proposal_id": "proposal-1",
+            }]})
+            returned = simulation.structured_content["results"][0]["fingerprint"]
+            await client.call_tool("reconcile_execution", {"fingerprint": returned})
+
+        self.assertEqual(len(returned), 64)
+        self.assertEqual(returned, fingerprint)
+        self.assertEqual(reconcile.call_args.args[0], fingerprint)
+
+    async def test_alpha_summary_duplicate_is_not_in_research_inventory(self):
+        api = self.api()
+        self.assertFalse(hasattr(api, "get_alpha_summary"))
+        self.assertTrue(hasattr(mcp_server.research_api, "get_alpha_summary"))
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(api=api, client=object())
+        async with Client(server) as client:
+            listed = await client.list_tools()
+        self.assertNotIn("get_alpha_summary", {tool.name for tool in listed.tools})
+
     async def test_multi_batch_routes_gateway_and_preserves_child_guard_statuses(self):
         multi = Mock(return_value=[
             {"status": "EXACT_DUPLICATE", "fingerprint": "child-1", "batch_fingerprint": "parent-1"},
@@ -471,13 +506,29 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                 "simulate_batch", {"specs": [{"expression": "rank(close)"}] * 51},
             )
         self.assertEqual(result.structured_content["error"], "INVALID_ARGUMENT")
+        self.assertEqual(result.structured_content["access_mode"], "SIMULATION_WRITE")
+        self.assertTrue(result.structured_content["remote_write"])
         submit.assert_not_called()
 
+        multi = Mock(return_value=[])
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(api=self.api(simulate_multi_batch=multi), client=object())
+        async with Client(server) as client:
+            invalid_multi = await client.call_tool(
+                "simulate_multi_batch", {"specs": [{"expression": "rank(close)"}]},
+            )
+        self.assertEqual(invalid_multi.structured_content["access_mode"], "SIMULATION_WRITE")
+        self.assertTrue(invalid_multi.structured_content["remote_write"])
+        multi.assert_not_called()
+
     async def test_batch_result_keeps_all_candidates_within_output_contract(self):
-        submit = Mock(return_value=[
-            {"status": "DONE", "proposal_id": f"p-{i}", "fingerprint": f"fp-{i}"}
+        expected = [
+            {"status": "DONE", "reason_code": "COMPLETED", "proposal_id": f"p-{i}",
+             "fingerprint": f"{i:064x}", "alpha_id": f"alpha-{i}",
+             "field_validation": "LIVE_VERIFIED"}
             for i in range(50)
-        ])
+        ]
+        submit = Mock(return_value=expected)
         fake_api = self.api(simulate_batch=submit)
         with patch.dict(os.environ, {self.ENV: "1"}):
             server = mcp_server.build_research_server(api=fake_api, client=object())
@@ -488,13 +539,21 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(len(payload.encode("utf-8")), MAX_RESULT_BYTES)
         self.assertEqual(len(result.structured_content["results"]), 50, msg=repr(result.structured_content))
         self.assertFalse(result.structured_content["truncated"])
+        for actual, expected_row in zip(result.structured_content["results"], expected, strict=True):
+            for key in ("proposal_id", "status", "reason_code", "fingerprint", "alpha_id", "field_validation"):
+                self.assertEqual(actual[key], expected_row[key])
 
-    async def test_multi_batch_keeps_all_100_candidates_and_marks_bounded_labels(self):
-        multi = Mock(return_value=[
-            {"status": "DONE", "proposal_id": f"p-{i}", "note": "n" * 200,
-             "fingerprint": f"fp-{i}"}
+    async def test_multi_batch_keeps_full_recovery_identity_for_100_results_under_limit(self):
+        expected = [
+            {"status": "SUBMIT_UNKNOWN", "reason_code": "SUBMIT_UNKNOWN",
+            "proposal_id": f"{i:03d}" + "p" * 45, "note": "n" * 600,
+             "template_id": "template-x", "fingerprint": f"{i:064x}",
+             "batch_fingerprint": "b" * 64, "alpha_id": f"{i:02d}" + "a" * 54,
+             "field_validation": "LIVE_VERIFIED",
+             "remote_duplicate_scan": {"status": "BOUNDED_RECENT_WINDOW", "lookback_days": 1, "complete": False, "rows_scanned": 1000}}
             for i in range(100)
-        ])
+        ]
+        multi = Mock(return_value=expected)
         with patch.dict(os.environ, {self.ENV: "1"}):
             server = mcp_server.build_research_server(api=self.api(simulate_multi_batch=multi), client=object())
         specs = [{"expression": "rank(close)", "proposal_id": f"p-{i}"} for i in range(100)]
@@ -503,6 +562,27 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         payload = json.dumps(result.structured_content, separators=(",", ":"))
         self.assertLessEqual(len(payload.encode("utf-8")), MAX_RESULT_BYTES)
         self.assertEqual(len(result.structured_content["results"]), 100)
+        self.assertTrue(result.structured_content["truncated"])
+        for actual, expected_row in zip(result.structured_content["results"], expected, strict=True):
+            for key in ("proposal_id", "status", "reason_code", "fingerprint", "batch_fingerprint", "alpha_id", "field_validation"):
+                self.assertEqual(actual[key], expected_row[key])
+            self.assertEqual(actual["note"], "n" * 12)
+
+    async def test_oversized_identity_is_omitted_whole_instead_of_clipped(self):
+        fingerprint = "f" * 64
+        submit = Mock(return_value=[{
+            "status": "SUBMIT_UNKNOWN", "reason_code": "SUBMIT_UNKNOWN",
+            "proposal_id": "p" * 49, "fingerprint": fingerprint,
+        }])
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(api=self.api(simulate_batch=submit), client=object())
+        async with Client(server) as client:
+            result = await client.call_tool("simulate_batch", {"specs": [{
+                "expression": "rank(close)", "proposal_id": "p" * 49,
+            }]})
+        row = result.structured_content["results"][0]
+        self.assertNotIn("proposal_id", row)
+        self.assertEqual(row["fingerprint"], fingerprint)
         self.assertTrue(result.structured_content["truncated"])
 
     async def test_write_failures_do_not_return_exception_messages_or_drop_candidates(self):

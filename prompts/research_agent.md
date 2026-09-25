@@ -12,4 +12,4 @@
 
 使用 `wqb_agent.research_api` 与其默认 `research_tool_manifest()` CORE profile（12 个工具）；只有任务需要低频工具（如模板维护、颜色元数据或相似度分析）时才显式请求 `profile="full"`。读取 BRAIN 原始 datasets/datafields 并自行选择字段；每个字段的 dataset provenance 必须进入 `SimulationSpec`。
 
-用 `get_alpha_summary()` 做宽面筛选；只为选定的终选候选请求完整 evidence 与 PROD correlation。假设链接写进 `note`（例如 `H2:EXPLORE`），使每个返回结果可映射回其 proposal。执行、隐私与人工提交约束由根 `AGENTS.md` 定义，此处不得复制或覆盖该契约。
+用 `get_alpha_evidence(alpha_id)` 做宽面筛选；该调用默认返回 summary。只为选定的终选候选传入 recordsets 请求深证据与 PROD correlation。假设链接写进 `note`（例如 `H2:EXPLORE`），使每个返回结果可映射回其 proposal。执行、隐私与人工提交约束由根 `AGENTS.md` 定义，此处不得复制或覆盖该契约。

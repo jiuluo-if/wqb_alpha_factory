@@ -28,6 +28,8 @@ _WRITE_RESULT_KEYS = (
     "proposal_id", "note", "template_id", "status", "reason_code",
     "fingerprint", "batch_fingerprint", "alpha_id", "field_validation",
 )
+_IDENTITY_RESULT_LIMITS = {"proposal_id": 48, "template_id": 12, "fingerprint": 64, "batch_fingerprint": 64, "alpha_id": 56}
+_RESULT_TEXT_LIMITS = {"note": 12, "status": 32, "reason_code": 32, "field_validation": 16}
 
 
 def _is_secret_key(key: object) -> bool:
@@ -178,9 +180,9 @@ def _failed_result(exc: Exception, *, owner: str, source: str = "BRAIN_LIVE") ->
     }
 
 
-def _invalid_result(*, owner: str, source: str = "NOT_READ") -> dict[str, Any]:
+def _invalid_result(*, owner: str, source: str = "NOT_READ", access_mode: str = "READ_ONLY", remote_write: bool = False) -> dict[str, Any]:
     return {
-        "access_mode": "READ_ONLY",
+        "access_mode": access_mode,
         "owner": owner,
         "source": source,
         "status": "INVALID_ARGUMENT",
@@ -191,6 +193,7 @@ def _invalid_result(*, owner: str, source: str = "NOT_READ") -> dict[str, Any]:
         "truncated": False,
         "data": None,
         "error": "INVALID_ARGUMENT",
+        **({"remote_write": True} if remote_write else {}),
     }
 
 
@@ -344,10 +347,17 @@ def _write_result_envelope(results, *, expected_count: int) -> dict[str, Any]:
             value = item.get(key)
             if value is None or not isinstance(value, (str, bool, int, float)) or isinstance(value, float) and not math.isfinite(value):
                 continue
+            if key in _IDENTITY_RESULT_LIMITS:
+                if not isinstance(value, str) or len(value) > _IDENTITY_RESULT_LIMITS[key]:
+                    clipped = True
+                    continue
+                row[key] = value
+                continue
             if key == "note" and isinstance(value, str) and _is_secret_key(value):
                 value = "[REDACTED]"
-            clipped |= isinstance(value, str) and len(value) > 48
-            row[key] = value[:48] if isinstance(value, str) else value
+            text_limit = _RESULT_TEXT_LIMITS.get(key, 48)
+            clipped |= isinstance(value, str) and len(value) > text_limit
+            row[key] = value[:text_limit] if isinstance(value, str) else value
         row.setdefault("status", "UNKNOWN")
         projected.append(row)
         duplicate_scan = item.get("remote_duplicate_scan")
@@ -356,8 +366,8 @@ def _write_result_envelope(results, *, expected_count: int) -> dict[str, Any]:
             for key in ("status", "lookback_days", "complete", "elapsed_sec", "rows_scanned", "matched_count", "candidate_count"):
                 value = duplicate_scan.get(key)
                 if isinstance(value, str):
-                    clipped |= len(value) > 48
-                    scan[key] = value[:48]
+                    clipped |= len(value) > 32
+                    scan[key] = value[:32]
                 elif isinstance(value, (bool, int)) or isinstance(value, float) and math.isfinite(value):
                     scan[key] = value
     projected.extend({"status": "UNKNOWN"} for _ in range(max(0, expected_count - len(projected))))
@@ -371,13 +381,6 @@ def _write_result_envelope(results, *, expected_count: int) -> dict[str, Any]:
     }
     if scan is not None:
         envelope["remote_duplicate_scan"] = scan
-    size = len(json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
-    if size > MAX_RESULT_BYTES:
-        for row in projected:
-            for key in ("note", "template_id", "alpha_id", "batch_fingerprint", "fingerprint"):
-                row.pop(key, None)
-        envelope["truncated"] = True
-        envelope["truncation_reason"] = "OPTIONAL_RESULT_FIELDS"
     return envelope
 
 
@@ -411,23 +414,23 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
             active_client = WQBClient()
         return active_client
 
-    def read(call, *, owner, allow_expression=False):
+    def read_facade(name, *args, allow_expression=False, **kwargs):
         try:
-            payload = call()
+            payload = getattr(api, name)(
+                *args, client=resolve_client(), config=config, **kwargs,
+            )
         except Exception as exc:  # Do not return remote messages, URLs, or secrets.
-            return _failed_result(exc, owner=owner)
+            return _failed_result(exc, owner=f"research_api.{name}")
         if not isinstance(payload, Mapping):
             payload = {"source": "UNKNOWN", "status": "UNKNOWN", "result": payload}
-        return _envelope(payload, owner=owner, allow_expression=allow_expression)
+        return _envelope(payload, owner=f"research_api.{name}", allow_expression=allow_expression)
 
-    def read_facade(name, *args, allow_expression=False, **kwargs):
-        return read(lambda: getattr(api, name)(
-            *args, client=resolve_client(), config=config, **kwargs,
-        ), owner=f"research_api.{name}", allow_expression=allow_expression)
-
-    def write(call, *, count):
+    def write_facade(name, specs):
+        count = len(specs)
         try:
-            results = call()
+            results = getattr(api, name)(
+                specs, client=resolve_client(), config=config, state_dir=state_dir,
+            )
         except Exception as exc:  # Never serialize exception text from a write path.
             code = getattr(exc, "reason_code", None)
             if not isinstance(code, str) or not code.replace("_", "").isalnum() or not code.isupper():
@@ -436,11 +439,6 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
             result.update(status="UNAVAILABLE", reason_code=code[:64], error="REMOTE_WRITE_FAILED")
             return result
         return _write_result_envelope(results, expected_count=count)
-
-    def write_facade(name, specs):
-        return write(lambda: getattr(api, name)(
-            specs, client=resolve_client(), config=config, state_dir=state_dir,
-        ), count=len(specs))
 
     def parse_specs(specs, *, minimum, maximum):
         if not isinstance(specs, list) or not minimum <= len(specs) <= maximum:
@@ -485,7 +483,7 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
         """[REMOTE_WRITE] Start 1–50 BRAIN Simulations through SimulationGateway."""
         parsed = parse_specs(specs, minimum=1, maximum=MAX_SIMULATION_BATCH)
         if parsed is None:
-            return _invalid_result(owner="research_api.simulate_batch")
+            return _invalid_result(owner="research_api.simulate_batch", access_mode="SIMULATION_WRITE", remote_write=True)
         return write_facade("simulate_batch", parsed)
 
     @server.tool(annotations=remote_write)
@@ -493,15 +491,8 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
         """[REMOTE_WRITE] Start 2–100 compatible candidates through Gateway Multi batching."""
         parsed = parse_specs(specs, minimum=2, maximum=MAX_MULTI_BATCH)
         if parsed is None:
-            return _invalid_result(owner="research_api.simulate_multi_batch")
+            return _invalid_result(owner="research_api.simulate_multi_batch", access_mode="SIMULATION_WRITE", remote_write=True)
         return write_facade("simulate_multi_batch", parsed)
-
-    @server.tool(annotations=readonly)
-    def get_alpha_summary(alpha_id: str) -> dict[str, Any]:
-        """[READ_ONLY] Read one live Alpha summary."""
-        if not alpha_id:
-            return _invalid_result(owner="research_api.get_alpha_summary")
-        return read_facade("get_alpha_summary", alpha_id)
 
     @server.tool(annotations=readonly)
     def get_alpha_evidence(alpha_id: str, recordsets: list[str] | None = None) -> dict[str, Any]:

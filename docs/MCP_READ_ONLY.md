@@ -20,7 +20,7 @@
 
 需要真实研究写入的 Agent 可单独连接 `alpha-factory-research-mcp`。启动该 entrypoint 前，host 必须显式设置 `ALPHA_FACTORY_ENABLE_SIMULATION_WRITES=1`；未设置时 server 以 `RESEARCH_WRITE_MODE_NOT_ENABLED` 退出，不提供降级后的 Research 工具面。这个 server 只复用 `wqb_agent.research_api`，Simulation 写入仍沿 `research_api → SimulationGateway → Simulator → WQBClient → BRAIN`。
 
-Research Mode 暴露 10 个工具：`research_status`、`list_datasets`、`list_datafields`、`get_operator_reference`、`validate_simulation_spec`、`simulate_batch`、`simulate_multi_batch`、`get_alpha_summary`、`get_alpha_evidence`、`reconcile_execution`。`simulate_batch` 接受 1–50 个 `SimulationSpec`；`simulate_multi_batch` 接受 2–100 个候选。Simulation 输入仅包含 spec 字段，state directory、config 和 credentials 固定在 server process；结果限于小型状态投影并设置明确的 `truncated` 标志。两个 Simulation 工具标记为 remote write；Alpha submission、HTTP、WQBClient、模板写和维护工具不暴露。
+Research Mode 暴露 9 个工具：`research_status`、`list_datasets`、`list_datafields`、`get_operator_reference`、`validate_simulation_spec`、`simulate_batch`、`simulate_multi_batch`、`get_alpha_evidence`、`reconcile_execution`。`get_alpha_evidence(alpha_id)` 默认返回轻量 summary；显式选择 recordsets 时读取对应深度。`simulate_batch` 接受 1–50 个 `SimulationSpec`；`simulate_multi_batch` 接受 2–100 个候选。Simulation 输入仅包含 spec 字段，state directory、config 和 credentials 固定在 server process；结果限于小型状态投影并设置明确的 `truncated` 标志，execution fingerprint 保持完整。两个 Simulation 工具标记为 remote write；Alpha submission、HTTP、WQBClient、模板写和维护工具不暴露。
 
 Research Agent 必须先检查 tool inventory 并调用 `research_status`。缺少该工具时仅报告一次 `LIVE_RESEARCH_CAPABILITY_MISSING`，将 goal 设为 `WAITING_FOR_CAPABILITY`；inventory 未变化（包括 host 重启）不得自动重试。工具存在但远端权限、quota 或未解决 guard 阻塞时标记 `BLOCKED_BY_REMOTE_STATE`；只有 live readiness 成功才是 `READY`。
 
