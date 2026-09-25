@@ -2,9 +2,9 @@
 
 ## 证据深度
 
-宽面筛选用 Simulation 返回的 live Alpha detail 或 `get_alpha_summary()`。只有问题需要 aggregates、PnL、self-correlation 或指定 recordsets 时，才为小型终选集合调用 `get_alpha_evidence(depth="full")`。`get_alpha_prod_correlation()` 只为终选候选请求；普通探针不等它。
+宽面筛选用 Simulation 返回的 live Alpha detail，或调用 Core 工具 `get_alpha_evidence()` 读取默认 lightweight summary。只有问题需要 aggregates、PnL、self-correlation 或指定 recordsets 时，才为小型终选集合请求 full evidence。仅当当前 Research tool inventory 暴露 `get_alpha_prod_correlation()` 时，才为终选候选按需读取 PROD correlation；若未暴露，应报告能力缺失，不用 full evidence 代替，也不为普通探针等待它。
 
-批次比较优先用 summary 深度：一次 summary 读取就是一个 Alpha detail 请求，不得扇出为 PnL、年度聚合与相关性调用。
+批次比较优先使用 `get_alpha_evidence()` 的默认 summary：一次轻量 summary 读取就是一个 Alpha detail 请求，不得为每个候选扇出为 PnL、年度聚合与相关性调用。
 
 ## 选择偏差与多重检验
 
