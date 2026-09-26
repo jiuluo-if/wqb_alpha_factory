@@ -20,6 +20,7 @@ frontmatter 中 `compatible_research_contract` 是本文件编写时所针对的
 ## 每个研究批次
 
 - 从多个竞争假设起步。使用 BRAIN 原始 dataset/datafield 列表，并解释每个 Agent 选定字段。
+- 探索新字段、自定义分组、字段复合、新算子或新模板时，先读[批次设计](references/batch-design.md)中的 live discovery 与结构判据。
 - 每个 proposal 都要有 1–48 字符、batch 内唯一的 `proposal_id`，并在调用写工具前保留 `proposal_id → hypothesis/note/template` mapping。适用时提供有用的 `note` 和模板/家族标签。批次按对照组、本地兄弟组、证伪组与新探针分组。
 - `note` 可使用 `H2:EXPLORE`、`H3:CONTROL`、`H2:FALSIFY`、`H2:LOCAL` 等假设标签，由 Agent 在 mapping 中解释。Research MCP 结果仅投影 `proposal_id`、`status`、`reason_code`、`fingerprint`、`alpha_id` 和 `field_validation`；`note`、`template_id` 保留在 Agent mapping 中，`batch_fingerprint` 不回显。Multi child 可用 child fingerprint 通过 `reconcile_execution` 恢复 parent；direct Python facade 的既有返回兼容行为保持不变。
 - 说明每组测试什么机制、什么结果会改变下一次决策、使用多少 Simulation。大量有目的的 Simulation 受欢迎；不可追溯的随机表达式不受欢迎。
