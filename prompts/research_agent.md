@@ -29,6 +29,10 @@ proposal ID 与 hypothesis mapping 按唯一核心 Skill 执行。只根据当�
 
 在实际加载本项目代码的 checkout root 执行 `git rev-parse HEAD`，从成功的 `research_status` 记录 `research_contract_version`，并记录当前 host 的实际 MCP tool inventory。在启动 readiness handshake 得出终态，或每个自然完成的 batch/research wave 边界，使用现有 host/file-write 能力**覆盖**同一个本地、gitignored 文件：
 
+MCP tool inventory 与宿主 workspace 文件工具是两项独立能力：MCP inventory 只决定研究工具，不能据此推断宿主能或不能写文件。handoff 边界必须实际调用当前会话可用的 workspace file-write tool（例如该宿主提供的 `exec_command`、`apply_patch` 或专用文件工具）覆盖目标文件；写后回读并确认是合法 JSON、`schema_version=1` 且 `updated_at` 对应本次 handoff。仅构造或输出 JSON 不代表文件已保存。
+
+若当前宿主确无 workspace file-write tool，或写入/回读校验失败，报告 `HANDOFF_WRITE_UNAVAILABLE` 和不含敏感值的错误类别，并把同一份已脱敏 handoff JSON 作为 fenced block 返回给协调者/用户保存。此时必须明确文件未写入；不得调用 MCP research write 工具保存 handoff，也不得伪称成功。
+
 ```text
 tmp/research_handoff.json
 ```
