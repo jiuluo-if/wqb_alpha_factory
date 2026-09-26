@@ -26,7 +26,7 @@
 - 源脚本和稳定 lookup key 保留有意义的 `lower_snake_case` 名称，不为了日期或计数修改代码标识。
 - 时间快照文件统一使用 `YYYY-MM-DD_<semantic_name>.<ext>`。日期优先取文件内的 capture/create/save 日期，其次取所属日期任务目录，再次取可信的文档日期；都没有时才用文件修改日期，并在本地 rename manifest 中标注来源。
 - rename 保留原有语义名和真实实验/round ID；不新造 `round1`、`batch2` 等无语义序号。已有轮次号只有在它是可追溯实验标识时才保留。
-- README、知识索引和稳定经验页使用稳定语义名，不加日期。由 dataset/operator 等稳定键直接寻址的缓存文件名也保留该键，更新时间记录在 manifest/index 中；rename 前须先检查真实 consumer。
+- README、知识索引、稳定经验页，以及日期任务目录中的 `task_plan.md`、`findings.md`、`progress.md` 和固定 manifest 文件使用稳定语义名，不重复加日期。由 dataset/operator 等稳定键直接寻址的缓存文件名也保留该键，更新时间记录在 manifest/index 中；rename 前须先检查真实 consumer。
 - 批量 rename 前生成 `old_path → new_path` 清单，检查目标冲突和源码/文档引用；完成后更新 consumer 引用并验证路径均存在。活动进程持有或正在写入的文件须等进程结束后再处理。
 
 旧的 `tmp/` 根目录文件维持原位，不为追求目录整齐而批量移动。`tmp/README.md` 是唯一允许位于根目录的新增 Markdown，仅作为导航索引，不承载研究材料；新任务文档写入 task-id 目录。归档资料不是缓存；不得只因日期旧或文件名含 `old`、`archive`、`summary` 就删除。
