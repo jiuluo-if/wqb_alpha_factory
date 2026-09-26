@@ -29,7 +29,7 @@
 - README、知识索引、稳定经验页，以及日期任务目录中的 `task_plan.md`、`findings.md`、`progress.md` 和固定 manifest 文件使用稳定语义名，不重复加日期。由 dataset/operator 等稳定键直接寻址的缓存文件名也保留该键，更新时间记录在 manifest/index 中；rename 前须先检查真实 consumer。
 - 批量 rename 前生成 `old_path → new_path` 清单，检查目标冲突和源码/文档引用；完成后更新 consumer 引用并验证路径均存在。活动进程持有或正在写入的文件须等进程结束后再处理。
 
-旧的 `tmp/` 根目录文件维持原位，不为追求目录整齐而批量移动。`tmp/README.md` 是唯一允许位于根目录的新增 Markdown，仅作为导航索引，不承载研究材料；新任务文档写入 task-id 目录。归档资料不是缓存；不得只因日期旧或文件名含 `old`、`archive`、`summary` 就删除。
+历史根文件和原有历史子目录已按用户授权一次性集中到 `tmp/archive/legacy_root/`，保留其相对目录树、文件名和历史路径文字；迁移映射与 SHA-256 见本地 centralization manifest。后续历史文件迁移须先审核消费者，默认只更新当前导航，不改写历史正文。`tmp/README.md` 是根层导航入口；新任务文档写入 `YYYY-MM-DD-<task-id>` 目录。归档资料不是缓存；不得只因日期旧或文件名含 `old`、`archive`、`summary` 就删除。
 
 ## 清理规则
 

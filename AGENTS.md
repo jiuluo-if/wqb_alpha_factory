@@ -36,7 +36,7 @@ BRAIN 是 Alpha、Simulation、指标、检查项、聚合、PnL 和相关性的
 
 ## 本地 tmp 工作区
 
-`tmp/` 是被 Git 忽略的本机临时工作区，不是研究事实源、备份或交付目录。新任务按 `tmp/<日期>-<task-id>/{scripts,evidence,logs}` 分组；旧根目录内容不做批量搬迁，以免破坏脚本的相对路径。缓存须可从明确来源重建并记录 owner/source；结项时清理缓存，失去 owner 的缓存在 30 天后进入清理候选。清理规则、分类和保护范围见 [`docs/TMP_WORKSPACE_POLICY.md`](docs/TMP_WORKSPACE_POLICY.md)。
+`tmp/` 是被 Git 忽略的本机临时工作区，不是研究事实源、备份或交付目录。新任务按 `tmp/<日期>-<task-id>/{scripts,evidence,logs}` 分组；历史散落内容已按用户授权一次性集中迁入 `tmp/archive/legacy_root/`，保留原目录树和历史路径文字；后续归档先审核路径消费者，只更新当前导航，不改写历史资料。缓存须可从明确来源重建并记录 owner/source；结项时清理缓存，失去 owner 的缓存在 30 天后进入清理候选。清理规则、分类和保护范围见 [`docs/TMP_WORKSPACE_POLICY.md`](docs/TMP_WORKSPACE_POLICY.md)。
 
 ## 模板与隐私
 
