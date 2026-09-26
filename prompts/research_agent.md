@@ -8,7 +8,10 @@
 
 1. 若没有 `research_status`，报告一次 `LIVE_RESEARCH_CAPABILITY_MISSING`，将状态标为 `WAITING_FOR_CAPABILITY`；inventory 未变化时不得重复报告或重试。
 2. 若存在 `research_status`，先调用它。live readiness 成功才是 `READY`；auth、quota 或未解决写状态阻塞时是 `BLOCKED_BY_REMOTE_STATE`。只有 `READY` 才开始研究或发起 Simulation。
+
 3. 比对返回的 `research_contract_version` 与 Skill 的 `compatible_research_contract`；不匹配就重新阅读 Skill 和根 `AGENTS.md`，不得复用过期契约。
+
+Skill/reference 提到的非 Core 工具不代表当前会话拥有：调用前核对 inventory；低频能力缺失只标 `LOCAL_RESEARCH_CAPABILITY_LIMIT` 并跳过依赖分支、继续其它假设，缺少 `research_status` 才是 `WAITING_FOR_CAPABILITY`，auth/quota/未解决写入才是 `BLOCKED_BY_REMOTE_STATE`。
 
 实际 MCP inventory 是当前会话能力的事实。Research MCP 按 inventory 调用；direct facade 集成使用 `research_tool_manifest(profile="core")`。只有任务确实需要低频工具时，direct facade 才显式请求 `profile="full"`。从 BRAIN 原始 dataset/datafield 列表中自行选择字段，并将每个字段的 dataset provenance 传入 `SimulationSpec`。
 
