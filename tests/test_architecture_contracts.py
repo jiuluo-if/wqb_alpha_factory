@@ -28,6 +28,7 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         self.assertEqual(skill_dirs, ["wqb-research"])
 
         self.assertEqual(research_api.RESEARCH_CONTRACT_VERSION, "2026-09-26")
+        self.assertEqual(len(research_api.research_tool_manifest(profile="core")), 10)
         skill_path = skill_root / "wqb-research" / "SKILL.md"
         text = skill_path.read_text(encoding="utf-8")
         self.assertIn(
@@ -95,12 +96,32 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
             "METRIC SYMPTOM != MECHANISM DIAGNOSIS",
             "EXTERNAL_HYPOTHESIS_SOURCE", "FULL_LOCAL_EXPRESSION_COMPILER = DEFER",
             "dataset metadata → semantic themes → bounded field pages",
+            "IDEA", "IMPLEMENTATION", "OPTIMIZATION / ROBUSTNESS",
+            "IDEA → IMPLEMENTATION → OPTIMIZATION / ROBUSTNESS",
+            "SUBMISSION_CUTOFFS_ARE_PLATFORM_FACTS", "TASK_SCOPED_TARGET",
+            "TURNOVER_REDUCTION != TURNOVER_MINIMIZATION",
+            "NEUTRALIZATION IS A RISK-HYPOTHESIS",
+            "PLATFORM_RESEARCH_PRIOR", "EXPRESSION_NEUTRALIZATION",
+            "CORRELATION FITTING != RESEARCH DIVERSIFICATION",
+            "DECORRELATION_SIBLING", "CORE_MECHANISM", "AUX_PROCESSING",
+            "TEMPLATE_EFFECT != FIELD_EFFECT", "FIELD_DOMINATED_EVIDENCE",
+            "numerator/denominator role", "cadence compatibility", "RAW RATIO",
         ):
             self.assertIn(phrase, batch)
-        for label in ("FIELD_SIGNAL_WEAK", "EXTRACTION_WEAK", "INCONCLUSIVE"):
+        for label in (
+            "FIELD_SIGNAL_WEAK", "EXTRACTION_WEAK", "INCONCLUSIVE",
+            "RETURN_WEAK", "INSTABILITY_HIGH", "MIXED",
+        ):
             self.assertIn(label, result)
+        for phrase in (
+            "Robustness Ladder", "DO_NOT_FIT_THE_TEST", "rank transform",
+            "sign/binary transform", "DEVELOPMENT_EVIDENCE",
+            "median", "failure distribution", "portfolio optimizer",
+        ):
+            self.assertIn(phrase, result)
         self.assertIn("不得因 Sharpe 为负而事后反转方向", skill)
         self.assertNotIn("signal_light.py", batch + result)
+        self.assertNotRegex(batch + result, r"(?:Sharpe|Fitness)\s*>\s*\d")
 
     def test_research_status_reports_the_contract_version(self):
         status = research_api.research_status()

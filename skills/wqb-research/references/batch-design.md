@@ -62,8 +62,36 @@
 
 只构造区分解释所需的最少候选。大批次有用当且仅当其分组有不同解释；不得生成笛卡尔积或 Python 规划的搜索循环。
 
-## 指标症状与外部假设
+## 研究循环、机制与模板归因
 
-`METRIC SYMPTOM != MECHANISM DIAGNOSIS`。Low Sharpe、Low Fitness、Low Margin 或 High Turnover 不能映射成固定 operator prescription。先比较字段本身弱、horizon 不合、scale/distribution、噪声/outlier、换手来源及 neutralization 是否抹去机制等竞争原因，再用 matched variants 区分解释；指标到算子的经验只能标为 `HYPOTHESIS EXAMPLES`。
+Agent 可按三个研究视角拆解问题；它们不是 Python lifecycle/state machine。`CORE_MECHANISM`、`AUX_PROCESSING`、`DECORRELATION_SIBLING`、`FIELD_DOMINATED_EVIDENCE` 等都是 proposal mapping 中的 Agent 概念，不新增 schema 字段：
 
-当机制不清、多个合理 probes 无结果或需要新竞争解释时，可查少量高相关 primary/high-quality 外部资料，并标记 `EXTERNAL_HYPOTHESIS_SOURCE`。资料只能产生新 hypothesis 或 mechanism interpretation，不能证明当前 BRAIN field/operator 能力、平台阈值、Simulation setting 或 Alpha performance；不设固定论文数量配额。
+```text
+IDEA → IMPLEMENTATION → OPTIMIZATION / ROBUSTNESS
+```
+
+1. `IDEA`：预测什么经济机制、为什么关联未来收益、预期方向和可证伪证据是什么？
+2. `IMPLEMENTATION`：用 BRAIN live fields、operators、horizon、field relationships 忠实表达 idea。
+3. `OPTIMIZATION / ROBUSTNESS`：仅在已有可解释 signal 后，研究 settings、neutralization、preprocessing、局部参数邻域及稳健性。
+
+proposal mapping 可标出 `CORE_MECHANISM` 与 `AUX_PROCESSING`。前者写核心经济关系（如 revision surprise、ratio/spread、residual relationship、event response、term structure）；后者写 backfill、winsorize、rank/zscore、grouping、neutralization 或 smoothing。这样才能判断变化改了机制还是实现稳健性；这些标签不进入 schema。
+
+`TEMPLATE_EFFECT != FIELD_EFFECT`。单一强字段不能证明 template 可复用；若只有该字段支持，标为 `FIELD_DOMINATED_EVIDENCE`，不晋升 builtin。先用至少一种对照区分 template mechanism 与字段效应：同字段更简单 control、同 template 的语义近邻字段/兼容 dataset，或 template ablation。晋升还要能解释 `CORE_MECHANISM`、拆分 `AUX_PROCESSING`、说明稳定 operator roles 与至少一个 falsification test；不要求固定字段数或 dataset 数，不改 template schema。
+
+对 `A / B`、`A - B` 或 `A vs B`，事前说明 numerator/denominator role、经济维度、cadence compatibility 与关系为何有意义；两个字段各自有效不等于随机组合有意义。先比较 RAW RATIO/paired expression 与简单 control；只有当前问题需要时，再分别测试 ratio-level 或 operand-level preprocessing，每个 sibling 只变一个轴。看结果时解释 magnitude/distribution、coverage 和 concentration，不能只比 Sharpe。
+
+官方 [BRAIN Alpha 示例](https://worldquantbrain.com/alpha-examples) 展示从 hypothesis、实现到 Simulation，并检查跨年表现与 coverage；[社区改进指南](https://github.com/alexisdpc/WorldQuant-alpha-trading/blob/main/ImprovingAlphas.md) 中的 operator 配方只作情境先验。引用外部资料时标 `EXTERNAL_HYPOTHESIS_SOURCE`：它只能生成 hypothesis/mechanism interpretation，不能证明 live field/operator 能力、平台规则、Simulation setting 或 Alpha performance。
+
+## 风险、换手与中性化实验
+
+`SUBMISSION_CUTOFFS_ARE_PLATFORM_FACTS`。Sharpe、Fitness、Sub-universe、IS Ladder、Correlation 等以当前 BRAIN 返回的 check/cutoff 为准；缺失时记 `UNKNOWN`，不重建公式或猜阈值。研究任务若设目标值，标 `TASK_SCOPED_TARGET`，不把它写成全局 success rule、Skill 常量或 Python threshold。
+
+`METRIC SYMPTOM != MECHANISM DIAGNOSIS`。Low Sharpe、Low Fitness、Low Margin 或 High Turnover 不对应固定 operator。Low Sharpe 的 Agent explanation labels、返回与不稳定的诊断见[结果解释](result-interpretation.md)；先形成竞争原因，再用 matched variants。只用观察足够的指标决定下一问题，不从一次症状开自动处方。
+
+`TURNOVER_REDUCTION != TURNOVER_MINIMIZATION`：目标是减少无意义 position churn，同时保留预测机制；比较 turnover、margin、returns、Sharpe、coverage 与 BRAIN checks。decay/smoothing 可能减 churn，也可能稀释信号，要用 matched variant 同看这些结果。高 turnover 本身不足以优先 `trade_when`。只有能说明 `EVENT CONDITION`、何时 open/update、为何在事件间 hold、可选 exit mechanism 时，才把它列为结构 proposal；普通连续信号中的 `trade_when` 是带独立经济解释的 `NEW_PROBE`。同时观察 event frequency、Alpha coverage、可用时 long/short coverage，以及稀疏触发造成的 performance loss；turnover 降低不单独证明改善。
+
+PnL/表现不稳定时，先选一个可区分原因的轴：missingness transition（NaN↔non-NaN）用 RAW CONTROL vs BACKFILL SIBLING；signal temporal jumpiness 用 RAW vs DECAY/SMOOTHING SIBLING；若 evidence 显示少数股票主导，测试一个 truncation/concentration setting sibling。一次只改一个轴；不要同时叠加 backfill、decay、truncation 与 neutralization。对预处理 sibling 解释 coverage、concentration、PnL shape 和 year stability：RAW 更好可能是 tails/magnitude 含信息，也可能只是集中 outlier luck；rank 后失效可能是幅度信息被移除。
+
+`NEUTRALIZATION IS A RISK-HYPOTHESIS`。改变设置前说明要消除的 exposure、它为何不是 Alpha 核心机制，以及选择 market/sector/industry/subindustry 的经济依据。资料按 dataset category 给出的 neutralization 建议只标 `PLATFORM_RESEARCH_PRIOR`，例如 fundamental/analyst 可从 industry 起步、news/sentiment 可比较 industry/subindustry、options 可比较 market/sector、PV 需警惕细分 neutralization 抹去信号；这些是待验证先验。BRAIN 官方示例自身也因问题不同采用不同设置，不能推广成 mapping。实际选择结合 live BRAIN availability、exposure hypothesis 与 matched Simulation evidence；不得建立 dataset→mandatory-neutralization mapping。若 expression 含 `group_neutralize(...)`，在 proposal mapping 标 `EXPRESSION_NEUTRALIZATION` 并一并检查 settings；双重 neutralization 只能作为独立 `NEW_PROBE`，不得在 Python 自动清空 settings。
+
+`CORRELATION FITTING != RESEARCH DIVERSIFICATION`。高 correlation 时，先找保持原 idea 的 equivalent/semantically close field、same-role operator、reasonable horizon 或有意义 grouping。保持 same mechanism、field role 与 economic direction 的修改可标 `DECORRELATION_SIBLING`；改变机制就是 `NEW_PROBE`，不能为降 correlation 把新 Alpha 伪装成旧机制优化。地区资格、社区阈值与赛季规则均为 `CONTEXTUAL COMMUNITY EXPERIENCE`，不得提升成通用规则；BRAIN 保管 Alpha truth、submission 由人负责，本 Skill 不建 manager/queue/portfolio optimizer。
