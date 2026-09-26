@@ -17,6 +17,8 @@ compatible_research_contract: "2026-09-25"
 
 frontmatter 中 `compatible_research_contract` 是本文件编写时所针对的契约。先调用 `research_status()` 并比对其 `research_contract_version`；不匹配即本 Skill 为 `SKILL_STALE`：运行任何批次前重新阅读仓库 Skill 与 `AGENTS.md`。不得凭信任复用过期 Skill。
 
+Skill/reference 提到的具体工具必须先对照当前会话的实际 inventory。Core 未暴露的低频能力若有等价 Core 路径则使用该路径；否则标记 `LOCAL_RESEARCH_CAPABILITY_LIMIT`，跳过依赖该能力的分支并继续其它可执行假设。不得臆造工具或绕过 facade。
+
 ## 每个研究批次
 
 - 从多个竞争假设起步。使用 BRAIN 原始 dataset/datafield 列表，并解释每个 Agent 选定字段。
@@ -34,7 +36,7 @@ frontmatter 中 `compatible_research_contract` 是本文件编写时所针对的
 - Probe 开始前声明 `direction`、`direction_reason` 和 `direction_transform`，理由必须先于结果；不得因 Sharpe 为负而事后反转方向。
 - 复杂度按最终表达式的 effective operator occurrence 计算，`direction_transform` 等机械 wrapper 也计数。CONTROL 为 1–3，PROBE 为 4–6；上限是硬约束，不是目标，不加无经济理由的算子凑数。
 - 局部优化先声明 immutable anchor。每个 variant 只改一个已声明的 numeric slot 或一个 settings key；字段、template、mechanism、算子顺序/拓扑和 operator count 保持不变。需要改拓扑时另立 `NEW_PROBE` 假设。
-- numeric slot 先用 `inspect_template()` 核对 `default`、`allowed_values` 与 `economic_role`；优先比较当前值相邻且有经济理由的 allowed value，不生成 grid 或笛卡尔积。
+- 仅当当前 inventory 或明确进入 full profile 的 direct facade 暴露 `inspect_template()` 时，才依据其 `default`、`allowed_values` 与 `economic_role` 做 template-slot optimization。否则报告 `TEMPLATE_INSPECTION_CAPABILITY_MISSING`，归类为 `LOCAL_RESEARCH_CAPABILITY_LIMIT`；不得猜 allowed values、从旧缓存恢复当前 template contract、优化或提交依赖该槽位的 Simulation，但可继续普通 `NEW_PROBE`、字段研究和非 template-specific settings research。
 - baseline 已有证据时不重复提交它。解释时比较 baseline 与所有 variants，不自动选 winner；若邻近变化没有一致、可解释的支持证据，停止该优化维度并保留其他解释。
 
 ## 研究工作集
