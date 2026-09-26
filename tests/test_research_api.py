@@ -103,7 +103,7 @@ class TestResearchApi(unittest.TestCase):
             "research_status", "list_datasets", "list_datafields",
             "get_operator_reference", "validate_simulation_spec",
             "simulate_batch", "simulate_multi_batch", "get_alpha_evidence",
-            "reconcile_execution",
+            "reconcile_execution", "get_alpha_prod_correlation",
         })
         dangerous = {"create_template", "sync_alpha_colors", "alpha_submission"}
         self.assertTrue(dangerous <= full_names)
@@ -186,7 +186,7 @@ class TestResearchApi(unittest.TestCase):
 
     def test_core_manifest_is_a_small_startup_surface(self):
         core = research_api.research_tool_manifest()
-        self.assertEqual(len(core), 9)
+        self.assertEqual(len(core), 10)
         self.assertEqual(core[0]["name"], "research_status")
 
     def test_generated_probe_api_requires_agent_selected_raw_inputs(self):
@@ -214,6 +214,7 @@ class TestResearchApi(unittest.TestCase):
         client.get_aggregates.assert_not_called()
         client.get_pnl.assert_not_called()
         client.get_self_correlation.assert_not_called()
+        client.get_correlation.assert_not_called()
 
         full = get_alpha_evidence("a1", client=client, depth="full")
         self.assertEqual(client.get_alpha.call_count, 2)
@@ -221,6 +222,7 @@ class TestResearchApi(unittest.TestCase):
         self.assertEqual(client.get_aggregates.call_count, 1)
         self.assertEqual(client.get_pnl.call_count, 1)
         self.assertEqual(client.get_self_correlation.call_count, 1)
+        client.get_correlation.assert_not_called()
 
     def test_named_metrics_and_correlation_reads_call_only_requested_endpoint(self):
         from wqb_agent.research_api import (

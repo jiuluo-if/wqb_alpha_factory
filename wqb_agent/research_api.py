@@ -80,7 +80,7 @@ MAX_PROBE_COUNT = 100
 # The research contract version is the compatibility handshake between the
 # single research Skill and this runtime.  A Skill that declares a different
 # ``compatible_research_contract`` is stale and must be re-read, not reused.
-RESEARCH_CONTRACT_VERSION = "2026-09-25"
+RESEARCH_CONTRACT_VERSION = "2026-09-26"
 
 # Region-Agnostic simulations are written through the same gateway as REGULAR ones;
 # whether the writer accepts them is a property of the gateway's supported set, not
@@ -1317,7 +1317,7 @@ _AGENT_CORE_TOOL_NAMES = frozenset({
     "research_status", "list_datasets", "list_datafields",
     "get_operator_reference", "validate_simulation_spec",
     "simulate_batch", "simulate_multi_batch", "get_alpha_evidence",
-    "reconcile_execution",
+    "reconcile_execution", "get_alpha_prod_correlation",
 })
 
 

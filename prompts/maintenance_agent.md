@@ -10,7 +10,7 @@
 tmp/research_handoff.json
 ```
 
-Maintenance 只读 tmp，绝不写入 handoff、日志或研究状态。handoff 是本地 Research Agent 观测，不是 BRAIN truth。验证 schema、类型、`natural_boundary`、`updated_at`，并将 handoff SHA/contract 与刚 fetch 的代码版本核对；旧 SHA 的问题若已在 main 修复，标记 `STALE_RUN_EVIDENCE`，不重复实现。将最后处理的 `updated_at` 和 last observed relevant tmp mtime 记在当前 task 的 planning progress 中，不建数据库、watcher 或新 checkpoint subsystem。
+Maintenance 只读 tmp，绝不写入 handoff、日志或研究状态。handoff 是本地 Research Agent 观测，不是 BRAIN truth；`family_label`、`related_trial_count_lower_bound`、`count_scope` 是 Agent 的有界观测下界，不是完整历史、平台字段或自动评分。旧 handoff 未带这些可选字段时视为 `UNKNOWN`，不据此判为 malformed。验证 schema、类型、`natural_boundary`、`updated_at`，并将 handoff SHA/contract 与刚 fetch 的代码版本核对；旧 SHA 的问题若已在 main 修复，标记 `STALE_RUN_EVIDENCE`，不重复实现。将最后处理的 `updated_at` 和 last observed relevant tmp mtime 记在当前 task 的 planning progress 中，不建数据库、watcher 或新 checkpoint subsystem。
 
 - handoff 合法且比 task checkpoint 新：以它作为本轮首要运行证据；只有数据异常、与代码契约冲突，或需要定位已确认摩擦时才查看对应的少量原始 artifact。
 - handoff 合法但未更新：若 relevant tmp mtime 也未变化且用户未要求新的 runtime audit，记录 `WAITING_FOR_RUNTIME_EVIDENCE` 并停止 runtime-friction loop；仍可完成用户明确要求、且有独立静态契约依据的维护，不重扫已审窗口。

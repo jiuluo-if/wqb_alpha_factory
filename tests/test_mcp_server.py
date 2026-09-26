@@ -350,6 +350,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                 for i, spec in enumerate(specs)
             ],
             "get_alpha_evidence": lambda *_, **__: {"source": "LIVE", "alpha": {}},
+            "get_alpha_prod_correlation": lambda *_, **__: {"source": "LIVE", "status": "AVAILABLE", "records": []},
             "reconcile_execution": lambda fingerprint, **_: {"status": "SUBMIT_UNKNOWN", "fingerprint": fingerprint},
         }
         defaults.update(overrides)
@@ -375,8 +376,9 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             "research_status", "list_datasets", "list_datafields",
             "get_operator_reference", "validate_simulation_spec",
             "simulate_batch", "simulate_multi_batch", "get_alpha_evidence",
-            "reconcile_execution",
+            "reconcile_execution", "get_alpha_prod_correlation",
         })
+        self.assertEqual(len(by_name), 10)
         self.assertEqual(
             set(by_name),
             {row["name"] for row in mcp_server.research_api.research_tool_manifest(profile="core")},
@@ -395,15 +397,18 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             listed = await client.list_tools()
 
         by_name = {tool.name: tool for tool in listed.tools}
+        self.assertIn("get_alpha_prod_correlation", by_name)
         remote_read_names = {
             "research_status", "list_datasets", "list_datafields",
             "get_operator_reference", "validate_simulation_spec",
-            "get_alpha_evidence", "reconcile_execution",
+            "get_alpha_evidence", "reconcile_execution", "get_alpha_prod_correlation",
         }
         for name in remote_read_names:
             annotations = by_name[name].annotations
             self.assertIs(annotations.read_only_hint, True, name)
             self.assertIs(annotations.open_world_hint, True, name)
+
+        self.assertIn("FINALIST_ONLY", by_name["get_alpha_prod_correlation"].description)
 
         for name in ("simulate_batch", "simulate_multi_batch"):
             annotations = by_name[name].annotations
@@ -411,6 +416,71 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(annotations.destructive_hint, False, name)
             self.assertIs(annotations.idempotent_hint, False, name)
             self.assertIs(annotations.open_world_hint, True, name)
+
+    async def test_prod_correlation_is_an_explicit_single_facade_read(self):
+        alpha_id = "a123456"
+        correlation = Mock(return_value={
+            "source": "LIVE", "status": "AVAILABLE", "correlation": {"rows": []},
+        })
+        api = self.api(get_alpha_prod_correlation=correlation)
+        client_obj = object()
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(api=api, client=client_obj)
+        async with Client(server) as client:
+            listed = await client.list_tools()
+        self.assertIn("get_alpha_prod_correlation", {tool.name for tool in listed.tools})
+        async with Client(server) as client:
+            result = await client.call_tool("get_alpha_prod_correlation", {"alpha_id": alpha_id})
+
+        correlation.assert_called_once()
+        self.assertEqual(correlation.call_args.args, (alpha_id,))
+        self.assertIs(correlation.call_args.kwargs["client"], client_obj)
+        self.assertEqual(
+            result.structured_content["owner"],
+            "research_api.get_alpha_prod_correlation",
+        )
+        self.assertEqual(result.structured_content["source"], "LIVE")
+
+    async def test_prod_correlation_rejects_invalid_alpha_ids_before_facade(self):
+        correlation = Mock(return_value={"source": "LIVE"})
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(
+                api=self.api(get_alpha_prod_correlation=correlation), client=object(),
+            )
+        async with Client(server) as client:
+            listed = await client.list_tools()
+        self.assertIn("get_alpha_prod_correlation", {tool.name for tool in listed.tools})
+        async with Client(server) as client:
+            for alpha_id in ("", "a" * 129):
+                with self.subTest(alpha_id_length=len(alpha_id)):
+                    result = await client.call_tool(
+                        "get_alpha_prod_correlation", {"alpha_id": alpha_id},
+                    )
+                    self.assertEqual(result.structured_content["error"], "INVALID_ARGUMENT")
+        correlation.assert_not_called()
+
+    async def test_readonly_mcp_surface_does_not_gain_prod_correlation(self):
+        server = build_server(api=self.api(), client=object())
+        async with Client(server) as client:
+            names = {tool.name for tool in (await client.list_tools()).tools}
+        self.assertNotIn("get_alpha_prod_correlation", names)
+        self.assertEqual(len(names), 5)
+
+    async def test_evidence_summary_and_full_never_implicitly_read_prod_correlation(self):
+        evidence = Mock(return_value={"source": "LIVE", "status": "AVAILABLE", "alpha": {}})
+        correlation = Mock(return_value={"source": "LIVE", "status": "AVAILABLE"})
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(
+                api=self.api(get_alpha_evidence=evidence, get_alpha_prod_correlation=correlation),
+                client=object(),
+            )
+        async with Client(server) as client:
+            await client.call_tool("get_alpha_evidence", {"alpha_id": "a1"})
+            await client.call_tool(
+                "get_alpha_evidence", {"alpha_id": "a1", "recordsets": ["pnl"]},
+            )
+        self.assertEqual(evidence.call_count, 2)
+        correlation.assert_not_called()
 
     async def test_research_status_is_first_tool_and_performs_live_handshake(self):
         status = Mock(return_value={"source": "LIVE", "status": "AVAILABLE", "capability": {"status": "LIVE_VERIFIED"}})
@@ -437,7 +507,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         async with Client(parameters) as client:
             listed = await client.list_tools()
         names = {tool.name for tool in listed.tools}
-        self.assertEqual(len(names), 9)
+        self.assertEqual(len(names), 10)
         self.assertTrue({"research_status", "simulate_batch", "simulate_multi_batch"} <= names)
 
     async def test_alpha_expression_is_available_only_through_requested_evidence(self):

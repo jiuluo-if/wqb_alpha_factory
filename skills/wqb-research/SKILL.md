@@ -1,7 +1,7 @@
 ---
 name: wqb-research
 description: "用于 WorldQuant BRAIN Alpha 研究：实验批次设计、Simulation 证据、结果解释与下一次实验选择。"
-compatible_research_contract: "2026-09-25"
+compatible_research_contract: "2026-09-26"
 ---
 
 # WQB 研究
@@ -50,6 +50,7 @@ Skill/reference 提到的具体工具必须先对照当前会话的实际 invent
 被否决的解释
 开放不确定性
 有前景的家族
+试验上下文（`family_label` / `related_trial_count_lower_bound` / `count_scope`）
 下一实验
 ```
 

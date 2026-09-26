@@ -48,6 +48,9 @@ tmp/research_handoff.json
   "research_code_sha": null,
   "research_contract": null,
   "tool_inventory": [],
+  "family_label": "UNKNOWN",
+  "related_trial_count_lower_bound": "UNKNOWN",
+  "count_scope": "UNKNOWN",
   "readiness": "UNKNOWN",
   "natural_boundary": true,
   "batches_observed": 0,
@@ -77,6 +80,8 @@ tmp/research_handoff.json
 
 `readiness` 只能取 `READY`、`BLOCKED_BY_REMOTE_STATE`、`WAITING_FOR_CAPABILITY` 或 `UNKNOWN`。把空 `tool_inventory` 替换为本次真实名称；SHA/contract 可确认时写实际值，无法确认时保留 `null`。
 
-handoff 禁止包含 expressions、field IDs、私有 dataset 配对、Alpha IDs、credentials/cookies/tokens、hypothesis 正文、metrics/PnL/Sharpe、result payload 或 progress URL。只允许 SHA、contract、tool names、状态/数量、reason categories 和 timing aggregates。
+试验上下文只保留 Agent 实际观察到的 `family_label`、`related_trial_count_lower_bound` 与 `count_scope`：family label 是本任务内简短分类，不含 field ID/表达式/假设正文；trial count 是相关已观察试验数的非负整数下界或 `UNKNOWN`，不能声称完整账户或 BRAIN 历史；scope 只能是 `CURRENT_WORKING_SET`、`CURRENT_TASK`、`HANDOFF_CHAIN` 或 `UNKNOWN`。只有实际读取到上一份 handoff 且 family label 一致时，才可沿 `HANDOFF_CHAIN` 累加此前下界与新增观察，避免重复计数；否则按当前工作集/任务计数或标 `UNKNOWN`。无法可靠计数时写 `UNKNOWN`，不推断、不创建 trial ledger/数据库。
+
+handoff 禁止包含 expressions、field IDs、私有 dataset 配对、Alpha IDs、credentials/cookies/tokens、hypothesis 正文、metrics/PnL/Sharpe、result payload 或 progress URL。除已有工程字段外，只允许上述简短 `family_label`、观测试验数下界与 `count_scope`，不写其它研究内容。
 
 不得修改仓库代码、配置、CI 或 Git branches。执行、隐私和人工提交边界以根 `AGENTS.md` 为准；不得复制或覆盖其安全契约。

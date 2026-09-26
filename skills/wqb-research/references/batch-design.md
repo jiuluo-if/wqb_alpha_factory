@@ -32,6 +32,13 @@
 - 需要给既有 agent 工作经验分配注意力时，按证据来源、所属任务、研究契约与时间新鲜度分层：BRAIN 当前 live 证据优先；本轮刚验证的工作集优先于旧 `tmp` 报告和缓存；旧记录先作为假设线索，重新核验后才恢复为当前约束。新证据与旧记录冲突时，保留旧记录的时间/范围并以新 live 结果更新工作集，不把记忆伪装成平台事实。
 - 每轮结束时，用最新已验证结果更新简短工作集（强证据、失败归因、未决解释、下一实验）；保留旧记录的来源和日期，避免重复注入所有历史 agent 记忆。时间较近本身不等于更可靠，仍按证据质量和当前任务相关性判断。
 
+## 语义配对、期限与预处理
+
+- 多字段组合前声明 field role、semantic core 与 comparison meaning；优先配对同一指标的 actual/estimate 或不同预测 horizon。共享 semantic core、期限不同的字段可形成 `TERM_STRUCTURE` 假设；不同机制的字段组合要作为 `NEW_PROBE`，不能随机配对或标为 local sibling。
+- 数据 cadence、发布日期/可用延迟与经济机制 horizon 是窗口选择的 prior，不是规则。用 anchor 加少量相邻且有经济理由的参数；不得假定低频字段必然需要更长窗口，也不做 Cartesian grid。
+- 把 `ts_backfill`、`to_nan`、`winsorize`、`rank`、`zscore` 作为待检验的 preprocessing axis，先保留同字段/同机制/同 settings 的 `RAW CONTROL`，再做只改变预处理的 `PREPROCESSED SIBLING`；比较时记录 coverage/缺失变化。预处理失败或成功都由 Agent 解释，不自动套用。
+- operator substitution 若保留相同经济角色且在现有 template operator slot 明确允许，可作为 local sibling；改变经济关系（如 ratio→difference 或 ranking→residualization）则是 `NEW_PROBE`。理论型 proposal（CAPM、GGM/DDM、DuPont、PEG 等）用已有 `semantic_contract`、`relationship_contract`、`field_relationship`、`expected_horizon` 说明适用对象、可能失效假设与可证伪观察；不加 schema 字段、不把社区公式直接晋升为 builtin。
+
 ## 自定义分组
 
 - 分组参数必须使用从当前 BRAIN datafields 读到、`type=GROUP` 的真实 GROUP type 字段，并保留其 dataset provenance。不能把 `bucket(rank(...))` 等数值表达式当作 GROUP 字段；历史实测中这类表达式未产生预期分组。
