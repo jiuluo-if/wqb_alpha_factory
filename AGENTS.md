@@ -34,6 +34,10 @@ BRAIN 是 Alpha、Simulation、指标、检查项、聚合、PnL 和相关性的
 
 本地允许：ExecutionGuard、远端滚动缓存、外部 credentials 引用和进程锁。不得手改或删除真实运行目录中的未解决 guard；真实环境只做只读诊断和明确授权的恢复。
 
+## 本地 tmp 工作区
+
+`tmp/` 是被 Git 忽略的本机临时工作区，不是研究事实源、备份或交付目录。新任务按 `tmp/<日期>-<task-id>/{scripts,evidence,logs}` 分组；旧根目录内容不做批量搬迁，以免破坏脚本的相对路径。缓存须可从明确来源重建并记录 owner/source；结项时清理缓存，失去 owner 的缓存在 30 天后进入清理候选。清理规则、分类和保护范围见 [`docs/TMP_WORKSPACE_POLICY.md`](docs/TMP_WORKSPACE_POLICY.md)。
+
 ## 模板与隐私
 
 模板变更前必须阅读本文件、`wqb_agent/AGENTS.md` 和 `wqb_agent/alpha_templates/AGENTS.md`。`alpha_templates` 是唯一模板负责方；公开 catalog 只能使用 synthetic 数据，私有 catalog 必须按显式路径加载且缺失时 fail closed。
