@@ -511,6 +511,13 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
         return read_facade("get_alpha_evidence", alpha_id, live=True, recordsets=selected, depth="full" if selected else "summary", allow_expression=True)
 
     @server.tool(annotations=remote_read)
+    def get_alpha_prod_correlation(alpha_id: str) -> dict[str, Any]:
+        """[READ_ONLY][FINALIST_ONLY] Read PROD correlation when explicitly requested for a finalist."""
+        if not alpha_id or len(alpha_id) > 128:
+            return _invalid_result(owner="research_api.get_alpha_prod_correlation")
+        return read_facade("get_alpha_prod_correlation", alpha_id)
+
+    @server.tool(annotations=remote_read)
     def reconcile_execution(fingerprint: str) -> dict[str, Any]:
         """[READ_ONLY] Reconcile one existing guard; never submit again."""
         return read_facade("reconcile_execution", fingerprint, state_dir=state_dir)

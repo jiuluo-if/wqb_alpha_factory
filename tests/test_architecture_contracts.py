@@ -27,6 +27,7 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         skill_dirs = sorted(path.parent.name for path in skill_root.glob("*/SKILL.md"))
         self.assertEqual(skill_dirs, ["wqb-research"])
 
+        self.assertEqual(research_api.RESEARCH_CONTRACT_VERSION, "2026-09-26")
         skill_path = skill_root / "wqb-research" / "SKILL.md"
         text = skill_path.read_text(encoding="utf-8")
         self.assertIn(
@@ -38,6 +39,29 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
             for path in (skill_root / "wqb-research" / "references").glob("*.md")
         )
         self.assertLessEqual(len(references), 2)
+
+    def test_mcp_reference_documents_prod_correlation_as_a_finalist_tool(self):
+        text = (ROOT / "docs" / "MCP_READ_ONLY.md").read_text(encoding="utf-8")
+        self.assertIn("Research Mode 暴露 10 个工具", text)
+        self.assertIn("get_alpha_prod_correlation", text)
+        self.assertIn("FINALIST_ONLY", text)
+        self.assertIn("不隐式", text)
+
+    def test_result_guide_uses_agent_owned_trial_context(self):
+        text = (
+            ROOT / "skills" / "wqb-research" / "references" / "result-interpretation.md"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("variant_family", text)
+        self.assertNotIn("observed_execution_count", text)
+        for name in ("family_label", "related_trial_count_lower_bound", "count_scope"):
+            self.assertIn(name, text)
+        self.assertIn("Agent-owned", text)
+
+    def test_skill_workset_has_only_the_requested_trial_context_line(self):
+        text = (ROOT / "skills" / "wqb-research" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("试验上下文", text)
+        for name in ("family_label", "related_trial_count_lower_bound", "count_scope"):
+            self.assertIn(name, text)
 
     def test_research_status_reports_the_contract_version(self):
         status = research_api.research_status()
