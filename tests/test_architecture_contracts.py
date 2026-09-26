@@ -63,6 +63,45 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         for name in ("family_label", "related_trial_count_lower_bound", "count_scope"):
             self.assertIn(name, text)
 
+    def test_hashes_are_not_task_completion_evidence(self):
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        for phrase in (
+            "用户目标 > 可观察程序行为",
+            "不能证明任务完成",
+            "安全关键 machine identity",
+            "Git SHA 可确认 runtime evidence 对应版本",
+            "same hash != 功能正确",
+            "main SHA matched != runtime research 正常",
+        ):
+            self.assertIn(phrase, agents)
+
+    def test_maintenance_contract_prioritizes_direct_evidence(self):
+        prompt = (ROOT / "prompts" / "maintenance_agent.md").read_text(encoding="utf-8")
+        for name in (
+            "TASK_TARGET:", "DIRECT_VERIFICATION:", "CONSTRAINTS:",
+            "CURRENT_BLOCKER:", "NEXT_USEFUL_ACTION:",
+            "ACTUAL_CHANGE", "REMAINING_BLOCKER", "mtime 只决定是否值得重读",
+            "运行每条新命令前先问", "读取实际 artifact/runtime evidence",
+            "SHA 只标示来源", "不能单独构成 blocker",
+        ):
+            self.assertIn(name, prompt)
+
+    def test_research_guides_preserve_validation_and_mechanism_boundaries(self):
+        batch = (ROOT / "skills" / "wqb-research" / "references" / "batch-design.md").read_text(encoding="utf-8")
+        result = (ROOT / "skills" / "wqb-research" / "references" / "result-interpretation.md").read_text(encoding="utf-8")
+        skill = (ROOT / "skills" / "wqb-research" / "SKILL.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Validation Ladder", "evidence_status=INCONCLUSIVE",
+            "METRIC SYMPTOM != MECHANISM DIAGNOSIS",
+            "EXTERNAL_HYPOTHESIS_SOURCE", "FULL_LOCAL_EXPRESSION_COMPILER = DEFER",
+            "dataset metadata → semantic themes → bounded field pages",
+        ):
+            self.assertIn(phrase, batch)
+        for label in ("FIELD_SIGNAL_WEAK", "EXTRACTION_WEAK", "INCONCLUSIVE"):
+            self.assertIn(label, result)
+        self.assertIn("不得因 Sharpe 为负而事后反转方向", skill)
+        self.assertNotIn("signal_light.py", batch + result)
+
     def test_research_status_reports_the_contract_version(self):
         status = research_api.research_status()
         self.assertEqual(

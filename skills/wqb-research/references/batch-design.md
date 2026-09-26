@@ -19,6 +19,16 @@
 2. 哪些 proposal 是对照、本地兄弟、证伪或新探针？
 3. 什么结果会改变下一次决策？
 
+## Validation Ladder
+
+验证按证据层级解释：
+
+1. `validate_simulation_spec()` 检查 deterministic request shape。返回 `valid=true` 且 `evidence_status=INCONCLUSIVE` 只表示请求形状通过；`VALID` 不等于表达式已可执行，也不验证 operator signature、keyword 参数、`MATRIX/VECTOR/GROUP` 完整类型链或远端 parser 接受。
+2. live operator、settings 与 field capability 由 Gateway/BRAIN 验证；BRAIN 是能力事实源。
+3. 表达式能否执行由实际 Simulation/BRAIN 结果证明。
+
+不要在 production 复制完整 tokenizer/parser/semantic analyzer 或 operator catalog。`FULL_LOCAL_EXPRESSION_COMPILER = DEFER`；只有 handoff 证明同类 deterministic syntax failure 反复浪费 Multi batch 时，才评估小型验证。未来规则必须可 100% 确定识别、稳定、不与 live BRAIN capability 冲突且实现很小。
+
 `proposal_id` 是临时结果的关联键；Agent 在写入前保留它与假设、`note`、`template_id` 的 mapping。Research MCP 对每项只投影 `proposal_id`、状态、reason code、fingerprint、Alpha ID 与字段校验结果；Agent 应从自己的 mapping 还原 note/template，不把这些解释信息写入 `ExecutionGuard` 或本地研究数据库。
 
 为每个字段 ID 保留 dataset provenance 并传入 `SimulationSpec`。具体字段查询路径按当前会话 inventory 选择；Gateway 的 live 校验是安全校验，不是经济适配度评分。
@@ -26,6 +36,7 @@
 ## 新字段、单信号与复合
 
 - 从当前 BRAIN `list_datasets()` 开始，再对问题相关的数据集发现字段：若当前 inventory 暴露 `list_all_datafields()`，用其 bounded pagination；否则用 `list_datafields(dataset_id, limit, offset, field_type)` 显式翻页。开始前设 page budget 或 time budget；预算耗尽但 API 返回的 count/offset 尚未证明覆盖完成时，标记 `FIELD_DISCOVERY_INCOMPLETE`，不得把部分结果说成完整覆盖。`research_api.list_all_datafields` 保留为 public-only 低频能力，不因此加入默认 Core。按语义关键词、字段 ID、`type`、描述、data coverage、dataset、region/universe/delay 与语义核心（semantic core）整理候选；历史未测清单可辅助检索，旧 `field_library`、字段 dump、reservoir 和 cache 只作带 freshness 的索引线索，不能证明当前字段存在、可用或适合 RA。
+- 发现顺序为：dataset metadata → semantic themes → bounded field pages → small field shortlist → operator-role selection → probes。由 Agent 根据 dataset 和 page/time budget 决定数量；shortlist 应小到能认真分析，并说明 discovery 是否 incomplete。不要硬编码主题数、字段数或算子数，也不要建 vector DB、embedding service 或 semantic index。
 - 对每个新 dataset/语义方向，先建立单字段基线（single-field baseline），确认它对应单一机制，再判断字段语义、类型变换与 RA 地区资格。确认后才扩大到同义字段或复合；保留字段到 dataset 的 live provenance，并传入 `field_datasets`。
 - 默认让一个候选表达一个经济机制，并先测一个信号字段，不加辅助腿。若要复合字段，先写明 field roles（各字段的经济角色）、它们为何属于同一机制、组合要解决的具体问题；在相同设置下比较组成信号与复合信号，做 ablation（消融）判断每一项是否提供了所声称的作用。若字段代表不同机制，将组合标成新的 `NEW_PROBE` 假设，不把它包装成去噪腿。
 - 辅助、控制或 hedge 腿不是默认去噪器。只有在独立假设说明其风险作用，并通过“原信号单独 / 控制腿单独 / 两者组合”的匹配消融后，才保留该腿；同时检查它是否掩盖原字段信号或主导相关性。
@@ -50,3 +61,9 @@
 - 新模板可先提出 proposal 并记录 contract 草案；只有当前 inventory 或明确进入 full profile 的 direct facade 暴露模板维护能力时，才 create/update template。不得因为 Skill 提到 template 就假设当前 Agent 能修改 catalog。新模板应封装可复用的经济机制与字段角色，注明方向、field type/dataset 约束、operator 数、numeric slots 的默认值/允许值/经济作用及可证伪结果。模板数量、候选表达式数量和字段数量都不是研究质量；没有机制或 live 能力证据时不新增模板。
 
 只构造区分解释所需的最少候选。大批次有用当且仅当其分组有不同解释；不得生成笛卡尔积或 Python 规划的搜索循环。
+
+## 指标症状与外部假设
+
+`METRIC SYMPTOM != MECHANISM DIAGNOSIS`。Low Sharpe、Low Fitness、Low Margin 或 High Turnover 不能映射成固定 operator prescription。先比较字段本身弱、horizon 不合、scale/distribution、噪声/outlier、换手来源及 neutralization 是否抹去机制等竞争原因，再用 matched variants 区分解释；指标到算子的经验只能标为 `HYPOTHESIS EXAMPLES`。
+
+当机制不清、多个合理 probes 无结果或需要新竞争解释时，可查少量高相关 primary/high-quality 外部资料，并标记 `EXTERNAL_HYPOTHESIS_SOURCE`。资料只能产生新 hypothesis 或 mechanism interpretation，不能证明当前 BRAIN field/operator 能力、平台阈值、Simulation setting 或 Alpha performance；不设固定论文数量配额。

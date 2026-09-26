@@ -10,6 +10,17 @@ BRAIN 负责 Alpha 模拟证据。
 
 唯一公开研究面是 `wqb_agent.research_api`。Python 不维护研究生命周期、结果数据库、父子关系、优化状态或自动研究循环；AI 读取 BRAIN 实时证据后决定下一份 `SimulationSpec`。
 
+## 目标与证据
+
+维护任务按此顺序判断：用户目标 > 可观察程序行为 > 与目标直接相关的验证 > 代码语义 > 文件元数据 > hash。
+hash、SHA、checksum、cache key 与 mtime 只说明身份、完整性、来源、新鲜度或建议分组，不能证明任务完成、语义正确、bug 已修复或研究成功。
+`submission_fingerprint` 是 ExecutionGuard 使用的安全关键 machine identity，必须保留；它不是代理指标问题。
+`variant_family_fingerprint` 只用于建议分组；Git commit SHA 只用于代码来源、证据版本比较与 stale 判断；reference checksum 只用于 artifact 完整性/来源。
+Git SHA 可确认 runtime evidence 对应版本、main 是否包含某 fix、handoff 是否 stale；是否修好仍须检查行为、测试或 artifact/runtime evidence。
+mtime 只帮助判断是否值得重新读取；mtime 未变不能推出运行正常、batch 完成或没有新错误。
+same hash != 功能正确；different hash != 修改正确；CI PASS != 用户目标自动满足；main SHA matched != runtime research 正常。
+每次完成声明必须回答：目标是什么？哪个直接证据证明它？
+
 ## 唯一 Simulation 写链
 
 ```text

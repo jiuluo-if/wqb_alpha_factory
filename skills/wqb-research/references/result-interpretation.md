@@ -23,3 +23,13 @@ Research Agent 在当前工作集定义 Agent-owned 的 `family_label`（假设/
 ## 失败归因
 
 记录最可能的类别及其证据：假设、字段、算子、horizon、实现、相关性或稳健性。平台/实现失败要和经济上的负结果分开。模糊写入只通过对账其既有 progress URL 重试；无 URL 的 `SUBMIT_UNKNOWN` 永不触发替代 POST。
+
+### 低表现诊断
+
+以下是 Agent-owned 的解释标签，不是 API status，也不自动改变平台或 Alpha 状态：
+
+- `FIELD_SIGNAL_WEAK`：只有同一字段上多个经济含义不同但合理的 extraction（例如不同 operator role 或 horizon）都没有支持信号时，才提高此解释权重；仍不能据此宣布 dataset 已失效。
+- `EXTRACTION_WEAK`：同一字段的某个结构 sibling 有明显证据、其它结构失败时，优先考虑表达式/算子设计，而非断言字段完全无信号；围绕有证据的机制继续。
+- `INCONCLUSIVE`：只试少量候选、高度相似 variants 或单一 operator family 时，证据不足以判断字段/方向失败。
+
+负 Sharpe 本身不授权事后翻转方向；方向与理由必须在结果前声明。只有反向机制原本就是 competing hypothesis 时才能测试反向版本，否则创建带新经济解释的 `NEW_PROBE`。
