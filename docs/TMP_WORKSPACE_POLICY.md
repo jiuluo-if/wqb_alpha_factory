@@ -6,6 +6,8 @@
 
 本地研究数据和日志可能包含私有信息。不能把它们复制到 tracked 文件、公开 catalog、issue 或远程服务。BRAIN 仍是 Simulation 与 Alpha 结果的事实源；`tmp/` 中的快照只能作为有来源和采集时间的临时证据。
 
+`tmp/knowledge/` 是受限的本机知识层，只放脱敏后的可复用经验、来源索引和维护规则；不放实时 Alpha/Simulation 结果、完整研究表达式、候选 ID 或凭据。它不属于 cache，不按普通临时文件的年龄清理；改写或删除前先检查私有 memory note 与其他文档的引用。
+
 ## 分类与目录约定
 
 新任务使用 `tmp/<YYYY-MM-DD>-<task-id>/`，按需建立：
