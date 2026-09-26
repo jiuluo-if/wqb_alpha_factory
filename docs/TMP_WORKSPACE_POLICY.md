@@ -8,29 +8,27 @@
 
 `tmp/knowledge/` 是受限的本机知识层，只放脱敏后的可复用经验、来源索引和维护规则；不放实时 Alpha/Simulation 结果、完整研究表达式、候选 ID 或凭据。它不属于 cache，不按普通临时文件的年龄清理；改写或删除前先检查私有 memory note 与其他文档的引用。
 
-## 分类与目录约定
+## 一级分类与平铺约定
 
-新任务使用 `tmp/<YYYY-MM-DD>-<task-id>/`，按需建立：
+`tmp/` 根层保留 `README.md` 和按性质分类的一级目录。分类目录内不创建 task 子目录或其他嵌套目录；任务日期和 task-id 写入文件名。当前分类如下：
 
-| 子目录 | 内容 | 结项处理 |
+| 一级目录 | 内容 | 命名/结项 |
 | --- | --- | --- |
-| `scripts/` | 本次任务的一次性分析/检查脚本 | 判断是否值得迁入正式 `scripts/`；其余随任务关闭清理 |
-| `evidence/` | 输入快照、中间 JSON、报告和结果 | 仅保留尚未可重建、且对结论有用的本地证据；标来源/时间 |
-| `logs/` | 命令输出与诊断日志 | 结项并完成状态对账后删除；开放任务的日志保留 |
-| `cache/` | 可由明确来源再生成的数据 | 结项时清理；无 owner 的缓存超过 30 天列为清理候选 |
-| `archive/` | 有历史价值且不能重建的任务总结 | 只读保留；确认已迁入受控文档且内容重复后才删除旧副本 |
+| `scripts/` | 本机临时或历史 Python 脚本 | 使用语义化 `lower_snake_case`；历史研究脚本不代表当前流程 |
+| `snapshots/` | JSON/JSONL 证据和研究数据快照 | 使用 `YYYY-MM-DD_<semantic_name>.<ext>`，并记录来源 |
+| `logs/` | 执行日志和文本输出 | 结项并对账后评估清理 |
+| `docs/` | 历史总结、诊断和 playbook | 保留历史正文，当前索引负责导航 |
+| `planning/` | task plan、findings、progress、比较矩阵 | 扁平文件名 `YYYY-MM-DD_<task-id>_<semantic_name>.md`，不造无意义轮数 |
+| `field_library/` | dataset-keyed 稳定 lookup 文件及索引 | 保留原 dataset key；更新 freshness/index |
+| `patches/` | 历史补丁 | 只读保留，先核实是否已合入再评估清理 |
+| `maintenance/` | inventory、候选表、迁移 manifest 和 cleanup 记录 | 文件直接放在本目录，维护当前清单 |
+| `knowledge/` | 脱敏后的可复用经验和索引 | 稳定语义名；不按普通缓存年龄清理 |
 
-## 命名约定
-
-- 任务目录统一使用 `YYYY-MM-DD-<task-id>`；日期与 task-id 使用小写 ASCII 和连字符。
-- 源脚本和稳定 lookup key 保留有意义的 `lower_snake_case` 名称，不为了日期或计数修改代码标识。
-- 时间快照文件统一使用 `YYYY-MM-DD_<semantic_name>.<ext>`。日期优先取文件内的 capture/create/save 日期，其次取所属日期任务目录，再次取可信的文档日期；都没有时才用文件修改日期，并在本地 rename manifest 中标注来源。
-- rename 保留原有语义名和真实实验/round ID；不新造 `round1`、`batch2` 等无语义序号。已有轮次号只有在它是可追溯实验标识时才保留。
-- README、知识索引、稳定经验页，以及日期任务目录中的 `task_plan.md`、`findings.md`、`progress.md` 和固定 manifest 文件使用稳定语义名，不重复加日期。由 dataset/operator 等稳定键直接寻址的缓存文件名也保留该键，更新时间记录在 manifest/index 中；rename 前须先检查真实 consumer。
-- 批量 rename 前生成 `old_path → new_path` 清单，检查目标冲突和源码/文档引用；完成后更新 consumer 引用并验证路径均存在。活动进程持有或正在写入的文件须等进程结束后再处理。
-
-历史根文件和原有历史子目录已按用户授权一次性集中到 `tmp/archive/legacy_root/`，保留其相对目录树、文件名和历史路径文字；迁移映射与 SHA-256 见本地 centralization manifest。后续历史文件迁移须先审核消费者，默认只更新当前导航，不改写历史正文。`tmp/README.md` 是根层导航入口；新任务文档写入 `YYYY-MM-DD-<task-id>` 目录。归档资料不是缓存；不得只因日期旧或文件名含 `old`、`archive`、`summary` 就删除。
-
+- 新时间快照日期优先取文件内 capture/create/save 日期，其次可信内容日期；没有时才以所属日期语义或 mtime 回退，并在 manifest 标注来源。
+- 保留真实 round/实验标识；不新造 `round1`、`batch2` 等无意义编号。
+- 历史材料在 2026-09-26 按性质平铺归类；历史正文和脚本内的路径文字保留原样。只更新当前 README、目录索引和 selector，使人能导航到新位置。
+- 迁移前先生成 `old_path → new_path` manifest，检查目标冲突、owner 和 SHA-256。目录只允许一级分类，不允许 category/subcategory 嵌套。
+- 归档文件不是缓存；不得只因日期旧或文件名含 `old`、`archive`、`summary` 就删除。
 ## 清理规则
 
 ### 可直接清理
@@ -43,7 +41,7 @@
 
 - `*.json`、`*.jsonl`、`*.md`、`*.txt`、`*.patch`、研究脚本和实验报告。
 - 各种 rounds、candidate/shortlist、field、correlation、submission、checkpoint 和 guard 相关文件。
-- `archive/`、历史 planning 文档、work playbook 与本地 memory。
+- `docs/`、`planning/`、`snapshots/`、work playbook 与本地 memory。
 
 仅当文件可从权威来源精确重建，或已核实被受控版本完整替代且无未结任务引用时，才列入删除清单。mtime 和扩展名都不是充分删除条件。
 
@@ -64,4 +62,8 @@
 
 本次只读盘点看到 1,304 个文件（约 16.8 MB）：532 JSON、451 Python、201 log、99 Markdown、11 pyc，其余为少量文本、JSONL、patch 和 plan selector。文件覆盖 2026-09-17 至 2026-09-26，说明这里同时承担了临时脚本、研究证据和历史归档，不应整目录删除。确认并清理的缓存限于 11 个 Python bytecode 文件；`v2-archive/` 中的历史计划与根部 playbook 作为不可重建资料保留。
 
-清理后剩余 1,293 个文件（16,652,896 bytes）：根目录 1,003 个、`field_library/` 116 个、`glb_research/` 66 个、`v2-archive/` 108 个。根目录暂时维持原布局，等相关任务结项后再逐组迁入 task-id 目录；本轮不搬动这些文件。
+清理后剩余 1,293 个文件（16,652,896 bytes）：根目录 1,003 个、`field_library/` 116 个、`glb_research/` 66 个、`v2-archive/` 108 个。该数字和目录描述为性质分类前的历史基线；当前布局以本节一级分类表及 `tmp/maintenance/inventory.csv` 为准。
+
+## 当前平铺分类状态
+
+历史材料已按性质平铺到九个一级目录，分类目录无子目录；README、知识索引和 planning selector 指向当前位置。历史正文/脚本中的旧路径文字保留。路径映射与 SHA-256 见 `tmp/maintenance/flat_reorganization_manifest.csv`。
