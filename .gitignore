@@ -173,3 +173,6 @@ Desktop.ini
 /task_plan.md
 /memory/
 docs/superpowers/
+
+# Locally supplied external tools
+/tools/

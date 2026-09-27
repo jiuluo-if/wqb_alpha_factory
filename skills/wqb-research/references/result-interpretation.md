@@ -39,6 +39,12 @@ Research Agent 在当前工作集定义 Agent-owned 的 `family_label`（假设/
 - `EXTRACTION_WEAK`：同一字段的某个结构 sibling 有明显证据、其它结构失败时，优先考虑表达式/算子设计，而非断言字段完全无信号；围绕有证据的机制继续。
 - `INCONCLUSIVE`：只试少量候选、高度相似 variants 或单一 operator family 时，证据不足以判断字段/方向失败。
 
+### Attribution before repair
+
+修复前先定位问题层。Agent 可用轻量解释标签 `RAW_FIELD`、`FIELD_RELATIONSHIP`、`TEMPORAL_EXTRACTION`、`GROUP_OR_NEUTRALIZATION`、`SETTINGS`、`COVERAGE_OR_CONCENTRATION`、`REGIME_OR_TIME_STABILITY` 或 `UNKNOWN`；这些标签不属于 API status，也不新增 schema/class/database。用已有 baseline、PnL、checks、year evidence 与已模拟 siblings 优先区分解释；只有现有证据不能分辨重要竞争原因时，才考虑最少的额外 ablation。修复应针对归因层：字段弱时换 wrapper 不解决字段问题；关系弱时重审关系；extraction 弱时检验有理由的 temporal sibling；settings 暴露时比较 matched settings；coverage/concentration 问题则针对相应暴露。不要修与失败来源无关的层。
+
+结构相似度也参与归因：不同 family label、近义 operator 或 wrapper 若保留同一机制和核心拓扑，不算独立机制证据。反之，字段语义不同也不能只凭字段名断言机制不同；结合 live description/type/coverage 与字段在表达式中的角色判断。
+
 负 Sharpe 本身不授权事后翻转方向；方向与理由必须在结果前声明。只有反向机制原本就是 competing hypothesis 时才能测试反向版本，否则创建带新经济解释的 `NEW_PROBE`。
 
 ## Robustness Ladder
@@ -52,7 +58,15 @@ Research Agent 在当前工作集定义 Agent-owned 的 `family_label`（假设/
 5. time-period / yearly evidence：检查跨期表现、coverage 与机制一致性。
 6. 若 live BRAIN settings 支持，finalist 可做 train/test-period validation；不能反复根据 test 结果调参。若据 test 结果修改 Alpha，原 test evidence 降为 `DEVELOPMENT_EVIDENCE`，之后需新的未使用验证维度。
 7. semantically equivalent field：检查核心机制是否跨近义字段保持，而非扩大成随机 field search。
+8. structural perturbation（finalist only）：在保留经济机制的前提下，改变一个非平凡结构选择，例如合理的 temporal extraction，或移除非核心 preprocessing wrapper。若变化已改变经济机制，应作为 `NEW_PROBE`，不算 robustness sibling。
+9. settings perturbation（finalist only, when relevant）：对照 anchor 与一个经济含义明确的 alternate setting，例如 neutralization、truncation 或 decay；它是解释风险的证据，不要求固定数量或通过比例。
+
+检查前先复用已有的 parameter、structural、settings 或 semantic siblings；新 Simulation 只用于补足会改变结论的证据。若只有精确 anchor 表现强，附近合理 sibling 都崩溃，可标 `BRITTLE_EXACT_POINT` 并降低 finalist 信心，不自动 FAIL。
 
 robustness check 失败先按具体证据归到 `ROBUSTNESS`、`CONCENTRATION`、`CORRELATION`、`TIME_STABILITY` 或 `PERFORMANCE`，不要统称 “Alpha bad”。不得针对失败 check 连续加 wrapper 直到 PASS；那会把 validation 变成 optimization objective，须显式标为新的开发问题。
+
+一个孤立的负年份不是自动否决。结合跨年方向、近期表现、coverage、PnL concentration、机制解释与平台 checks 判断；若数据范围或 siblings 不足，保留 `INCONCLUSIVE`，不要套用固定 CV、负年份计数或近期年阈值。
+
+长期 reference 的 lesson 晋升门槛应高于当前 working set：至少需要重复且机制一致的证据、支持 attribution 的证据、一个 falsification/semantic sibling test，以及清楚的适用范围。未满足时把经验留在当前工作集；不为此建立 research memory database、自动 writer 或晋升队列。
 
 批次足够大且分布信息有助于当前判断时，可同时描述 median、spread、tails 与 failure distribution，不只报 batch mean 或 top-1。mean 上升但 median 不动可能由少数极值驱动；mean 和 median 同向则与整体分布移动一致，但都不是自动评分。单 Alpha Sharpe/Fitness/Return 较高也不证明 alpha pool 或 combined portfolio 贡献更好；本项目不据此创建 portfolio optimizer。
