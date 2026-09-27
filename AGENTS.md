@@ -80,7 +80,7 @@ tracked 代码、测试、docs 和 fixtures 不得包含真实 Alpha、私有 fi
 
 ## Research Skill
 
-项目技能只维护在根目录 `skills/`，且只有一个核心 Skill：`skills/wqb-research/SKILL.md`，最多两个按需 reference。Skill 提供研究方法，不把缓存、Skill 或 memory 经验伪装成 BRAIN 事实，也不新增平台写入入口。工具按 `research_tool_manifest()` 的 CORE profile 默认披露，低频能力需显式请求 full profile。
+项目技能只维护在根目录 `skills/`。研究运行时只有一个核心 Skill：`skills/wqb-research/SKILL.md`，最多两个按需 reference；另允许独立的 `skills/skill-authoring/SKILL.md` 维护 Skill 编写规范，不参与研究运行、不增加研究工具或状态。研究 Skill 提供研究方法，不把缓存、Skill 或 memory 经验伪装成 BRAIN 事实，也不新增平台写入入口。工具按 `research_tool_manifest()` 的 CORE profile 默认披露，低频能力需显式请求 full profile。
 
 ## 验证与交付
 

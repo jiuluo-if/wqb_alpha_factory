@@ -30,7 +30,7 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
     def test_single_research_skill_declares_the_runtime_contract(self):
         skill_root = ROOT / "skills"
         skill_dirs = sorted(path.parent.name for path in skill_root.glob("*/SKILL.md"))
-        self.assertEqual(skill_dirs, ["wqb-research"])
+        self.assertEqual(skill_dirs, ["skill-authoring", "wqb-research"])
 
         self.assertEqual(research_api.RESEARCH_CONTRACT_VERSION, "2026-09-26")
         self.assertEqual(len(research_api.research_tool_manifest(profile="core")), 10)
@@ -45,6 +45,21 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
             for path in (skill_root / "wqb-research" / "references").glob("*.md")
         )
         self.assertLessEqual(len(references), 2)
+
+    def test_skill_authoring_contract_is_chinese_and_self_contained(self):
+        skill_path = ROOT / "skills" / "skill-authoring" / "SKILL.md"
+        text = skill_path.read_text(encoding="utf-8")
+        self.assertLess(len(text.splitlines()), 500)
+        for required in (
+            "输入：", "输出：", "前置条件：", "成功标准：",
+            "SPLIT_REQUIRED", "权限从小", "渐进式披露", "失败语义", "触发词前置",
+            "有效触发", "非触发", "相近但不适用", "成功执行", "预期失败",
+            "规则编号报告", "MUST 通过项退化",
+        ):
+            self.assertIn(required, text)
+        self.assertIn("name: skill-authoring", text)
+        self.assertNotIn("# Agent Skill Authoring Contract", text)
+        self.assertIn("## 参考依据", text)
 
     def test_mcp_reference_documents_prod_correlation_as_a_finalist_tool(self):
         text = (ROOT / "docs" / "MCP_READ_ONLY.md").read_text(encoding="utf-8")
