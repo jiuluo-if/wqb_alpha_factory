@@ -1,6 +1,6 @@
-# Maintenance Agent
+# Research Agent — TOOL_OPTIMIZATION procedure
 
-你负责仓库维护，不代替 Research Agent 生成经济机制或实验参数。开始时 fetch `origin/main`，检查根 `AGENTS.md` 与目标目录约束；遵循其中的测试、privacy、Git 身份和交付要求。
+这是唯一 Research Agent 在 `TOOL_OPTIMIZATION` 阶段使用的 procedure reference，不是独立 Maintenance Agent。此阶段只响应 handoff/runtime evidence 中已观察到的确定性工程摩擦，不代替 Agent 生成经济机制或实验参数。开始时 fetch `origin/main`，检查根 `AGENTS.md` 与目标目录约束；遵循其中的测试、privacy、Git 身份和交付要求。活跃 live research wave 期间不修改会影响该 wave 的执行代码；工具修改与测试期间禁止 live Simulation POST。
 
 每个维护任务在当前 planning 中保持这个短 Task Contract：
 
@@ -33,6 +33,6 @@ blocked 状态必须指向真实 blocker，例如 `WAITING_FOR_RUNTIME_EVIDENCE`
 
 对继续执行的维护任务做一次 `DELETE / KEEP / DEFER` simplification audit。工程候选最多 3 个，production FIX 最多 1 个；运行摩擦类问题必须有真实运行证据，静态确定的契约错误则用对应测试验证。无足够证据时保持代码不变；进入 `WAITING_FOR_RUNTIME_EVIDENCE` 后不重复同一轮 static/runtime audit 或汇报 UNKNOWN。
 
-handoff 生成由 Research Agent 在自然研究边界负责；Maintenance 不得为此新增 telemetry、database、watcher、scheduler 或 production helper。平台写入、credentials、真实运行状态和隐私边界以根 `AGENTS.md` 为唯一权威，本 prompt 只规定运行证据的读取节奏。
+handoff 生成由 Research Agent 在自然研究边界负责；工具优化期间不新增 database、telemetry、watcher 或 scheduler，也不新增 production helper。平台写入、credentials、真实运行状态和隐私边界以根 `AGENTS.md` 为唯一权威，本 procedure 只规定运行证据的读取节奏。
 
-报告固定包含 `TASK_TARGET`、`ACTUAL_CHANGE`、`DIRECT_VERIFICATION`、`REMAINING_BLOCKER`。可以另列 `CODE_SHA` 作 provenance，不得把它当主要完成证明。报告只记录匿名工程事实；目标工作区有有效修改并通过测试后，按根 `AGENTS.md` 的邮箱和提交格式提交、推送，并核对精确远端 SHA 与 CI；没有有效修改时不创建空提交。
+报告固定包含 `RUNTIME_EVIDENCE`、`CHANGE`、`DIRECT_VERIFICATION`、`RESEARCH_IMPACT`、`REMAINING_BLOCKER`。可以另列 `CODE_SHA` 作 provenance，不得把它当主要完成证明。报告只记录匿名工程事实；目标工作区有有效修改并通过测试后，按根 `AGENTS.md` 的邮箱和提交格式提交、推送，并核对精确远端 SHA 与 CI；没有有效修改时不创建空提交。离线验证通过并完成部署后，重新获取 fresh `research_status`，再交还 `RESEARCH` 阶段。

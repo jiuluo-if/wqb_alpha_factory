@@ -76,16 +76,57 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         ):
             self.assertIn(phrase, agents)
 
-    def test_maintenance_contract_prioritizes_direct_evidence(self):
+    def test_tool_optimization_reference_prioritizes_direct_evidence(self):
         prompt = (ROOT / "prompts" / "maintenance_agent.md").read_text(encoding="utf-8")
         for name in (
             "TASK_TARGET:", "DIRECT_VERIFICATION:", "CONSTRAINTS:",
             "CURRENT_BLOCKER:", "NEXT_USEFUL_ACTION:",
-            "ACTUAL_CHANGE", "REMAINING_BLOCKER", "mtime 只决定是否值得重读",
+            "RUNTIME_EVIDENCE", "CHANGE", "DIRECT_VERIFICATION:",
+            "RESEARCH_IMPACT", "REMAINING_BLOCKER", "mtime 只决定是否值得重读",
             "运行每条新命令前先问", "读取实际 artifact/runtime evidence",
             "SHA 只标示来源", "不能单独构成 blocker",
         ):
             self.assertIn(name, prompt)
+
+    def test_research_agent_owns_evidence_triggered_tool_optimization(self):
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        local_agents = (ROOT / "wqb_agent" / "AGENTS.md").read_text(encoding="utf-8")
+        prompt = (ROOT / "prompts" / "research_agent.md").read_text(encoding="utf-8")
+        prompt_index = (ROOT / "prompts" / "AGENTS.md").read_text(encoding="utf-8")
+        tool_phase = (ROOT / "prompts" / "maintenance_agent.md").read_text(encoding="utf-8")
+        skill = (ROOT / "skills" / "wqb-research" / "SKILL.md").read_text(encoding="utf-8")
+        combined = "\n".join((agents, local_agents, prompt, prompt_index, tool_phase, skill))
+
+        self.assertIn("TOOL_OPTIMIZATION", combined)
+        self.assertIn("RESEARCH → TOOL_OPTIMIZATION → RESEARCH", combined)
+        self.assertIn("同一个 Research Agent", combined)
+        self.assertIn("真实运行证据", combined)
+        self.assertIn("确定性工程摩擦", combined)
+        self.assertIn("活跃 research wave", combined)
+        self.assertIn("工具优化期间禁止 live Simulation POST", combined)
+        self.assertIn("离线测试", combined)
+        self.assertIn("fresh `research_status`", combined)
+        self.assertNotIn("不修改仓库代码", prompt)
+        self.assertNotIn("永不改核心代码", skill)
+        self.assertNotIn("Maintenance Agent（architecture", prompt_index)
+
+    def test_handoff_records_only_bounded_tool_friction_and_blocks_unknown_readiness(self):
+        prompt = (ROOT / "prompts" / "research_agent.md").read_text(encoding="utf-8")
+        tool_phase = (ROOT / "prompts" / "maintenance_agent.md").read_text(encoding="utf-8")
+        combined = prompt + "\n" + tool_phase
+
+        for field in (
+            "invalid_spec_failures", "deterministic_failure_codes",
+            "batch_execution_failures", "evidence_retrieval_failures",
+            "evidence_retrieval_pending_count", "repeated_manual_workaround_count",
+        ):
+            self.assertIn(field, combined)
+        self.assertIn("pending_execution_count > 0", combined)
+        self.assertIn("readiness 必须是 `BLOCKED_BY_REMOTE_STATE`", combined)
+        self.assertIn("只记录 reason code", combined)
+        self.assertIn("不记录自由文本", combined)
+        self.assertIn("不得写入 expression、field ID、Alpha ID", combined)
+        self.assertIn("不新增 database、telemetry、watcher 或 scheduler", combined)
 
     def test_research_guides_preserve_validation_and_mechanism_boundaries(self):
         batch = (ROOT / "skills" / "wqb-research" / "references" / "batch-design.md").read_text(encoding="utf-8")

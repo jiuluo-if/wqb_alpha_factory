@@ -1,6 +1,6 @@
 # `wqb_agent` 局部约束
 
-本目录实现远端优先（Remote-First）公开工具，不实现研究员状态机。
+本目录实现远端优先（Remote-First）公开工具，不实现研究员状态机。Research Agent 可在真实运行证据触发的 `TOOL_OPTIMIZATION` 阶段修改确定性 research-facing 工具，但只能在 live research wave 已结束、且工具改动/测试期间不执行 live Simulation POST 时进行。
 
 - `research_api.py` 是唯一 Agent-facing facade。
 - Simulation 只能经 `SimulationGateway → Simulator → WQBClient` 写入 BRAIN。
@@ -10,5 +10,6 @@
 - 去重、相似性、分组和颜色必须与执行安全分离；除精确执行重复外，不得替 AI 强制阻止实验。
 - credentials 只能由 resolver 解析，不写入 config、state、log、cache 或测试。
 - 新代码不得引入研究结果数据库、研究生命周期、父子 lineage、自动 optimizer 或第二套 config/state 抽象。
+- 工具优化只修可复现的 schema/validation、mapping、dispatch、reconcile、duplicate-scan 或 evidence-read 摩擦；不得把经济机制选择、字段排名、实验推荐或研究阶段状态机移入 Python。工具修改须使用 offline/fake-client tests 验证，之后经仓库交付门并以新 `research_status()` 握手恢复 live Research。
 
 模板变更还必须遵守 `alpha_templates/AGENTS.md`。变更后运行直接相关测试、编译、Ruff 和 privacy gate；真实平台写操作不属于质量测试。
