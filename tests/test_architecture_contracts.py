@@ -164,6 +164,88 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         self.assertNotIn("signal_light.py", batch + result)
         self.assertNotRegex(batch + result, r"(?:Sharpe|Fitness)\s*>\s*\d")
 
+    def test_research_aligns_long_term_alpha_with_current_platform_opportunities(self):
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        skill = (ROOT / "skills" / "wqb-research" / "SKILL.md").read_text(encoding="utf-8")
+        result = (ROOT / "skills" / "wqb-research" / "references" / "result-interpretation.md").read_text(encoding="utf-8")
+        prompt = (ROOT / "prompts" / "research_agent.md").read_text(encoding="utf-8")
+        combined = "\n".join((agents, skill, result, prompt))
+
+        for phrase in (
+            "长期可持续 Alpha",
+            "当前 BRAIN submission / checks / correlation / cost",
+            "Genius / Theme / competition / consultant",
+            "每个 research wave",
+            "当前 account",
+            "UNKNOWN",
+            "活动机会不能替代机制证据",
+        ):
+            self.assertIn(phrase, combined)
+
+    def test_every_paper_maps_to_brain_template_even_when_observables_are_missing(self):
+        skill = (ROOT / "skills" / "wqb-research" / "SKILL.md").read_text(encoding="utf-8")
+        batch = (ROOT / "skills" / "wqb-research" / "references" / "batch-design.md").read_text(encoding="utf-8")
+        prompt = (ROOT / "prompts" / "research_agent.md").read_text(encoding="utf-8")
+        combined = "\n".join((skill, batch, prompt))
+
+        for phrase in (
+            "UNIVERSAL PAPER MAPPING",
+            "PAPER → claim / empirical finding → economic mechanism",
+            "BRAIN 可检验的模板草案",
+            "predicted variable",
+            "observable variables",
+            "information timing",
+            "implementation frictions",
+            "transaction-cost implications",
+            "falsification conditions",
+            "近 24 个月",
+            "peer-reviewed papers",
+            "working papers",
+            "market microstructure",
+            "alternative data",
+            "multiple-testing/overfitting",
+            "CORE_MECHANISM",
+            "FIELD_ROLES",
+            "TEMPORAL_EXTRACTION",
+            "SETTINGS_HYPOTHESIS",
+            "ROBUSTNESS_AXES",
+            "UNMAPPED_OBSERVABLE",
+            "PARTIAL_MAPPING",
+            "方法论文",
+            "不强造 Alpha 表达式",
+        ):
+            self.assertIn(phrase, combined)
+        self.assertIn("研究/audit 输入", combined)
+        self.assertIn("不要求本地 Research Agent 联网检索论文", combined)
+
+    def test_reusable_template_promotion_requires_family_level_brain_evidence(self):
+        skill = (ROOT / "skills" / "wqb-research" / "SKILL.md").read_text(encoding="utf-8")
+        batch = (ROOT / "skills" / "wqb-research" / "references" / "batch-design.md").read_text(encoding="utf-8")
+        result = (ROOT / "skills" / "wqb-research" / "references" / "result-interpretation.md").read_text(encoding="utf-8")
+        combined = "\n".join((skill, batch, result))
+
+        for phrase in (
+            "TEMPLATE EVIDENCE",
+            "BRAIN family-level validation",
+            "supporting / falsification siblings",
+            "同一经济机制",
+            "字段",
+            "horizon",
+            "structural",
+            "settings",
+            "cost",
+            "correlation",
+            "return 与 stability",
+            "time decay",
+            "selection pressure",
+            "单一 Alpha",
+            "不设固定字段数、批次数或通过率",
+            "机制不变量",
+            "已知失败条件",
+            "验证证据范围",
+        ):
+            self.assertIn(phrase, combined)
+
     def test_research_status_reports_the_contract_version(self):
         status = research_api.research_status()
         self.assertEqual(

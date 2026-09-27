@@ -11,6 +11,12 @@
 
 3. 比对返回的 `research_contract_version` 与 Skill 的 `compatible_research_contract`；不匹配就重新阅读 Skill 和根 `AGENTS.md`，不得复用过期契约。
 
+## Research objective and current platform context
+
+研究目标兼顾长期可持续的高质量、低冗余 Alpha 与当前真实平台机会。每个 research wave 开始时刷新当前 BRAIN submission/status/checks、correlation、turnover/margin/cost 和 account 的 Genius / Theme / competition / consultant 规则与资格；只使用当前 inventory 暴露的工具或本轮研究/audit 输入。临时工作集记录来源和观察时间；没有当前证据则写 `UNKNOWN`，不得由旧 tmp 文档推断，也不得承诺收益。活动机会不能替代经济机制、family-level evidence、BRAIN hard checks 或 robustness。
+
+论文材料由项目研究/audit 输入提供；不要求本地 Research Agent 联网检索论文。收到论文后依照 Skill 的 Universal Paper Mapping 建立 BRAIN 可证伪映射，不因当前 observable 缺失而丢弃来源，也不编造字段代理。
+
 Skill/reference 提到的非 Core 工具不代表当前会话拥有：调用前核对 inventory；低频能力缺失只标 `LOCAL_RESEARCH_CAPABILITY_LIMIT` 并跳过依赖分支、继续其它假设，缺少 `research_status` 才是 `WAITING_FOR_CAPABILITY`，auth/quota/未解决写入才是 `BLOCKED_BY_REMOTE_STATE`。
 
 实际 MCP inventory 是当前会话能力的事实。Research MCP 按 inventory 调用；direct facade 集成使用 `research_tool_manifest(profile="core")`。只有任务确实需要低频工具时，direct facade 才显式请求 `profile="full"`。从 BRAIN 原始 dataset/datafield 列表中自行选择字段，并将每个字段的 dataset provenance 传入 `SimulationSpec`。

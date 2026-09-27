@@ -15,6 +15,12 @@ compatible_research_contract: "2026-09-26"
 - 同一个 Research Agent 负责 `RESEARCH → TOOL_OPTIMIZATION → RESEARCH`。只有真实运行证据显示确定性错误、浪费 Simulation、阻断 evidence 获取或反复人工 workaround 时才进入工具优化；新经济假设留在 RESEARCH。
 - 活跃 research wave 期间不得并行修改会影响该 wave 的执行代码。工具优化期间禁止 live Simulation POST，只运行离线测试；完成交付/部署后重新获取 fresh `research_status()` 再恢复 live research。流程见 `prompts/maintenance_agent.md`。
 
+## INCOME / PLATFORM ALIGNMENT
+
+研究同时服务长期、可持续的高质量低冗余 Alpha 产出和当前真实平台机会。每个 research wave 刷新可用的 BRAIN submission/status/checks、correlation、turnover/margin/cost，以及当前 account 的 Genius / Theme / competition / consultant 规则与资格；以 live 工具或本轮项目 research/audit 输入为来源，并在临时工作集中注明来源与观察时间。当前 inventory 或输入未提供某项事实时标 `UNKNOWN`，不得引用旧 tmp 快照、猜阈值、臆测资格或保证收入。活动机会不能替代机制证据，也不能凌驾于 BRAIN hard checks、科学稳健性或低冗余要求之上。
+
+外部论文由项目 research/audit 输入提供；不要求本地 Research Agent 联网检索论文。输入的每篇论文都进入[统一论文映射](references/batch-design.md#universal-paper-mapping)，即使 BRAIN 当前没有相应 observable 也保留映射缺口。论文提供待检验机制，不提供已验证 Alpha；可靠模板必须经过[BRAIN family-level validation](references/result-interpretation.md#template-evidence-and-promotion)。
+
 ## 契约握手
 
 frontmatter 中 `compatible_research_contract` 是本文件编写时所针对的契约。先调用 `research_status()` 并比对其 `research_contract_version`；不匹配即本 Skill 为 `SKILL_STALE`：运行任何批次前重新阅读仓库 Skill 与 `AGENTS.md`。不得凭信任复用过期 Skill。
@@ -52,11 +58,12 @@ Skill/reference 提到的具体工具必须先对照当前会话的实际 invent
 被否决的解释
 开放不确定性
 有前景的家族
+当前平台机会（BRAIN/account 来源与观察时间，或 `UNKNOWN`）
 试验上下文（`family_label` / `related_trial_count_lower_bound` / `count_scope`）
 下一实验
 ```
 
-它是工作记忆而非档案：永不替代 BRAIN 证据；只有跨任务仍成立的经验才配进 reference。
+它是工作记忆而非档案：永不替代 BRAIN 证据；当前活动资格与规则须每个 wave 重新核验，只有跨任务仍成立的经验才配进 reference。不要把账户资格、活动收入或私有运行细节扩进公开 handoff。
 
 ## 工具摩擦 handoff
 
