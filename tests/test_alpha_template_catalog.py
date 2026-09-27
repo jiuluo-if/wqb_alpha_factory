@@ -43,6 +43,74 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
         self.assertEqual(slot["name"], "fast")
         self.assertIn(66, slot["allowed_values"])
 
+    def test_numeric_slot_kind_must_be_explicit_in_catalog_input(self):
+        source = _partial_document().replace('kind = "RESEARCH_HORIZON"\n', "", 1)
+        with self.assertRaisesRegex(ValueError, "numeric slot kind"):
+            load_templates(io.StringIO(source))
+
+    def test_numeric_slot_default_must_belong_to_its_allowed_values(self):
+        slot = TemplateNumericSlot(
+            name="window", kind="RESEARCH_HORIZON", default=22,
+            allowed_values=(5, 66), economic_role="test horizon",
+            token="22",
+        )
+        template = AlphaTemplate(
+            "default-outside-bounds", family="synthetic",
+            expression="ts_mean({p}, 22)", required_slots=("p",),
+            role="CONTROL_ALPHA", semantic_contract="SYNTHETIC_FIXTURE",
+            economic_mechanism="synthetic slot test",
+            field_relationship="single field", direction_reason="synthetic",
+            expected_horizon="short-term", falsification="synthetic falsification",
+            numeric_slots=(slot,),
+        )
+
+        report = validate_template_contract(template)
+
+        self.assertIn("NUMERIC_SLOT_DEFAULT_NOT_ALLOWED", report["errors"])
+
+    def test_numeric_slot_bounds_must_be_finite_numeric_and_unique(self):
+        def make_template(allowed_values, *, kind="RESEARCH_HORIZON", economic_role="test horizon"):
+            slot = TemplateNumericSlot(
+                name="window", kind=kind, default=5,
+                allowed_values=allowed_values, economic_role=economic_role,
+                token="5",
+            )
+            return AlphaTemplate(
+                "invalid-bounds", family="synthetic",
+                expression="ts_mean({p}, 5)", required_slots=("p",),
+                role="CONTROL_ALPHA", semantic_contract="SYNTHETIC_FIXTURE",
+                economic_mechanism="synthetic slot test",
+                field_relationship="single field", direction_reason="synthetic",
+                expected_horizon="short-term", falsification="synthetic falsification",
+                numeric_slots=(slot,),
+            )
+
+        duplicate = validate_template_contract(make_template((5, 5, 22)))
+        nonnumeric = validate_template_contract(make_template((5, "22")))
+        nonfinite = validate_template_contract(make_template((5, float("nan"))))
+        boolean_bound = validate_template_contract(make_template((5, True)))
+        empty = validate_template_contract(make_template(()))
+        malformed_container = validate_template_contract(make_template(5))
+        missing_role = validate_template_contract(
+            make_template((5, 22), economic_role="")
+        )
+        non_lattice = validate_template_contract(
+            make_template((5, 9), kind="RESEARCH_HORIZON")
+        )
+        non_horizon_kind = validate_template_contract(
+            make_template((5, 22), kind="window")
+        )
+
+        self.assertIn("DUPLICATE_NUMERIC_SLOT_VALUE", duplicate["errors"])
+        self.assertIn("INVALID_NUMERIC_SLOT_BOUNDS", nonnumeric["errors"])
+        self.assertIn("INVALID_NUMERIC_SLOT_BOUNDS", nonfinite["errors"])
+        self.assertIn("INVALID_NUMERIC_SLOT_BOUNDS", boolean_bound["errors"])
+        self.assertIn("MISSING_NUMERIC_SLOT_BOUNDS", empty["errors"])
+        self.assertIn("INVALID_NUMERIC_SLOT_BOUNDS", malformed_container["errors"])
+        self.assertIn("NUMERIC_SLOT_ECONOMIC_ROLE_MISSING", missing_role["errors"])
+        self.assertIn("NON_LATTICE_HORIZON_SLOT", non_lattice["errors"])
+        self.assertIn("UNSUPPORTED_NUMERIC_SLOT_KIND", non_horizon_kind["errors"])
+
     def test_factory_covers_entire_field_pool_with_bounded_target(self):
         template = AlphaTemplate(
             "coverage-control", family="synthetic", expression="rank({p})",
@@ -450,7 +518,7 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
             field_relationship="paired fields", relationship_contract="CO_MOVEMENT",
             field_roles=("primary",), direction_reason="synthetic",
             expected_horizon="short-term", falsification="synthetic",
-            numeric_slots=(TemplateNumericSlot(name=f"n{i}", allowed_values=(5,),
+            numeric_slots=(TemplateNumericSlot(name=f"n{i}", kind="RESEARCH_HORIZON", allowed_values=(5,),
                                                 economic_role="synthetic", token="5")
                            for i in range(4)),
         )

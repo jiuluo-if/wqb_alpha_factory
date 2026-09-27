@@ -12,28 +12,36 @@ Research Agent 在当前工作集定义 Agent-owned 的 `family_label`（假设/
 
 ## TEMPLATE EVIDENCE AND PROMOTION
 
-论文模板只有经过 BRAIN family-level validation 才能成为可靠模板。`family_label` 用于组织证据，不是 family membership 的证明；须按共享 economic mechanism、field roles/relationships、信息时点和结构解释实际 sibling。论文主张与 template 草案是待验证假设，不是 BRAIN evidence。单一 Alpha、单一强字段、一个高分 winner 或某项活动达标都不能晋升。
+`PAPER SUPPORT != BRAIN SUPPORT`。论文证据只说明某个机制值得测试；BRAIN Simulation 才能支持该机制在当前 observable、实现和平台环境中的实现。论文模板只有经过 BRAIN family-level validation 才能成为可靠模板。`family_label` 用于组织证据，不是 family membership 的证明；须按共享 economic mechanism、field roles/relationships、信息时点和结构解释实际 sibling。论文主张与 template 草案是待验证假设，不是 BRAIN evidence。单一 Alpha、单一强字段、一个高分 winner 或某项活动达标都不能晋升。
 
 晋升证据按研究问题逐步累积，不是固定 pipeline 或固定样本量：
 
 ```text
 paper mechanism
 → BRAIN observables
-→ simple control
-→ admission simulations
+→ SIMPLE IMPLEMENTATION
+→ CONTROL + FALSIFICATION + NEGATIVE CONTROL
+→ LARGE-SCALE FAMILY ADMISSION
 → supporting / falsification siblings
-→ attribution
-→ local neighborhood
+→ ATTRIBUTION
+→ LOCAL / STRUCTURAL STABILITY
 → structural / settings robustness
-→ cost + correlation + current platform checks
-→ reusable template
+→ COST + CORRELATION + TIME ROBUSTNESS
+→ current platform checks
+→ REUSABLE TEMPLATE
 ```
+
+Simulation budget 随信息增益逐步增加：`SEMANTIC / TIMING / COVERAGE SCREEN → LARGE-SCALE FAMILY ADMISSION → FAMILY TRIAGE → SUPPORT + FALSIFICATION + NEGATIVE CONTROL → LOCAL / STRUCTURAL STABILITY → FINALIST DEEP EVIDENCE`。每次新增 Simulation 前说明它区分哪两个解释、什么结果会改变决策，以及现有 evidence 是否已回答；若不能改变研究判断，先复用已有 BRAIN evidence。早期扩展机制/template/data coverage，中期集中到重复支持的 family，后期才深查 PnL/year evidence/correlation/qualification。批次大小依信息增益和 live 预算决定，不设固定 batch quota。
 
 可晋升时，证据应表明同一经济机制能在合理的 semantic field、horizon/time、数据/地区或结构/settings 变化下重复得到支持；至少要能解释哪些变体支持机制、哪些结果会证伪它，以及提升不是由单一字段或 `AUX_PROCESSING` 主导。变化轴由竞争解释与现有 BRAIN evidence 决定，不设固定字段数、批次数或通过率。使用 `related_trial_count_lower_bound` 与 `count_scope` 说明搜索和选择压力，不能把反复筛选后的极值当作独立复现。
 
-晋升审查还要检查当前 BRAIN hard checks、submission 状态、return 与 stability、coverage、time decay、selection pressure、turnover/margin/transaction cost、self/PROD correlation（仅在可用且对问题必要时）及冗余。交易成本和 implementability 从 admission 阶段就是经济证据，不是最后才加的筛选项。通过某项活动或资格门槛只是当前机会条件，不证明机制成立；当前规则或资格无 live 证据时保持 `UNKNOWN`。平台约束、历史阈值与活动收入不得固化成通用常数。
+晋升审查还要检查当前 BRAIN hard checks、submission 状态、return 与 stability/performance、turnover/margin、coverage、persistence/time decay、sibling consistency、selection pressure、transaction cost、self/PROD correlation（仅在可用且对问题必要时）、falsification 和 redundancy。交易成本和 implementability 从 admission 阶段就是经济证据，不是最后才加的筛选项。若 negative control 与目标版本同样有效，降低机制可信度并重审竞争解释；不能把二者并列 PASS 后照常晋升。通过某项活动或资格门槛只是当前机会条件，不证明机制成立；当前规则或资格无 live 证据时保持 `UNKNOWN`。平台约束、历史阈值与活动收入不得固化成通用常数；不汇总成单一综合值（No single Quality Score）。
 
 可复用 template 的说明应保留机制不变量、FIELD_ROLES 与 semantic slots、已由 live contract 验证的允许替换范围、合理 horizon、可变 extraction/settings axes、已知失败条件、成本特征、适用 region/data 条件和验证证据范围。只记录足以支持复用的匿名机制与证据摘要；具体候选字段、表达式、Alpha 或完整研究内容仍遵循隐私约束。没有足够家族证据时停留在 candidate/provisional 工作集，不创建 template registry 或自动晋升器。
+
+## Validation Budget
+
+任何 evidence 一旦被用来调整 `field`、`expression`、`parameter`、`operator` 或 `settings`，都转为 `DEVELOPMENT_EVIDENCE`，不再算作独立 finalist validation。finalist 应尽量保留未参与开发的验证轴；同一个 validation 反复被拿来调 Alpha 时标 `VALIDATION_EXHAUSTED`，停止将该轴声称为验证证据并寻找尚未消耗的 axis。不得在同一 validation 上继续拟合到 PASS。
 
 重复使用同一历史选择模型或搜索配置，会提高偶然胜出的候选被选中的风险；White 的 data-snooping 检验、Bailey 等人的 backtest-overfitting 框架及资产定价 multiple-testing 研究均讨论了这一问题，但其统计阈值不应直接硬编码到 BRAIN 研究流程中。[White (2000)](https://doi.org/10.1111/1468-0262.00152), [Bailey et al. (2017)](https://doi.org/10.21314/jcf.2016.322), [Harvey, Liu & Zhu (2016)](https://doi.org/10.1093/rfs/hhv059)。
 

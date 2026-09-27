@@ -51,7 +51,9 @@ def _slot(raw, template_id):
         raise ValueError(f"{template_id}: slot {name} missing allowed_values")
     token = raw.get("token")
     token = str(token) if token is not None else str(raw.get("default"))
-    kind = _text(raw.get("kind", "window"), "numeric slot kind")
+    kind = _text(raw.get("kind"), "numeric slot kind")
+    if kind != "RESEARCH_HORIZON":
+        raise ValueError(f"{template_id}: unsupported numeric slot kind {kind}")
     if kind == "RESEARCH_HORIZON" and any(value not in HORIZON_LATTICE for value in allowed):
         raise ValueError(f"{template_id}: horizon slot must use the lattice")
     return TemplateNumericSlot(

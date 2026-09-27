@@ -54,7 +54,7 @@ class TemplateNumericSlot:
     """研究数值声明；只有声明的数字允许轮换。"""
 
     name: str
-    kind: str = "window"
+    kind: str = "UNDECLARED"
     default: float = 0.0
     allowed_values: tuple = ()
     economic_role: str = ""

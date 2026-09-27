@@ -5,6 +5,11 @@ import unittest
 
 from wqb_agent import research_api
 from wqb_agent.alpha_factory import AlphaFactory
+from wqb_agent.alpha_templates.model import (
+    AlphaTemplate,
+    TemplateNumericSlot,
+    TemplateOperatorSlot,
+)
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "wqb_agent"
@@ -243,6 +248,128 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
             "机制不变量",
             "已知失败条件",
             "验证证据范围",
+        ):
+            self.assertIn(phrase, combined)
+
+    def test_paper_template_candidate_preserves_source_assumptions_and_controls(self):
+        skill = (ROOT / "skills" / "wqb-research" / "SKILL.md").read_text(encoding="utf-8")
+        batch = (ROOT / "skills" / "wqb-research" / "references" / "batch-design.md").read_text(encoding="utf-8")
+        prompt = (ROOT / "prompts" / "research_agent.md").read_text(encoding="utf-8")
+        combined = "\n".join((skill, batch, prompt))
+
+        for phrase in (
+            "PAPER_TEMPLATE_CANDIDATE",
+            "SOURCE",
+            "CLAIM",
+            "ECONOMIC / BEHAVIORAL / MICROSTRUCTURE MECHANISM",
+            "PREDICTED VARIABLE",
+            "REQUIRED OBSERVABLES",
+            "FIELD ROLES / RELATIONSHIP",
+            "DIRECTION + REASON",
+            "INFORMATION AVAILABILITY",
+            "EXPECTED HORIZON / DECAY",
+            "CONDITION / REGIME",
+            "IMPLEMENTATION / COST FRICTION",
+            "NEGATIVE CONTROL",
+            "BRAIN MAPPING",
+            "publication date",
+            "PAPER → TEMPLATE ASSUMPTION PROVENANCE",
+            "CORE_MECHANISM",
+            "FIELD RELATIONSHIP",
+            "TEMPORAL_EXTRACTION",
+            "AUX_PROCESSING",
+            "RISK / SETTINGS",
+        ):
+            self.assertIn(phrase, combined)
+        for route in (
+            "map to an existing template",
+            "extend an existing semantic slot",
+            "NEW_PROBE sibling",
+            "new template skeleton",
+        ):
+            self.assertIn(route, combined)
+        self.assertIn("existing templates cannot faithfully express", combined)
+        self.assertIn("CAPABILITY_MISSING", combined)
+        for axis_field in (
+            "default", "allowed neighborhood", "economic role",
+            "what changing it tests",
+        ):
+            self.assertIn(axis_field, combined)
+        self.assertIn("Alpha/PA", combined)
+        self.assertIn("合法 validation/write contract", combined)
+
+    def test_paper_templates_use_existing_alpha_template_owner_contract(self):
+        owner = (ROOT / "wqb_agent" / "alpha_templates" / "AGENTS.md").read_text(encoding="utf-8")
+        model = (ROOT / "wqb_agent" / "alpha_templates" / "model.py").read_text(encoding="utf-8")
+        batch = (ROOT / "skills" / "wqb-research" / "references" / "batch-design.md").read_text(encoding="utf-8")
+        combined = "\n".join((owner, batch))
+
+        template_fields = set(AlphaTemplate.__dataclass_fields__)
+        for name in (
+            "economic_mechanism", "semantic_contract", "relationship_contract",
+            "field_roles", "direction", "direction_reason", "expected_horizon",
+            "falsification", "novelty_family", "numeric_slots",
+            "allowed_horizon_profiles", "allowed_settings_arms",
+        ):
+            self.assertIn(name, template_fields)
+        self.assertTrue(hasattr(AlphaTemplate, "structural_fingerprint"))
+        self.assertTrue(hasattr(AlphaTemplate, "mechanism_fingerprint"))
+        self.assertTrue({"default", "allowed_values", "economic_role"}.issubset(
+            TemplateNumericSlot.__dataclass_fields__
+        ))
+        self.assertTrue({"role", "baseline_operator", "allowed_operators"}.issubset(
+            TemplateOperatorSlot.__dataclass_fields__
+        ))
+        self.assertIn("structural_fingerprint", model)
+        self.assertIn("mechanism_fingerprint", model)
+        self.assertIn("用于 template 结构身份/机制分组和去重", combined)
+        self.assertIn("Research mapping", combined)
+        self.assertIn("不是 `AlphaTemplate` schema", combined)
+        self.assertIn("无等价项时保留为 `CAPABILITY_MISSING`", combined)
+        self.assertIn("不得硬塞相邻枚举", combined)
+        self.assertIn("私有 catalog", owner)
+        self.assertIn("fail-closed", owner)
+
+    def test_paper_template_research_preserves_evidence_and_validation_budget(self):
+        skill = (ROOT / "skills" / "wqb-research" / "SKILL.md").read_text(encoding="utf-8")
+        batch = (ROOT / "skills" / "wqb-research" / "references" / "batch-design.md").read_text(encoding="utf-8")
+        result = (ROOT / "skills" / "wqb-research" / "references" / "result-interpretation.md").read_text(encoding="utf-8")
+        prompt = (ROOT / "prompts" / "research_agent.md").read_text(encoding="utf-8")
+        combined = "\n".join((skill, batch, result, prompt))
+
+        for phrase in (
+            "PAPER SUPPORT != BRAIN SUPPORT",
+            "SIMPLE IMPLEMENTATION",
+            "CONTROL + FALSIFICATION",
+            "NEGATIVE CONTROL",
+            "LARGE-SCALE FAMILY ADMISSION",
+            "ATTRIBUTION",
+            "LOCAL / STRUCTURAL STABILITY",
+            "COST + CORRELATION + TIME ROBUSTNESS",
+            "REUSABLE TEMPLATE",
+            "DEVELOPMENT_EVIDENCE",
+            "VALIDATION_EXHAUSTED",
+            "不汇总成单一综合值",
+        ):
+            self.assertIn(phrase, combined)
+
+    def test_natural_wave_efficiency_review_separates_research_unknown_from_tool_friction(self):
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        prompt = (ROOT / "prompts" / "research_agent.md").read_text(encoding="utf-8")
+        skill = (ROOT / "skills" / "wqb-research" / "SKILL.md").read_text(encoding="utf-8")
+        combined = "\n".join((agents, prompt, skill))
+
+        for phrase in (
+            "研究信息增益",
+            "family yield",
+            "无效 Simulation 来源",
+            "deterministic failures",
+            "evidence retrieval friction",
+            "重复人工 workaround",
+            "RESEARCH_UNKNOWN",
+            "TOOL_FRICTION",
+            "INFORMATION GAIN / SIMULATION",
+            "paper → template → evidence",
         ):
             self.assertIn(phrase, combined)
 
