@@ -19,6 +19,41 @@
 2. 哪些 proposal 是对照、本地兄弟、证伪或新探针？
 3. 什么结果会改变下一次决策？
 
+## UNIVERSAL PAPER MAPPING
+
+项目 research/audit 输入提供外部论文与研究材料；不要求本地 Research Agent 联网检索论文。输入资料应覆盖 peer-reviewed papers 与 working papers（包括 SSRN / NBER），涉及 asset pricing、market microstructure、alternative data、ML/statistical learning、transaction costs、anomaly replication/decay 与 multiple-testing/overfitting；经典论文用于机制基础，近 24 个月的研究优先反映当前市场和方法变化，并注明来源与发表/工作论文状态。对输入的每篇论文，都保留准确来源并做一次统一映射，即使当前 BRAIN 没有完整的可观测变量也不丢弃它。不得复制大段论文正文；区分论文的 claim/empirical finding 与作者提出或数据支持的 economic mechanism，不把相关性结果写成已识别的因果关系。
+
+先将论文映射为可质疑的研究主张：
+
+```text
+PAPER → claim / empirical finding → economic mechanism
+      → predicted variable → observable variables
+      → direction → horizon / information timing
+      → conditioning / regime → field relationships
+      → implementation frictions → transaction-cost implications
+      → known decay / redundancy → falsification conditions
+```
+
+再写成 BRAIN 可检验的模板草案：
+
+```text
+CORE_MECHANISM
+FIELD_ROLES
+RELATIONSHIP
+TEMPORAL_EXTRACTION
+OPTIONAL_CONTEXT
+SETTINGS_HYPOTHESIS
+CONTROL
+FALSIFICATION
+ROBUSTNESS_AXES
+```
+
+模板草案描述经济机制、语义字段角色与可变轴，不是论文公式的照抄、Alpha 表达式、builtin template 或 Python schema。映射时解释方向、信息可用时点和 horizon、conditioning/regime、字段关系、交易成本/实现摩擦、衰减/冗余风险，以及什么结果会推翻机制；由 Agent 根据当前 BRAIN live dataset/datafield 与 capability evidence 选择 observable 和实验，不能让 Python 排名或补齐字段。
+
+方法论文若研究的是数据挖掘偏差、识别、预处理或验证方法，而非可交易预测机制，也使用同一映射框架：把其主张映射到 `CONTROL`、`FALSIFICATION`、`ROBUSTNESS_AXES` 与可观察的数据条件；若没有 Alpha-level observable，标 `PARTIAL_MAPPING` 或 `UNMAPPED_OBSERVABLE`，不强造 Alpha 表达式。
+
+若论文要求的 observable 当前不在 BRAIN 可用数据中，对具体缺项标 `UNMAPPED_OBSERVABLE`；若仅部分主张或变量能落地，标 `PARTIAL_MAPPING` 并列出缺口。不得静默换成名称相似但经济角色不同的 proxy；只有明确论证 proxy 的经济关系、信息时点及可证伪结果后，才可将它作为独立、有限的映射假设。未映射论文继续保留为研究输入，不得宣称已被 BRAIN 验证。
+
 批次多样性按经济机制、field roles、字段关系、operator topology、temporal extraction 与 group/settings 作用判断。不同 `family_label` 不代表不同机制；只换名字、近义 operator 或 wrapper，而核心结构与机制相同的候选仍属于同一结构家族。优先覆盖能区分的机制与竞争解释（`MECHANISM COVERAGE > OPERATOR COVERAGE`），不要为 operator 使用率、entropy 或固定 quota 构造候选。
 
 ## Validation Ladder
@@ -83,6 +118,8 @@ IDEA → IMPLEMENTATION → OPTIMIZATION / ROBUSTNESS
 proposal mapping 可标出 `CORE_MECHANISM` 与 `AUX_PROCESSING`。前者写核心经济关系（如 revision surprise、ratio/spread、residual relationship、event response、term structure）；后者写 backfill、winsorize、rank/zscore、grouping、neutralization 或 smoothing。这样才能判断变化改了机制还是实现稳健性；这些标签不进入 schema。
 
 `TEMPLATE_EFFECT != FIELD_EFFECT`。单一强字段不能证明 template 可复用；若只有该字段支持，标为 `FIELD_DOMINATED_EVIDENCE`，不晋升 builtin。先用至少一种对照区分 template mechanism 与字段效应：同字段更简单 control、同 template 的语义近邻字段/兼容 dataset，或 template ablation。晋升还要能解释 `CORE_MECHANISM`、拆分 `AUX_PROCESSING`、说明稳定 operator roles 与至少一个 falsification test；不要求固定字段数或 dataset 数，不改 template schema。
+
+以上是字段与机制的局部辨析，不单独构成可靠模板晋升。将论文映射变成候选 template 后，还须按[family-level BRAIN evidence](result-interpretation.md#template-evidence-and-promotion)区分可复用机制与偶然的单字段/单 Alpha winner；不得把 paper mapping 草案或一次支持性 Simulation 称为 validated template。
 
 对 `A / B`、`A - B` 或 `A vs B`，事前说明 numerator/denominator role、经济维度、cadence compatibility 与关系为何有意义；两个字段各自有效不等于随机组合有意义。先比较 RAW RATIO/paired expression 与简单 control；只有当前问题需要时，再分别测试 ratio-level 或 operand-level preprocessing，每个 sibling 只变一个轴。看结果时解释 magnitude/distribution、coverage 和 concentration，不能只比 Sharpe。
 

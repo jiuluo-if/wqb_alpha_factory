@@ -10,6 +10,10 @@ BRAIN 负责 Alpha 模拟证据。
 
 唯一公开研究面是 `wqb_agent.research_api`。Python 不维护研究生命周期、结果数据库、父子关系、优化状态或自动研究循环；AI 读取 BRAIN 实时证据后决定下一份 `SimulationSpec`。
 
+## 研究目标与平台机会
+
+目标是长期可持续 Alpha 产出，同时兼顾高质量、低冗余以及当前 BRAIN submission / checks / correlation / cost 约束和 Genius / Theme / competition / consultant 等实际平台机会。平台规则、资格、活动和报酬属于易变 live facts；Research Agent 每个 research wave 应按当前 BRAIN/account evidence 与实际可用工具刷新，不能从旧 tmp 快照或固定 Skill/Python 阈值推断。没有当前证据时标 `UNKNOWN`。活动机会不能替代机制证据，也不能覆盖 BRAIN hard checks、安全约束或长期稳健性；不得承诺收益。
+
 ## Research Agent 与工具优化阶段
 
 ```text

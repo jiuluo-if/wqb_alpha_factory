@@ -10,6 +10,31 @@
 
 Research Agent 在当前工作集定义 Agent-owned 的 `family_label`（假设/模板/局部变体/语义家族；只是组织标签，不证明信号等价）、`related_trial_count_lower_bound`（实际观察到的相关试验下界）和 `count_scope`（`CURRENT_WORKING_SET`、`CURRENT_TASK` 或 `HANDOFF_CHAIN`）。这些不是 BRAIN/MCP 字段，也不代表完整账户或历史试验数；不知道时写 `UNKNOWN`，不能自动评分或过滤候选。
 
+## TEMPLATE EVIDENCE AND PROMOTION
+
+论文模板只有经过 BRAIN family-level validation 才能成为可靠模板。`family_label` 用于组织证据，不是 family membership 的证明；须按共享 economic mechanism、field roles/relationships、信息时点和结构解释实际 sibling。论文主张与 template 草案是待验证假设，不是 BRAIN evidence。单一 Alpha、单一强字段、一个高分 winner 或某项活动达标都不能晋升。
+
+晋升证据按研究问题逐步累积，不是固定 pipeline 或固定样本量：
+
+```text
+paper mechanism
+→ BRAIN observables
+→ simple control
+→ admission simulations
+→ supporting / falsification siblings
+→ attribution
+→ local neighborhood
+→ structural / settings robustness
+→ cost + correlation + current platform checks
+→ reusable template
+```
+
+可晋升时，证据应表明同一经济机制能在合理的 semantic field、horizon/time、数据/地区或结构/settings 变化下重复得到支持；至少要能解释哪些变体支持机制、哪些结果会证伪它，以及提升不是由单一字段或 `AUX_PROCESSING` 主导。变化轴由竞争解释与现有 BRAIN evidence 决定，不设固定字段数、批次数或通过率。使用 `related_trial_count_lower_bound` 与 `count_scope` 说明搜索和选择压力，不能把反复筛选后的极值当作独立复现。
+
+晋升审查还要检查当前 BRAIN hard checks、submission 状态、return 与 stability、coverage、time decay、selection pressure、turnover/margin/transaction cost、self/PROD correlation（仅在可用且对问题必要时）及冗余。交易成本和 implementability 从 admission 阶段就是经济证据，不是最后才加的筛选项。通过某项活动或资格门槛只是当前机会条件，不证明机制成立；当前规则或资格无 live 证据时保持 `UNKNOWN`。平台约束、历史阈值与活动收入不得固化成通用常数。
+
+可复用 template 的说明应保留机制不变量、FIELD_ROLES 与 semantic slots、已由 live contract 验证的允许替换范围、合理 horizon、可变 extraction/settings axes、已知失败条件、成本特征、适用 region/data 条件和验证证据范围。只记录足以支持复用的匿名机制与证据摘要；具体候选字段、表达式、Alpha 或完整研究内容仍遵循隐私约束。没有足够家族证据时停留在 candidate/provisional 工作集，不创建 template registry 或自动晋升器。
+
 重复使用同一历史选择模型或搜索配置，会提高偶然胜出的候选被选中的风险；White 的 data-snooping 检验、Bailey 等人的 backtest-overfitting 框架及资产定价 multiple-testing 研究均讨论了这一问题，但其统计阈值不应直接硬编码到 BRAIN 研究流程中。[White (2000)](https://doi.org/10.1111/1468-0262.00152), [Bailey et al. (2017)](https://doi.org/10.21314/jcf.2016.322), [Harvey, Liu & Zhu (2016)](https://doi.org/10.1093/rfs/hhv059)。
 
 证据复核按问题选择，不要求每个候选全部执行：local sibling/相邻参数 → 同机制跨年度 → 小 settings 邻域 → 语义匹配的替代字段 → 假设支持时的替代 dataset/region。孤立峰值弱于邻域一致性，邻域一致性又弱于多种独立且机制一致的证据；结合观察到的试验下界解释，不自动选 winner，并保留竞争或证伪解释。
