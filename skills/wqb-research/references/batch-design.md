@@ -19,6 +19,8 @@
 2. 哪些 proposal 是对照、本地兄弟、证伪或新探针？
 3. 什么结果会改变下一次决策？
 
+批次多样性按经济机制、field roles、字段关系、operator topology、temporal extraction 与 group/settings 作用判断。不同 `family_label` 不代表不同机制；只换名字、近义 operator 或 wrapper，而核心结构与机制相同的候选仍属于同一结构家族。优先覆盖能区分的机制与竞争解释（`MECHANISM COVERAGE > OPERATOR COVERAGE`），不要为 operator 使用率、entropy 或固定 quota 构造候选。
+
 ## Validation Ladder
 
 验证按证据层级解释：
@@ -38,7 +40,10 @@
 - 从当前 BRAIN `list_datasets()` 开始，再对问题相关的数据集发现字段：若当前 inventory 暴露 `list_all_datafields()`，用其 bounded pagination；否则用 `list_datafields(dataset_id, limit, offset, field_type)` 显式翻页。开始前设 page budget 或 time budget；预算耗尽但 API 返回的 count/offset 尚未证明覆盖完成时，标记 `FIELD_DISCOVERY_INCOMPLETE`，不得把部分结果说成完整覆盖。`research_api.list_all_datafields` 保留为 public-only 低频能力，不因此加入默认 Core。按语义关键词、字段 ID、`type`、描述、data coverage、dataset、region/universe/delay 与语义核心（semantic core）整理候选；历史未测清单可辅助检索，旧 `field_library`、字段 dump、reservoir 和 cache 只作带 freshness 的索引线索，不能证明当前字段存在、可用或适合 RA。
 - 发现顺序为：dataset metadata → semantic themes → bounded field pages → small field shortlist → operator-role selection → probes。由 Agent 根据 dataset 和 page/time budget 决定数量；shortlist 应小到能认真分析，并说明 discovery 是否 incomplete。不要硬编码主题数、字段数或算子数，也不要建 vector DB、embedding service 或 semantic index。
 - 对每个新 dataset/语义方向，先建立单字段基线（single-field baseline），确认它对应单一机制，再判断字段语义、类型变换与 RA 地区资格。确认后才扩大到同义字段或复合；保留字段到 dataset 的 live provenance，并传入 `field_datasets`。
+- 选择字段时，除 field role 外，可由 Agent 记录 `LIKELY_FALSE_PROXY` 判断：字段是否更像 liquidity、size、coverage、reporting frequency、post-event reaction，或 `none/unknown`。优先依据当前 BRAIN description、type、coverage/context 与经济解释；字段名只是线索，不用 Python 的名字规则推断代理属性。
+- 对 News 类字段，分清 `SOURCE_INFORMATION`、`CONTEXT_OR_GATE` 与 `POST_EVENT_REACTION`。sentiment、event direction、estimate/relevance 可能承载 source information；新闻后的价格、成交量或 reaction statistics 通常先视为 context/confirmation/gate。若将 reaction 当主信号，先写明独立机制（如 delayed absorption、overreaction 或 reaction speed）；否则不要把它当 standalone source。
 - 默认让一个候选表达一个经济机制，并先测一个信号字段，不加辅助腿。若要复合字段，先写明 field roles（各字段的经济角色）、它们为何属于同一机制、组合要解决的具体问题；在相同设置下比较组成信号与复合信号，做 ablation（消融）判断每一项是否提供了所声称的作用。若字段代表不同机制，将组合标成新的 `NEW_PROBE` 假设，不把它包装成去噪腿。
+- Agent 可按当前字段语义提出 `SPREAD`、`SURPRISE`、`INTENSITY`、`INTERACTION`、`DISPERSION` 或 `CONFIDENCE_WEIGHT` 等关系；它们只是 construction vocabulary，不是 builtin/template factory。每次仍需说明 field roles、经济关系、预期方向与可证伪观察。
 - 辅助、控制或 hedge 腿不是默认去噪器。只有在独立假设说明其风险作用，并通过“原信号单独 / 控制腿单独 / 两者组合”的匹配消融后，才保留该腿；同时检查它是否掩盖原字段信号或主导相关性。
 - 需要给既有 agent 工作经验分配注意力时，按证据来源、所属任务、研究契约与时间新鲜度分层：BRAIN 当前 live 证据优先；本轮刚验证的工作集优先于旧 `tmp` 报告和缓存；旧记录先作为假设线索，重新核验后才恢复为当前约束。新证据与旧记录冲突时，保留旧记录的时间/范围并以新 live 结果更新工作集，不把记忆伪装成平台事实。
 - 每轮结束时，用最新已验证结果更新简短工作集（强证据、失败归因、未决解释、下一实验）；保留旧记录的来源和日期，避免重复注入所有历史 agent 记忆。时间较近本身不等于更可靠，仍按证据质量和当前任务相关性判断。
@@ -48,6 +53,7 @@
 - 多字段组合前声明 field role、semantic core 与 comparison meaning；优先配对同一指标的 actual/estimate 或不同预测 horizon。共享 semantic core、期限不同的字段可形成 `TERM_STRUCTURE` 假设；不同机制的字段组合要作为 `NEW_PROBE`，不能随机配对或标为 local sibling。
 - 数据 cadence、发布日期/可用延迟与经济机制 horizon 是窗口选择的 prior，不是规则。用 anchor 加少量相邻且有经济理由的参数；不得假定低频字段必然需要更长窗口，也不做 Cartesian grid。
 - 把 `ts_backfill`、`to_nan`、`winsorize`、`rank`、`zscore` 作为待检验的 preprocessing axis，先保留同字段/同机制/同 settings 的 `RAW CONTROL`，再做只改变预处理的 `PREPROCESSED SIBLING`；比较时记录 coverage/缺失变化。预处理失败或成功都由 Agent 解释，不自动套用。
+- 若 `trade_when`、hard threshold、event gate、rank/winsorize/decay 等强 wrapper 带来明显提升，先审计 source 是否已存在，还是 wrapper 选择了有利样本或重塑了暴露。能区分时优先比较 ungated/raw control 或已有邻近 sibling；若表现只在 wrapper 后出现，可记为 `WRAPPER_DEPENDENT_EVIDENCE` 并降低机制信心，不自动判 FAIL。Negative control 有明确解释时可预先设计，并在看结果前写明判读；不得看到结果后临时翻转 sign。
 - operator substitution 若保留相同经济角色且在现有 template operator slot 明确允许，可作为 local sibling；改变经济关系（如 ratio→difference 或 ranking→residualization）则是 `NEW_PROBE`。理论型 proposal（CAPM、GGM/DDM、DuPont、PEG 等）用已有 `semantic_contract`、`relationship_contract`、`field_relationship`、`expected_horizon` 说明适用对象、可能失效假设与可证伪观察；不加 schema 字段、不把社区公式直接晋升为 builtin。
 
 ## 自定义分组
