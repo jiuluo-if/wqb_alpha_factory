@@ -10,6 +10,21 @@ BRAIN 负责 Alpha 模拟证据。
 
 唯一公开研究面是 `wqb_agent.research_api`。Python 不维护研究生命周期、结果数据库、父子关系、优化状态或自动研究循环；AI 读取 BRAIN 实时证据后决定下一份 `SimulationSpec`。
 
+## Research Agent 与工具优化阶段
+
+```text
+Research Agent:
+RESEARCH → TOOL_OPTIMIZATION → RESEARCH
+```
+
+同一个 Research Agent 可根据当前 BRAIN evidence 与本地匿名 `tmp/research_handoff.json` 决定继续实验，或在自然 research-wave 边界进入 `TOOL_OPTIMIZATION`。只有真实运行证据表明工具限制造成确定性错误、浪费 Simulation、阻断 evidence 获取或反复人工 workaround 时，才优化工具；单纯的新经济想法直接留在 RESEARCH 阶段。
+
+`TOOL_OPTIMIZATION` 可修改现有 Skill/prompt/reference、research-facing Python/MCP、small helper 和对应 tests，但不得创建研究生命周期、研究结果库、自动 optimizer、scheduler 或第二套 state。Python 只修确定性工具摩擦，不替 Agent 选择经济机制、候选或下一实验。
+
+阶段必须互斥：活跃 live research wave 中不得并行修改会影响该 wave 的执行代码；进入 `TOOL_OPTIMIZATION` 后停止所有 live Simulation POST，只运行离线/fake-client tests 和静态质量门。工具修改经测试、commit/PR/CI 验证并部署后，Agent 重新执行 `research_status()`，确认新代码 contract/readiness，再回到 RESEARCH。Simulation 唯一写链、ExecutionGuard/exact-once、隐私边界和人工 Alpha submission 不变。
+
+`tmp/research_handoff.json` 仍是本地匿名运行交接，不是 BRAIN truth 或研究数据库；可以承载少量当前 task/wave 的聚合工程摩擦计数和 safe reason codes，以便 Research Agent 判断是否需要 TOOL_OPTIMIZATION。不得写入私有研究内容，也不得由 Tool Optimization 阶段伪造或覆盖正在运行的 agent handoff。
+
 ## 目标与证据
 
 维护任务按此顺序判断：用户目标 > 可观察程序行为 > 与目标直接相关的验证 > 代码语义 > 文件元数据 > hash。

@@ -12,6 +12,8 @@ compatible_research_contract: "2026-09-26"
 - Agent 拥有假设、机制、字段选择、实验分组与解释权。Python 校验确定性契约并安全执行，不做经济研究选择。
 - Alpha 提交永远人工完成。所有 Simulation 写入走 `research_api → SimulationGateway → Simulator → WQBClient`。
 - Simulation 结果不等于其主张机制得到支持。缺失证据保持 `UNKNOWN`/`UNAVAILABLE`。
+- 同一个 Research Agent 负责 `RESEARCH → TOOL_OPTIMIZATION → RESEARCH`。只有真实运行证据显示确定性错误、浪费 Simulation、阻断 evidence 获取或反复人工 workaround 时才进入工具优化；新经济假设留在 RESEARCH。
+- 活跃 research wave 期间不得并行修改会影响该 wave 的执行代码。工具优化期间禁止 live Simulation POST，只运行离线测试；完成交付/部署后重新获取 fresh `research_status()` 再恢复 live research。流程见 `prompts/maintenance_agent.md`。
 
 ## 契约握手
 
@@ -56,10 +58,10 @@ Skill/reference 提到的具体工具必须先对照当前会话的实际 invent
 
 它是工作记忆而非档案：永不替代 BRAIN 证据；只有跨任务仍成立的经验才配进 reference。
 
-## 权限
+## 工具摩擦 handoff
 
-- `RESEARCH_MODE`（本 Skill）：运行 live 研究与 Simulation；永不改核心代码、`AGENTS.md` 或本 Skill。
-- `MAINTENANCE_MODE`：改代码、测试与 Skill；永不执行 live Simulation POST。
-- Skill 变更永不由单次 Simulation 生效：执行证据 → 提出 Skill diff → 独立测试/评审 → 接受或拒绝 → 之后研究在已接受版本下继续。
+仅在自然 wave 边界由 Research Agent 更新 gitignored 的 `tmp/research_handoff.json`。允许添加当前 task/wave 的匿名聚合计数：`invalid_spec_failures`、`deterministic_failure_codes`、`batch_execution_failures`、`evidence_retrieval_failures`、`evidence_retrieval_pending_count`、`repeated_manual_workaround_count`。未知值用 `null` 或省略，不能猜 0；reason code 必须有限且脱敏，不记录自由文本。不得写 expression、field ID、Alpha ID、私有研究内容、结果指标、credentials 或 URL；不新增 database、telemetry、watcher 或 scheduler。
+
+只要 `pending_execution_count > 0` 或有 `SUBMIT_UNKNOWN`，handoff `readiness` 必须是 `BLOCKED_BY_REMOTE_STATE`，不受工具/API 的宽松 readiness 标签覆盖。handoff 是运行交接，不是平台事实。
 
 规划或标注大批次时读[批次设计](references/batch-design.md)；比较优胜者、检查稳健性或决定是否继续时读[结果解释](references/result-interpretation.md)。
