@@ -21,6 +21,10 @@ compatible_research_contract: "2026-09-26"
 
 外部论文由项目 research/audit 输入提供；不要求本地 Research Agent 联网检索论文。输入的每篇论文都进入[统一论文映射](references/batch-design.md#universal-paper-mapping)，即使 BRAIN 当前没有相应 observable 也保留映射缺口。论文提供待检验机制，不提供已验证 Alpha；可靠模板必须经过[BRAIN family-level validation](references/result-interpretation.md#template-evidence-and-promotion)。
 
+每篇有研究价值的论文形成 `PAPER_TEMPLATE_CANDIDATE`：在 research mapping 中保留来源/发表日期/状态、claim、机制和每项 template assumption 的来源链，以及 negative control 与当前 `BRAIN MAPPING`。候选可映射已有模板、扩展语义 slot、提出同机制 `NEW_PROBE` sibling；只有现有模板无法忠实表达核心机制/关系时才提出新 skeleton candidate。Candidate 是研究笔记，不是私有 catalog 条目；写入 catalog 仍受 `wqb_agent/alpha_templates/AGENTS.md` 和 BRAIN family evidence 晋升约束。
+
+要新增或修改 private template/catalog 时，先阅读 `wqb_agent/alpha_templates/AGENTS.md` 并只通过唯一 `AlphaTemplate` owner 与现有 strict validation；若当前能力不足，candidate 留在 Research mapping 并标记 capability gap，不绕过 owner。
+
 ## 契约握手
 
 frontmatter 中 `compatible_research_contract` 是本文件编写时所针对的契约。先调用 `research_status()` 并比对其 `research_contract_version`；不匹配即本 Skill 为 `SKILL_STALE`：运行任何批次前重新阅读仓库 Skill 与 `AGENTS.md`。不得凭信任复用过期 Skill。
@@ -58,12 +62,19 @@ Skill/reference 提到的具体工具必须先对照当前会话的实际 invent
 被否决的解释
 开放不确定性
 有前景的家族
+paper/template candidate（来源、发表日期、template assumption provenance）
 当前平台机会（BRAIN/account 来源与观察时间，或 `UNKNOWN`）
 试验上下文（`family_label` / `related_trial_count_lower_bound` / `count_scope`）
 下一实验
 ```
 
 它是工作记忆而非档案：永不替代 BRAIN 证据；当前活动资格与规则须每个 wave 重新核验，只有跨任务仍成立的经验才配进 reference。不要把账户资格、活动收入或私有运行细节扩进公开 handoff。
+
+Alpha/PA 或其他 execution mode 只有在 fresh `research_status()` 与当前 tool inventory 明确暴露时，才可作为同一 template mechanism 的不同实验环境比较；若缺失或 validation/write contract 不可用，标 `CAPABILITY_MISSING`，不假设存在或绕过 facade。
+
+## Wave-end research and tool-efficiency review
+
+每个自然 research wave 结束时，Agent 一并回看研究信息增益、family yield、无效 Simulation 来源、deterministic failures、evidence retrieval friction 和重复人工 workaround，并先区分 `RESEARCH_UNKNOWN` 与 `TOOL_FRICTION`。研究未知量进入下一轮 paper/template/data/Simulation 研究；只有可复现的工具摩擦才进入既有 `TOOL_OPTIMIZATION` 阶段。工具改进目标是提高 `INFORMATION GAIN / SIMULATION`、缩短 paper → template → evidence 路径并减少确定性无效试验，不创建自动研究/晋升系统。
 
 ## 工具摩擦 handoff
 

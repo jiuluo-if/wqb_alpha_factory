@@ -15,7 +15,9 @@
 
 研究目标兼顾长期可持续的高质量、低冗余 Alpha 与当前真实平台机会。每个 research wave 开始时刷新当前 BRAIN submission/status/checks、correlation、turnover/margin/cost 和 account 的 Genius / Theme / competition / consultant 规则与资格；只使用当前 inventory 暴露的工具或本轮研究/audit 输入。临时工作集记录来源和观察时间；没有当前证据则写 `UNKNOWN`，不得由旧 tmp 文档推断，也不得承诺收益。活动机会不能替代经济机制、family-level evidence、BRAIN hard checks 或 robustness。
 
-论文材料由项目研究/audit 输入提供；不要求本地 Research Agent 联网检索论文。收到论文后依照 Skill 的 Universal Paper Mapping 建立 BRAIN 可证伪映射，不因当前 observable 缺失而丢弃来源，也不编造字段代理。
+论文材料由项目研究/audit 输入提供；不要求本地 Research Agent 联网检索论文。收到有研究价值的论文后，建立 `PAPER_TEMPLATE_CANDIDATE` 并按 Skill 的 Universal Paper Mapping 记录来源/发表日期/状态、claim、机制、required observables、negative control、每个 template assumption 的 paper provenance 和 BRAIN mapping。对可用的候选，可选择映射已有模板、扩展 semantic slot、提出同机制 `NEW_PROBE` sibling；仅当现有模板无法忠实表达核心机制/关系时才提出新 skeleton candidate。Candidate 不等于 private catalog entry；只有经现有 AlphaTemplate owner validation 与足够 BRAIN family evidence 后才可晋升。Observable/operator/setting/contract 不可用时保留 `UNMAPPED_OBSERVABLE`、`PARTIAL_MAPPING` 或 `CAPABILITY_MISSING`，不得补造或强行套近似 contract。
+
+Alpha/PA 等执行环境仅当 fresh `research_status()` 与实际 MCP inventory 明确暴露并有合法 validation/write contract 时，才用于同一 template mechanism 的跨环境比较；否则标 `CAPABILITY_MISSING`，不假设平台支持。
 
 Skill/reference 提到的非 Core 工具不代表当前会话拥有：调用前核对 inventory；低频能力缺失只标 `LOCAL_RESEARCH_CAPABILITY_LIMIT` 并跳过依赖分支、继续其它假设，缺少 `research_status` 才是 `WAITING_FOR_CAPABILITY`，auth/quota/未解决写入才是 `BLOCKED_BY_REMOTE_STATE`。
 
@@ -30,6 +32,10 @@ PROD correlation 是独立的 finalist-only capability。仅当当前实际 tool
 ## Simulation result mapping
 
 proposal ID 与 hypothesis mapping 按唯一核心 Skill 执行。只根据当前 MCP 实际返回的字段归因结果；Multi child 使用返回的完整 child fingerprint 调用 `reconcile_execution`。direct Python facade 兼容行为以 API 契约为准。
+
+## Wave-end research efficiency
+
+在每个自然 research wave 的真实 handoff/runtime evidence 到齐后，回看研究信息增益、family yield、无效 Simulation 来源、deterministic failures、evidence retrieval friction 与重复人工 workaround。先分清 `RESEARCH_UNKNOWN`（机制/字段/时点/效果仍未知）和 `TOOL_FRICTION`（可复现的确定性工程问题）：前者进入下一轮 paper/template/data 研究，后者才考虑 `TOOL_OPTIMIZATION`。优化必须基于本轮真实摩擦，目标是提高 `INFORMATION GAIN / SIMULATION`、缩短 paper → template → evidence 路径、降低确定性无效试验；不以 simulation 数量或单一 Quality Score 作目标，也不自动选机制或晋升模板。
 
 ## RUN EVIDENCE HANDOFF
 

@@ -72,6 +72,10 @@ BRAIN 是 Alpha、Simulation、指标、检查项、聚合、PnL 和相关性的
 
 模板变更前必须阅读本文件、`wqb_agent/AGENTS.md` 和 `wqb_agent/alpha_templates/AGENTS.md`。`alpha_templates` 是唯一模板负责方；公开 catalog 只能使用 synthetic 数据，私有 catalog 必须按显式路径加载且缺失时 fail closed。
 
+论文与模板来源、发表日期及哪些模板假设来自论文，保留在 Agent 的 `PAPER_TEMPLATE_CANDIDATE` Research mapping 中，不借此扩展第二套模板 schema 或研究数据库。若现有 AlphaTemplate 无法忠实表达新机制/字段关系，Agent 可以提出新 skeleton candidate；只有经过当前 owner validation 和 BRAIN family-level evidence 后，才考虑把真实模板写入显式 private catalog。结构/机制 fingerprint 只服务身份与去重，不能证明模板质量。
+
+每个 paper/template 的 negative control、capability/mapping gaps 和 axis-specific testing question 也属于 Research mapping；candidate mapping 不能绕过 `alpha_templates` 的 strict validation、private catalog 边界、唯一 Simulation 写链或 human submission。
+
 tracked 代码、测试、docs 和 fixtures 不得包含真实 Alpha、私有 field、完整研究表达式、credentials 或运行状态。质量检查不得触发线上 Simulation POST。
 
 ## Research Skill

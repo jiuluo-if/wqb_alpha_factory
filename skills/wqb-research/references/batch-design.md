@@ -48,6 +48,41 @@ FALSIFICATION
 ROBUSTNESS_AXES
 ```
 
+每篇输入论文先在 Agent-owned Research mapping 形成 `PAPER_TEMPLATE_CANDIDATE`，至少保留：
+
+```text
+SOURCE (citation/DOI, publication date, publication or working-paper status)
+CLAIM
+ECONOMIC / BEHAVIORAL / MICROSTRUCTURE MECHANISM
+PREDICTED VARIABLE
+REQUIRED OBSERVABLES
+FIELD ROLES / RELATIONSHIP
+DIRECTION + REASON
+INFORMATION AVAILABILITY
+EXPECTED HORIZON / DECAY
+CONDITION / REGIME
+IMPLEMENTATION / COST FRICTION
+FALSIFICATION
+NEGATIVE CONTROL
+BRAIN MAPPING
+PAPER → TEMPLATE ASSUMPTION PROVENANCE
+```
+
+`PAPER → TEMPLATE ASSUMPTION PROVENANCE` 逐项说明哪些 mechanism/role/relationship/timing/slot assumptions 来自哪条论文 claim，哪些是 Agent 的新假设。SOURCE、发表日期与这条 provenance 留在 Research mapping，不新增 `AlphaTemplate` 字段、catalog metadata 或 research database。`NEGATIVE CONTROL` 是事前设计的无关/机制破坏对照，写明它为何不应支持目标机制、如何保持可比较，以及若结果与目标版本同样有效会怎样下调机制可信度；它不等同于 `CONTROL_ALPHA` 模板角色。
+
+### Route each paper candidate through the existing template owner
+
+- `map to an existing template`：现有机制、semantic slots、field relationship、direction 和 timing 能忠实表达论文主张时优先复用。
+- `extend an existing semantic slot`：新增合理 field carrier/slot hypothesis，但不改变 `CORE_MECHANISM` 与关系时使用；每个 semantic role 指明映射到 AlphaTemplate 的现有 field binding。
+- 提出 `NEW_PROBE sibling`：保留可辨认的机制核心，单独检验论文所启发的一个新 carrier、temporal extraction 或 bounded hypothesis。
+- 只有当 existing templates cannot faithfully express 论文的核心关系、信息时点或可证伪预测时，才 propose a new template skeleton。新 skeleton 先作为 `PAPER_TEMPLATE_CANDIDATE`，不自动写进 catalog；仍由唯一 `wqb_agent.alpha_templates` owner 定义并通过其 strict validation，晋升需 family-level BRAIN evidence。
+
+字段语义角色可使用 `direction`、`expectation`、`outcome`、`scale`、`confidence`、`context`、`cohort` 等 Agent vocabulary；多字段关系可解释为 `spread`、`directional ratio`、`surprise`、`confirmation`、`interaction`、`dispersion`、`co-movement` 或 `term structure`。这些是 Research mapping 中的人读经济语义，不自动成为 `semantic_contract` / `relationship_contract` enum。机器 contract 必须忠实匹配当前 AlphaTemplate owner 的 supported set；没有等价 contract 时标 `CAPABILITY_MISSING` 并保留为未 materialize candidate，不能强塞近似枚举。新 contract 需要单独的 owner 变更、验证和测试。
+
+每个 proposed numeric/operator/settings/horizon axis 都在 Research mapping 记录 `default`、`allowed neighborhood`、`economic role` 和 `what changing it tests`。`TemplateNumericSlot`、`TemplateOperatorSlot`、`allowed_settings_arms` 和 `allowed_horizon_profiles` 仍由现有 owner 表达有界可执行范围；Research mapping 说明范围背后的研究问题，不扩大 schema。未知或当前不支持的 observable 标 `UNMAPPED_OBSERVABLE`；只有部分字段/claim 映射时标 `PARTIAL_MAPPING`；当前 operator、setting 或 machine contract 不支持时标 `CAPABILITY_MISSING`，不把三种缺口混为一类。
+
+Candidate mapping 将实现拆为 `CORE_MECHANISM`、`FIELD RELATIONSHIP`、`TEMPORAL_EXTRACTION`、`AUX_PROCESSING`、`RISK / SETTINGS`；前两项主导 template 的经济身份。预处理、neutralization、decay、truncation 通常是实现/风险轴，不能单凭 wrapper 差异伪造新机制；若变化了预测逻辑或 economic relationship，则创建新的 template candidate / `NEW_PROBE` 并说明原因。
+
 模板草案描述经济机制、语义字段角色与可变轴，不是论文公式的照抄、Alpha 表达式、builtin template 或 Python schema。映射时解释方向、信息可用时点和 horizon、conditioning/regime、字段关系、交易成本/实现摩擦、衰减/冗余风险，以及什么结果会推翻机制；由 Agent 根据当前 BRAIN live dataset/datafield 与 capability evidence 选择 observable 和实验，不能让 Python 排名或补齐字段。
 
 方法论文若研究的是数据挖掘偏差、识别、预处理或验证方法，而非可交易预测机制，也使用同一映射框架：把其主张映射到 `CONTROL`、`FALSIFICATION`、`ROBUSTNESS_AXES` 与可观察的数据条件；若没有 Alpha-level observable，标 `PARTIAL_MAPPING` 或 `UNMAPPED_OBSERVABLE`，不强造 Alpha 表达式。

@@ -1,5 +1,7 @@
 """Pure validation gates for public synthetic and local private templates."""
 
+import math
+
 from ..expression import has_redundant_unary_wrapper, operator_occurrence_count
 from .model import (
     DIRECTION_TRANSFORMS,
@@ -192,6 +194,33 @@ def validate_template_contract(template, *, production=False):
         errors.append("INVALID_FIELD_ROLE")
     if len(template.numeric_slots) > 3:
         errors.append("NUMERIC_SLOT_LIMIT")
+    for slot in template.numeric_slots:
+        if not isinstance(slot.allowed_values, (tuple, list)):
+            errors.append("INVALID_NUMERIC_SLOT_BOUNDS")
+            continue
+        allowed = tuple(slot.allowed_values)
+        values = (*allowed, slot.default)
+        if not allowed:
+            errors.append("MISSING_NUMERIC_SLOT_BOUNDS")
+            continue
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or (isinstance(value, float) and not math.isfinite(value))
+            for value in values
+        ):
+            errors.append("INVALID_NUMERIC_SLOT_BOUNDS")
+            continue
+        if len(set(allowed)) != len(allowed):
+            errors.append("DUPLICATE_NUMERIC_SLOT_VALUE")
+        if slot.default not in allowed:
+            errors.append("NUMERIC_SLOT_DEFAULT_NOT_ALLOWED")
+        if not str(slot.economic_role or "").strip():
+            errors.append("NUMERIC_SLOT_ECONOMIC_ROLE_MISSING")
+        if slot.kind != "RESEARCH_HORIZON":
+            errors.append("UNSUPPORTED_NUMERIC_SLOT_KIND")
+        elif any(value not in HORIZON_LATTICE for value in allowed):
+            errors.append("NON_LATTICE_HORIZON_SLOT")
     if production and template.economic_field_count > 1:
         if contract == "UNDECLARED":
             errors.append("RELATIONSHIP_CONTRACT_UNDECLARED")
