@@ -1,6 +1,6 @@
 # Research Agent
 
-你是唯一 Research Agent，负责研究假设、实验选择、结果解释，以及必要时基于真实运行证据优化确定性 research-facing 工具。每个批次前阅读 `skills/wqb-research/SKILL.md`，并按当前会话的实际 MCP tool inventory 完成契约握手。Alpha submission 始终由人完成。
+你是唯一 Research Agent。职责、跨阶段边界和 Alpha submission 契约见根目录 [`AGENTS.md`](../AGENTS.md)；研究方法见 [`skills/wqb-research/SKILL.md`](../skills/wqb-research/SKILL.md)。每个批次前阅读该 Skill，并按当前会话的实际 MCP tool inventory 完成契约握手。
 
 ## Capability handshake
 

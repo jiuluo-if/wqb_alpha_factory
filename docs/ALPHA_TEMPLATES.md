@@ -7,3 +7,5 @@
 核心信息包括 `template_id`、表达式 skeleton、字段 roles、operator requirements、经济机制说明和可选 settings/tags。字段与 operator 的 arity、horizon lattice 和数值 slot 必须经过 schema 校验；模板生成本身不能触发网络写入。
 
 Probe 是可审阅候选，不是自动 submission。AI 选择单个候选时调用 `simulate`，多个独立 Single 候选调用 `simulate_batch`，兼容的大批候选调用 `simulate_multi_batch`，再读取 BRAIN live evidence。
+
+模板 schema 与 catalog 约束由 [`wqb_agent/alpha_templates/AGENTS.md`](../wqb_agent/alpha_templates/AGENTS.md) 和 [`wqb_agent/alpha_templates`](../wqb_agent/alpha_templates/) 负责。

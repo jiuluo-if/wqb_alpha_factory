@@ -12,7 +12,7 @@
 | `COMMUNITY_OBSERVED` | 社区观察到的接口，只能 probe/fixture，不能成为生产依赖 |
 | `UNKNOWN` | 没有足够证据，必须 fail-closed |
 
-当前官方接口登记：`POST /authentication`、`GET /authentication`、`data_sets`、`data_fields`、`OPTIONS /simulations`、`POST /simulations`、已知 progress URL、`users/self/alphas`、`GET /alphas/{id}`、`GET /alphas/{id}/recordsets`、`GET /alphas/{id}/recordsets/{name}` 和 `GET /users/{userid}/activities/diversity`。本轮只把这些官方接口作为生产协议事实；`/operators` 等仍按现有 provenance 处理。
+当前项目纳入 production protocol facts 的接口限于 `POST /authentication`、`GET /authentication`、`data_sets`、`data_fields`、`OPTIONS /simulations`、`POST /simulations`、已知 progress URL、`users/self/alphas`、`GET /alphas/{id}`、`GET /alphas/{id}/recordsets`、`GET /alphas/{id}/recordsets/{name}` 和 `GET /users/{userid}/activities/diversity`；`/operators` 等仍按现有 provenance 处理。
 
 成功的 `POST /simulations` response 中，`X-Ratelimit-Limit`、`X-Ratelimit-Remaining` 和 `X-Ratelimit-Reset` 是 BRAIN 提供的官方 Simulation quota observation；Multi response 中每个 child 分别计入配额，重复提交一个已经存在的 Alpha 也仍然计数。`/users/self/alphas` 的 Alpha 创建日期视图可能按 `alpha_id` 去重，不能作为精确 Simulation counter。当前 client 只在内存保留最近一次成功 response 的 bounded header projection；未观察到这些 headers 时，官方配额必须保持 `UNKNOWN`。
 
@@ -26,7 +26,7 @@
 
 `RemoteAlphaRepository` 缓存只按配置的保留窗口保存可重建的轻量 Alpha 元数据，不使用本地配额上限裁剪元数据行；这些行仍只是 `APPROXIMATE` 用量证据，不是精确 Simulation 计数。
 
-当前顾问阶段的本地每日 Simulation 策略上限为 5000，默认也是 5000；配置只允许下调，不允许高于 5000。它只作用于 `APPROXIMATE` 本地配额投影，不覆盖 BRAIN 响应头，也不代表平台固定配额。
+本地每日 Simulation 策略上限为 5000，默认也是 5000；配置只允许下调，不允许高于 5000。它只作用于 `APPROXIMATE` 本地配额投影，不覆盖 BRAIN 响应头，也不代表平台固定配额。
 
 当前已确认的本地配额策略只有每日上限 5000；`RemoteAlphaRepository` 的配置保留窗口只产生 `APPROXIMATE` `window_used` 观察值，不代表存在滚动上限或滚动剩余额度，也不得从每日 5000 推导 7 日 35000。
 
@@ -40,7 +40,7 @@ Multi-Simulation payload 必须包含 2–10 个 child；单个余数由 `Simula
 
 `research_api.simulate_multi_batch()` 保留原有的 `list[child_result]` 形状，但每个实际 Multi child 结果都附带 bounded `parent` projection：parent fingerprint、最终状态、progress URL、child 数量、exception class、failure kind、HTTP status（若 transport 明确知道）、remote status/diagnostic、bounded status path 和 guard action。该 projection 只存在于当前返回值，不写入 `ExecutionGuard`；`SUBMIT_UNKNOWN` 与已知 URL 的 `UNKNOWN` 仍分别保留原有 exactly-once 和同 URL 对账语义。
 
-Multi response 中每个 child 分别计入配额；因此 unresolved Multi parent 的 local `APPROXIMATE` estimate 按其实际 child Simulation 数量投影，一个 parent guard 不等于一次 Simulation。ExecutionGuard 只增加 bounded `simulation_count` 整数，不保存 child payload、expression、settings、结果或 child ID；缺失或非法的旧 metadata 按 1 fail closed，不能把 estimate 提升为 official quota。
+Multi response 中每个 child 分别计入配额；因此 unresolved Multi parent 的 local `APPROXIMATE` estimate 按其实际 child Simulation 数量投影，一个 parent guard 不等于一次 Simulation。ExecutionGuard 持久字段与隐私限制见根目录 [`AGENTS.md`](../AGENTS.md)；本地 estimate 不能提升为 official quota。
 
 未解决 guard 的近似每日/窗口贡献按持久 `created_at` 的 `America/New_York` 本地日投影；这是本地 POST 前时间代理，不是官方 BRAIN Simulation 时间戳。估算可分别暴露所有 active guard 的加权计数、当日/窗口 guard 贡献和未知时间贡献；`updated_at` 只表示 guard 状态维护，不得让同一未解决写入跨日漂移。缺失或非法时间戳保持保守的未知时间计入，且不改变 guard 的 exactly-once 生命周期；这些字段仍只形成 `APPROXIMATE` 估算，不能覆盖官方响应头。
 
@@ -61,7 +61,7 @@ Agent 使用 `list_datasets()`、`list_datafields()` 和有页数上限的
 
 仅观察登记：`operators`、`alpha_check`、`pnl`。这些接口没有被生产 client 自动调用；只有 capability probe 或脱敏 fixture 可以证明其当前可用性。
 
-Retry-After 支持秒数和 HTTP-date，统一由 `retry_after_seconds()` 解析，并拒绝负数、非有限值和畸形值。429 仍受全局 gate 与预算约束，Simulation POST 的未知结果仍进入 `SUBMIT_UNKNOWN`。
+Retry-After 支持秒数和 HTTP-date，统一由 `retry_after_seconds()` 解析，并拒绝负数、非有限值和畸形值。429 仍受全局 gate 与预算约束；未知 Simulation POST 的处理遵循根目录 [`AGENTS.md`](../AGENTS.md) 写入安全契约。
 
 ## 脱敏 fixtures
 

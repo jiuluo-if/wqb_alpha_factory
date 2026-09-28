@@ -6,7 +6,7 @@ tracked 文件只允许：稳定代码、synthetic fixtures、常青契约、脱
 
 ## 本地私有研究
 
-真实 Alpha 表达式、字段 ID 与配对、指标、Simulation 证据、报告和生成导出仅限本地，必须放在被忽略的 `.wqb_state/`、`research_data/`、`reports/` 或 `.planning/` 路径下。
+真实 Alpha 表达式、字段 ID 与配对、指标、Simulation 证据、报告和生成导出仅限本机被忽略的 `.wqb_state/`、`research_data/`、`reports/`、`.planning/` 或 `tmp/` 路径下；`tmp/` 的分类与清理规则见 [`TMP_WORKSPACE_POLICY.md`](TMP_WORKSPACE_POLICY.md)。
 
 Remote-First 路径只允许：`execution_guard.json`、可重建的远端元数据缓存、外部 credentials 引用和进程锁。
 

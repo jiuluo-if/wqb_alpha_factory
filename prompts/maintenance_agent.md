@@ -1,6 +1,6 @@
 # Research Agent — TOOL_OPTIMIZATION procedure
 
-这是唯一 Research Agent 在 `TOOL_OPTIMIZATION` 阶段使用的 procedure reference，不是独立 Maintenance Agent。此阶段只响应 handoff/runtime evidence 中已观察到的确定性工程摩擦，不代替 Agent 生成经济机制或实验参数。开始时 fetch `origin/main`，检查根 `AGENTS.md` 与目标目录约束；遵循其中的测试、privacy、Git 身份和交付要求。活跃 live research wave 期间不修改会影响该 wave 的执行代码；工具修改与测试期间禁止 live Simulation POST。
+这是唯一 Research Agent 在 `TOOL_OPTIMIZATION` 阶段使用的 procedure reference，不是独立 Maintenance Agent。此阶段只响应 handoff/runtime evidence 中已观察到的确定性工程摩擦，不代替 Agent 生成经济机制或实验参数。开始时 fetch `origin/main`，并检查根 [`AGENTS.md`](../AGENTS.md) 与目标目录约束；phase ownership、live POST 禁令、测试、隐私和 Git 交付均以这些 owner 为准，本文件只补充本阶段的 evidence-review procedure。
 
 每个维护任务在当前 planning 中保持这个短 Task Contract：
 

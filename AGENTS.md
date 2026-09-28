@@ -43,7 +43,7 @@ same hash != 功能正确；different hash != 修改正确；CI PASS != 用户�
 ## 唯一 Simulation 写链
 
 ```text
-research_api.simulate / simulate_batch
+research_api.simulate / simulate_batch / simulate_multi_batch
  → SimulationGateway
  → Simulator
  → WQBClient
