@@ -10,6 +10,8 @@ BRAIN 负责 Alpha 模拟证据。
 
 唯一公开研究面是 `wqb_agent.research_api`。Python 不维护研究生命周期、结果数据库、父子关系、优化状态或自动研究循环；AI 读取 BRAIN 实时证据后决定下一份 `SimulationSpec`。
 
+Agent 架构地图见 [`docs/ARCHITECTURE_AGENT.md`](docs/ARCHITECTURE_AGENT.md)；公开接口从 [`wqb_agent/research_api.py`](wqb_agent/research_api.py) 开始。
+
 ## 研究目标与平台机会
 
 目标是长期可持续 Alpha 产出，同时兼顾高质量、低冗余以及当前 BRAIN submission / checks / correlation / cost 约束和 Genius / Theme / competition / consultant 等实际平台机会。平台规则、资格、活动和报酬属于易变 live facts；Research Agent 每个 research wave 应按当前 BRAIN/account evidence 与实际可用工具刷新，不能从旧 tmp 快照或固定 Skill/Python 阈值推断。没有当前证据时标 `UNKNOWN`。活动机会不能替代机制证据，也不能覆盖 BRAIN hard checks、安全约束或长期稳健性；不得承诺收益。
@@ -27,7 +29,7 @@ RESEARCH → TOOL_OPTIMIZATION → RESEARCH
 
 阶段必须互斥：活跃 live research wave 中不得并行修改会影响该 wave 的执行代码；进入 `TOOL_OPTIMIZATION` 后停止所有 live Simulation POST，只运行离线/fake-client tests 和静态质量门。工具修改经测试、commit/PR/CI 验证并部署后，Agent 重新执行 `research_status()`，确认新代码 contract/readiness，再回到 RESEARCH。Simulation 唯一写链、ExecutionGuard/exact-once、隐私边界和人工 Alpha submission 不变。
 
-`tmp/research_handoff.json` 仍是本地匿名运行交接，不是 BRAIN truth 或研究数据库；可以承载少量当前 task/wave 的聚合工程摩擦计数和 safe reason codes，以便 Research Agent 判断是否需要 TOOL_OPTIMIZATION。不得写入私有研究内容，也不得由 Tool Optimization 阶段伪造或覆盖正在运行的 agent handoff。
+`tmp/research_handoff.json` 仍是本地匿名运行交接，不是 BRAIN truth 或研究数据库；可以承载少量当前 task/wave 的 readiness 摘要、工具清单、聚合工程摩擦计数和 safe reason codes，以便 Research Agent 判断是否需要 TOOL_OPTIMIZATION。不得写入私有研究内容，也不得由 Tool Optimization 阶段伪造或覆盖正在运行的 agent handoff。字段 owner、compact schema 和隐私细节见 [`docs/TMP_WORKSPACE_POLICY.md`](docs/TMP_WORKSPACE_POLICY.md)。
 
 ## 目标与证据
 
@@ -55,6 +57,8 @@ research_api.simulate / simulate_batch / simulate_multi_batch
 ## Gateway 与 ExecutionGuard
 
 Gateway 只负责：规范化有效 settings、基本请求 schema、live 字段/算子能力、执行指纹、精确去重、并发与配额、传输安全、提交、轮询和恢复。不得把研究判断变成执行前硬 gate。
+
+`SimulationGateway` 是唯一 Simulation 写入准入 owner。`research_status()` 必须返回只表达“是否允许新的 Simulation write”的 `write_readiness`、有界 `write_blockers`、pending 计数和 contract version；Agent 只消费该结果，不自行放宽或重算。状态只取 `READY`、`BLOCKED_BY_REMOTE_STATE`、`WAITING_FOR_CAPABILITY`、`UNKNOWN`；只有 `READY` 允许新 POST。任一未解决 guard、`SUBMIT_UNKNOWN`、官方 quota **已知耗尽**、write capability 不可用都 fail closed。官方 quota 只在成功 Simulation response 的 header 中出现，因此尚未观察到该事实时它保持 `UNKNOWN`，且不阻塞新的 Simulation write（否则任何新进程都无法发出第一个 POST）；`APPROXIMATE` estimate 永远不能把官方 quota `UNKNOWN` 提升为已知值或 `READY`。Startup status 只返回 pending summary；逐行诊断仅按需通过现有 READ_ONLY `research_api.get_pending_executions()` 获取。
 
 ExecutionGuard 是唯一远端写安全负责方，记录只允许指纹、`SUBMITTING/RUNNING/SUBMIT_UNKNOWN`、progress URL、时间戳、有界 `simulation_count`、`kind`（`SINGLE`/`MULTI_PARENT`/`MULTI_CHILD`）、MULTI_CHILD 的 `parent_fingerprint` 和可选远端 Alpha ID。`simulation_count` 只表示该未解决写入可能代表的 Simulation 数量，不保存 child payload 或结果；POST 前先持久化 `SUBMITTING`；进程异常后视为 `SUBMIT_UNKNOWN`，不得自动重 POST；已知 progress URL 只能轮询同一任务。exact-once 以单个 Simulation 为单位：Multi POST 前 parent 与每个 child 各自登记，重排、拆分、子集重试或 child 改走 Single 都不得再次 POST；恢复时 `MULTI_PARENT` 用 multi 轮询，child 跟随其 parent。
 

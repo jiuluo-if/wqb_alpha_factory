@@ -35,6 +35,7 @@ import random
 import threading
 import time
 from collections.abc import Mapping
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
@@ -246,6 +247,8 @@ def load_credentials(username_env="WQB_USERNAME", password_env="WQB_PASSWORD"):
 class WQBClient:
     """Thread-safe WQB API client."""
 
+    supports_read_only_budget = True
+
     def __init__(
         self,
         username=None,
@@ -342,6 +345,43 @@ class WQBClient:
     def _set_authenticated(self, value):
         self._local.authenticated = value
 
+    @contextmanager
+    def read_only_budget(self, timeout_sec):
+        """Bound nested read requests without changing normal write budgets."""
+        try:
+            budget = _finite_nonnegative(timeout_sec, 0.0)
+        except (TypeError, ValueError):
+            budget = 0.0
+        if not hasattr(self, "_local"):
+            self._local = threading.local()
+        previous = getattr(self._local, "read_only_deadline", None)
+        deadline = time.monotonic() + budget
+        if previous is not None:
+            deadline = min(deadline, previous)
+        self._local.read_only_deadline = deadline
+        try:
+            yield self
+        finally:
+            if previous is None:
+                try:
+                    del self._local.read_only_deadline
+                except AttributeError:
+                    pass
+            else:
+                self._local.read_only_deadline = previous
+
+    def _read_only_budget_remaining(self, context):
+        local = getattr(self, "_local", None)
+        deadline = getattr(local, "read_only_deadline", None)
+        if deadline is None:
+            return None
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise WQBTimeoutError(
+                f"{context} exceeded the bounded read-only status budget."
+            )
+        return remaining
+
     def _normalize_progress_url(self, progress_url):
         """Resolve and validate a progress URL before any network request."""
         return normalize_progress_url(
@@ -356,21 +396,37 @@ class WQBClient:
         transport_attempt = 0
         rate_limit_start = time.monotonic()
         while True:
-            self._wait_rate_limit_gate()
+            remaining = self._read_only_budget_remaining("Authentication")
+            if remaining is None:
+                self._wait_rate_limit_gate()
+            elif not self._wait_rate_limit_gate(max_wait=remaining):
+                raise WQBTimeoutError(
+                    "Authentication exceeded the bounded read-only status budget while waiting for Retry-After."
+                )
+            remaining = self._read_only_budget_remaining("Authentication")
+            timeout = 30 if remaining is None else max(0.001, min(30.0, remaining))
             try:
                 resp = self._session().post(
                     f"{self.base_url}/authentication",
                     auth=(self.username, self.password),
                     allow_redirects=False,
-                    timeout=30,
+                    timeout=timeout,
                 )
             except requests.exceptions.RequestException as exc:
+                remaining = self._read_only_budget_remaining("Authentication")
+                if remaining is not None:
+                    delay = self._backoff(transport_attempt)
+                    if delay >= remaining:
+                        time.sleep(max(0.0, remaining))
+                        raise WQBTimeoutError(
+                            "Authentication exceeded the bounded read-only status budget."
+                        ) from exc
                 if transport_attempt >= self.max_retries - 1:
                     raise WQBSimulationError(
                         f"Authentication network error after "
                         f"{self.max_retries} attempts: {exc}"
                     ) from exc
-                time.sleep(self._backoff(transport_attempt))
+                time.sleep(delay if remaining is not None else self._backoff(transport_attempt))
                 transport_attempt += 1
                 continue
             if resp.status_code in (200, 201, 301, 302, 303):
@@ -382,12 +438,19 @@ class WQBClient:
                     status_code=401,
                 )
             if resp.status_code == 429:
+                remaining = self._read_only_budget_remaining("Authentication")
                 if time.monotonic() - rate_limit_start >= 1800:
                     raise WQBRateLimitError(
                         "Authentication rate-limit budget exhausted; "
                         "server continued returning 429.", status_code=429,
                     )
                 self._register_rate_limit(resp)
+                if remaining is not None and self._retry_after_seconds(resp) >= remaining:
+                    time.sleep(max(0.0, remaining))
+                    raise WQBTimeoutError(
+                        "Authentication Retry-After exceeded the bounded read-only status budget.",
+                        status_code=429,
+                    )
                 continue
             else:
                 raise WQBSimulationError(
@@ -522,7 +585,13 @@ class WQBClient:
         transport_attempt = 0
         while True:
             remaining = max(0.0, rate_limit_budget_sec - (time.monotonic() - start))
-            if not self._wait_rate_limit_gate(max_wait=remaining):
+            read_remaining = self._read_only_budget_remaining(context)
+            wait_budget = remaining if read_remaining is None else min(remaining, read_remaining)
+            if not self._wait_rate_limit_gate(max_wait=wait_budget):
+                if read_remaining is not None and read_remaining <= remaining:
+                    raise WQBTimeoutError(
+                        f"{context} exceeded the bounded read-only status budget while waiting for Retry-After."
+                    )
                 error = f"{context} rate-limit budget exhausted while waiting for shared gate."
                 raise (WQBSubmitUnknownError(error) if ambiguous_write
                        else WQBRateLimitError(error))
@@ -531,15 +600,34 @@ class WQBClient:
             # client-wide gate.  Confirm again immediately before transport;
             # Simulation POSTs must not cross that second TOCTOU window.
             remaining = max(0.0, rate_limit_budget_sec - (time.monotonic() - start))
-            if not self._wait_rate_limit_gate(max_wait=remaining):
+            read_remaining = self._read_only_budget_remaining(context)
+            wait_budget = remaining if read_remaining is None else min(remaining, read_remaining)
+            if not self._wait_rate_limit_gate(max_wait=wait_budget):
+                if read_remaining is not None and read_remaining <= remaining:
+                    raise WQBTimeoutError(
+                        f"{context} exceeded the bounded read-only status budget before transport."
+                    )
                 error = f"{context} rate-limit budget exhausted before transport."
                 raise (WQBSubmitUnknownError(error) if ambiguous_write
                        else WQBRateLimitError(error))
+            read_remaining = self._read_only_budget_remaining(context)
+            request_timeout = timeout
+            if read_remaining is not None:
+                try:
+                    request_timeout = max(0.001, min(float(timeout), read_remaining))
+                except (TypeError, ValueError):
+                    request_timeout = max(0.001, min(60.0, read_remaining))
             try:
                 resp = self._session().request(
-                    method, url, params=params, json=json, headers=headers, timeout=timeout
+                    method, url, params=params, json=json, headers=headers,
+                    timeout=request_timeout,
                 )
             except requests.exceptions.Timeout as exc:
+                read_remaining = self._read_only_budget_remaining(context)
+                if read_remaining is not None:
+                    raise WQBTimeoutError(
+                        f"{context} timed out within the bounded read-only status budget."
+                    ) from exc
                 if ambiguous_write:
                     raise WQBSubmitUnknownError(
                         f"{context} timed out; backend acceptance is unknown."
@@ -552,6 +640,11 @@ class WQBClient:
                 transport_attempt += 1
                 continue
             except requests.exceptions.RequestException as exc:
+                read_remaining = self._read_only_budget_remaining(context)
+                if read_remaining is not None:
+                    raise WQBSimulationError(
+                        f"{context} failed within the bounded read-only status budget: {type(exc).__name__}"
+                    ) from exc
                 if ambiguous_write:
                     raise WQBSubmitUnknownError(
                         f"{context} network error; backend acceptance is unknown."
@@ -692,8 +785,10 @@ class WQBClient:
             # behind the legacy POST authentication exception.
             pass
         try:
+            remaining = self._read_only_budget_remaining("GET /authentication")
+            timeout = 30 if remaining is None else max(0.001, min(30.0, remaining))
             resp = self._session().request(
-                "GET", f"{self.base_url}/authentication", timeout=30
+                "GET", f"{self.base_url}/authentication", timeout=timeout
             )
         except requests.exceptions.RequestException as exc:
             raise WQBSimulationError(f"GET /authentication failed: {exc}") from exc

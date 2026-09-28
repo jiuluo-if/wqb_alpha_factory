@@ -283,6 +283,7 @@
       "id": "CS3_CANDIDATE_SUMMARY",
       "title": "Candidate inline contract with summary status",
       "CONTEXT_FILES": [
+        "AGENTS.md",
         "tests/fixtures/research_agent_eval/cold_start_candidate.md"
       ],
       "DISCOVERY_HINT": "旧续接备注（仅 DISCOVERY_HINT）: readiness=READY; pending_execution_count=0; 可以继续派发。",
@@ -405,6 +406,7 @@
       "id": "CS4_CANDIDATE_PENDING_DIAGNOSIS",
       "title": "Summary status loads pending details on demand",
       "CONTEXT_FILES": [
+        "AGENTS.md",
         "tests/fixtures/research_agent_eval/cold_start_candidate.md"
       ],
       "USEFUL_ACTION_TOOLS": [
@@ -505,6 +507,7 @@
       "id": "CS5_READY",
       "title": "READY remains READY",
       "CONTEXT_FILES": [
+        "AGENTS.md",
         "tests/fixtures/research_agent_eval/cold_start_candidate.md"
       ],
       "USEFUL_ACTION_TOOLS": [
@@ -589,7 +592,7 @@
     },
     {
       "id": "SK1_CURRENT_TWO_BATCHES",
-      "title": "Existing per-batch Skill read rule",
+      "title": "Progressive loading reuses the Skill across ordinary batches",
       "CONTEXT_FILES": [
         "AGENTS.md",
         "prompts/AGENTS.md",
@@ -615,11 +618,11 @@
       "EXPECTED_ACTION": {
         "required_calls": {
           "research_status": 1,
-          "read_workspace_reference": 2
+        "read_workspace_reference": 1
         },
         "max_calls": {
           "research_status": 1,
-          "read_workspace_reference": 2
+        "read_workspace_reference": 1
         },
         "max_total_tool_calls": 3,
         "expected_final_values": [
@@ -627,15 +630,14 @@
         ],
         "expected_write_count": 0,
         "expected_reference_reads": {
-          "skills/wqb-research/SKILL.md": 2
+        "skills/wqb-research/SKILL.md": 1
         },
         "max_reference_reads": {
-          "skills/wqb-research/SKILL.md": 2
+        "skills/wqb-research/SKILL.md": 1
         },
         "expected_tool_order": [
-          "research_status",
-          "read_workspace_reference",
-          "read_workspace_reference"
+        "research_status",
+        "read_workspace_reference"
         ]
       },
       "FORBIDDEN_ACTION": [
@@ -644,8 +646,8 @@
         "command_execution"
       ],
       "PASS_EVIDENCE": [
-        "current prompt's per-batch Skill loading rule is followed for both ordinary batches",
-        "the same Skill document is read twice",
+      "the new Research session reads the Skill once",
+      "the ordinary second batch reuses the loaded Skill",
         "no Simulation write"
       ],
       "USEFUL_ACTION_TOOLS": [
@@ -656,6 +658,7 @@
       "id": "SK2_CANDIDATE_TRIGGERED_LOADING",
       "title": "Candidate trigger-based Skill loading sequence",
       "CONTEXT_FILES": [
+        "AGENTS.md",
         "tests/fixtures/research_agent_eval/cold_start_candidate.md"
       ],
       "INPUT": "模拟同一研究会话的四个阶段并严格按顺序处理：1) 新 Research session 的普通 batch；2) 同一 contract 的第二个普通 batch，没有新方法；3) 需要 paper/template mapping 的 batch；4) 当前研究 contract 发生变化后、任何下一项 Research action 之前重新握手。按需调用 read_workspace_reference 读取 core Skill/reference。只规划，不提交 Simulation。",

@@ -14,7 +14,7 @@
 
 当前项目纳入 production protocol facts 的接口限于 `POST /authentication`、`GET /authentication`、`data_sets`、`data_fields`、`OPTIONS /simulations`、`POST /simulations`、已知 progress URL、`users/self/alphas`、`GET /alphas/{id}`、`GET /alphas/{id}/recordsets`、`GET /alphas/{id}/recordsets/{name}` 和 `GET /users/{userid}/activities/diversity`；`/operators` 等仍按现有 provenance 处理。
 
-成功的 `POST /simulations` response 中，`X-Ratelimit-Limit`、`X-Ratelimit-Remaining` 和 `X-Ratelimit-Reset` 是 BRAIN 提供的官方 Simulation quota observation；Multi response 中每个 child 分别计入配额，重复提交一个已经存在的 Alpha 也仍然计数。`/users/self/alphas` 的 Alpha 创建日期视图可能按 `alpha_id` 去重，不能作为精确 Simulation counter。当前 client 只在内存保留最近一次成功 response 的 bounded header projection；未观察到这些 headers 时，官方配额必须保持 `UNKNOWN`。
+成功的 `POST /simulations` response 中，`X-Ratelimit-Limit`、`X-Ratelimit-Remaining` 和 `X-Ratelimit-Reset` 是 BRAIN 提供的官方 Simulation quota observation；Multi response 中每个 child 分别计入配额，重复提交一个已经存在的 Alpha 也仍然计数。`/users/self/alphas` 的 Alpha 创建日期视图可能按 `alpha_id` 去重，不能作为精确 Simulation counter。当前 client 只在内存保留最近一次成功 response 的 bounded header projection；未观察到这些 headers 时，官方配额必须保持 `UNKNOWN`。由于这些 header 只出现在成功的 Simulation response 上，尚无官方观察的 `UNKNOWN` 不阻塞新的 Simulation write（否则任何新进程都无法发出第一个 POST）；只有观察到 `remaining == 0` 的官方耗尽才按 fail closed 处理，且本地 `APPROXIMATE` estimate 永远不能替代官方观察。
 
 `X-Ratelimit-Reset` 只投影为有界的原始数值 `reset` header 值；无独立官方证据时，不推断其时间单位或时间基准。
 
@@ -33,6 +33,8 @@
 `GET /authentication` 只投影当前 live 会话的 `authenticated`、`user_id`、`token_expiry` 和 `permissions`，不保存 JWT、cookie 或权限状态。`MULTI_SIMULATION` 权限是 Multi-Simulation 的账户能力前置条件；没有该权限时，客户端不得用 POST 探测或静默退化为大量 Single。
 
 `OPTIONS /simulations` 的 `actions.POST` 是 Simulation settings 的平台事实源。客户端只投影 Simulation 类型选项、实际使用的 settings 允许取值/类型和必填字段；未知 vendor 字段忽略。当前 writer 的支持类型就是已完整建模并验证的 `REGULAR` 与 `REGION_AGNOSTIC` 白名单；平台广告本身不是写入契约，`SUPER` 仍不在其中。SUPER 只有在独立 `combo`/`selection` 请求 schema 实现并验证后才能进入生产 writer。`MULTI` 不是 Simulation 类型，而是由 `MULTI_SIMULATION` 权限授权的派发模式；当前 Multi child 仍只使用 REGULAR schema。OPTIONS 不可用时只能返回 `UNKNOWN`，并以最低本地 shape 校验继续提供 `LOCAL_ONLY` 结果，不能宣称 live 校验已通过。
+
+Alpha/PA 或其他 execution surface 不能从相似名称、旧文档或账户历史推断可用。只有当前 tool inventory、live status 和当前支持的合法 validation/write contract 一起提供有效契约时才可使用；否则保留 `CAPABILITY_MISSING`/`UNKNOWN`，不尝试探测写接口。
 
 Simulation mode availability 的阻塞原因按 `authentication → platform capability → Multi-Simulation permission` 投影；该只读投影不改变 Simulation 写入契约。
 

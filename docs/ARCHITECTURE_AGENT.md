@@ -12,9 +12,9 @@ BRAIN 负责 Alpha 模拟证据。
 
 `wqb_agent.research_api` 是唯一 Agent-facing facade，提供原始 dataset/datafield 列表、operator capability、可选 template/probe、Simulation、remote Alpha evidence、dedupe、group 和 color 工具。字段/机制筛选由 Agent 负责；执行前只有确定性的 live schema 与 field/operator capability 校验。
 
-`research_status()` 是 Agent 的唯一起步调用：它只读地聚合 live capability、simulation modes、带 freshness 的 quota、pending executions、cache freshness 和 `research_contract_version`，不给出任何研究建议。`research_tool_manifest()` 默认只披露 canonical Agent Core；direct facade 的低频能力需显式请求 `profile="full"`。
+`research_status()` 是 Agent 的唯一起步调用：它返回 bounded `write_readiness` / `write_blockers`、capability/authentication summary、quota 与 cache freshness、pending 计数和 `research_contract_version`，不给出研究建议，也不携带 pending rows。准入状态及其判定规则以根目录 [`AGENTS.md`](../AGENTS.md) 为唯一 owner；逐行诊断可按需调用现有 READ_ONLY `get_pending_executions()`。`research_tool_manifest()` 默认披露 canonical Agent Core；direct facade 的低频能力需显式请求 `profile="full"`。
 
-MCP stdio 入口有两个模式：`alpha-factory-mcp` 仅提供 READ_ONLY tools；显式 opt-in 的 `alpha-factory-research-mcp` 提供 canonical Agent Core，Simulation writes 仍只能经 `research_api → SimulationGateway → Simulator → WQBClient → BRAIN`。它们是同一 facade 的 transport，不创建第二研究语义或 BRAIN 访问负责方；详见 [`MCP_READ_ONLY.md`](MCP_READ_ONLY.md)。
+MCP stdio 入口有两个模式：`alpha-factory-mcp` 仅提供 READ_ONLY tools；显式 opt-in 的 `alpha-factory-research-mcp` 提供 canonical Agent Core 与按需 pending-detail READ_ONLY tool，Simulation writes 仍只能经 `research_api → SimulationGateway → Simulator → WQBClient → BRAIN`。它们是同一 facade 的 transport，不创建第二研究语义或 BRAIN 访问负责方；详见 [`MCP_READ_ONLY.md`](MCP_READ_ONLY.md)。
 
 ## 唯一 Simulation 写链
 

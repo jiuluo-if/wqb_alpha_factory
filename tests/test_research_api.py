@@ -104,6 +104,7 @@ class TestResearchApi(unittest.TestCase):
             "get_operator_reference", "validate_simulation_spec",
             "simulate_batch", "simulate_multi_batch", "get_alpha_evidence",
             "reconcile_execution", "get_alpha_prod_correlation",
+            "get_pending_executions",
         })
         dangerous = {"create_template", "sync_alpha_colors", "alpha_submission"}
         self.assertTrue(dangerous <= full_names)
@@ -125,12 +126,13 @@ class TestResearchApi(unittest.TestCase):
             result["research_contract_version"],
             research_api.RESEARCH_CONTRACT_VERSION,
         )
-        for key in ("capability", "simulation_modes", "quota",
-                    "pending_executions", "cache"):
+        for key in ("capability", "simulation_modes", "quota", "cache",
+                    "write_readiness", "write_blockers"):
             self.assertIn(key, result)
-        self.assertEqual(result["pending_executions"], [])
+        self.assertNotIn("pending_executions", result)
         self.assertEqual(result["pending_execution_count"], 0)
         self.assertEqual(result["capability"]["status"], "UNKNOWN")
+        self.assertEqual(result["write_readiness"], "WAITING_FOR_CAPABILITY")
         # Without a live client the mode report must not claim a live source.
         self.assertTrue(result["simulation_modes"])
         for mode in result["simulation_modes"].values():
@@ -152,14 +154,18 @@ class TestResearchApi(unittest.TestCase):
                 )
 
             result = research_api.research_status(state_dir=tmp)
+            pending_detail_count = len(
+                research_api.get_pending_executions(state_dir=tmp)["entries"]
+            )
 
         self.assertEqual(result["pending_execution_count"], 1)
         self.assertEqual(result["pending_simulation_count"], 2)
         self.assertEqual(result["pending_multi_child_count"], 2)
-        # The child rows stay visible so an Agent can still match its own specs.
-        self.assertEqual(len(result["pending_executions"]), 3)
+        self.assertNotIn("pending_executions", result)
+        self.assertEqual(pending_detail_count, 3)
+        self.assertEqual(result["write_readiness"], "BLOCKED_BY_REMOTE_STATE")
 
-    def test_research_status_reports_live_sections_with_a_client(self):
+    def test_research_status_keeps_unobserved_official_quota_non_blocking(self):
         client = mock.Mock()
         client.get_operator_capability.return_value = {
             "valid": True, "source": "BRAIN_LIVE_ONLY",
@@ -169,7 +175,51 @@ class TestResearchApi(unittest.TestCase):
             "authenticated": True, "permissions": ["MULTI_SIMULATION"],
         }
         client.get_simulation_capability.return_value = {
+            "status": "AVAILABLE", "capability_status": "AVAILABLE",
+            "simulation_type_choices": ["REGULAR"],
+        }
+        client.get_all_user_alphas.return_value = []
+        client.get_simulation_quota_observation.return_value = {
+            "status": "UNKNOWN", "source": "BRAIN_SIMULATION_HEADERS",
+            "limit": None, "remaining": None, "reset": None,
+        }
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            research_api, "simulation_quota", return_value={
+                "status": "APPROXIMATE",
+                "source": "ESTIMATE_REMOTE_ALPHA_REPOSITORY+EXECUTION_GUARD",
+                "official": {
+                    "status": "UNKNOWN", "source": "BRAIN_SIMULATION_HEADERS",
+                    "limit": None, "remaining": None, "reset": None,
+                },
+                "estimate": {"today_remaining": 4999, "approximate": True},
+            },
+        ):
+            result = research_api.research_status(client=client, state_dir=tmp)
+        self.assertEqual(result["write_readiness"], "READY")
+        self.assertNotIn("OFFICIAL_QUOTA_UNKNOWN", result["write_blockers"])
+        self.assertNotIn("OFFICIAL_QUOTA_EXHAUSTED", result["write_blockers"])
+        self.assertEqual(result["quota"]["status"], "APPROXIMATE")
+        self.assertNotIn("pending_executions", result)
+
+    def test_research_status_reports_live_sections_with_a_client(self):
+        client = mock.Mock()
+        client.supports_read_only_budget = True
+        read_budget = mock.MagicMock()
+        client.read_only_budget.return_value = read_budget
+        client.get_operator_capability.return_value = {
+            "valid": True, "source": "BRAIN_LIVE_ONLY",
+            "operators": ["rank"], "status": "AVAILABLE",
+        }
+        client.get_authentication_status.return_value = {
+            "authenticated": True, "permissions": ["MULTI_SIMULATION"],
+        }
+        client.get_simulation_capability.return_value = {
             "status": "AVAILABLE", "simulation_type_choices": ["REGULAR"],
+        }
+        client.get_simulation_quota_observation.return_value = {
+            "status": "AVAILABLE", "evidence_status": "AVAILABLE",
+            "source": "BRAIN_SIMULATION_HEADERS", "limit": 100,
+            "remaining": 25, "reset": 1,
         }
         client.get_all_user_alphas.return_value = []
 
@@ -183,10 +233,21 @@ class TestResearchApi(unittest.TestCase):
         )
         self.assertEqual(result["simulation_modes"]["multi"]["status"], "AVAILABLE")
         self.assertIn("freshness", result["cache"])
+        self.assertEqual(result["write_readiness"], "READY")
+        self.assertEqual(result["write_blockers"], [])
+        self.assertNotIn("pending_executions", result)
+        client.get_all_user_alphas.assert_not_called()
+        client.read_only_budget.assert_called_once_with(
+            research_api.RESEARCH_STATUS_TIMEOUT_SEC
+        )
+        read_budget.__enter__.assert_called_once()
+        client.get_authentication_status.assert_called_once_with()
+        client.get_simulation_capability.assert_called_once_with()
+        client.get_operator_capability.assert_called_once_with()
 
     def test_core_manifest_is_a_small_startup_surface(self):
         core = research_api.research_tool_manifest()
-        self.assertEqual(len(core), 10)
+        self.assertEqual(len(core), 11)
         self.assertEqual(core[0]["name"], "research_status")
 
     def test_generated_probe_api_requires_agent_selected_raw_inputs(self):

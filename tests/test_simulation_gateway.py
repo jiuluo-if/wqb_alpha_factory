@@ -28,13 +28,38 @@ from wqb_agent.simulation_gateway import (
     ExecutionGuard,
     SimulationGateway,
     SimulationSpec,
+    classify_write_readiness,
 )
 
 
 class FakeGatewayClient:
-    def __init__(self, *, unknown=False):
+    def __init__(self, *, unknown=False, quota_unknown=False, quota_exhausted=False):
         self.unknown = unknown
+        self.quota_unknown = quota_unknown
+        self.quota_exhausted = quota_exhausted
         self.submissions = []
+
+    def get_simulation_quota_observation(self):
+        if self.quota_unknown:
+            return {
+                "status": "UNKNOWN", "source": "BRAIN_SIMULATION_HEADERS",
+                "limit": None, "remaining": None, "reset": None,
+            }
+        if self.quota_exhausted:
+            return {
+                "status": "AVAILABLE", "source": "BRAIN_SIMULATION_HEADERS",
+                "limit": 100, "remaining": 0, "reset": 1,
+            }
+        return {
+            "status": "AVAILABLE", "source": "BRAIN_SIMULATION_HEADERS",
+            "limit": 100, "remaining": 50, "reset": 1,
+        }
+
+    def get_operator_capability(self):
+        return {
+            "valid": True, "status": "AVAILABLE", "source": "BRAIN_LIVE_ONLY",
+            "operators": ["rank"],
+        }
 
     def submit_simulation(self, expression, settings, **kwargs):
         self.submissions.append((expression, settings, kwargs))
@@ -68,6 +93,146 @@ class FakeGatewayClient:
         return {"status": "AVAILABLE", "capability_status": "AVAILABLE",
                 "simulation_type_choices": ["REGULAR", "SUPER"],
                 "settings": {}, "required_fields": [], "required_settings": []}
+
+
+class UnauthenticatedGatewayClient(FakeGatewayClient):
+    def get_authentication_status(self):
+        return {"authenticated": False, "permissions": []}
+
+
+class TestWriteReadiness(unittest.TestCase):
+    def _facts(self, **overrides):
+        facts = {
+            "pending_entries": [],
+            "official_quota": {
+                "status": "AVAILABLE", "source": "BRAIN_SIMULATION_HEADERS",
+                "limit": 100, "remaining": 25, "reset": 1,
+            },
+            "simulation_capability": {
+                "status": "AVAILABLE", "capability_status": "AVAILABLE",
+                "source": "BRAIN_LIVE", "simulation_type_choices": ["REGULAR"],
+            },
+            "operator_capability": {
+                "valid": True, "status": "AVAILABLE", "source": "BRAIN_LIVE_ONLY",
+                "operators": ["rank"],
+            },
+            "authentication": {"authenticated": True},
+            "execution_state_known": True,
+            "client_available": True,
+        }
+        facts.update(overrides)
+        return facts
+
+    def test_write_readiness_is_ready_only_with_official_quota_and_live_capability(self):
+        result = classify_write_readiness(**self._facts())
+        self.assertEqual(result, {"write_readiness": "READY", "write_blockers": []})
+
+    def test_write_readiness_keeps_unobserved_official_quota_non_blocking(self):
+        # BRAIN only exposes the official quota on a successful POST response,
+        # so a cold start has no official observation yet. Treating that as a
+        # blocker would make the first write impossible forever.
+        result = classify_write_readiness(**self._facts(
+            pending_entries=[{"status": "SUBMIT_UNKNOWN", "kind": "SINGLE"}],
+            official_quota={"status": "UNKNOWN", "source": "BRAIN_SIMULATION_HEADERS"},
+        ))
+        self.assertEqual(result["write_readiness"], "BLOCKED_BY_REMOTE_STATE")
+        self.assertEqual(result["write_blockers"], [
+            "UNRESOLVED_EXECUTIONS", "SUBMIT_UNKNOWN_PRESENT",
+        ])
+
+    def test_write_readiness_blocks_observed_official_quota_exhaustion(self):
+        result = classify_write_readiness(**self._facts(
+            official_quota={
+                "status": "AVAILABLE", "source": "BRAIN_SIMULATION_HEADERS",
+                "limit": 100, "remaining": 0, "reset": 1,
+            },
+        ))
+        self.assertEqual(result["write_readiness"], "BLOCKED_BY_REMOTE_STATE")
+        self.assertEqual(result["write_blockers"], ["OFFICIAL_QUOTA_EXHAUSTED"])
+
+    def test_write_readiness_ignores_approximate_quota_estimate(self):
+        result = classify_write_readiness(**self._facts(
+            official_quota={
+                "status": "AVAILABLE",
+                "source": "ESTIMATE_REMOTE_ALPHA_REPOSITORY+EXECUTION_GUARD",
+                "limit": 100, "remaining": 0, "reset": 1,
+            },
+        ))
+        self.assertEqual(result, {"write_readiness": "READY", "write_blockers": []})
+
+    def test_write_readiness_preserves_waiting_when_no_live_client_exists(self):
+        result = classify_write_readiness(**self._facts(
+            client_available=False,
+            authentication=None,
+            official_quota={"status": "UNKNOWN", "source": "BRAIN_SIMULATION_HEADERS"},
+            simulation_capability=None,
+            operator_capability=None,
+        ))
+        self.assertEqual(result["write_readiness"], "WAITING_FOR_CAPABILITY")
+        self.assertIn("AUTHENTICATION_UNKNOWN", result["write_blockers"])
+        self.assertNotIn("OFFICIAL_QUOTA_UNKNOWN", result["write_blockers"])
+
+    def test_write_readiness_counts_multi_child_as_unresolved_state(self):
+        result = classify_write_readiness(**self._facts(
+            pending_entries=[{"status": "RUNNING", "kind": "MULTI_CHILD"}],
+        ))
+        self.assertEqual(result["write_readiness"], "BLOCKED_BY_REMOTE_STATE")
+        self.assertIn("UNRESOLVED_EXECUTIONS", result["write_blockers"])
+
+    def test_write_readiness_waits_for_missing_capability_and_unknowns_broken_guard(self):
+        waiting = classify_write_readiness(**self._facts(
+            client_available=False,
+            authentication=None,
+            simulation_capability=None,
+            operator_capability=None,
+        ))
+        self.assertEqual(waiting["write_readiness"], "WAITING_FOR_CAPABILITY")
+        self.assertIn("SIMULATION_CAPABILITY_UNKNOWN", waiting["write_blockers"])
+        unknown = classify_write_readiness(**self._facts(execution_state_known=False))
+        self.assertEqual(unknown["write_readiness"], "UNKNOWN")
+        self.assertIn("EXECUTION_STATE_UNKNOWN", unknown["write_blockers"])
+
+    def test_gateway_blocks_new_write_when_an_unresolved_guard_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeGatewayClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            gateway.guard.register(
+                "another-unresolved-fingerprint", status="SUBMIT_UNKNOWN",
+                simulation_count=1, kind=ExecutionGuard.SINGLE,
+            )
+            result = gateway.simulate_batch([SimulationSpec("rank(close)")])[0]
+        self.assertEqual(result["status"], "BLOCKED_BY_REMOTE_STATE")
+        self.assertEqual(result["reason_code"], "UNRESOLVED_EXECUTIONS")
+        self.assertEqual(client.submissions, [])
+
+    def test_gateway_allows_new_write_when_official_quota_is_unobserved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeGatewayClient(quota_unknown=True)
+            result = SimulationGateway(client, state_dir=tmp).simulate_batch([
+                SimulationSpec("rank(close)"),
+            ])[0]
+        self.assertEqual(result["status"], "DONE")
+        self.assertEqual(len(client.submissions), 1)
+
+    def test_gateway_blocks_new_write_when_official_quota_is_exhausted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeGatewayClient(quota_exhausted=True)
+            result = SimulationGateway(client, state_dir=tmp).simulate_batch([
+                SimulationSpec("rank(close)"),
+            ])[0]
+        self.assertEqual(result["status"], "BLOCKED_BY_REMOTE_STATE")
+        self.assertEqual(result["reason_code"], "OFFICIAL_QUOTA_EXHAUSTED")
+        self.assertEqual(client.submissions, [])
+
+    def test_gateway_blocks_when_current_authentication_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = UnauthenticatedGatewayClient()
+            result = SimulationGateway(client, state_dir=tmp).simulate(
+                SimulationSpec("rank(close)")
+            )
+        self.assertEqual(result["status"], "BLOCKED_BY_REMOTE_STATE")
+        self.assertEqual(result["reason_code"], "AUTHENTICATION_UNAVAILABLE")
+        self.assertEqual(client.submissions, [])
 
 
 class _EmptyQuotaRepository:
@@ -814,11 +979,11 @@ class TestSimulationGateway(unittest.TestCase):
             client = UnavailableCapabilityGatewayClient()
             gateway = SimulationGateway(client, state_dir=tmp)
 
-            with self.assertRaisesRegex(ValueError, "OPERATOR_CAPABILITY_UNAVAILABLE"):
-                gateway.simulate_batch([
-                    SimulationSpec("rank(close)", {"delay": 1}),
-                ])
-
+            result = gateway.simulate_batch([
+                SimulationSpec("rank(close)", {"delay": 1}),
+            ])[0]
+            self.assertEqual(result["status"], "WAITING_FOR_CAPABILITY")
+            self.assertEqual(result["reason_code"], "OPERATOR_CAPABILITY_UNKNOWN")
             self.assertEqual(client.submissions, [])
 
     def test_public_research_api_simulate_uses_gateway_without_agent_state(self):
@@ -1337,9 +1502,11 @@ class TestSimulationGateway(unittest.TestCase):
 
             self.assertEqual(results[0]["status"], "SUBMIT_UNKNOWN")
             self.assertEqual(results[0]["guard_action"], "EXISTING_GUARD")
-            self.assertEqual([item["status"] for item in results[1:]], ["DONE", "DONE"])
-            self.assertEqual(len(multi_client.multi_submissions), 1)
-            self.assertEqual(len(multi_client.multi_submissions[0][0]), 2)
+            self.assertEqual(
+                [item["status"] for item in results[1:]],
+                ["BLOCKED_BY_REMOTE_STATE", "BLOCKED_BY_REMOTE_STATE"],
+            )
+            self.assertEqual(multi_client.multi_submissions, [])
 
     def test_multi_parent_recovers_with_multi_polling_from_persisted_kind(self):
         class ProgressOnlyMultiClient(MultiGatewayClient):
@@ -1479,9 +1646,11 @@ class TestSimulationGateway(unittest.TestCase):
 
             self.assertEqual(results[0]["status"], "SUBMIT_UNKNOWN")
             self.assertEqual(results[0]["guard_action"], "EXISTING_GUARD")
-            self.assertEqual([item["status"] for item in results[1:]], ["DONE", "DONE"])
-            self.assertEqual(len(client.multi_submissions), 1)
-            self.assertEqual(len(client.multi_submissions[0][0]), 2)
+            self.assertEqual(
+                [item["status"] for item in results[1:]],
+                ["BLOCKED_BY_REMOTE_STATE", "BLOCKED_BY_REMOTE_STATE"],
+            )
+            self.assertEqual(client.multi_submissions, [])
 
     def test_timed_out_multi_parent_recovers_through_persisted_kind(self):
         with tempfile.TemporaryDirectory() as tmp:

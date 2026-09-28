@@ -8,6 +8,52 @@
 
 `tmp/knowledge/` 是受限的本机知识层，只放脱敏后的可复用经验、来源索引和维护规则；不放实时 Alpha/Simulation 结果、完整研究表达式、候选 ID 或凭据。它不属于 cache，不按普通临时文件的年龄清理；改写或删除前先检查私有 memory note 与其他文档的引用。
 
+## Research runtime handoff
+
+`tmp/research_handoff.json` 是 Research Agent 的单份、本机、gitignored 的运行交接；它是 `DISCOVERY_HINT`，不是 BRAIN truth、Guard 副本或研究数据库。fresh `research_status()`、当前 ExecutionGuard 结果和 live BRAIN evidence 始终优先。此文件只在新会话完成 readiness handshake 后或自然 wave/batch 边界由 Research Agent 覆盖；`TOOL_OPTIMIZATION` 和 Maintenance procedure 只读，不改写正在运行的 handoff。
+
+字段 owner 在本文档。Writer 使用以下 compact shape；未观测值用 `null`、`UNKNOWN` 或省略，不得把 unknown 记为 0。Reader 忽略未知的旧字段，不据此否决整个 hint；下一次受控 handoff 可覆盖回 compact shape。
+
+```json
+{
+  "schema_version": 1,
+  "updated_at": "ISO-8601 timestamp",
+  "research_code_sha": null,
+  "research_contract": null,
+  "tool_inventory": [],
+  "readiness": "UNKNOWN",
+  "capability_blockers": [],
+  "family_label": "UNKNOWN",
+  "related_trial_count_lower_bound": "UNKNOWN",
+  "count_scope": "UNKNOWN",
+  "batches_observed": 0,
+  "candidates_observed": 0,
+  "status_counts": {
+    "DONE": null,
+    "FAILED": null,
+    "EXACT_DUPLICATE": null,
+    "SUBMIT_UNKNOWN": null,
+    "NOT_DISPATCHED": null,
+    "UNKNOWN": null
+  },
+  "pending_execution_count": null,
+  "pending_simulation_count": null,
+  "pending_multi_child_count": null,
+  "tool_friction": {
+    "invalid_spec_failures": null,
+    "deterministic_failure_codes": null,
+    "batch_execution_failures": null,
+    "evidence_retrieval_failures": null,
+    "evidence_retrieval_pending_count": null,
+    "repeated_manual_workaround_count": null
+  }
+}
+```
+
+`readiness` 只能取 `READY`、`BLOCKED_BY_REMOTE_STATE`、`WAITING_FOR_CAPABILITY` 或 `UNKNOWN`，并记录最近一次成功 status observation；它不能授权 write。只要当前观测到 `pending_execution_count > 0` 或 `SUBMIT_UNKNOWN`，handoff readiness 必须为 `BLOCKED_BY_REMOTE_STATE`；fresh `research_status().write_readiness` 仍是当前写入准入 owner。`status_counts` 只表示当前已观察到的 task/wave；值必须是非负整数下界，无法可靠观测时写 `null` 或省略，不能猜 0。`tool_inventory` 和 friction counts 也只限当前 task/wave 的有界观察。`family_label` 只能是短分类；`count_scope` 只能是 `CURRENT_WORKING_SET`、`CURRENT_TASK`、`HANDOFF_CHAIN` 或 `UNKNOWN`。reason code 只记录有限、稳定且脱敏的代码，不记录自由文本诊断。
+
+不得写入 Alpha ID、field ID、expression、私有 dataset 配对、paper payload、metrics/PnL、完整结果、credentials/cookies/tokens、progress URL 或自由文本诊断；不新增 database、telemetry、watcher 或 scheduler。若 Agent 未在当前上下文读取上一份 handoff，不沿 `HANDOFF_CHAIN` 累加旧计数。详细研究 continuation 不属于本 handoff。
+
 ## 一级分类与平铺约定
 
 `tmp/` 的目标布局是在根层保留 `README.md` 和按性质分类的一级目录。分类目录内不创建 task 子目录或其他嵌套目录；任务日期和 task-id 写入文件名。每次清理前通过本地 inventory 确认实际文件位置。当前分类如下：

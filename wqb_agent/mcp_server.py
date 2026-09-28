@@ -195,6 +195,19 @@ def _invalid_result(*, owner: str, source: str = "NOT_READ", access_mode: str = 
     }
 
 
+def _pending_guard_payload(api, *, state_dir, config):
+    result = api.get_pending_executions(state_dir=state_dir, config=config)
+    if not isinstance(result, Mapping) or not isinstance(result.get("entries"), list):
+        raise ValueError("EXECUTION_STATE_UNAVAILABLE")
+    return {
+        "source": "LOCAL_EXECUTION_GUARD",
+        "status": "AVAILABLE",
+        "evidence_status": "AVAILABLE",
+        "fetched_at": None,
+        "entries": result["entries"],
+    }
+
+
 def build_server(*, api=research_api, client=None, config=None, state_dir=None):
     """Build an MCP server containing only bounded READ_ONLY facade tools."""
     try:
@@ -313,18 +326,8 @@ def build_server(*, api=research_api, client=None, config=None, state_dir=None):
     @server.tool(annotations=local_read)
     def get_pending_executions() -> dict[str, Any]:
         """[READ_ONLY] Read bounded unresolved ExecutionGuard summaries from local state; never resumes or edits them."""
-        def read_guard():
-            result = api.get_pending_executions(state_dir=state_dir, config=config)
-            return {
-                "source": "LOCAL_EXECUTION_GUARD",
-                "status": "AVAILABLE",
-                "evidence_status": "AVAILABLE",
-                "fetched_at": None,
-                "entries": result.get("entries", []),
-            }
-
         return wrap(
-            read_guard,
+            lambda: _pending_guard_payload(api, state_dir=state_dir, config=config),
             owner="research_api.get_pending_executions",
             failure_source="LOCAL_EXECUTION_GUARD",
         )
@@ -397,6 +400,7 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
         ),
     )
     remote_read = ToolAnnotations(readOnlyHint=True, openWorldHint=True)
+    local_read = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
     simulation_write = ToolAnnotations(
         readOnlyHint=False,
         destructiveHint=False,
@@ -521,6 +525,20 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
     def reconcile_execution(fingerprint: str) -> dict[str, Any]:
         """[READ_ONLY] Reconcile one existing guard; never submit again."""
         return read_facade("reconcile_execution", fingerprint, state_dir=state_dir)
+
+    @server.tool(annotations=local_read)
+    def get_pending_executions() -> dict[str, Any]:
+        """[READ_ONLY] Inspect unresolved ExecutionGuard rows only when diagnosis needs row detail."""
+        try:
+            payload = _pending_guard_payload(
+                api, state_dir=state_dir, config=config
+            )
+        except Exception as exc:  # Do not expose paths or raw local-state errors.
+            return _failed_result(
+                exc, owner="research_api.get_pending_executions",
+                source="LOCAL_EXECUTION_GUARD",
+            )
+        return _envelope(payload, owner="research_api.get_pending_executions")
 
     return server
 

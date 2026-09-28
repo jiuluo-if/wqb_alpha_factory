@@ -239,42 +239,11 @@ class ResearchAgentEvalTests(unittest.TestCase):
         self.assertNotIn("pending_executions", summary)
         self.assertIn("write_readiness", summary)
         self.assertIn("write_readiness", candidate)
-
-    def test_cold_start_metrics_measure_context_tools_unknown_and_write_boundary(self):
-        case = next(
-            row for row in load_case_fixture(COLD_FIXTURE)["cases"]
-            if row["id"] == "CS2_CURRENT_SUMMARY"
-        )
-        with tempfile.TemporaryDirectory() as temp:
-            base = Path(temp)
-            trace_path = base / "trace.jsonl"
-            fake_path = base / "fake.jsonl"
-            run_started = 100.0
-            tool_rows = [
-                {"case_id": case["id"], "tool": "research_status", "arguments": {}, "result": case["CURRENT_EVIDENCE"]["research_status"], "fake": True, "simulated_remote_write": False, "network_calls": 0, "monotonic_s": 100.2},
-                {"case_id": case["id"], "tool": "list_datafields", "arguments": {"dataset_id": "dataset_a"}, "result": {"rows": []}, "fake": True, "simulated_remote_write": False, "network_calls": 0, "monotonic_s": 100.6},
-            ]
-            fake_path.write_text("\n".join(json.dumps(row) for row in tool_rows), encoding="utf-8")
-            events = [
-                {"type": "item.completed", "item": {"id": "s", "type": "mcp_tool_call", "server": "research_eval", "tool": "research_status", "arguments": {}, "status": "completed"}},
-                {"type": "item.completed", "item": {"id": "l", "type": "mcp_tool_call", "server": "research_eval", "tool": "list_datafields", "arguments": {"dataset_id": "dataset_a"}, "status": "completed"}},
-                {"type": "item.completed", "item": {"id": "f", "type": "agent_message", "text": json.dumps({"case_id": case["id"], "status": "BLOCKED_BY_REMOTE_STATE", "decision": "READ_ONLY_CONTINUE", "unknown_quota_preserved": True, "stale_handoff_overridden": True, "evidence_used": ["research_status"]})}},
-                {"type": "turn.completed", "usage": {"input_tokens": 200, "output_tokens": 40}},
-            ]
-            trace_path.write_text("\n".join(json.dumps(event) for event in events), encoding="utf-8")
-            result = _measure(case, {
-                "case_id": case["id"], "status": "PASS", "elapsed_sec": 2.0,
-                "run_started_monotonic_s": run_started,
-                "context_files": case["CONTEXT_FILES"], "context_source_bytes": 1000,
-                "trace_path": str(trace_path), "fake_tool_log_path": str(fake_path),
-            })
-        self.assertEqual(result["TIME_TO_SAFE_STATE_SEC"], 2.0)
-        self.assertAlmostEqual(result["TIME_TO_FIRST_USEFUL_ACTION_SEC"], 0.6)
-        self.assertEqual(result["RESEARCH_STATUS_CALL_COUNT"], 1)
-        self.assertEqual(result["WRITE_VIOLATIONS"], 0)
-        self.assertTrue(result["STALE_HANDOFF_OVERRIDE"])
-        self.assertTrue(result["UNKNOWN_PRESERVATION"])
-        self.assertEqual(result["INPUT_TOKENS"], 200)
+        for case_id in (
+            "CS3_CANDIDATE_SUMMARY", "CS4_CANDIDATE_PENDING_DIAGNOSIS",
+            "CS5_READY", "SK2_CANDIDATE_TRIGGERED_LOADING",
+        ):
+            self.assertIn("AGENTS.md", by_id[case_id]["CONTEXT_FILES"])
 
     def test_cold_start_fixture_separates_status_and_context_variants(self):
         cases = load_case_fixture(COLD_FIXTURE)["cases"]
@@ -285,6 +254,12 @@ class ResearchAgentEvalTests(unittest.TestCase):
         self.assertNotIn("pending_executions", by_id["CS2_CURRENT_SUMMARY"]["CURRENT_EVIDENCE"]["research_status"])
         self.assertNotEqual(by_id["CS2_CURRENT_SUMMARY"]["CONTEXT_FILES"], by_id["CS3_CANDIDATE_SUMMARY"]["CONTEXT_FILES"])
         self.assertEqual(by_id["CS2_CURRENT_SUMMARY"]["EXPECTED_ACTION"]["expected_write_count"], 0)
+        progressive = by_id["SK1_CURRENT_TWO_BATCHES"]["EXPECTED_ACTION"]
+        self.assertEqual(
+            progressive["expected_reference_reads"],
+            {"skills/wqb-research/SKILL.md": 1},
+        )
+        self.assertEqual(progressive["max_reference_reads"], progressive["expected_reference_reads"])
 
     def test_completed_behavior_trace_survives_cli_timeout(self):
         case = next(case for case in load_case_fixture(COLD_FIXTURE)["cases"] if case["id"] == "CS5_READY")

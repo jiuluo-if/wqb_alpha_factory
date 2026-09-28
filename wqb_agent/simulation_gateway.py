@@ -28,6 +28,7 @@ from .simulator import Simulator
 
 _CAPABILITY_UNCHECKED = object()
 _CAPABILITY_READER_ABSENT = object()
+_AUTHENTICATION_UNCHECKED = object()
 _REMOTE_ROWS_UNCHECKED = object()
 # The write-type whitelist is owned by the client that builds the request body;
 # the Gateway only refuses a spec before it can reach that POST.
@@ -58,6 +59,130 @@ def _validate_write_simulation_type(spec):
             + ", ".join(sorted(SUPPORTED_WRITE_SIMULATION_TYPES))
             + f" only (got {simulation_type})"
         )
+
+
+def _write_state_blockers(pending_entries, official_quota, *, execution_state_known=True):
+    """Return bounded local-guard and official-quota blockers only."""
+    blockers = []
+
+    def add(code):
+        if code not in blockers:
+            blockers.append(code)
+
+    if not execution_state_known or not isinstance(pending_entries, list):
+        add("EXECUTION_STATE_UNKNOWN")
+    else:
+        for row in pending_entries:
+            if not isinstance(row, Mapping) or not isinstance(row.get("status"), str):
+                add("EXECUTION_STATE_UNKNOWN")
+                continue
+            status = row["status"].upper()
+            if status not in ExecutionGuard.STATUSES:
+                add("EXECUTION_STATE_UNKNOWN")
+                continue
+            add("UNRESOLVED_EXECUTIONS")
+            if status == "SUBMIT_UNKNOWN":
+                add("SUBMIT_UNKNOWN_PRESENT")
+
+    valid_quota = (
+        isinstance(official_quota, Mapping)
+        and official_quota.get("source") == "BRAIN_SIMULATION_HEADERS"
+        and official_quota.get("status") == "AVAILABLE"
+        and all(
+            isinstance(official_quota.get(key), int)
+            and not isinstance(official_quota.get(key), bool)
+            and official_quota[key] >= 0
+            for key in ("limit", "remaining", "reset")
+        )
+    )
+    # BRAIN only exposes these official headers on a successful Simulation
+    # response, so "no official observation yet" is the normal cold-start
+    # state. Treating it as a blocker would make the first write impossible
+    # forever, so only an *observed* exhaustion fails closed. An APPROXIMATE
+    # estimate never reaches this branch: its source is not the official one.
+    if valid_quota and official_quota["remaining"] == 0:
+        add("OFFICIAL_QUOTA_EXHAUSTED")
+    return blockers
+
+
+def classify_write_readiness(
+    *,
+    pending_entries,
+    official_quota,
+    simulation_capability,
+    operator_capability,
+    authentication,
+    execution_state_known=True,
+    client_available=True,
+):
+    """Classify whether a new Simulation POST is currently admissible.
+
+    This is the single deterministic owner used by both the status facade and
+    the Gateway. It consumes platform/write facts only; it never evaluates an
+    Alpha hypothesis or research candidate.
+    """
+    blockers = _write_state_blockers(
+        pending_entries, official_quota,
+        execution_state_known=execution_state_known,
+    )
+
+    def add(code):
+        if code not in blockers:
+            blockers.append(code)
+
+    if authentication is None:
+        add("AUTHENTICATION_UNKNOWN")
+    elif not isinstance(authentication, Mapping) or authentication.get("authenticated") is not True:
+        add("AUTHENTICATION_UNAVAILABLE")
+
+    if not isinstance(simulation_capability, Mapping):
+        add("SIMULATION_CAPABILITY_UNKNOWN")
+    else:
+        capability_status = str(
+            simulation_capability.get("capability_status")
+            or simulation_capability.get("status")
+            or "UNKNOWN"
+        ).upper()
+        choices = simulation_capability.get("simulation_type_choices")
+        supported = (
+            {str(value).upper() for value in choices}
+            & SUPPORTED_WRITE_SIMULATION_TYPES
+            if isinstance(choices, (list, tuple, set)) else set()
+        )
+        if capability_status in {"AVAILABLE", "LIVE_VERIFIED"} and supported:
+            pass
+        elif capability_status in {"AVAILABLE", "LIVE_VERIFIED"}:
+            add("SIMULATION_CAPABILITY_UNAVAILABLE")
+        elif capability_status in {"UNAVAILABLE", "PERMISSION_UNAVAILABLE"}:
+            add("SIMULATION_CAPABILITY_UNAVAILABLE")
+        else:
+            add("SIMULATION_CAPABILITY_UNKNOWN")
+
+    if not isinstance(operator_capability, Mapping):
+        add("OPERATOR_CAPABILITY_UNKNOWN")
+    elif operator_capability.get("valid") is not True:
+        capability_status = str(operator_capability.get("status") or "UNKNOWN").upper()
+        add(
+            "OPERATOR_CAPABILITY_UNAVAILABLE"
+            if capability_status == "UNAVAILABLE"
+            else "OPERATOR_CAPABILITY_UNKNOWN"
+        )
+
+    if "EXECUTION_STATE_UNKNOWN" in blockers:
+        readiness = "UNKNOWN"
+    elif any(code in blockers for code in (
+        "UNRESOLVED_EXECUTIONS", "OFFICIAL_QUOTA_EXHAUSTED",
+        "AUTHENTICATION_UNAVAILABLE", "SIMULATION_CAPABILITY_UNAVAILABLE",
+        "OPERATOR_CAPABILITY_UNAVAILABLE",
+    )):
+        readiness = "BLOCKED_BY_REMOTE_STATE"
+    elif not client_available:
+        readiness = "WAITING_FOR_CAPABILITY"
+    elif blockers:
+        readiness = "WAITING_FOR_CAPABILITY"
+    else:
+        readiness = "READY"
+    return {"write_readiness": readiness, "write_blockers": blockers}
 
 
 @dataclass(frozen=True)
@@ -707,6 +832,63 @@ class SimulationGateway:
         }
 
 
+    def _current_state_write_blockers(self):
+        try:
+            pending = self.guard.entries()
+            state_known = True
+        except Exception:
+            pending = None
+            state_known = False
+        quota_reader = getattr(self.client, "get_simulation_quota_observation", None)
+        try:
+            official_quota = quota_reader() if callable(quota_reader) else None
+        except Exception:
+            official_quota = None
+        return _write_state_blockers(
+            pending, official_quota, execution_state_known=state_known
+        )
+
+    def _block_specs_for_state(self, specs, blockers, *, readiness=None):
+        """Label new candidates as blocked while preserving exact-once rows."""
+        if not blockers:
+            return None
+        readiness = readiness or (
+            "UNKNOWN" if "EXECUTION_STATE_UNKNOWN" in blockers
+            else "BLOCKED_BY_REMOTE_STATE"
+        )
+        reason_code = blockers[0]
+        results = [None] * len(specs)
+        seen = set()
+        for index, spec in enumerate(specs):
+            fingerprint = self.execution_fingerprint(spec)
+            if fingerprint in seen:
+                results[index] = self._labelled_result(
+                    spec, "EXACT_DUPLICATE", fingerprint,
+                )
+                continue
+            seen.add(fingerprint)
+            existing = self.guard.find(fingerprint)
+            if existing is not None:
+                status = (
+                    "SUBMIT_UNKNOWN"
+                    if existing.get("status") == "SUBMIT_UNKNOWN"
+                    else "EXACT_DUPLICATE"
+                )
+                results[index] = self._labelled_result(
+                    spec, status, fingerprint,
+                    progress_url=existing.get("progress_url"),
+                    guard_action="EXISTING_GUARD",
+                )
+                continue
+            results[index] = self._labelled_result(
+                spec, readiness, fingerprint,
+                reason_code=reason_code,
+                write_readiness=readiness,
+                write_blockers=list(blockers),
+            )
+        return results
+
+
     def execution_fingerprint(self, spec):
         spec = spec if isinstance(spec, SimulationSpec) else SimulationSpec(**dict(spec))
         self.validate_simulation_spec(spec)
@@ -714,7 +896,10 @@ class SimulationGateway:
             spec.expression, spec.settings, simulation_type=spec.simulation_type
         )
 
-    def _preflight_specs(self, specs, *, simulation_capability=_CAPABILITY_UNCHECKED):
+    def _preflight_specs(
+        self, specs, *, simulation_capability=_CAPABILITY_UNCHECKED,
+        authentication=_AUTHENTICATION_UNCHECKED,
+    ):
         normalized = [
             item if isinstance(item, SimulationSpec)
             else SimulationSpec(**dict(item))
@@ -730,6 +915,12 @@ class SimulationGateway:
         for spec in normalized:
             _validate_write_simulation_type(spec)
 
+        blocked = self._block_specs_for_state(
+            normalized, self._current_state_write_blockers()
+        )
+        if blocked is not None:
+            return blocked, [], {}
+
         if simulation_capability is _CAPABILITY_UNCHECKED:
             capability_reader = getattr(self.client, "get_simulation_capability", None)
             simulation_capability = _CAPABILITY_READER_ABSENT
@@ -743,6 +934,41 @@ class SimulationGateway:
             operator_reader() if callable(operator_reader)
             else _CAPABILITY_READER_ABSENT
         )
+        if authentication is _AUTHENTICATION_UNCHECKED:
+            authentication_reader = getattr(
+                self.client, "get_authentication_status", None
+            )
+            if callable(authentication_reader):
+                try:
+                    authentication = authentication_reader()
+                except Exception:
+                    authentication = None
+            else:
+                authentication = None
+        state_entries = self.guard.entries()
+        quota_reader = getattr(self.client, "get_simulation_quota_observation", None)
+        try:
+            official_quota = quota_reader() if callable(quota_reader) else None
+        except Exception:
+            official_quota = None
+        readiness = classify_write_readiness(
+            pending_entries=state_entries,
+            official_quota=official_quota,
+            simulation_capability=simulation_capability,
+            operator_capability=(
+                operator_capability
+                if operator_capability is not _CAPABILITY_READER_ABSENT else None
+            ),
+            authentication=authentication,
+            execution_state_known=True,
+            client_available=True,
+        )
+        if readiness["write_readiness"] != "READY":
+            blocked = self._block_specs_for_state(
+                normalized, readiness["write_blockers"],
+                readiness=readiness["write_readiness"],
+            )
+            return blocked, [], {}
         validated = []
         field_reader = getattr(self.client, "get_field_capability", None)
         field_groups = {}
@@ -828,6 +1054,8 @@ class SimulationGateway:
         results, validated, remote_duplicates = (
             preflight if preflight is not None else self._preflight_specs(specs)
         )
+        if not validated:
+            return results
         prepared = []
         seen = set()
         for index, spec, fingerprint in validated:
@@ -971,6 +1199,12 @@ class SimulationGateway:
             # one-element Multi payload.  The Gateway still owns this split.
             return self._simulate_batch(normalized_specs)
 
+        blocked = self._block_specs_for_state(
+            normalized_specs, self._current_state_write_blockers()
+        )
+        if blocked is not None:
+            return blocked
+
         auth_reader = getattr(self.client, "get_authentication_status", None)
         if not callable(auth_reader):
             raise ValueError("PERMISSION_UNAVAILABLE: live authentication capability required")
@@ -994,8 +1228,11 @@ class SimulationGateway:
                 raise ValueError("SIMULATION_CAPABILITY_UNAVAILABLE")
 
         results, validated, remote_duplicates = self._preflight_specs(
-            normalized_specs, simulation_capability=capability
+            normalized_specs, simulation_capability=capability,
+            authentication=authentication,
         )
+        if not validated:
+            return results
         eligible = []
         seen = set()
         for index, spec, fingerprint in validated:

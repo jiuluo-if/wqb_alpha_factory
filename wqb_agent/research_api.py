@@ -27,6 +27,7 @@ import re
 import tomllib
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from typing import Any
 
 from .alpha_factory import AlphaFactory
@@ -71,6 +72,7 @@ from .simulation_gateway import (
     ExecutionGuard,
     SimulationGateway,
     SimulationSpec,
+    classify_write_readiness,
 )
 
 MAX_PROBE_FIELDS = 100
@@ -81,6 +83,7 @@ MAX_PROBE_COUNT = 100
 # single research Skill and this runtime.  A Skill that declares a different
 # ``metadata.wqb_alpha_factory_research_contract`` is stale and must be re-read, not reused.
 RESEARCH_CONTRACT_VERSION = "2026-09-26"
+RESEARCH_STATUS_TIMEOUT_SEC = 15.0
 
 # Region-Agnostic simulations are written through the same gateway as REGULAR ones;
 # whether the writer accepts them is a property of the gateway's supported set, not
@@ -799,6 +802,113 @@ def _capability_status(capability):
     ).upper()
 
 
+def _research_status_budget(client):
+    budget_factory = getattr(client, "read_only_budget", None)
+    if (
+        client is not None
+        and getattr(client, "supports_read_only_budget", False) is True
+        and callable(budget_factory)
+    ):
+        return budget_factory(RESEARCH_STATUS_TIMEOUT_SEC)
+    return nullcontext()
+
+
+def _operator_capability_summary(capability):
+    if not isinstance(capability, Mapping):
+        return {
+            "source": "UNAVAILABLE", "status": "UNKNOWN",
+            "evidence_status": "INCONCLUSIVE", "operator_count": None,
+        }
+    operators = capability.get("operators")
+    count = len(operators) if isinstance(operators, (list, tuple)) else None
+    return {
+        "source": str(capability.get("source") or "UNKNOWN"),
+        "status": str(capability.get("status") or "UNKNOWN").upper(),
+        "evidence_status": str(
+            capability.get("evidence_status") or "INCONCLUSIVE"
+        ).upper(),
+        "operator_count": count,
+    }
+
+
+def _simulation_capability_summary(capability):
+    if not isinstance(capability, Mapping):
+        return {
+            "source": "UNAVAILABLE", "status": "UNKNOWN",
+            "capability_status": "UNKNOWN", "simulation_type_choices": [],
+            "evidence_status": "INCONCLUSIVE",
+        }
+    choices = capability.get("simulation_type_choices")
+    choices = (
+        sorted({str(item).upper() for item in choices if isinstance(item, str)})
+        if isinstance(choices, (list, tuple, set)) else []
+    )
+    return {
+        "source": str(capability.get("source") or "UNKNOWN"),
+        "status": str(capability.get("status") or "UNKNOWN").upper(),
+        "capability_status": str(
+            capability.get("capability_status")
+            or capability.get("status")
+            or "UNKNOWN"
+        ).upper(),
+        "simulation_type_choices": choices,
+        "evidence_status": str(
+            capability.get("evidence_status") or "INCONCLUSIVE"
+        ).upper(),
+    }
+
+
+def _authentication_summary(authentication):
+    if not isinstance(authentication, Mapping):
+        return {
+            "source": "UNAVAILABLE", "status": "UNKNOWN",
+            "authenticated": None, "permissions": [],
+            "evidence_status": "INCONCLUSIVE",
+        }
+    authenticated = authentication.get("authenticated")
+    permissions = authentication.get("permissions")
+    permissions = (
+        sorted({str(item).upper() for item in permissions if isinstance(item, str)})[:16]
+        if isinstance(permissions, (list, tuple, set)) else []
+    )
+    return {
+        "source": "BRAIN_LIVE",
+        "status": (
+            "AVAILABLE" if authenticated is True
+            else "UNAVAILABLE" if authenticated is False else "UNKNOWN"
+        ),
+        "authenticated": authenticated if isinstance(authenticated, bool) else None,
+        "permissions": permissions,
+        "evidence_status": "AVAILABLE" if authenticated is True else "INCONCLUSIVE",
+    }
+
+
+def _pending_execution_summary(entries):
+    if not isinstance(entries, list):
+        return None
+    write_rows = []
+    child_count = 0
+    for row in entries:
+        if not isinstance(row, Mapping):
+            return None
+        if str(row.get("kind") or "").upper() == "MULTI_CHILD":
+            child_count += 1
+        else:
+            write_rows.append(row)
+    simulation_count = 0
+    for row in write_rows:
+        count = row.get("simulation_count")
+        if isinstance(count, int) and not isinstance(count, bool) and count > 0:
+            simulation_count += count
+        else:
+            simulation_count += 1
+    return {
+        "pending_execution_count": len(write_rows),
+        "pending_simulation_count": simulation_count,
+        "pending_multi_child_count": child_count,
+    }
+
+
 def _mode_unavailable_reason(
     authentication, *, options_available, regular_available, multi=False,
     permissions=(),
@@ -935,34 +1045,46 @@ def get_live_preflight(*, client=None, config=None, state_dir=None):
 
 
 def research_status(*, client=None, config=None, state_dir=None):
-    """Aggregate the read-only facts an Agent checks before starting research.
+    """Return bounded write readiness and a summary for Research cold-starts.
 
-    This is the single startup-readiness call: live capability, simulation
-    modes, quota with freshness, pending executions, cache freshness and the
-    research contract version.  Every section keeps its own source/status, and
-    a missing live client degrades those sections to UNKNOWN instead of failing
-    the whole call.  Python reports facts only; it never chooses the next
-    experiment.
+    Pending row detail remains owned by :func:`get_pending_executions` and is
+    fetched only when diagnosis needs it. This function uses a bounded request
+    budget for the production WQBClient and never refreshes the remote Alpha
+    history cache as a side effect of startup.
     """
     typed = _normalized_config(config)
     directory = _state_directory(typed, state_dir)
-    pending = get_pending_executions(state_dir=directory)["entries"]
-    cache = remote_cache_status(config=typed, state_dir=directory)
+    pending_state_known = True
     try:
-        quota = simulation_quota(client=client, config=typed, state_dir=directory)
+        pending = get_pending_executions(state_dir=directory)["entries"]
+        pending_summary = _pending_execution_summary(pending)
+        pending_state_known = pending_summary is not None
+    except Exception:
+        pending = None
+        pending_summary = None
+        pending_state_known = False
+    try:
+        cache = remote_cache_status(config=typed, state_dir=directory)
+    except Exception:
+        cache = {"freshness": "UNKNOWN"}
+    try:
+        quota = simulation_quota(
+            client=client, config=typed, state_dir=directory,
+            refresh_if_stale=False,
+        )
     except Exception as exc:
         quota = {
             "status": "UNKNOWN", "source": "UNAVAILABLE",
             "reason_code": "CAPABILITY_UNAVAILABLE", "error": type(exc).__name__,
+            "official": {
+                "status": "UNKNOWN", "source": "BRAIN_SIMULATION_HEADERS",
+                "limit": None, "remaining": None, "reset": None,
+            },
         }
-    modes: dict[str, Any]
+    authentication = None
+    simulation_capability = None
+    operator_capability = None
     if client is None:
-        capability = {
-            "source": "UNAVAILABLE", "status": "UNKNOWN",
-            "evidence_status": "INCONCLUSIVE",
-        }
-        # Without a live client the mode report is derived from nothing, so it
-        # must not keep claiming a BRAIN_LIVE source.
         modes = {
             key: {
                 **value, "source": "UNAVAILABLE",
@@ -971,38 +1093,50 @@ def research_status(*, client=None, config=None, state_dir=None):
             for key, value in _simulation_modes_from_capabilities(None, None).items()
         }
     else:
-        try:
-            capability = get_capabilities(client=client, config=typed)
-        except Exception as exc:
-            capability = {
-                "source": "UNAVAILABLE", "status": "UNKNOWN",
-                "evidence_status": "INCONCLUSIVE", "error": type(exc).__name__,
-            }
-        try:
-            modes = get_simulation_modes(client=client, config=typed)
-        except Exception as exc:
-            modes = {"error": type(exc).__name__, "status": "UNKNOWN"}
+        with _research_status_budget(client):
+            try:
+                authentication = client.get_authentication_status()
+            except Exception:
+                authentication = None
+            try:
+                simulation_capability = client.get_simulation_capability()
+            except Exception:
+                simulation_capability = None
+            try:
+                capability = get_capabilities(client=client, config=typed)
+                operator_capability = capability.get("operator_capability")
+            except Exception:
+                capability = None
+        modes = _simulation_modes_from_capabilities(
+            authentication, simulation_capability
+        )
     live = client is not None
-    # A Multi child row is not an independent unresolved write: its parent row
-    # already represents that remote POST and its Simulation count.
-    pending_writes = [
-        row for row in pending
-        if str(row.get("kind") or "").upper() != "MULTI_CHILD"
-    ]
+    readiness = classify_write_readiness(
+        pending_entries=pending,
+        official_quota=quota.get("official") if isinstance(quota, Mapping) else None,
+        simulation_capability=simulation_capability,
+        operator_capability=operator_capability,
+        authentication=authentication,
+        execution_state_known=pending_state_known,
+        client_available=live,
+    )
     return {
         "source": "LIVE" if live else "LOCAL_ONLY",
         "status": "AVAILABLE" if live else "PARTIAL",
         "evidence_status": "AVAILABLE" if live else "INCONCLUSIVE",
         "research_contract_version": RESEARCH_CONTRACT_VERSION,
-        "capability": capability,
+        "write_readiness": readiness["write_readiness"],
+        "write_blockers": readiness["write_blockers"],
+        "authentication": _authentication_summary(authentication),
+        "capability": _operator_capability_summary(operator_capability),
+        "simulation_capability": _simulation_capability_summary(simulation_capability),
         "simulation_modes": modes,
         "quota": quota,
-        "pending_executions": pending,
-        "pending_execution_count": len(pending_writes),
-        "pending_simulation_count": sum(
-            int(row.get("simulation_count") or 1) for row in pending_writes
-        ),
-        "pending_multi_child_count": len(pending) - len(pending_writes),
+        **(pending_summary or {
+            "pending_execution_count": None,
+            "pending_simulation_count": None,
+            "pending_multi_child_count": None,
+        }),
         "cache": cache,
     }
 
@@ -1318,6 +1452,7 @@ _AGENT_CORE_TOOL_NAMES = frozenset({
     "get_operator_reference", "validate_simulation_spec",
     "simulate_batch", "simulate_multi_batch", "get_alpha_evidence",
     "reconcile_execution", "get_alpha_prod_correlation",
+    "get_pending_executions",
 })
 
 

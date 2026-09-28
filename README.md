@@ -8,7 +8,7 @@
 AI → wqb_agent.research_api → SimulationGateway → Simulator → WQBClient → BRAIN
 ```
 
-`wqb_agent.research_api` 是唯一公开研究接口。项目边界见根目录 [`AGENTS.md`](AGENTS.md)，Agent 架构与执行链见 [`docs/ARCHITECTURE_AGENT.md`](docs/ARCHITECTURE_AGENT.md)。
+`wqb_agent.research_api` 是唯一公开研究接口。默认阅读路径为本文件 → [`AGENTS.md`](AGENTS.md) → [`docs/ARCHITECTURE_AGENT.md`](docs/ARCHITECTURE_AGENT.md) → [`wqb_agent/research_api.py`](wqb_agent/research_api.py)。
 
 ## 能力
 

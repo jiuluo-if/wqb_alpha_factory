@@ -1241,6 +1241,49 @@ class TestClassifiedExceptions(unittest.TestCase):
         ), "INVALID_SPEC")
 
 class TestSharedRateLimitGate(unittest.TestCase):
+    def test_read_only_budget_clamps_http_timeout(self):
+        c = make_client()
+        session = mock.Mock()
+        session.request.return_value = FakeResponse(200)
+        c._local.session = session
+        with mock.patch.object(c, "_wait_rate_limit_gate", return_value=True), \
+             mock.patch.object(c, "_ensure_auth"):
+            with c.read_only_budget(0.25):
+                c._request("GET", "/x", context="bounded status", timeout=60)
+        timeout = session.request.call_args.kwargs["timeout"]
+        self.assertLessEqual(timeout, 0.25)
+        self.assertGreater(timeout, 0)
+
+    def test_authentication_retry_after_respects_read_only_budget(self):
+        c = make_client()
+        c.username = "synthetic-user"
+        c.password = "synthetic-password"
+        session = mock.Mock()
+        session.post.return_value = FakeResponse(
+            429, headers={"Retry-After": "3600"}
+        )
+        c._local.session = session
+        c._register_rate_limit = mock.Mock()
+        with c.read_only_budget(0.25), \
+             mock.patch("wqb_agent.client.time.sleep") as sleep:
+            with self.assertRaises(WQBTimeoutError):
+                c._authenticate()
+        self.assertLessEqual(session.post.call_args.kwargs["timeout"], 0.25)
+        self.assertLessEqual(sleep.call_args.args[0], 0.25)
+
+    def test_authentication_status_get_is_clamped_by_read_only_budget(self):
+        c = make_client()
+        session = mock.Mock()
+        session.request.return_value = FakeResponse(
+            200, payload={"status": "authenticated", "user_id": "synthetic"}
+        )
+        c._local.session = session
+        with c.read_only_budget(0.25):
+            result = c.get_authentication_status()
+        self.assertTrue(result["authenticated"])
+        self.assertLessEqual(session.request.call_args.kwargs["timeout"], 0.25)
+        self.assertGreater(session.request.call_args.kwargs["timeout"], 0)
+
     def test_simulation_post_429_is_unknown_without_transport_retry(self):
         c = make_client()
         c._local.session = FakeSession([

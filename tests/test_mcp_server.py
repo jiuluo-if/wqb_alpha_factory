@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -352,6 +353,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             "get_alpha_evidence": lambda *_, **__: {"source": "LIVE", "alpha": {}},
             "get_alpha_prod_correlation": lambda *_, **__: {"source": "LIVE", "status": "AVAILABLE", "records": []},
             "reconcile_execution": lambda fingerprint, **_: {"status": "SUBMIT_UNKNOWN", "fingerprint": fingerprint},
+            "get_pending_executions": lambda **_: {"entries": []},
         }
         defaults.update(overrides)
         return SimpleNamespace(**defaults)
@@ -377,8 +379,9 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             "get_operator_reference", "validate_simulation_spec",
             "simulate_batch", "simulate_multi_batch", "get_alpha_evidence",
             "reconcile_execution", "get_alpha_prod_correlation",
+            "get_pending_executions",
         })
-        self.assertEqual(len(by_name), 10)
+        self.assertEqual(len(by_name), 11)
         self.assertEqual(
             set(by_name),
             {row["name"] for row in mcp_server.research_api.research_tool_manifest(profile="core")},
@@ -389,6 +392,97 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         for tool in listed.tools:
             self.assertNotIn("state_dir", tool.input_schema.get("properties", {}))
         self.assertNotIn("alpha_submission", by_name)
+
+    async def test_research_mode_exposes_existing_pending_details_as_local_read_only(self):
+        calls = []
+
+        def read_pending(**kwargs):
+            calls.append(kwargs)
+            return {"entries": [{"status": "SUBMIT_UNKNOWN", "kind": "SINGLE"}]}
+
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(
+                api=self.api(get_pending_executions=read_pending),
+                client=object(), state_dir="synthetic-state",
+            )
+        async with Client(server) as client:
+            listed = await client.list_tools()
+            tool = next(item for item in listed.tools if item.name == "get_pending_executions")
+            result = await client.call_tool("get_pending_executions", {})
+
+        self.assertTrue(tool.annotations.read_only_hint)
+        self.assertFalse(tool.annotations.open_world_hint)
+        self.assertEqual(calls, [{"state_dir": "synthetic-state", "config": None}])
+        self.assertEqual(
+            result.structured_content["data"]["entries"][0]["status"],
+            "SUBMIT_UNKNOWN",
+        )
+
+    async def test_research_status_summary_and_gateway_write_gate_share_one_contract(self):
+        from wqb_agent.simulation_gateway import ExecutionGuard
+
+        class SyntheticClient:
+            def __init__(self):
+                self.submissions = []
+
+            def get_simulation_quota_observation(self):
+                return {
+                    "status": "UNKNOWN", "source": "BRAIN_SIMULATION_HEADERS",
+                    "limit": None, "remaining": None, "reset": None,
+                }
+
+            def get_authentication_status(self):
+                return {"authenticated": True, "permissions": ["MULTI_SIMULATION"]}
+
+            def get_simulation_capability(self):
+                return {
+                    "status": "AVAILABLE", "capability_status": "AVAILABLE",
+                    "source": "BRAIN_LIVE", "simulation_type_choices": ["REGULAR"],
+                    "settings": {}, "required_fields": [], "required_settings": [],
+                }
+
+            def get_operator_capability(self):
+                return {
+                    "valid": True, "status": "AVAILABLE", "source": "BRAIN_LIVE_ONLY",
+                    "operators": ["rank"],
+                }
+
+            def get_all_user_alphas(self, **_kwargs):
+                raise AssertionError("research_status must not refresh remote Alpha history")
+
+            def submit_simulation(self, *args, **kwargs):
+                self.submissions.append((args, kwargs))
+                raise AssertionError("blocked readiness must stop before Simulation POST")
+
+        with tempfile.TemporaryDirectory() as state_dir, patch.dict(os.environ, {self.ENV: "1"}):
+            ExecutionGuard(state_dir).register(
+                "synthetic-unknown", status="SUBMIT_UNKNOWN", kind=ExecutionGuard.SINGLE,
+            )
+            synthetic_client = SyntheticClient()
+            server = mcp_server.build_research_server(
+                api=mcp_server.research_api, client=synthetic_client, state_dir=state_dir,
+            )
+            async with Client(server) as client:
+                listed = await client.list_tools()
+                self.assertEqual(listed.tools[0].name, "research_status")
+                status = await client.call_tool("research_status", {})
+                details = await client.call_tool("get_pending_executions", {})
+                blocked = await client.call_tool("simulate_batch", {"specs": [{
+                    "expression": "rank(close)", "settings": {}, "proposal_id": "synthetic-1",
+                }]})
+
+        status_data = status.structured_content["data"]
+        self.assertEqual(status_data["write_readiness"], "BLOCKED_BY_REMOTE_STATE")
+        self.assertEqual(status_data["write_blockers"], [
+            "UNRESOLVED_EXECUTIONS", "SUBMIT_UNKNOWN_PRESENT",
+        ])
+        self.assertNotIn("pending_executions", status_data)
+        self.assertEqual(len(details.structured_content["data"]["entries"]), 1)
+        self.assertEqual(
+            blocked.structured_content["results"][0]["status"],
+            "BLOCKED_BY_REMOTE_STATE",
+        )
+        self.assertEqual(synthetic_client.submissions, [])
 
     async def test_research_annotations_mark_reads_remote_and_simulations_additive_non_idempotent(self):
         with patch.dict(os.environ, {self.ENV: "1"}):
@@ -483,7 +577,12 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         correlation.assert_not_called()
 
     async def test_research_status_is_first_tool_and_performs_live_handshake(self):
-        status = Mock(return_value={"source": "LIVE", "status": "AVAILABLE", "capability": {"status": "LIVE_VERIFIED"}})
+        status = Mock(return_value={
+            "source": "LIVE", "status": "AVAILABLE",
+            "capability": {"status": "LIVE_VERIFIED"},
+            "write_readiness": "BLOCKED_BY_REMOTE_STATE",
+            "write_blockers": ["OFFICIAL_QUOTA_UNKNOWN"],
+        })
         with patch.dict(os.environ, {self.ENV: "1"}):
             server = mcp_server.build_research_server(
                 api=self.api(research_status=status), client=object(), state_dir="synthetic-state",
@@ -493,6 +592,14 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             result = await client.call_tool(listed.tools[0].name, {})
         self.assertEqual(listed.tools[0].name, "research_status")
         self.assertEqual(result.structured_content["data"]["capability"]["status"], "LIVE_VERIFIED")
+        self.assertEqual(
+            result.structured_content["data"]["write_readiness"],
+            "BLOCKED_BY_REMOTE_STATE",
+        )
+        self.assertEqual(
+            result.structured_content["data"]["write_blockers"],
+            ["OFFICIAL_QUOTA_UNKNOWN"],
+        )
         self.assertEqual(status.call_args.kwargs["state_dir"], "synthetic-state")
 
     async def test_opted_in_research_entrypoint_serves_stdio_inventory(self):
@@ -507,7 +614,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         async with Client(parameters) as client:
             listed = await client.list_tools()
         names = {tool.name for tool in listed.tools}
-        self.assertEqual(len(names), 10)
+        self.assertEqual(len(names), 11)
         self.assertTrue({"research_status", "simulate_batch", "simulate_multi_batch"} <= names)
 
     async def test_alpha_expression_is_available_only_through_requested_evidence(self):

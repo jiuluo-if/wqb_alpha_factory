@@ -9,43 +9,38 @@ metadata:
 
 ## 执行契约
 
-- **INPUT**：当前用户研究问题或简短工作集、fresh `research_status()` 与当前会话实际 MCP inventory、对问题有用的 BRAIN dataset/datafield/capability/evidence，以及可选的外部 Research Packet。
+- **INPUT**：当前用户研究问题或简短工作集、bootstrap 交给 Skill 的当前 MCP inventory、对问题有用的 BRAIN dataset/datafield/evidence，以及可选的外部 Research Packet。
 - **OUTPUT**：有当前证据支持的下一项研究行动和简短映射；行动可以是经唯一研究 API 提交的 `SimulationSpec`/batch，也可以是明确的 no-write、`UNKNOWN` 或能力限制结论。
-- **PRECONDITIONS**：`research_status().research_contract_version` 必须与 `metadata.wqb_alpha_factory_research_contract` 一致；每个所需工具必须存在于当前 inventory，能力与平台事实须来自本轮 live evidence。
+- **PRECONDITIONS**：bootstrap 已确认当前 Skill contract version 与本 frontmatter 一致；Skill/reference 仅提供方法，不替代 runtime readiness、权限和写入契约。
 - **SUCCESS**：行动能指出它要区分的解释、会改变决策的观测、证据范围与反证；Simulation 成功只证明执行结果可用，不自动证明经济机制。
-- **FAILURE**：研究问题缺失且不能从上下文恢复时，指出最小缺项并停止构造候选；契约版本不匹配时返回 `SKILL_STALE` 并停止依赖旧契约的执行；状态不可用或证据缺失时保留 `UNAVAILABLE`/`UNKNOWN`；工具缺失时报告能力限制并跳过受影响分支；未解决写入按原恢复边界处理，绝不自动重 POST。
+- **FAILURE**：研究问题缺失且不能从上下文恢复时，指出最小缺项并停止构造候选；方法所需证据缺失时保留 `UNAVAILABLE`/`UNKNOWN`；所需研究工具缺失时报告能力限制并跳过受影响分支。
 
-## 负责方
+平台事实、readiness、ExecutionGuard、唯一写链、隐私和 Alpha submission 的 owner 均见根目录 [`AGENTS.md`](../../AGENTS.md)。本 Skill 只提供研究方法，不复刻 runtime/write safety contract。
 
-- BRAIN 是能力、字段、Simulation 与 Alpha 证据的首要事实源。
-- Agent 拥有假设、机制、字段选择、实验分组与解释权。Python 校验确定性契约并安全执行，不做经济研究选择。
-- Alpha 提交永远人工完成。所有 Simulation 写入走 `research_api → SimulationGateway → Simulator → WQBClient`。
-- Simulation 结果不等于其主张机制得到支持。缺失证据保持 `UNKNOWN`/`UNAVAILABLE`。
-- 同一个 Research Agent 负责 `RESEARCH → TOOL_OPTIMIZATION → RESEARCH`。只有真实运行证据显示确定性错误、浪费 Simulation、阻断 evidence 获取或反复人工 workaround 时才进入工具优化；新经济假设留在 RESEARCH。
-- 活跃 research wave 期间不得并行修改会影响该 wave 的执行代码。工具优化期间禁止 live Simulation POST，只运行离线测试；完成交付/部署后重新获取 fresh `research_status()` 再恢复 live research。流程见 `prompts/maintenance_agent.md`。
+研究结果只支持或反对被检验的机制，不自动证明机制成立。缺失证据保留 `UNKNOWN`/`UNAVAILABLE`。
 
 ## INCOME / PLATFORM ALIGNMENT
 
 研究同时服务长期、可持续的高质量低冗余 Alpha 产出和当前真实平台机会。每个 research wave 刷新可用的 BRAIN submission/status/checks、correlation、turnover/margin/cost，以及当前 account 的 Genius / Theme / competition / consultant 规则与资格；以 live 工具或本轮项目 research/audit 输入为来源，并在临时工作集中注明来源与观察时间。当前 inventory 或输入未提供某项事实时标 `UNKNOWN`，不得引用旧 tmp 快照、猜阈值、臆测资格或保证收入。活动机会不能替代机制证据，也不能凌驾于 BRAIN hard checks、科学稳健性或低冗余要求之上。
 
-外部论文由项目 research/audit 输入提供；不要求本地 Research Agent 联网检索论文。输入的每篇论文都进入[统一论文映射](references/batch-design.md#universal-paper-mapping)，即使 BRAIN 当前没有相应 observable 也保留映射缺口。论文提供待检验机制，不提供已验证 Alpha；可靠模板必须经过[BRAIN family-level validation](references/result-interpretation.md#template-evidence-and-promotion)。
+外部论文由项目研究/audit 输入提供；不要求本地 Research Agent 联网检索论文。输入的每篇论文都进入[统一论文映射](references/batch-design.md#universal-paper-mapping)，即使 BRAIN 当前没有相应 observable 也保留映射缺口。论文提供待检验机制，不提供已验证 Alpha；可靠模板必须经过[BRAIN family-level validation](references/result-interpretation.md#template-evidence-and-promotion)。
 
 每篇有研究价值的论文形成 `PAPER_TEMPLATE_CANDIDATE`：在 research mapping 中保留来源/发表日期/状态、claim、机制和每项 template assumption 的来源链，以及 negative control 与当前 `BRAIN MAPPING`。候选可映射已有模板、扩展语义 slot、提出同机制 `NEW_PROBE` sibling；只有现有模板无法忠实表达核心机制/关系时才提出新 skeleton candidate。Candidate 是研究笔记，不是私有 catalog 条目；写入 catalog 仍受 `wqb_agent/alpha_templates/AGENTS.md` 和 BRAIN family evidence 晋升约束。
 
 要新增或修改 private template/catalog 时，先阅读 `wqb_agent/alpha_templates/AGENTS.md` 并只通过唯一 `AlphaTemplate` owner 与现有 strict validation；若当前能力不足，candidate 留在 Research mapping 并标记 capability gap，不绕过 owner。
 
-## 契约握手
+## Skill 版本
 
-frontmatter 中 `metadata.wqb_alpha_factory_research_contract` 是本文件编写时所针对的契约。先调用 `research_status()` 并比对其 `research_contract_version`；不匹配即本 Skill 为 `SKILL_STALE`：运行任何批次前重新阅读仓库 Skill 与 `AGENTS.md`。不得凭信任复用过期 Skill。
+frontmatter 中 `metadata.wqb_alpha_factory_research_contract` 是本文件编写时所针对的 Research contract version。bootstrap 负责比较 runtime 版本；不匹配即本 Skill 为 `SKILL_STALE`，不得让本文件覆盖 runtime/tool owner。
 
-Skill/reference 提到的具体工具必须先对照当前会话的实际 inventory。Core 未暴露的低频能力若有等价 Core 路径则使用该路径；否则标记 `LOCAL_RESEARCH_CAPABILITY_LIMIT`，跳过依赖该能力的分支并继续其它可执行假设。不得臆造工具或绕过 facade。
+本 Skill/reference 提到的具体研究工具必须对照当前会话实际 inventory。Core 未暴露的低频能力若无可用路径，标记 `LOCAL_RESEARCH_CAPABILITY_LIMIT` 并跳过受影响分支；不得臆造工具。
 
 ## 每个研究批次
 
 - 从多个竞争假设起步。使用 BRAIN 原始 dataset/datafield 列表，并解释每个 Agent 选定字段。
 - 探索新字段、自定义分组、字段复合、新算子或新模板时，先读[批次设计](references/batch-design.md)中的 live discovery 与结构判据。
-- 每个 proposal 都要有 1–48 字符、batch 内唯一的 `proposal_id`，并在调用写工具前保留 `proposal_id → hypothesis/note/template` mapping。适用时提供有用的 `note` 和模板/家族标签。批次按对照组、本地兄弟组、证伪组与新探针分组。
-- `note` 可使用 `H2:EXPLORE`、`H3:CONTROL`、`H2:FALSIFY`、`H2:LOCAL` 等假设标签，由 Agent 在 mapping 中解释。Research MCP 结果仅投影 `proposal_id`、`status`、`reason_code`、`fingerprint`、`alpha_id` 和 `field_validation`；`note`、`template_id` 保留在 Agent mapping 中，`batch_fingerprint` 不回显。Multi child 可用 child fingerprint 通过 `reconcile_execution` 恢复 parent；direct Python facade 的既有返回兼容行为保持不变。
+- 每个 proposal 都要有 batch 内唯一的 `proposal_id`，并在调用写工具前保留 `proposal_id → hypothesis/note/template` mapping。适用时提供有用的 `note` 和模板/家族标签。批次按对照组、本地兄弟组、证伪组与新探针分组。
+- `note` 可使用 `H2:EXPLORE`、`H3:CONTROL`、`H2:FALSIFY`、`H2:LOCAL` 等假设标签，由 Agent 在 mapping 中解释；Simulation payload/result 细节遵循当前 MCP tool schema。
 - 说明每组测试什么机制、什么结果会改变下一次决策、使用多少 Simulation。大量有目的的 Simulation 受欢迎；不可追溯的随机表达式不受欢迎。
 - 保留探索。高结果只是比较候选，不是大举开发该方向的许可。
 - 本地变体保持字段、算子与表达式拓扑不变；拓扑变化是带独立假设的 `NEW_PROBE`。
@@ -77,18 +72,12 @@ paper/template candidate（来源、发表日期、template assumption provenanc
 下一实验
 ```
 
-它是工作记忆而非档案：永不替代 BRAIN 证据；当前活动资格与规则须每个 wave 重新核验，只有跨任务仍成立的经验才配进 reference。不要把账户资格、活动收入或私有运行细节扩进公开 handoff。
+它是工作记忆而非档案：永不替代 BRAIN 证据；当前活动资格与规则须每个 wave 重新核验，只有跨任务仍成立的经验才配进 reference。
 
 Alpha/PA 或其他 execution mode 只有在 fresh `research_status()` 与当前 tool inventory 明确暴露时，才可作为同一 template mechanism 的不同实验环境比较；若缺失或 validation/write contract 不可用，标 `CAPABILITY_MISSING`，不假设存在或绕过 facade。
 
 ## Wave-end research and tool-efficiency review
 
-每个自然 research wave 结束时，Agent 一并回看研究信息增益、family yield、无效 Simulation 来源、deterministic failures、evidence retrieval friction 和重复人工 workaround，并先区分 `RESEARCH_UNKNOWN` 与 `TOOL_FRICTION`。研究未知量进入下一轮 paper/template/data/Simulation 研究；只有可复现的工具摩擦才进入既有 `TOOL_OPTIMIZATION` 阶段。工具改进目标是提高 `INFORMATION GAIN / SIMULATION`、缩短 paper → template → evidence 路径并减少确定性无效试验，不创建自动研究/晋升系统。
-
-## 工具摩擦 handoff
-
-仅在自然 wave 边界由 Research Agent 更新 gitignored 的 `tmp/research_handoff.json`。允许添加当前 task/wave 的匿名聚合计数：`invalid_spec_failures`、`deterministic_failure_codes`、`batch_execution_failures`、`evidence_retrieval_failures`、`evidence_retrieval_pending_count`、`repeated_manual_workaround_count`。未知值用 `null` 或省略，不能猜 0；reason code 必须有限且脱敏，不记录自由文本。不得写 expression、field ID、Alpha ID、私有研究内容、结果指标、credentials 或 URL；不新增 database、telemetry、watcher 或 scheduler。
-
-只要 `pending_execution_count > 0` 或有 `SUBMIT_UNKNOWN`，handoff `readiness` 必须是 `BLOCKED_BY_REMOTE_STATE`，不受工具/API 的宽松 readiness 标签覆盖。handoff 是运行交接，不是平台事实。
+每个自然 research wave 结束时，复盘研究信息增益、family yield 和无效 Simulation 来源，并区分 `RESEARCH_UNKNOWN`（研究未知）与 `TOOL_FRICTION`（可复现的确定性工程问题）。研究未知量进入下一轮 paper/template/data/Simulation 研究；只有可复现的工具摩擦才按根目录 [`AGENTS.md`](../../AGENTS.md) 的 owner 流程进入 `TOOL_OPTIMIZATION`。研究方法以提高 `INFORMATION GAIN / SIMULATION`、缩短 `paper → template → evidence` 路径为导向。
 
 规划或标注大批次时读[批次设计](references/batch-design.md)；比较优胜者、检查稳健性或决定是否继续时读[结果解释](references/result-interpretation.md)。

@@ -33,7 +33,7 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         self.assertEqual(skill_dirs, ["skill-authoring", "wqb-research"])
 
         self.assertEqual(research_api.RESEARCH_CONTRACT_VERSION, "2026-09-26")
-        self.assertEqual(len(research_api.research_tool_manifest(profile="core")), 10)
+        self.assertEqual(len(research_api.research_tool_manifest(profile="core")), 11)
         skill_path = skill_root / "wqb-research" / "SKILL.md"
         text = skill_path.read_text(encoding="utf-8")
         self.assertIn(
@@ -89,8 +89,26 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
 
     def test_research_agent_handshake_reads_namespaced_skill_contract(self):
         text = (ROOT / "prompts" / "research_agent.md").read_text(encoding="utf-8")
-        self.assertIn("wqb_alpha_factory_research_contract", text)
+        self.assertIn("metadata.wqb_alpha_factory_research_contract", text)
         self.assertNotIn("compatible_research_contract", text)
+
+    def test_research_bootstrap_consumes_readiness_and_loads_detail_on_demand(self):
+        text = (ROOT / "prompts" / "research_agent.md").read_text(encoding="utf-8")
+        runtime = (ROOT / "wqb_agent" / "simulation_gateway.py").read_text(encoding="utf-8")
+        self.assertIn("write_readiness", text)
+        self.assertIn("AGENTS.md", text)
+        self.assertIn("只有 `write_readiness=READY` 可以发起新的 Simulation", text)
+        self.assertIn("Alpha submission 由人工完成", text)
+        self.assertIn("get_pending_executions", text)
+        self.assertNotIn("每个批次前阅读", text)
+        self.assertIn("新 Research 会话", text)
+        for detail in (
+            "OFFICIAL_QUOTA_EXHAUSTED",
+            "UNRESOLVED_EXECUTIONS",
+            "SUBMIT_UNKNOWN_PRESENT",
+        ):
+            self.assertIn(detail, runtime)
+            self.assertNotIn(detail, text)
 
     def test_skill_authoring_contract_is_chinese_and_self_contained(self):
         skill_path = ROOT / "skills" / "skill-authoring" / "SKILL.md"
@@ -109,7 +127,8 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
 
     def test_mcp_reference_documents_prod_correlation_as_a_finalist_tool(self):
         text = (ROOT / "docs" / "MCP_READ_ONLY.md").read_text(encoding="utf-8")
-        self.assertIn("Research Mode 暴露 10 个工具", text)
+        self.assertIn("Research Mode 暴露 11 个工具", text)
+        self.assertIn("get_pending_executions", text)
         self.assertIn("get_alpha_prod_correlation", text)
         self.assertIn("FINALIST_ONLY", text)
         self.assertIn("不隐式", text)
@@ -149,7 +168,7 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
             "CURRENT_BLOCKER:", "NEXT_USEFUL_ACTION:",
             "RUNTIME_EVIDENCE", "CHANGE", "DIRECT_VERIFICATION:",
             "RESEARCH_IMPACT", "REMAINING_BLOCKER", "mtime 只决定是否值得重读",
-            "运行每条新命令前先问", "读取实际 artifact/runtime evidence",
+            "运行每条新命令前先问", "读取最少的 artifact/runtime evidence",
             "SHA 只标示来源", "不能单独构成 blocker",
         ):
             self.assertIn(name, prompt)
@@ -168,18 +187,20 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         self.assertIn("同一个 Research Agent", combined)
         self.assertIn("真实运行证据", combined)
         self.assertIn("确定性工程摩擦", combined)
-        self.assertIn("活跃 research wave", combined)
-        self.assertIn("工具优化期间禁止 live Simulation POST", combined)
-        self.assertIn("离线测试", combined)
+        self.assertIn("活跃 live research wave", agents)
+        self.assertNotIn("活跃 live research wave", prompt)
+        self.assertIn("进入 `TOOL_OPTIMIZATION` 后停止所有 live Simulation POST", agents)
+        self.assertIn("离线/fake-client tests", agents)
         self.assertIn("fresh `research_status`", combined)
         self.assertNotIn("不修改仓库代码", prompt)
         self.assertNotIn("永不改核心代码", skill)
         self.assertNotIn("Maintenance Agent（architecture", prompt_index)
 
     def test_handoff_records_only_bounded_tool_friction_and_blocks_unknown_readiness(self):
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        tmp_policy = (ROOT / "docs" / "TMP_WORKSPACE_POLICY.md").read_text(encoding="utf-8")
         prompt = (ROOT / "prompts" / "research_agent.md").read_text(encoding="utf-8")
-        tool_phase = (ROOT / "prompts" / "maintenance_agent.md").read_text(encoding="utf-8")
-        combined = prompt + "\n" + tool_phase
+        combined = agents + "\n" + tmp_policy
 
         for field in (
             "invalid_spec_failures", "deterministic_failure_codes",
@@ -188,11 +209,13 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         ):
             self.assertIn(field, combined)
         self.assertIn("pending_execution_count > 0", combined)
-        self.assertIn("readiness 必须是 `BLOCKED_BY_REMOTE_STATE`", combined)
-        self.assertIn("只记录 reason code", combined)
+        self.assertIn("handoff readiness 必须为 `BLOCKED_BY_REMOTE_STATE`", combined)
+        self.assertIn("只记录有限、稳定且脱敏的代码", combined)
         self.assertIn("不记录自由文本", combined)
-        self.assertIn("不得写入 expression、field ID、Alpha ID", combined)
+        self.assertIn("不得写入 Alpha ID、field ID、expression", combined)
         self.assertIn("不新增 database、telemetry、watcher 或 scheduler", combined)
+        self.assertIn("TMP_WORKSPACE_POLICY.md", prompt)
+        self.assertNotIn("status_counts", prompt)
 
     def test_research_guides_preserve_validation_and_mechanism_boundaries(self):
         batch = (ROOT / "skills" / "wqb-research" / "references" / "batch-design.md").read_text(encoding="utf-8")
@@ -251,8 +274,7 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
     def test_every_paper_maps_to_brain_template_even_when_observables_are_missing(self):
         skill = (ROOT / "skills" / "wqb-research" / "SKILL.md").read_text(encoding="utf-8")
         batch = (ROOT / "skills" / "wqb-research" / "references" / "batch-design.md").read_text(encoding="utf-8")
-        prompt = (ROOT / "prompts" / "research_agent.md").read_text(encoding="utf-8")
-        combined = "\n".join((skill, batch, prompt))
+        combined = "\n".join((skill, batch))
 
         for phrase in (
             "UNIVERSAL PAPER MAPPING",
@@ -315,8 +337,8 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
     def test_paper_template_candidate_preserves_source_assumptions_and_controls(self):
         skill = (ROOT / "skills" / "wqb-research" / "SKILL.md").read_text(encoding="utf-8")
         batch = (ROOT / "skills" / "wqb-research" / "references" / "batch-design.md").read_text(encoding="utf-8")
-        prompt = (ROOT / "prompts" / "research_agent.md").read_text(encoding="utf-8")
-        combined = "\n".join((skill, batch, prompt))
+        protocol = (ROOT / "docs" / "BRAIN_PROTOCOL.md").read_text(encoding="utf-8")
+        combined = "\n".join((skill, batch, protocol))
 
         for phrase in (
             "PAPER_TEMPLATE_CANDIDATE",
@@ -424,15 +446,14 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
             "研究信息增益",
             "family yield",
             "无效 Simulation 来源",
-            "deterministic failures",
-            "evidence retrieval friction",
-            "重复人工 workaround",
             "RESEARCH_UNKNOWN",
             "TOOL_FRICTION",
             "INFORMATION GAIN / SIMULATION",
             "paper → template → evidence",
         ):
             self.assertIn(phrase, combined)
+        self.assertIn("TOOL_OPTIMIZATION", agents)
+        self.assertIn("可复现的确定性工具摩擦", prompt)
 
     def test_research_status_reports_the_contract_version(self):
         status = research_api.research_status()
