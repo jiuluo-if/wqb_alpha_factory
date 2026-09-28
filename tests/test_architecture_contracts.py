@@ -37,14 +37,60 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         skill_path = skill_root / "wqb-research" / "SKILL.md"
         text = skill_path.read_text(encoding="utf-8")
         self.assertIn(
-            f'compatible_research_contract: "{research_api.RESEARCH_CONTRACT_VERSION}"',
+            "metadata:\n"
+            f'  wqb_alpha_factory_research_contract: "{research_api.RESEARCH_CONTRACT_VERSION}"',
             text,
         )
+        self.assertNotIn("\ncompatible_research_contract:", text)
         references = sorted(
             path.name
             for path in (skill_root / "wqb-research" / "references").glob("*.md")
         )
         self.assertLessEqual(len(references), 2)
+
+    def test_research_skill_declares_an_explicit_execution_contract(self):
+        text = (ROOT / "skills" / "wqb-research" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("## 执行契约", text)
+        for field in ("INPUT", "OUTPUT", "PRECONDITIONS", "SUCCESS", "FAILURE"):
+            self.assertIn(f"**{field}**", text)
+        self.assertIn("研究问题缺失且不能从上下文恢复", text)
+
+    def test_research_result_guide_uses_bounded_lesson_candidate_fields(self):
+        text = (
+            ROOT
+            / "skills"
+            / "wqb-research"
+            / "references"
+            / "result-interpretation.md"
+        ).read_text(encoding="utf-8")
+        for field in (
+            "LESSON:",
+            "SOURCE:",
+            "EVIDENCE:",
+            "SCOPE:",
+            "COUNTEREVIDENCE:",
+            "FALSIFICATION:",
+            "TRANSFER_VALUE:",
+            "TARGET:",
+        ):
+            self.assertIn(field, text)
+        for target in ("WORKING_SET", "SKILL", "TEMPLATE", "TOOL"):
+            self.assertIn(target, text)
+        for source in ("PAPER", "BRAIN", "RUNTIME", "TOOLS_SKILL"):
+            self.assertIn(source, text)
+        self.assertIn("只选一个主要来源", text)
+        self.assertIn("`EVIDENCE` 可包含一个或多个来源条目", text)
+        self.assertIn("恰好包含以下八个字段", text)
+        self.assertIn("合成评测", text)
+        self.assertIn("匿名/脱敏引用", text)
+        self.assertIn("不建立", text)
+
+    def test_research_agent_handshake_reads_namespaced_skill_contract(self):
+        text = (ROOT / "prompts" / "research_agent.md").read_text(encoding="utf-8")
+        self.assertIn("wqb_alpha_factory_research_contract", text)
+        self.assertNotIn("compatible_research_contract", text)
 
     def test_skill_authoring_contract_is_chinese_and_self_contained(self):
         skill_path = ROOT / "skills" / "skill-authoring" / "SKILL.md"

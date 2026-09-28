@@ -1,10 +1,19 @@
 ---
 name: wqb-research
 description: "用于 WorldQuant BRAIN Alpha 研究：实验批次设计、Simulation 证据、结果解释与下一次实验选择。"
-compatible_research_contract: "2026-09-26"
+metadata:
+  wqb_alpha_factory_research_contract: "2026-09-26"
 ---
 
 # WQB 研究
+
+## 执行契约
+
+- **INPUT**：当前用户研究问题或简短工作集、fresh `research_status()` 与当前会话实际 MCP inventory、对问题有用的 BRAIN dataset/datafield/capability/evidence，以及可选的外部 Research Packet。
+- **OUTPUT**：有当前证据支持的下一项研究行动和简短映射；行动可以是经唯一研究 API 提交的 `SimulationSpec`/batch，也可以是明确的 no-write、`UNKNOWN` 或能力限制结论。
+- **PRECONDITIONS**：`research_status().research_contract_version` 必须与 `metadata.wqb_alpha_factory_research_contract` 一致；每个所需工具必须存在于当前 inventory，能力与平台事实须来自本轮 live evidence。
+- **SUCCESS**：行动能指出它要区分的解释、会改变决策的观测、证据范围与反证；Simulation 成功只证明执行结果可用，不自动证明经济机制。
+- **FAILURE**：研究问题缺失且不能从上下文恢复时，指出最小缺项并停止构造候选；契约版本不匹配时返回 `SKILL_STALE` 并停止依赖旧契约的执行；状态不可用或证据缺失时保留 `UNAVAILABLE`/`UNKNOWN`；工具缺失时报告能力限制并跳过受影响分支；未解决写入按原恢复边界处理，绝不自动重 POST。
 
 ## 负责方
 
@@ -27,7 +36,7 @@ compatible_research_contract: "2026-09-26"
 
 ## 契约握手
 
-frontmatter 中 `compatible_research_contract` 是本文件编写时所针对的契约。先调用 `research_status()` 并比对其 `research_contract_version`；不匹配即本 Skill 为 `SKILL_STALE`：运行任何批次前重新阅读仓库 Skill 与 `AGENTS.md`。不得凭信任复用过期 Skill。
+frontmatter 中 `metadata.wqb_alpha_factory_research_contract` 是本文件编写时所针对的契约。先调用 `research_status()` 并比对其 `research_contract_version`；不匹配即本 Skill 为 `SKILL_STALE`：运行任何批次前重新阅读仓库 Skill 与 `AGENTS.md`。不得凭信任复用过期 Skill。
 
 Skill/reference 提到的具体工具必须先对照当前会话的实际 inventory。Core 未暴露的低频能力若有等价 Core 路径则使用该路径；否则标记 `LOCAL_RESEARCH_CAPABILITY_LIMIT`，跳过依赖该能力的分支并继续其它可执行假设。不得臆造工具或绕过 facade。
 

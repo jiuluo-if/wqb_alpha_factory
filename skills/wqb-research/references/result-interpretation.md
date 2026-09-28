@@ -39,6 +39,35 @@ Simulation budget 随信息增益逐步增加：`SEMANTIC / TIMING / COVERAGE SC
 
 可复用 template 的说明应保留机制不变量、FIELD_ROLES 与 semantic slots、已由 live contract 验证的允许替换范围、合理 horizon、可变 extraction/settings axes、已知失败条件、成本特征、适用 region/data 条件和验证证据范围。只记录足以支持复用的匿名机制与证据摘要；具体候选字段、表达式、Alpha 或完整研究内容仍遵循隐私约束。没有足够家族证据时停留在 candidate/provisional 工作集，不创建 template registry 或自动晋升器。
 
+## LESSON_CANDIDATE
+
+当一个研究结论可能跨任务复用时，先写一条短的 `LESSON_CANDIDATE`，再决定是否值得进入长期 reference。它是 Agent 当前工作集中的审查记录，不是平台事实、数据库记录或自动晋升授权；不要为每个 Alpha/Simulation 机械生成一条 lesson。
+
+每条候选恰好包含以下八个字段；多余的 paper/template 细节留在其专属 mapping，不扩张 lesson schema。
+
+```yaml
+LESSON: "一条可检验、范围明确的研究原则"
+SOURCE: BRAIN # 单选 PAPER | BRAIN | RUNTIME | TOOLS_SKILL；不能确定时 UNKNOWN
+EVIDENCE: # 一个或多个来源条目；没有可核对来源时 UNKNOWN
+  - SOURCE_TYPE: BRAIN # PAPER | BRAIN | RUNTIME | TOOLS_SKILL
+    REFERENCE: "匿名/脱敏引用；无法安全回查时 UNKNOWN"
+    OBSERVED: "观察日期和范围；未知时 UNKNOWN"
+    SUPPORTS: "该来源实际支持的主张"
+SCOPE: "适用数据、地区、时期、机制或任务边界；未知时 UNKNOWN"
+COUNTEREVIDENCE: "反例、矛盾证据；未查或不可用时 UNKNOWN"
+FALSIFICATION: "什么可观察结果会削弱或否定这条 lesson；无法界定时 UNKNOWN"
+TRANSFER_VALUE: "可复用情形，以及它能减少的重复推理；未知时 UNKNOWN"
+TARGET: WORKING_SET # 可选 SKILL | TEMPLATE | TOOL；只指向 owner review
+```
+
+- 顶层 `SOURCE` 只选一个主要来源，不替代具体出处。`EVIDENCE` 可包含一个或多个来源条目；每项单独标明 source type、匿名/脱敏引用、观察时间/范围和它实际支持的内容。论文只提供机制/方法支持，BRAIN 与 runtime evidence 才能验证本项目中的表现、能力和范围。不得把论文结论或一次 Simulation 写成通用事实。
+- `EVIDENCE` 使用有界、可回查的来源引用；原始私有字段、完整表达式、Alpha/credential 和研究 payload 留在其授权来源，不复制进 tracked Skill/reference 或公开 handoff。
+- 合成评测 fixture、模拟输入或行为评测必须在 `EVIDENCE` 中显式标 `SYNTHETIC`；不能把合成样例算作实际 BRAIN/RUNTIME evidence，也不能满足长期 promotion gates。
+- 信息缺失、互相矛盾或尚未验证时显式标 `UNKNOWN`；不得为凑齐格式推断字段、机制或反例。`COUNTEREVIDENCE` 只有在对应范围已检查后才可写“未观察到”。
+- `TARGET` 仅是审查方向：`WORKING_SET` 留在当前问题；`SKILL` 由 `wqb-research` owner 审查；`TEMPLATE` 由唯一 `AlphaTemplate` owner 审查；`TOOL` 由现有工具 owner 审查。它不触发文件写入、Simulation 或自动晋升。
+- 写入前先对照当前 Skill/reference：重复规则标为 `ALREADY_COVERED`，可合并或收窄时使用 `MERGE`/`NARROW`。长期晋升还须有重复且机制一致的项目证据、支持 attribution 的 evidence、反证/证伪测试、清楚的 scope 和跨任务 transfer value；单篇论文、单次结果或 scorecard 不够。
+- 不建立 lesson database、memory writer、scorecard、proposal queue 或自动晋升流程；未达到门槛时将候选留在工作集或明确 `NO_SKILL_PROMOTION`。
+
 ## Validation Budget
 
 任何 evidence 一旦被用来调整 `field`、`expression`、`parameter`、`operator` 或 `settings`，都转为 `DEVELOPMENT_EVIDENCE`，不再算作独立 finalist validation。finalist 应尽量保留未参与开发的验证轴；同一个 validation 反复被拿来调 Alpha 时标 `VALIDATION_EXHAUSTED`，停止将该轴声称为验证证据并寻找尚未消耗的 axis。不得在同一 validation 上继续拟合到 PASS。

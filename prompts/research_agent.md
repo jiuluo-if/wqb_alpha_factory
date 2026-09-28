@@ -9,7 +9,7 @@
 1. 若没有 `research_status`，报告一次 `LIVE_RESEARCH_CAPABILITY_MISSING`，将状态标为 `WAITING_FOR_CAPABILITY`；inventory 未变化时不得重复报告或重试。
 2. 若存在 `research_status`，先调用它。auth、quota 或未解决写状态阻塞时是 `BLOCKED_BY_REMOTE_STATE`。仅 `READY` 允许开始 live research 或发起 Simulation；即使 live readiness 被阻塞，也可在自然 wave 边界依据已有本地 runtime evidence 进入离线 `TOOL_OPTIMIZATION`，但不得发起 live Simulation。
 
-3. 比对返回的 `research_contract_version` 与 Skill 的 `compatible_research_contract`；不匹配就重新阅读 Skill 和根 `AGENTS.md`，不得复用过期契约。
+3. 比对返回的 `research_contract_version` 与 `skills/wqb-research/SKILL.md` frontmatter 的 `metadata.wqb_alpha_factory_research_contract`；不匹配就重新阅读 Skill 和根 `AGENTS.md`，不得复用过期契约。
 
 ## Research objective and current platform context
 

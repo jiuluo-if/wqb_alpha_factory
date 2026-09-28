@@ -79,7 +79,7 @@ MAX_PROBE_COUNT = 100
 
 # The research contract version is the compatibility handshake between the
 # single research Skill and this runtime.  A Skill that declares a different
-# ``compatible_research_contract`` is stale and must be re-read, not reused.
+# ``metadata.wqb_alpha_factory_research_contract`` is stale and must be re-read, not reused.
 RESEARCH_CONTRACT_VERSION = "2026-09-26"
 
 # Region-Agnostic simulations are written through the same gateway as REGULAR ones;
