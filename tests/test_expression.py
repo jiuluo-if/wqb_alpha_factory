@@ -8,6 +8,7 @@ from wqb_agent.expression import (
     operator_occurrence_count,
     operator_occurrence_signature,
     submission_fingerprint,
+    unaggregated_vector_fields,
     variant_family_fingerprint,
 )
 
@@ -92,6 +93,48 @@ class TestExpressionAnalysis(unittest.TestCase):
         )
 
         self.assertEqual(result.fields, ("close", "close_5d"))
+
+
+class TestUnaggregatedVectorFields(unittest.TestCase):
+    """A VECTOR field used outside any ``vec_*`` call is deterministically invalid."""
+
+    def test_scalar_use_of_a_vector_field_is_reported(self):
+        self.assertEqual(
+            unaggregated_vector_fields("rank(ts_arg_min(v, 255))", {"v": "VECTOR"}),
+            ("v",),
+        )
+
+    def test_vector_field_inside_a_vec_call_is_accepted(self):
+        self.assertEqual(
+            unaggregated_vector_fields("rank(vec_avg(v))", {"v": "VECTOR"}),
+            (),
+        )
+
+    def test_matrix_typed_fields_are_never_reported(self):
+        self.assertEqual(
+            unaggregated_vector_fields("rank(ts_arg_min(m, 255))", {"m": "MATRIX"}),
+            (),
+        )
+
+    def test_an_occurrence_outside_the_vec_call_is_still_reported(self):
+        self.assertEqual(
+            unaggregated_vector_fields("multiply(vec_avg(v), v)", {"v": "VECTOR"}),
+            ("v",),
+        )
+
+    def test_matching_is_case_insensitive_and_preserves_the_declared_id(self):
+        self.assertEqual(
+            unaggregated_vector_fields("rank(V)", {"v": "vector"}),
+            ("v",),
+        )
+
+    def test_absent_fields_and_blank_input_are_not_reported(self):
+        self.assertEqual(
+            unaggregated_vector_fields("rank(vec_avg(v))", {"w": "VECTOR"}),
+            (),
+        )
+        self.assertEqual(unaggregated_vector_fields(None, {"v": "VECTOR"}), ())
+        self.assertEqual(unaggregated_vector_fields("rank(v)", None), ())
 
 
 if __name__ == "__main__":

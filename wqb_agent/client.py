@@ -1091,6 +1091,7 @@ class WQBClient:
                 requested.setdefault(dataset, set()).update(ids)
 
         verified: set[str] = set()
+        field_types: dict[str, str] = {}
         missing: set[str] = set()
         for dataset_id, requested_ids in requested.items():
             found: set[str] = set()
@@ -1120,7 +1121,11 @@ class WQBClient:
                     if (returned_dataset is not None
                             and str(returned_dataset).casefold() != dataset_id.casefold()):
                         continue
-                    found.add(str(row["id"]).strip())
+                    field_id = str(row["id"]).strip()
+                    found.add(field_id)
+                    row_type = row.get("type")
+                    if isinstance(row_type, str) and row_type.strip():
+                        field_types[field_id.casefold()] = row_type.strip().upper()
                 if requested_ids <= found:
                     verified.update(requested_ids)
                     break
@@ -1141,6 +1146,11 @@ class WQBClient:
             "status": "LIVE_VERIFIED" if not missing else "UNAVAILABLE",
             "source": "BRAIN_LIVE_ONLY",
             "fields": sorted(verified),
+            "field_types": {
+                field_id: field_types[field_id.casefold()]
+                for field_id in sorted(verified)
+                if field_id.casefold() in field_types
+            },
             "missing": sorted(missing),
             "reason_code": None if not missing else "CAPABILITY_UNAVAILABLE",
         }

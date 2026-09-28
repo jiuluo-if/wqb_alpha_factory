@@ -9,7 +9,7 @@ import re
 REASON_CODES = frozenset({
     "INVALID_SPEC", "CAPABILITY_UNAVAILABLE", "EXACT_DUPLICATE",
     "RATE_LIMIT_OR_SUBMIT_UNKNOWN", "AUTH_FAILURE", "POLL_PENDING",
-    "NOT_DISPATCHED", "NEW_PROBE_REQUIRED",
+    "NOT_DISPATCHED", "NEW_PROBE_REQUIRED", "FIELD_TYPE_MISMATCH",
 })
 
 
@@ -86,11 +86,15 @@ def reason_code_for_failure(status, error=None, *, progress_url=None):
     explicit = getattr(error, "reason_code", None)
     if explicit in REASON_CODES:
         return explicit
+    text = str(error or "")
+    # A VECTOR field used without ``vec_*`` aggregation is deterministically
+    # invalid, so it must stay distinguishable from an unknown remote failure.
+    if "FIELD_TYPE_MISMATCH" in text:
+        return "FIELD_TYPE_MISMATCH"
     if status == "EXACT_DUPLICATE":
         return "EXACT_DUPLICATE"
     if status == "NOT_DISPATCHED":
         return "NOT_DISPATCHED"
-    text = str(error or "")
     if "NEW_PROBE_REQUIRED" in text:
         return "NEW_PROBE_REQUIRED"
     if "CAPABILITY" in text or "PERMISSION_UNAVAILABLE" in text:

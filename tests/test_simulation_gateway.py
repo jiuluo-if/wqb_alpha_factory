@@ -234,6 +234,51 @@ class TestWriteReadiness(unittest.TestCase):
         self.assertEqual(result["reason_code"], "AUTHENTICATION_UNAVAILABLE")
         self.assertEqual(client.submissions, [])
 
+    def test_gateway_blocks_a_vector_field_used_without_aggregation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = VectorFieldCapabilityGatewayClient()
+            results = SimulationGateway(client, state_dir=tmp).simulate_batch([
+                SimulationSpec(
+                    "rank(vec_field)", fields=("vec_field",),
+                    field_datasets={"vec_field": "synthetic_dataset"},
+                ),
+            ])
+        self.assertEqual(results[0]["status"], "NOT_DISPATCHED")
+        self.assertEqual(results[0]["reason_code"], "FIELD_TYPE_MISMATCH")
+        self.assertIn("FIELD_TYPE_MISMATCH", results[0]["error"])
+        self.assertEqual(client.submissions, [])
+
+    def test_gateway_still_runs_valid_siblings_of_a_blocked_vector_spec(self):
+        # One deterministically invalid child must not cost the whole batch:
+        # the platform would otherwise fail the entire Multi parent.
+        with tempfile.TemporaryDirectory() as tmp:
+            client = VectorFieldCapabilityGatewayClient()
+            results = SimulationGateway(client, state_dir=tmp).simulate_batch([
+                SimulationSpec(
+                    "rank(vec_field)", fields=("vec_field",),
+                    field_datasets={"vec_field": "synthetic_dataset"},
+                ),
+                SimulationSpec(
+                    "rank(matrix_field)", fields=("matrix_field",),
+                    field_datasets={"matrix_field": "synthetic_dataset"},
+                ),
+            ])
+        self.assertEqual(results[0]["reason_code"], "FIELD_TYPE_MISMATCH")
+        self.assertEqual(results[1]["status"], "DONE")
+        self.assertEqual(len(client.submissions), 1)
+
+    def test_gateway_allows_a_vector_field_aggregated_with_vec_avg(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = VectorFieldCapabilityGatewayClient()
+            results = SimulationGateway(client, state_dir=tmp).simulate_batch([
+                SimulationSpec(
+                    "rank(vec_avg(vec_field))", fields=("vec_field",),
+                    field_datasets={"vec_field": "synthetic_dataset"},
+                ),
+            ])
+        self.assertEqual(results[0]["status"], "DONE")
+        self.assertEqual(len(client.submissions), 1)
+
 
 class _EmptyQuotaRepository:
     retention_days = 7
@@ -298,6 +343,32 @@ class VerifiedFieldCapabilityGatewayClient(FakeGatewayClient):
     def get_field_capability(self, field_sources, *, scope=None):
         fields = [field for selected in field_sources.values() for field in selected]
         return {"valid": True, "fields": fields, "source": "BRAIN_LIVE_ONLY"}
+
+
+class VectorFieldCapabilityGatewayClient(FakeGatewayClient):
+    """Live field capability that reports selected fields as VECTOR-typed."""
+
+    def __init__(self, vector_fields=("vec_field",)):
+        super().__init__()
+        self.vector_fields = set(vector_fields)
+
+    def get_field_capability(self, field_sources, *, scope=None):
+        fields = [field for selected in field_sources.values() for field in selected]
+        return {
+            "valid": True,
+            "fields": fields,
+            "source": "BRAIN_LIVE_ONLY",
+            "field_types": {
+                field: ("VECTOR" if field in self.vector_fields else "MATRIX")
+                for field in fields
+            },
+        }
+
+    def get_operator_capability(self):
+        return {
+            "valid": True, "status": "AVAILABLE", "source": "BRAIN_LIVE_ONLY",
+            "operators": ["rank", "vec_avg"],
+        }
 
 
 class RemoteHistoryGatewayClient(FakeGatewayClient):

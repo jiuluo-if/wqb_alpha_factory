@@ -21,6 +21,7 @@ from .expression import (
     analyze_expression,
     expression_field_identifiers,
     submission_fingerprint,
+    unaggregated_vector_fields,
 )
 from .failures import ResearchReasonError, reason_code_for_failure
 from .locking import single_instance_scope
@@ -701,6 +702,18 @@ class SimulationGateway:
                     "CAPABILITY_UNAVAILABLE",
                 )
 
+    @staticmethod
+    def _unaggregated_vector_fields(spec, live_field_types):
+        """Return VECTOR fields of ``spec`` used without ``vec_*`` aggregation."""
+        if not live_field_types:
+            return ()
+        declared = {
+            field_id: live_field_types[field_id]
+            for field_id in spec.fields
+            if field_id in live_field_types
+        }
+        return unaggregated_vector_fields(spec.expression, declared)
+
     def _validate_operator_capability(self, spec, operator_capability):
         if operator_capability is _CAPABILITY_UNCHECKED:
             reader = getattr(self.client, "get_operator_capability", None)
@@ -1020,22 +1033,46 @@ class SimulationGateway:
                     "FIELD_CAPABILITY_UNAVAILABLE: " + ", ".join(sorted(missing)),
                     "CAPABILITY_UNAVAILABLE",
                 )
-            capabilities[group_key] = available
+            capabilities[group_key] = {
+                "fields": available,
+                "field_types": dict(capability.get("field_types") or {}),
+            }
+        executable = []
         for index, spec, _fingerprint in validated:
             field_capability = _CAPABILITY_READER_ABSENT
             if spec.fields:
-                available = set().union(*(
-                    capabilities[group_key] for group_key in spec_field_groups[index]
-                ))
+                groups = [capabilities[key] for key in spec_field_groups[index]]
+                available = set().union(*(entry["fields"] for entry in groups))
+                live_types = {}
+                for entry in groups:
+                    live_types.update(entry["field_types"])
                 field_capability = {
                     "valid": True, "source": "BRAIN_LIVE_ONLY",
                     "fields": available,
                 }
+                # A VECTOR field used as a scalar is deterministically invalid
+                # and would make the whole Multi parent terminate with ERROR,
+                # discarding every valid child in the same POST. Block only the
+                # offending spec so the rest of the batch still runs.
+                unaggregated = self._unaggregated_vector_fields(spec, live_types)
+                if unaggregated:
+                    results[index] = self._labelled_result(
+                        spec, "NOT_DISPATCHED", _fingerprint,
+                        error=(
+                            "FIELD_TYPE_MISMATCH: VECTOR field used without "
+                            "vec_* aggregation: " + ", ".join(unaggregated)
+                        ),
+                    )
+                    continue
             self._validate_live_capability(
                 spec, operator_capability=operator_capability,
                 field_capability=field_capability,
             )
-        return results, validated, self._remote_history_matches(validated)
+            executable.append((index, spec, _fingerprint))
+        return (
+            results, executable,
+            self._remote_history_matches(executable),
+        )
 
     def simulate(self, spec):
         return self.simulate_batch([spec])[0]

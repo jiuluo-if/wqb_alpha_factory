@@ -3,11 +3,13 @@
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 _IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
 _OPERATOR_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 _OPERATOR_PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}\s*\(")
+_VEC_OPERATOR_RE = re.compile(r"\bvec_[A-Za-z0-9_]*\s*\(", re.IGNORECASE)
 _REDUNDANT_UNARY_RE = re.compile(
     r"\b(rank|zscore|normalize|reverse)\s*\(\s*\1\s*\("
 )
@@ -85,6 +87,52 @@ def expression_field_identifiers(analysis):
         identifier for identifier in analysis.identifiers
         if identifier.lower() not in _NON_FIELD_IDENTIFIERS
     )
+
+
+def _call_spans(expression, pattern):
+    """Return (start, end) spans of each balanced call matched by ``pattern``."""
+    spans = []
+    for match in pattern.finditer(expression):
+        opening = match.end() - 1
+        depth = 0
+        for index in range(opening, len(expression)):
+            char = expression[index]
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    spans.append((opening, index + 1))
+                    break
+    return spans
+
+
+def unaggregated_vector_fields(expression, field_types):
+    """Return VECTOR-typed fields the expression uses outside any ``vec_*`` call.
+
+    BRAIN's VECTOR fields must be aggregated before they can take part in scalar
+    arithmetic, so feeding one straight into a scalar operator produces a
+    deterministically invalid Simulation. This reports only that syntactic fact;
+    it is not an economic judgement about the candidate.
+    """
+    text = str(expression or "")
+    if not text or not isinstance(field_types, Mapping):
+        return ()
+    aggregate_spans = _call_spans(text, _VEC_OPERATOR_RE)
+    unaggregated = []
+    for field, field_type in field_types.items():
+        name = str(field or "")
+        if not name or str(field_type or "").strip().upper() != "VECTOR":
+            continue
+        pattern = re.compile(rf"(?<![\w]){re.escape(name)}(?![\w])", re.IGNORECASE)
+        for match in pattern.finditer(text):
+            if not any(
+                start <= match.start() and match.end() <= end
+                for start, end in aggregate_spans
+            ):
+                unaggregated.append(name)
+                break
+    return tuple(sorted(unaggregated, key=str.casefold))
 
 
 def operator_occurrence_count(expression):
