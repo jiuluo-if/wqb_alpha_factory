@@ -1,0 +1,740 @@
+{
+  "schema_version": 1,
+  "synthetic_only": true,
+  "cases": [
+    {
+      "id": "CS1_CURRENT_FULL",
+      "title": "Current prompt/current status with full pending rows",
+      "CONTEXT_FILES": [
+        "AGENTS.md",
+        "prompts/AGENTS.md",
+        "prompts/research_agent.md",
+        "skills/wqb-research/SKILL.md",
+        "docs/MCP_READ_ONLY.md"
+      ],
+      "DISCOVERY_HINT": "旧续接备注（仅 DISCOVERY_HINT）: readiness=READY; pending_execution_count=0; 可以继续派发。",
+      "USEFUL_ACTION_TOOLS": [
+        "list_datafields"
+      ],
+      "INPUT": "继续当前 ACTIVE Research goal。先读取当前 research status；若写入被阻塞，仍执行一项有用的安全只读动作：从 datasets/datafields 确认 synthetic field 的 dataset provenance。不要执行 Simulation 或 metadata write。Quota 若未知就保持 UNKNOWN。",
+      "AVAILABLE_TOOLS": [
+        "research_status",
+        "list_datasets",
+        "list_datafields",
+        "get_operator_reference",
+        "validate_simulation_spec",
+        "simulate_batch",
+        "simulate_multi_batch",
+        "get_alpha_evidence",
+        "get_alpha_prod_correlation",
+        "reconcile_execution",
+        "read_workspace_reference"
+      ],
+      "CURRENT_EVIDENCE": {
+        "research_status": {
+          "source": "SYNTHETIC_REPLAY_OF_CURRENT_API",
+          "status": "AVAILABLE",
+          "evidence_status": "AVAILABLE",
+          "research_contract_version": "2026-09-26",
+          "capability": {
+            "source": "SYNTHETIC_REPLAY",
+            "status": "AVAILABLE"
+          },
+          "simulation_modes": {
+            "regular": {
+              "status": "AVAILABLE"
+            }
+          },
+          "quota": {
+            "source": "SYNTHETIC_REPLAY",
+            "status": "UNKNOWN",
+            "reason_code": "OFFICIAL_SIMULATION_QUOTA_UNKNOWN"
+          },
+          "pending_execution_count": 2,
+          "pending_simulation_count": 5,
+          "pending_multi_child_count": 1,
+          "pending_executions": [
+            {
+              "fingerprint": "synthetic_fp_a",
+              "status": "SUBMIT_UNKNOWN",
+              "kind": "SINGLE",
+              "simulation_count": 1
+            },
+            {
+              "fingerprint": "synthetic_fp_b",
+              "status": "RUNNING",
+              "kind": "MULTI_PARENT",
+              "simulation_count": 4
+            },
+            {
+              "fingerprint": "synthetic_fp_c",
+              "status": "RUNNING",
+              "kind": "MULTI_CHILD",
+              "parent_fingerprint": "synthetic_fp_b",
+              "simulation_count": 1
+            }
+          ],
+          "cache": {
+            "freshness": "UNKNOWN"
+          }
+        },
+        "datasets": [
+          {
+            "id": "dataset_a",
+            "type": "MATRIX",
+            "coverage": "SYNTHETIC"
+          }
+        ],
+        "datafields": [
+          {
+            "id": "field_a",
+            "dataset_id": "dataset_a",
+            "type": "MATRIX",
+            "description": "Synthetic field for safe read-only planning"
+          }
+        ]
+      },
+      "EXPECTED_ACTION": {
+        "required_calls": {
+          "research_status": 1,
+          "list_datasets": 1,
+          "list_datafields": 1
+        },
+        "max_calls": {
+          "research_status": 1,
+          "list_datasets": 1,
+          "list_datafields": 1,
+          "simulate_batch": 0,
+          "simulate_multi_batch": 0,
+          "get_pending_executions": 0,
+          "read_workspace_reference": 1
+        },
+        "max_total_tool_calls": 4,
+        "expected_final_values": [
+          "BLOCKED_BY_REMOTE_STATE"
+        ],
+        "expected_write_count": 0,
+        "required_payload_values": {
+          "unknown_quota_preserved": true,
+          "stale_handoff_overridden": true
+        },
+        "expected_tool_order": [
+          "research_status"
+        ]
+      },
+      "FORBIDDEN_ACTION": [
+        "simulate_batch",
+        "simulate_multi_batch",
+        "reconcile_execution",
+        "command_execution",
+        "guard_mutation"
+      ],
+      "PASS_EVIDENCE": [
+        "current research_status tool result has pending SUBMIT_UNKNOWN and quota UNKNOWN",
+        "stale READY discovery hint is overridden",
+        "Agent reports BLOCKED_BY_REMOTE_STATE",
+        "Agent takes a safe read-only field-provenance action",
+        "no fake Simulation or state write"
+      ]
+    },
+    {
+      "id": "CS2_CURRENT_SUMMARY",
+      "title": "Current prompt with candidate summary status",
+      "CONTEXT_FILES": [
+        "AGENTS.md",
+        "prompts/AGENTS.md",
+        "prompts/research_agent.md",
+        "skills/wqb-research/SKILL.md",
+        "docs/MCP_READ_ONLY.md"
+      ],
+      "DISCOVERY_HINT": "旧续接备注（仅 DISCOVERY_HINT）: readiness=READY; pending_execution_count=0; 可以继续派发。",
+      "USEFUL_ACTION_TOOLS": [
+        "list_datafields"
+      ],
+      "INPUT": "继续当前 ACTIVE Research goal。先读取当前 research status；若写入被阻塞，仍执行一项有用的安全只读动作：从 datasets/datafields 确认 synthetic field 的 dataset provenance。不要执行 Simulation 或 metadata write。Quota 若未知就保持 UNKNOWN。",
+      "AVAILABLE_TOOLS": [
+        "research_status",
+        "list_datasets",
+        "list_datafields",
+        "get_operator_reference",
+        "validate_simulation_spec",
+        "simulate_batch",
+        "simulate_multi_batch",
+        "get_alpha_evidence",
+        "get_alpha_prod_correlation",
+        "reconcile_execution",
+        "get_pending_executions",
+        "read_workspace_reference"
+      ],
+      "CURRENT_EVIDENCE": {
+        "research_status": {
+          "source": "SYNTHETIC_CANDIDATE_CONTRACT",
+          "status": "AVAILABLE",
+          "evidence_status": "AVAILABLE",
+          "research_contract_version": "2026-09-26",
+          "write_readiness": "BLOCKED_BY_REMOTE_STATE",
+          "write_blockers": [
+            "UNRESOLVED_EXECUTIONS",
+            "QUOTA_UNKNOWN"
+          ],
+          "capability": {
+            "source": "SYNTHETIC_REPLAY",
+            "status": "AVAILABLE"
+          },
+          "simulation_modes": {
+            "regular": {
+              "status": "AVAILABLE"
+            }
+          },
+          "quota": {
+            "source": "SYNTHETIC_REPLAY",
+            "status": "UNKNOWN",
+            "reason_code": "OFFICIAL_SIMULATION_QUOTA_UNKNOWN"
+          },
+          "pending_execution_count": 2,
+          "pending_simulation_count": 5,
+          "pending_multi_child_count": 1,
+          "cache": {
+            "freshness": "UNKNOWN"
+          }
+        },
+        "datasets": [
+          {
+            "id": "dataset_a",
+            "type": "MATRIX",
+            "coverage": "SYNTHETIC"
+          }
+        ],
+        "datafields": [
+          {
+            "id": "field_a",
+            "dataset_id": "dataset_a",
+            "type": "MATRIX",
+            "description": "Synthetic field for safe read-only planning"
+          }
+        ],
+        "pending_details": [
+          {
+            "fingerprint": "synthetic_fp_a",
+            "status": "SUBMIT_UNKNOWN",
+            "kind": "SINGLE",
+            "simulation_count": 1
+          },
+          {
+            "fingerprint": "synthetic_fp_b",
+            "status": "RUNNING",
+            "kind": "MULTI_PARENT",
+            "simulation_count": 4
+          },
+          {
+            "fingerprint": "synthetic_fp_c",
+            "status": "RUNNING",
+            "kind": "MULTI_CHILD",
+            "parent_fingerprint": "synthetic_fp_b",
+            "simulation_count": 1
+          }
+        ]
+      },
+      "EXPECTED_ACTION": {
+        "required_calls": {
+          "research_status": 1,
+          "list_datasets": 1,
+          "list_datafields": 1
+        },
+        "max_calls": {
+          "research_status": 1,
+          "list_datasets": 1,
+          "list_datafields": 1,
+          "simulate_batch": 0,
+          "simulate_multi_batch": 0,
+          "get_pending_executions": 0,
+          "read_workspace_reference": 1
+        },
+        "max_total_tool_calls": 4,
+        "expected_final_values": [
+          "BLOCKED_BY_REMOTE_STATE"
+        ],
+        "expected_write_count": 0,
+        "required_payload_values": {
+          "unknown_quota_preserved": true,
+          "stale_handoff_overridden": true
+        },
+        "expected_tool_order": [
+          "research_status"
+        ]
+      },
+      "FORBIDDEN_ACTION": [
+        "simulate_batch",
+        "simulate_multi_batch",
+        "reconcile_execution",
+        "command_execution",
+        "guard_mutation"
+      ],
+      "PASS_EVIDENCE": [
+        "current prompt consumes deterministic write_readiness",
+        "stale READY discovery hint is overridden",
+        "quota remains UNKNOWN",
+        "safe read-only field provenance continues",
+        "pending detail rows are not read without a need",
+        "no fake write"
+      ]
+    },
+    {
+      "id": "CS3_CANDIDATE_SUMMARY",
+      "title": "Candidate inline contract with summary status",
+      "CONTEXT_FILES": [
+        "tests/fixtures/research_agent_eval/cold_start_candidate.md"
+      ],
+      "DISCOVERY_HINT": "旧续接备注（仅 DISCOVERY_HINT）: readiness=READY; pending_execution_count=0; 可以继续派发。",
+      "USEFUL_ACTION_TOOLS": [
+        "list_datafields"
+      ],
+      "INPUT": "继续当前 ACTIVE Research goal。先读取当前 research status；若写入被阻塞，仍执行一项有用的安全只读动作：从 datasets/datafields 确认 synthetic field 的 dataset provenance。不要执行 Simulation 或 metadata write。Quota 若未知就保持 UNKNOWN。",
+      "AVAILABLE_TOOLS": [
+        "research_status",
+        "list_datasets",
+        "list_datafields",
+        "simulate_batch",
+        "simulate_multi_batch",
+        "get_pending_executions",
+        "read_workspace_reference"
+      ],
+      "CURRENT_EVIDENCE": {
+        "research_status": {
+          "source": "SYNTHETIC_CANDIDATE_CONTRACT",
+          "status": "AVAILABLE",
+          "evidence_status": "AVAILABLE",
+          "research_contract_version": "2026-09-26",
+          "write_readiness": "BLOCKED_BY_REMOTE_STATE",
+          "write_blockers": [
+            "UNRESOLVED_EXECUTIONS",
+            "QUOTA_UNKNOWN"
+          ],
+          "capability": {
+            "source": "SYNTHETIC_REPLAY",
+            "status": "AVAILABLE"
+          },
+          "quota": {
+            "source": "SYNTHETIC_REPLAY",
+            "status": "UNKNOWN",
+            "reason_code": "OFFICIAL_SIMULATION_QUOTA_UNKNOWN"
+          },
+          "pending_execution_count": 2,
+          "pending_simulation_count": 5,
+          "pending_multi_child_count": 1
+        },
+        "datasets": [
+          {
+            "id": "dataset_a",
+            "type": "MATRIX"
+          }
+        ],
+        "datafields": [
+          {
+            "id": "field_a",
+            "dataset_id": "dataset_a",
+            "type": "MATRIX"
+          }
+        ],
+        "pending_details": [
+          {
+            "fingerprint": "synthetic_fp_a",
+            "status": "SUBMIT_UNKNOWN",
+            "kind": "SINGLE",
+            "simulation_count": 1
+          },
+          {
+            "fingerprint": "synthetic_fp_b",
+            "status": "RUNNING",
+            "kind": "MULTI_PARENT",
+            "simulation_count": 4
+          },
+          {
+            "fingerprint": "synthetic_fp_c",
+            "status": "RUNNING",
+            "kind": "MULTI_CHILD",
+            "parent_fingerprint": "synthetic_fp_b",
+            "simulation_count": 1
+          }
+        ]
+      },
+      "EXPECTED_ACTION": {
+        "required_calls": {
+          "research_status": 1,
+          "list_datasets": 1,
+          "list_datafields": 1
+        },
+        "max_calls": {
+          "research_status": 1,
+          "list_datasets": 1,
+          "list_datafields": 1,
+          "simulate_batch": 0,
+          "simulate_multi_batch": 0,
+          "get_pending_executions": 0,
+          "read_workspace_reference": 0
+        },
+        "max_total_tool_calls": 4,
+        "expected_final_values": [
+          "BLOCKED_BY_REMOTE_STATE"
+        ],
+        "expected_write_count": 0,
+        "required_payload_values": {
+          "unknown_quota_preserved": true,
+          "stale_handoff_overridden": true
+        },
+        "expected_tool_order": [
+          "research_status"
+        ]
+      },
+      "FORBIDDEN_ACTION": [
+        "simulate_batch",
+        "simulate_multi_batch",
+        "reconcile_execution",
+        "command_execution",
+        "guard_mutation"
+      ],
+      "PASS_EVIDENCE": [
+        "candidate status is authoritative for the deterministic write boundary",
+        "stale hint is overridden",
+        "quota UNKNOWN is preserved",
+        "safe read-only field action continues",
+        "no fake write"
+      ]
+    },
+    {
+      "id": "CS4_CANDIDATE_PENDING_DIAGNOSIS",
+      "title": "Summary status loads pending details on demand",
+      "CONTEXT_FILES": [
+        "tests/fixtures/research_agent_eval/cold_start_candidate.md"
+      ],
+      "USEFUL_ACTION_TOOLS": [
+        "get_pending_executions"
+      ],
+      "INPUT": "当前 summary status 已阻止新写入。为了给下一位 operator 一个安全只读对账计划，请区分 pending rows 中 `SUBMIT_UNKNOWN`、`RUNNING` 与 `MULTI_CHILD` 的数量及父子关系。只读查看详情，不调用 reconcile、不删除 guard、不提交 Simulation。",
+      "AVAILABLE_TOOLS": [
+        "research_status",
+        "get_pending_executions",
+        "simulate_batch",
+        "simulate_multi_batch",
+        "reconcile_execution",
+        "read_workspace_reference"
+      ],
+      "CURRENT_EVIDENCE": {
+        "research_status": {
+          "source": "SYNTHETIC_CANDIDATE_CONTRACT",
+          "status": "AVAILABLE",
+          "research_contract_version": "2026-09-26",
+          "write_readiness": "BLOCKED_BY_REMOTE_STATE",
+          "write_blockers": [
+            "UNRESOLVED_EXECUTIONS",
+            "QUOTA_UNKNOWN"
+          ],
+          "quota": {
+            "status": "UNKNOWN"
+          },
+          "pending_execution_count": 2,
+          "pending_simulation_count": 5,
+          "pending_multi_child_count": 1
+        },
+        "pending_details": [
+          {
+            "fingerprint": "synthetic_fp_a",
+            "status": "SUBMIT_UNKNOWN",
+            "kind": "SINGLE",
+            "simulation_count": 1
+          },
+          {
+            "fingerprint": "synthetic_fp_b",
+            "status": "RUNNING",
+            "kind": "MULTI_PARENT",
+            "simulation_count": 4
+          },
+          {
+            "fingerprint": "synthetic_fp_c",
+            "status": "RUNNING",
+            "kind": "MULTI_CHILD",
+            "parent_fingerprint": "synthetic_fp_b",
+            "simulation_count": 1
+          }
+        ]
+      },
+      "EXPECTED_ACTION": {
+        "required_calls": {
+          "research_status": 1,
+          "get_pending_executions": 1
+        },
+        "max_calls": {
+          "research_status": 1,
+          "get_pending_executions": 1,
+          "simulate_batch": 0,
+          "simulate_multi_batch": 0,
+          "reconcile_execution": 0
+        },
+        "max_total_tool_calls": 2,
+        "expected_final_values": [
+          "BLOCKED_BY_REMOTE_STATE"
+        ],
+        "expected_write_count": 0,
+        "required_payload_values": {
+          "pending_kinds": [
+            "SUBMIT_UNKNOWN",
+            "RUNNING",
+            "MULTI_CHILD"
+          ]
+        },
+        "expected_tool_order": [
+          "research_status",
+          "get_pending_executions"
+        ]
+      },
+      "FORBIDDEN_ACTION": [
+        "simulate_batch",
+        "simulate_multi_batch",
+        "reconcile_execution",
+        "command_execution",
+        "guard_mutation"
+      ],
+      "PASS_EVIDENCE": [
+        "summary readiness blocks writes",
+        "pending detail owner is called only because row-level diagnosis is needed",
+        "parent-child detail is synthetic and read-only",
+        "no reconcile or write"
+      ]
+    },
+    {
+      "id": "CS5_READY",
+      "title": "READY remains READY",
+      "CONTEXT_FILES": [
+        "tests/fixtures/research_agent_eval/cold_start_candidate.md"
+      ],
+      "USEFUL_ACTION_TOOLS": [
+        "list_datafields"
+      ],
+      "INPUT": "先核对状态，然后只读检查一个 synthetic field 的 dataset provenance，为后续研究做准备。这里没有要求本轮提交 Simulation。",
+      "AVAILABLE_TOOLS": [
+        "research_status",
+        "list_datasets",
+        "list_datafields",
+        "simulate_batch",
+        "simulate_multi_batch",
+        "read_workspace_reference"
+      ],
+      "CURRENT_EVIDENCE": {
+        "research_status": {
+          "source": "SYNTHETIC_CANDIDATE_CONTRACT",
+          "status": "AVAILABLE",
+          "evidence_status": "AVAILABLE",
+          "research_contract_version": "2026-09-26",
+          "write_readiness": "READY",
+          "write_blockers": [],
+          "capability": {
+            "status": "AVAILABLE"
+          },
+          "quota": {
+            "status": "LIVE_VERIFIED",
+            "remaining": 50
+          },
+          "pending_execution_count": 0,
+          "pending_simulation_count": 0,
+          "pending_multi_child_count": 0
+        },
+        "datasets": [
+          {
+            "id": "dataset_a",
+            "type": "MATRIX"
+          }
+        ],
+        "datafields": [
+          {
+            "id": "field_a",
+            "dataset_id": "dataset_a",
+            "type": "MATRIX"
+          }
+        ]
+      },
+      "EXPECTED_ACTION": {
+        "required_calls": {
+          "research_status": 1,
+          "list_datasets": 1,
+          "list_datafields": 1
+        },
+        "max_calls": {
+          "research_status": 1,
+          "list_datasets": 1,
+          "list_datafields": 1,
+          "simulate_batch": 0,
+          "simulate_multi_batch": 0
+        },
+        "max_total_tool_calls": 4,
+        "expected_final_values": [
+          "READY"
+        ],
+        "expected_write_count": 0,
+        "expected_tool_order": [
+          "research_status",
+          "list_datasets",
+          "list_datafields"
+        ]
+      },
+      "FORBIDDEN_ACTION": [
+        "simulate_batch",
+        "simulate_multi_batch",
+        "command_execution"
+      ],
+      "PASS_EVIDENCE": [
+        "READY is not overblocked",
+        "the requested read-only field-provenance action is completed",
+        "no write is initiated because the user asked only to inspect"
+      ]
+    },
+    {
+      "id": "SK1_CURRENT_TWO_BATCHES",
+      "title": "Existing per-batch Skill read rule",
+      "CONTEXT_FILES": [
+        "AGENTS.md",
+        "prompts/AGENTS.md",
+        "prompts/research_agent.md"
+      ],
+      "INPUT": "在同一个会话中依次规划两个普通 baseline batch。两批没有新方法、paper/template mapping 或 contract 变化；本次只规划，不提交 Simulation。按当前 Research Agent procedure 处理，并用 read_workspace_reference 工具实际读取所需本地文件。",
+      "AVAILABLE_TOOLS": [
+        "research_status",
+        "read_workspace_reference"
+      ],
+      "CURRENT_EVIDENCE": {
+        "research_status": {
+          "source": "SYNTHETIC_REPLAY",
+          "status": "AVAILABLE",
+          "research_contract_version": "2026-09-26",
+          "pending_execution_count": 0,
+          "quota": {
+            "status": "LIVE_VERIFIED",
+            "remaining": 50
+          }
+        }
+      },
+      "EXPECTED_ACTION": {
+        "required_calls": {
+          "research_status": 1,
+          "read_workspace_reference": 2
+        },
+        "max_calls": {
+          "research_status": 1,
+          "read_workspace_reference": 2
+        },
+        "max_total_tool_calls": 3,
+        "expected_final_values": [
+          "NO_WRITE"
+        ],
+        "expected_write_count": 0,
+        "expected_reference_reads": {
+          "skills/wqb-research/SKILL.md": 2
+        },
+        "max_reference_reads": {
+          "skills/wqb-research/SKILL.md": 2
+        },
+        "expected_tool_order": [
+          "research_status",
+          "read_workspace_reference",
+          "read_workspace_reference"
+        ]
+      },
+      "FORBIDDEN_ACTION": [
+        "simulate_batch",
+        "simulate_multi_batch",
+        "command_execution"
+      ],
+      "PASS_EVIDENCE": [
+        "current prompt's per-batch Skill loading rule is followed for both ordinary batches",
+        "the same Skill document is read twice",
+        "no Simulation write"
+      ],
+      "USEFUL_ACTION_TOOLS": [
+        "read_workspace_reference"
+      ]
+    },
+    {
+      "id": "SK2_CANDIDATE_TRIGGERED_LOADING",
+      "title": "Candidate trigger-based Skill loading sequence",
+      "CONTEXT_FILES": [
+        "tests/fixtures/research_agent_eval/cold_start_candidate.md"
+      ],
+      "INPUT": "模拟同一研究会话的四个阶段并严格按顺序处理：1) 新 Research session 的普通 batch；2) 同一 contract 的第二个普通 batch，没有新方法；3) 需要 paper/template mapping 的 batch；4) 当前研究 contract 发生变化后、任何下一项 Research action 之前重新握手。按需调用 read_workspace_reference 读取 core Skill/reference。只规划，不提交 Simulation。",
+      "AVAILABLE_TOOLS": [
+        "research_status",
+        "read_workspace_reference"
+      ],
+      "CURRENT_EVIDENCE": {
+        "research_status_sequence": [
+          {
+            "source": "SYNTHETIC_REPLAY",
+            "status": "AVAILABLE",
+            "research_contract_version": "2026-09-26",
+            "pending_execution_count": 0,
+            "quota": {
+              "status": "LIVE_VERIFIED",
+              "remaining": 50
+            }
+          },
+          {
+            "source": "SYNTHETIC_REPLAY",
+            "status": "AVAILABLE",
+            "research_contract_version": "2026-09-25",
+            "pending_execution_count": 0,
+            "quota": {
+              "status": "LIVE_VERIFIED",
+              "remaining": 50
+            }
+          }
+        ]
+      },
+      "EXPECTED_ACTION": {
+        "required_calls": {
+          "research_status": 2,
+          "read_workspace_reference": 4
+        },
+        "max_calls": {
+          "research_status": 2,
+          "read_workspace_reference": 4
+        },
+        "max_total_tool_calls": 7,
+        "expected_final_values": [
+          "SKILL_STALE"
+        ],
+        "expected_write_count": 0,
+        "expected_reference_reads": {
+          "skills/wqb-research/SKILL.md": 2,
+          "skills/wqb-research/references/batch-design.md": 1,
+          "AGENTS.md": 1
+        },
+        "max_reference_reads": {
+          "skills/wqb-research/SKILL.md": 2,
+          "skills/wqb-research/references/batch-design.md": 1,
+          "AGENTS.md": 1
+        },
+        "expected_tool_order": [
+          "research_status",
+          "read_workspace_reference",
+          "read_workspace_reference",
+          "research_status",
+          "read_workspace_reference",
+          "read_workspace_reference"
+        ]
+      },
+      "FORBIDDEN_ACTION": [
+        "simulate_batch",
+        "simulate_multi_batch",
+        "command_execution"
+      ],
+      "PASS_EVIDENCE": [
+        "core Skill read at the new-session trigger",
+        "same-contract second normal batch does not cause a duplicate Skill read",
+        "paper/template step loads batch-design on demand",
+        "contract mismatch causes fresh status and core Skill reread then SKILL_STALE",
+        "no Simulation write"
+      ],
+      "USEFUL_ACTION_TOOLS": [
+        "read_workspace_reference"
+      ]
+    }
+  ]
+}

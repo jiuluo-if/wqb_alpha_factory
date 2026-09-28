@@ -21,6 +21,8 @@ DIRECT_TESTS = {
     "main.py": ("tests/test_cli.py",),
     "scripts/run_targeted_tests.py": ("tests/test_targeted_ci.py",),
     "scripts/check_repo_privacy.py": ("tests/test_repo_privacy.py",),
+    "scripts/run_research_agent_eval.py": ("tests/test_research_agent_eval.py",),
+    "scripts/run_cold_start_eval.py": ("tests/test_research_agent_eval.py",),
     "wqb_agent/client.py": (
         "tests/test_client_refactor.py",
         "tests/test_protocol_truth.py",
@@ -35,6 +37,16 @@ DIRECT_TESTS = {
     "wqb_agent/alpha_relationships.py": ("tests/test_alpha_relationships.py",),
     "tests/test_architecture_contracts.py": (
         "tests/test_architecture_contracts.py",
+    ),
+    "tests/test_research_agent_eval.py": ("tests/test_research_agent_eval.py",),
+    "tests/fixtures/research_agent_eval/cases.json": (
+        "tests/test_research_agent_eval.py",
+    ),
+    "tests/fixtures/research_agent_eval/cold_start.json": (
+        "tests/test_research_agent_eval.py",
+    ),
+    "tests/fixtures/research_agent_eval/cold_start_candidate.md": (
+        "tests/test_research_agent_eval.py",
     ),
     "wqb_agent/field_metadata.py": ("tests/test_research_api.py",),
     "wqb_agent/__init__.py": (
