@@ -147,6 +147,10 @@ def _parse(document, *, strict_schema=False):
                 raise ValueError(f"{template_id}: PARTIAL_OPERATOR requires one operator slot")
         if len({slot.name for slot in numeric_slots}) != len(numeric_slots):
             raise ValueError(f"{template_id}: duplicate numeric slot name")
+        if len({(slot.token, slot.occurrence) for slot in numeric_slots}) != len(numeric_slots):
+            raise ValueError(
+                f"{template_id}: duplicate numeric slot token occurrence"
+            )
         horizon_profiles = tuple(
             tuple(int(value) for value in profile)
             for profile in raw.get("allowed_horizon_profiles", [])

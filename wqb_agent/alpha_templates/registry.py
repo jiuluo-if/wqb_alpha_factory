@@ -1,6 +1,10 @@
 """Catalog-backed template registry and numeric audit."""
 
-from .loader import load_builtin_templates, load_private_templates
+from .loader import (
+    load_builtin_templates,
+    load_private_templates,
+    resolve_private_catalog_path,
+)
 from .model import FIXED_NUMERICS, NUMBER_TOKEN_RE, AlphaTemplate
 from .validation import validate_template_contract
 
@@ -76,7 +80,7 @@ class AlphaTemplateRegistry:
     @classmethod
     def from_private(cls, path=None):
         """Build the production registry without a public-catalog fallback."""
-        return cls(private_catalog=path)
+        return cls(private_catalog=resolve_private_catalog_path(path))
 
     def operator_coverage(self, available=None):
         """Report broad operator use among semantically eligible templates."""

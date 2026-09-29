@@ -1,7 +1,10 @@
 """Observable contracts for the standalone Alpha template catalog."""
 
 import io
+import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from wqb_agent.alpha_factory import AlphaFactory
@@ -334,17 +337,25 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
         self.assertEqual(template.economic_field_count, 2)
         self.assertEqual(template.companion_field_slots, ("s",))
 
-    def test_probe_with_only_primary_and_control_slot_fails_field_gate(self):
+    def test_probe_with_only_primary_and_control_slot_passes_field_gate(self):
         template = AlphaTemplate(
-            "invalid-probe", family="synthetic", expression="rank(ts_mean({p}, 5))",
+            "single-field-probe", family="synthetic",
+            expression="rank(add(ts_mean({p}, 5)))",
             required_slots=("p", "g"), role="PROBE_ALPHA", economic=True,
-            economic_mechanism="synthetic mechanism", field_relationship="synthetic relation",
-            direction_reason="synthetic direction", expected_horizon="short-term",
-            falsification="synthetic falsification",
+            economic_mechanism="persistent operating state",
+            field_relationship="one primary economic field with group control",
+            relationship_contract="SINGLE_FIELD",
+            semantic_contract="TIME_SERIES_STATE",
+            field_roles=("primary economic signal",),
+            direction_reason="persistent state has a positive continuation hypothesis",
+            expected_horizon="short-term",
+            falsification="the state has no independent response",
         )
-        contract = validate_template_contract(template)
-        self.assertFalse(contract["ok"])
-        self.assertIn("PROBE_ECONOMIC_FIELD_COUNT", contract["errors"])
+        contract = validate_template_contract(template, production=True)
+        self.assertTrue(contract["ok"], contract)
+        self.assertEqual(template.operator_count, 3)
+        self.assertEqual(template.economic_field_count, 1)
+        self.assertEqual(template.control_slots, ("g",))
 
     def test_primary_alias_slots_cannot_be_declared_together(self):
         template = AlphaTemplate(
@@ -468,6 +479,7 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
             )
 
         probe_expressions = (
+            "rank(add(ts_mean({p}, 5)))",
             "rank(subtract(ts_mean({p}, 5), ts_mean({s}, 5)))",
             "normalize(rank(subtract(ts_mean({p}, 5), ts_mean({s}, 5))))",
             "scale(normalize(rank(subtract(ts_mean({p}, 5), ts_mean({s}, 5)))))",
@@ -481,7 +493,47 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
         )
         self.assertIn("PROBE_OPERATOR_COUNT", probe_too_complex["errors"])
         probe_too_simple = validate_template_contract(probe("rank(add({p}))"))
-        self.assertIn("ROLE_COMPLEXITY_MISMATCH", probe_too_simple["errors"])
+        self.assertIn("PROBE_OPERATOR_COUNT", probe_too_simple["errors"])
+
+    def test_repeated_operator_occurrences_count_toward_probe_complexity(self):
+        template = AlphaTemplate(
+            "repeated-operator-probe", family="synthetic",
+            expression="rank(add({p}, add({s}, add({t}, {p}))))",
+            required_slots=("p", "s", "t"), role="PROBE_ALPHA",
+            semantic_contract="RELATIONAL_PRIMARY",
+            relationship_contract="MULTI_FIELD_CONFIRMATION",
+            field_roles=("primary", "secondary", "confirmation"),
+            economic_mechanism="independent indicators confirm a persistent state",
+            field_relationship="three-field economic confirmation",
+            direction_reason="the confirmed state is hypothesized to persist",
+            expected_horizon="short-term",
+            falsification="the confirmation adds no independent response",
+            novelty_family="synthetic-repeated-operator",
+        )
+
+        self.assertEqual(template.operator_count, 4)
+        self.assertEqual(template.operator_names.count("add"), 3)
+        report = validate_template_contract(template, production=True)
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(template.economic_field_count, 3)
+
+    def test_private_registry_without_path_uses_default_private_path_and_fails_closed(self):
+        with tempfile.TemporaryDirectory() as home:
+            with patch.dict(os.environ, {}, clear=True):
+                with patch("wqb_agent.alpha_templates.loader.Path.home", return_value=Path(home)):
+                    with self.assertRaisesRegex(
+                        FileNotFoundError, "PRIVATE_TEMPLATE_CATALOG_MISSING"
+                    ):
+                        AlphaTemplateRegistry.from_private()
+
+    def test_numeric_slots_cannot_target_the_same_literal_occurrence(self):
+        document = _partial_document()
+        slot_start = document.index('name = "fast2"')
+        occurrence = document.index("occurrence = 1", slot_start)
+        document = document[:occurrence] + "occurrence = 0" + document[occurrence + len("occurrence = 1"):]
+
+        with self.assertRaisesRegex(ValueError, "duplicate numeric slot token occurrence"):
+            load_templates(io.StringIO(document))
 
     def test_effective_operator_count_includes_direction_transform(self):
         raw_five = AlphaTemplate(

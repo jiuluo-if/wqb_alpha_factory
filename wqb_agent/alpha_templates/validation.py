@@ -232,11 +232,11 @@ def validate_template_contract(template, *, production=False):
         if template.economic_field_count != 1:
             errors.append("CONTROL_ECONOMIC_FIELD_COUNT")
     elif role == "PROBE_ALPHA":
-        if not 4 <= template.operator_count <= 6:
+        if not 3 <= template.operator_count <= 6:
             errors.append("PROBE_OPERATOR_COUNT")
-            if template.operator_count < 4:
+            if template.operator_count < 3:
                 errors.append("ROLE_COMPLEXITY_MISMATCH")
-        if not 2 <= template.economic_field_count <= 4:
+        if not 1 <= template.economic_field_count <= 3:
             errors.append("PROBE_ECONOMIC_FIELD_COUNT")
     else:
         errors.append("UNKNOWN_TEMPLATE_ROLE")
