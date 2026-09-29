@@ -32,8 +32,8 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         skill_dirs = sorted(path.parent.name for path in skill_root.glob("*/SKILL.md"))
         self.assertEqual(skill_dirs, ["skill-authoring", "wqb-research"])
 
-        self.assertEqual(research_api.RESEARCH_CONTRACT_VERSION, "2026-09-26")
-        self.assertEqual(len(research_api.research_tool_manifest(profile="core")), 11)
+        self.assertEqual(research_api.RESEARCH_CONTRACT_VERSION, "2026-09-29")
+        self.assertEqual(len(research_api.research_tool_manifest(profile="core")), 12)
         skill_path = skill_root / "wqb-research" / "SKILL.md"
         text = skill_path.read_text(encoding="utf-8")
         self.assertIn(
@@ -97,7 +97,8 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         runtime = (ROOT / "wqb_agent" / "simulation_gateway.py").read_text(encoding="utf-8")
         self.assertIn("write_readiness", text)
         self.assertIn("AGENTS.md", text)
-        self.assertIn("只有 `write_readiness=READY` 可以发起新的 Simulation", text)
+        self.assertIn("research_batch_status(specs)", text)
+        self.assertIn("跳过精确冲突项", text)
         self.assertIn("Alpha submission 由人工完成", text)
         self.assertIn("get_pending_executions", text)
         self.assertNotIn("每个批次前阅读", text)

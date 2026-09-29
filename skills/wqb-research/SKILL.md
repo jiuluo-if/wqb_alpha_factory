@@ -2,7 +2,7 @@
 name: wqb-research
 description: "用于 WorldQuant BRAIN Alpha 研究：实验批次设计、Simulation 证据、结果解释与下一次实验选择。"
 metadata:
-  wqb_alpha_factory_research_contract: "2026-09-26"
+  wqb_alpha_factory_research_contract: "2026-09-29"
 ---
 
 # WQB 研究
@@ -17,7 +17,7 @@ metadata:
 
 平台事实、readiness、ExecutionGuard、唯一写链、隐私和 Alpha submission 的 owner 均见根目录 [`AGENTS.md`](../../AGENTS.md)。本 Skill 只提供研究方法，不复刻 runtime/write safety contract。
 
-研究结果只支持或反对被检验的机制，不自动证明机制成立。缺失证据保留 `UNKNOWN`/`UNAVAILABLE`。
+研究结果只支持或反对被检验的机制，不自动证明机制成立。缺失证据保留 `UNKNOWN`/`UNAVAILABLE`。如果研究目标是 Region-Agnostic（RA）parent，优先筛选 Sharpe >3、Fitness >2、Margin >10、return 高且自相关低的 Regular parent，并在 RA 至少两个地区通过；这些是研究晋升目标，不覆盖 BRAIN 当前 hard checks。低自相关候选可有依据地放宽次要阈值，记录放宽项和理由，不伪称达标。Alpha submission 永远由人完成。
 
 ## INCOME / PLATFORM ALIGNMENT
 
@@ -45,6 +45,9 @@ frontmatter 中 `metadata.wqb_alpha_factory_research_contract` 是本文件编�
 - 保留探索。高结果只是比较候选，不是大举开发该方向的许可。
 - 本地变体保持字段、算子与表达式拓扑不变；拓扑变化是带独立假设的 `NEW_PROBE`。
 - 失败归因到假设、字段、算子、horizon、实现、相关性或稳健性。没有新证据不得重跑已明确失败的形态。
+- 每轮 broad-search 至少实际提交 80 个新的、准入为 `READY` 的 child（默认 8 个并发 Multi parent × 每 parent 10 个）。Research API 拒绝少于 80 个 proposals；Gateway 再次按 guard 和远端去重计算实际 eligible 数，少于下限时整批不 POST。候选级 admission 排除 guard/重复/无效项后若不足 80，就继续生成新 proposal 并检查，直到凑足 80 个可写项或真实平台 hard blocker 阻止；不能把被跳过项算进批量。仅当 fresh BRAIN evidence 确认累计已完成至少 4000 个 child 时，才在 `simulate_multi_batch` 显式设置较低的 `minimum_eligible_children` 并传入完成计数；handoff/cache 不能单独证明达到门槛。计数未知或未到 4000 时维持 80 批量。候选覆盖多种算子组合、新数据集/字段与有经济理由的自定义分组；控制相似度并用结果证据判断正交性。
+- Cold start 先读 `research_status()`。若全局被已有 guard 标为 `BLOCKED_BY_REMOTE_STATE`，绝不重发、删除或绕过原请求；取得具体候选后调用 READ_ONLY `research_batch_status(specs)`。按 proposal admission 排除精确冲突的候选，继续本批可执行候选；不把一个 unknown 扩大成全体候选停摆。若批次状态也不是 `READY`，处理返回的能力/quota/capacity 原因或只跳过受影响分支，再继续不受影响的数据发现、表达式设计与证据整理。
+- 提交 80 个新 child 时调用 `simulate_multi_batch`。Gateway 在 POST 前重查全部事实；每个 unresolved Multi parent 占一个并发槽，最多 8 个，因此剩余 parent 并发自动为 `8 - unresolved_multi_parent_count`。全局状态和 exact-once guard 不因新批次恢复而被清除。
 - Skill、记忆教训或历史运行不是 BRAIN 事实。记忆只保留少量可迁移研究教训；永不存完整转录。
 
 ## 方向与局部优化

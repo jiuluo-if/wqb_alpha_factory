@@ -375,13 +375,13 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
 
         by_name = {tool.name: tool for tool in listed.tools}
         self.assertEqual(set(by_name), {
-            "research_status", "list_datasets", "list_datafields",
+            "research_status", "research_batch_status", "list_datasets", "list_datafields",
             "get_operator_reference", "validate_simulation_spec",
             "simulate_batch", "simulate_multi_batch", "get_alpha_evidence",
             "reconcile_execution", "get_alpha_prod_correlation",
             "get_pending_executions",
         })
-        self.assertEqual(len(by_name), 11)
+        self.assertEqual(len(by_name), 12)
         self.assertEqual(
             set(by_name),
             {row["name"] for row in mcp_server.research_api.research_tool_manifest(profile="core")},
@@ -389,9 +389,39 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(by_name["simulate_batch"].annotations.read_only_hint)
         self.assertFalse(by_name["simulate_multi_batch"].annotations.read_only_hint)
         self.assertTrue(by_name["research_status"].annotations.read_only_hint)
+        self.assertTrue(by_name["research_batch_status"].annotations.read_only_hint)
         for tool in listed.tools:
             self.assertNotIn("state_dir", tool.input_schema.get("properties", {}))
         self.assertNotIn("alpha_submission", by_name)
+
+    async def test_research_batch_status_is_read_only_and_uses_injected_state(self):
+        admission = Mock(return_value={
+            "source": "SimulationGateway", "status": "AVAILABLE",
+            "write_readiness": "READY", "eligible_count": 2,
+            "blocked_count": 0, "proposal_admissions": [],
+        })
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(
+                api=self.api(research_batch_status=admission), client=object(),
+                state_dir="synthetic-state",
+            )
+        async with Client(server) as client:
+            tool = next(item for item in (await client.list_tools()).tools
+                        if item.name == "research_batch_status")
+            result = await client.call_tool("research_batch_status", {"specs": [
+                {"expression": "rank(field_a)", "proposal_id": "p-a"},
+                {"expression": "rank(field_b)", "proposal_id": "p-b"},
+            ]})
+
+        self.assertTrue(tool.annotations.read_only_hint)
+        self.assertFalse(tool.annotations.destructive_hint)
+        args, kwargs = admission.call_args
+        self.assertEqual([spec.proposal_id for spec in args[0]], ["p-a", "p-b"])
+        self.assertIsNotNone(kwargs["client"])
+        self.assertEqual(kwargs["config"], None)
+        self.assertEqual(kwargs["state_dir"], "synthetic-state")
+        self.assertEqual(result.structured_content["data"]["eligible_count"], 2)
+        self.assertEqual(result.structured_content["owner"], "research_api.research_batch_status")
 
     async def test_research_mode_exposes_existing_pending_details_as_local_read_only(self):
         calls = []
@@ -455,10 +485,17 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                 raise AssertionError("blocked readiness must stop before Simulation POST")
 
         with tempfile.TemporaryDirectory() as state_dir, patch.dict(os.environ, {self.ENV: "1"}):
-            ExecutionGuard(state_dir).register(
-                "synthetic-unknown", status="SUBMIT_UNKNOWN", kind=ExecutionGuard.SINGLE,
-            )
             synthetic_client = SyntheticClient()
+            guarded_spec = mcp_server.research_api.SimulationSpec(
+                "rank(close)", {}, proposal_id="synthetic-1",
+            )
+            gateway = mcp_server.research_api._simulation_gateway(
+                client=synthetic_client, state_dir=state_dir,
+            )
+            gateway.guard.register(
+                gateway.execution_fingerprint(guarded_spec),
+                status="SUBMIT_UNKNOWN", kind=ExecutionGuard.SINGLE,
+            )
             server = mcp_server.build_research_server(
                 api=mcp_server.research_api, client=synthetic_client, state_dir=state_dir,
             )
@@ -480,7 +517,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(details.structured_content["data"]["entries"]), 1)
         self.assertEqual(
             blocked.structured_content["results"][0]["status"],
-            "BLOCKED_BY_REMOTE_STATE",
+            "SUBMIT_UNKNOWN",
         )
         self.assertEqual(synthetic_client.submissions, [])
 
@@ -614,7 +651,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         async with Client(parameters) as client:
             listed = await client.list_tools()
         names = {tool.name for tool in listed.tools}
-        self.assertEqual(len(names), 11)
+        self.assertEqual(len(names), 12)
         self.assertTrue({"research_status", "simulate_batch", "simulate_multi_batch"} <= names)
 
     async def test_alpha_expression_is_available_only_through_requested_evidence(self):
@@ -699,9 +736,29 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                 {"expression": "rank(close)", "proposal_id": "dup"},
                 {"expression": "rank(volume)", "proposal_id": "dup"},
             ]})
+            undersized_multi = await client.call_tool("simulate_multi_batch", {"specs": [
+                {"expression": f"rank(field_{index})", "proposal_id": f"p-{index}"}
+                for index in range(79)
+            ]})
+            premature_reduction = await client.call_tool("simulate_multi_batch", {
+                "specs": [
+                    {"expression": f"rank(reduced_{index})", "proposal_id": f"r-{index}"}
+                    for index in range(20)
+                ],
+                "minimum_eligible_children": 20,
+                "completed_simulation_count": 3999,
+            })
         self.assertEqual(invalid_multi.structured_content["error"], "INVALID_ARGUMENT")
         self.assertEqual(invalid_multi.structured_content["access_mode"], "SIMULATION_WRITE")
         self.assertTrue(invalid_multi.structured_content["remote_write"])
+        self.assertEqual(undersized_multi.structured_content["error"], "INVALID_ARGUMENT")
+        self.assertEqual(undersized_multi.structured_content["access_mode"], "SIMULATION_WRITE")
+        self.assertTrue(undersized_multi.structured_content["remote_write"])
+        self.assertEqual(premature_reduction.structured_content["status"], "NOT_DISPATCHED")
+        self.assertEqual(
+            premature_reduction.structured_content["reason_code"],
+            "MULTI_BATCH_BELOW_MINIMUM",
+        )
         submit.assert_not_called()
         multi.assert_not_called()
 
@@ -799,8 +856,8 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             with patch.dict(os.environ, {self.ENV: "1"}):
                 server = mcp_server.build_research_server(api=api, client=object(), state_dir=state_dir)
             specs = [
-                {"expression": "rank(close)", "proposal_id": "proposal-0"},
-                {"expression": "rank(volume)", "proposal_id": "proposal-1"},
+                {"expression": f"rank(field_{index})", "proposal_id": f"proposal-{index}"}
+                for index in range(80)
             ]
             async with Client(server) as client:
                 simulated = await client.call_tool("simulate_multi_batch", {"specs": specs})
@@ -810,6 +867,28 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                 recovered = await client.call_tool("reconcile_execution", {"fingerprint": row["fingerprint"]})
         self.assertEqual(recovered.structured_content["data"]["status"], "SUBMIT_UNKNOWN")
         self.assertEqual(recovered.structured_content["data"]["fingerprint"], parent)
+
+    async def test_multi_batch_can_reduce_only_with_4000_completed_count(self):
+        multi = Mock(return_value=[])
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(
+                api=self.api(simulate_multi_batch=multi), client=object(),
+            )
+        specs = [
+            {"expression": f"rank(reduced_{index})", "proposal_id": f"r-{index}"}
+            for index in range(20)
+        ]
+        async with Client(server) as client:
+            result = await client.call_tool("simulate_multi_batch", {
+                "specs": specs, "minimum_eligible_children": 20,
+                "completed_simulation_count": 4000,
+            })
+
+        self.assertEqual(result.structured_content["candidate_count"], 20)
+        args, kwargs = multi.call_args
+        self.assertEqual(len(args[0]), 20)
+        self.assertEqual(kwargs["minimum_eligible_children"], 20)
+        self.assertEqual(kwargs["completed_simulation_count"], 4000)
 
     def test_write_projection_enforces_byte_limit_without_dropping_candidates(self):
         rows = [{
@@ -899,16 +978,18 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         fake_api = self.api(simulate_multi_batch=multi)
         with patch.dict(os.environ, {self.ENV: "1"}):
             server = mcp_server.build_research_server(api=fake_api, client=object())
-        specs = [{"expression": "rank(close)", "proposal_id": f"p-{i}"} for i in range(2)]
+        specs = [
+            {"expression": f"rank(field_{i})", "proposal_id": f"p-{i}"}
+            for i in range(80)
+        ]
         async with Client(server) as client:
             result = await client.call_tool("simulate_multi_batch", {"specs": specs})
 
         multi.assert_called_once()
         self.assertTrue(multi.called)
-        self.assertEqual(
-            [row["status"] for row in result.structured_content["results"]],
-            ["EXACT_DUPLICATE", "SUBMIT_UNKNOWN"],
-        )
+        statuses = [row["status"] for row in result.structured_content["results"]]
+        self.assertEqual(statuses[:2], ["EXACT_DUPLICATE", "SUBMIT_UNKNOWN"])
+        self.assertEqual(statuses[2:], ["UNKNOWN"] * 78)
 
     async def test_transport_bounds_reject_oversized_batch_without_calling_facade(self):
         submit = Mock(return_value=[])

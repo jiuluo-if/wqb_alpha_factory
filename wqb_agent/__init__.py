@@ -62,6 +62,7 @@ __all__ = [
     "get_operator_reference",
     "get_operator_syntax_reference",
     "research_status",
+    "research_batch_status",
     "research_tool_manifest",
 ]
 
@@ -95,6 +96,7 @@ def __getattr__(name):
         "sync_alpha_colors",
         "get_operator_reference", "get_operator_syntax_reference",
         "research_status",
+        "research_batch_status",
         "research_tool_manifest",
     }:
         from . import research_api
