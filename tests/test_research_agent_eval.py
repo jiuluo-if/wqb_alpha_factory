@@ -77,10 +77,10 @@ def _fake_log(
 
 
 class ResearchAgentEvalTests(unittest.TestCase):
-    def test_fixture_defines_a_through_i_with_all_required_fields(self):
+    def test_fixture_defines_a_through_l_with_all_required_fields(self):
         manifest = load_case_manifest()
         self.assertTrue(manifest["synthetic_only"])
-        self.assertEqual([case["id"] for case in manifest["cases"]], list("ABCDEFGHI"))
+        self.assertEqual([case["id"] for case in manifest["cases"]], list("ABCDEFGHIJKL"))
         for case in manifest["cases"]:
             self.assertEqual(
                 set(case) & {
@@ -116,6 +116,94 @@ class ResearchAgentEvalTests(unittest.TestCase):
         rejected = evaluate_case(case, trace=shell_trace, fake_log=[], exit_code=0)
         self.assertEqual(rejected["status"], "FAIL")
         self.assertIn("SHELL_TOOL_WAS_AVAILABLE_OR_USED", rejected["issues"])
+
+    def test_low_self_correlation_allows_early_optimization_without_marking_target_met(self):
+        case = _case("J")
+        calls = [_event("research_status"), _event("get_alpha_evidence", {
+            "alpha_id": "synthetic_alpha_low_self_corr",
+        })]
+        final = {
+            "case_id": "J", "status": "READY",
+            "decision": "PROBE_AND_OPTIMIZE",
+            "target_status": "TARGET_NOT_MET", "brain_submittable": True,
+            "active_lanes": ["PROBE", "OPTIMIZE"],
+            "optimization_candidate": "synthetic_alpha_low_self_corr",
+        }
+        fake = [
+            _fake_log("research_status", case_id="J", result=case["CURRENT_EVIDENCE"]["research_status"]),
+            _fake_log("get_alpha_evidence", {"alpha_id": "synthetic_alpha_low_self_corr"},
+                      case_id="J", result=case["CURRENT_EVIDENCE"]["alpha_evidence"]),
+        ]
+        trace = parse_codex_jsonl(_run_events(calls, final))
+        result = evaluate_case(case, trace=trace, fake_log=fake, exit_code=0)
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["simulated_write_count"], 0)
+
+    def test_high_pairwise_correlation_keeps_redundant_candidate_out_of_qualified_pool(self):
+        case = _case("K")
+        calls = [_event("research_status"), _event("compare_alphas", {
+            "alpha_ids": ["synthetic_alpha_a", "synthetic_alpha_b"],
+        })]
+        fake = [
+            _fake_log("research_status", case_id="K", result=case["CURRENT_EVIDENCE"]["research_status"]),
+            _fake_log("compare_alphas", {
+                "alpha_ids": ["synthetic_alpha_a", "synthetic_alpha_b"],
+            }, case_id="K", result=case["CURRENT_EVIDENCE"]["pairwise_pnl"]),
+        ]
+        selected = {
+            "case_id": "K", "status": "READY",
+            "decision": "LOW_REDUNDANCY_POOL_SELECTED",
+            "qualified_pool": ["synthetic_alpha_a"],
+            "retained_nonselected_evidence": ["synthetic_alpha_b"],
+            "numeric_threshold": "UNKNOWN",
+        }
+        trace = parse_codex_jsonl(_run_events(calls, selected))
+        result = evaluate_case(case, trace=trace, fake_log=fake, exit_code=0)
+        self.assertEqual(result["status"], "PASS")
+
+        selected_both = {**selected, "qualified_pool": [
+            "synthetic_alpha_a", "synthetic_alpha_b",
+        ]}
+        rejected = evaluate_case(
+            case,
+            trace=parse_codex_jsonl(_run_events(calls, selected_both)),
+            fake_log=fake,
+            exit_code=0,
+        )
+        self.assertEqual(rejected["status"], "FAIL")
+        self.assertIn("FORBIDDEN_FINAL_FIELD:qualified_pool", rejected["issues"])
+
+    def test_low_correlation_cannot_relax_a_failed_brain_hard_check(self):
+        case = _case("L")
+        calls = [_event("research_status"), _event("get_alpha_evidence", {
+            "alpha_id": "synthetic_alpha_hard_fail",
+        })]
+        fake = [
+            _fake_log("research_status", case_id="L", result=case["CURRENT_EVIDENCE"]["research_status"]),
+            _fake_log("get_alpha_evidence", {"alpha_id": "synthetic_alpha_hard_fail"},
+                      case_id="L", result=case["CURRENT_EVIDENCE"]["alpha_evidence"]),
+        ]
+        correct = {
+            "case_id": "L", "status": "BRAIN_HARD_CHECK_FAIL",
+            "decision": "BRAIN_HARD_CHECK_FAIL",
+            "target_status": "TARGET_MET", "brain_submittable": False,
+            "failed_checks": ["LOW_SUB_UNIVERSE_SHARPE"],
+            "qualified_pool": [],
+        }
+        result = evaluate_case(
+            case, trace=parse_codex_jsonl(_run_events(calls, correct)),
+            fake_log=fake, exit_code=0,
+        )
+        self.assertEqual(result["status"], "PASS")
+
+        relaxed = {**correct, "brain_submittable": True,
+                   "qualified_pool": ["synthetic_alpha_hard_fail"]}
+        rejected = evaluate_case(
+            case, trace=parse_codex_jsonl(_run_events(calls, relaxed)),
+            fake_log=fake, exit_code=0,
+        )
+        self.assertEqual(rejected["status"], "FAIL")
+        self.assertIn("FORBIDDEN_FINAL_FIELD:qualified_pool", rejected["issues"])
 
     def test_manifest_rejects_non_synthetic_fixtures(self):
         with tempfile.TemporaryDirectory() as temp:

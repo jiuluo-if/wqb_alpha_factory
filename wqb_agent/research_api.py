@@ -52,7 +52,7 @@ from .expression import (
     operator_occurrence_count,
     operator_occurrence_signature,
 )
-from .failures import ResearchReasonError, reason_code_for_failure
+from .failures import reason_code_for_failure
 from .operator_reference import (
     load_operator_syntax_reference,
     load_packaged_operator_syntax_reference,
@@ -60,11 +60,12 @@ from .operator_reference import (
 from .protocol import endpoint_truth
 from .remote_alpha_repository import RemoteAlphaRepository
 from .remote_colors import preview_remote_colors, sync_remote_colors
-from .remote_evidence import RemoteAlphaEvidenceProvider
+from .remote_evidence import MAX_PAIRWISE_ALPHA_IDS, RemoteAlphaEvidenceProvider
 from .remote_quota import SimulationQuota
 from .simulation_gateway import (
     MULTI_DEFAULT_CHILD_BATCH_SIZE,
     MULTI_DEFAULT_CONCURRENCY,
+    MULTI_MAX_CANDIDATES_PER_CALL,
     MULTI_MAX_CHILDREN,
     MULTI_MAX_CONCURRENCY,
     MULTI_MIN_CHILDREN,
@@ -78,8 +79,6 @@ from .simulation_gateway import (
 MAX_PROBE_FIELDS = 100
 MAX_PROBE_TEMPLATES = 100
 MAX_PROBE_COUNT = 100
-MULTI_RESEARCH_BATCH_MIN_CHILDREN = 80
-
 # The research contract version is the compatibility handshake between the
 # single research Skill and this runtime.  A Skill that declares a different
 # ``metadata.wqb_alpha_factory_research_contract`` is stale and must be re-read, not reused.
@@ -782,37 +781,19 @@ def simulate_multi_batch(
     specs, *, client=None, config=None, state_dir=None,
     child_batch_size=MULTI_DEFAULT_CHILD_BATCH_SIZE,
     max_concurrent_multi=MULTI_DEFAULT_CONCURRENCY,
-    minimum_eligible_children=MULTI_RESEARCH_BATCH_MIN_CHILDREN,
-    completed_simulation_count=0,
 ):
-    """Execute probe windows as Multi-Simulation parents.
+    """Execute meaningful candidates through bounded Multi-Simulation parents.
 
-    Each parent contains two to ten children. The safe default dispatches
-    eight parent jobs concurrently; unresolved Multi parents reserve slots
-    until they are safely reconciled. Research waves require at least 80 new
-    eligible children; the Gateway rechecks after local and remote dedupe.
+    Gateway groups compatible children into transport-sized parents, enforces
+    the currently available concurrency, and routes one-child remainders via
+    the Single contract. It never pads a research batch to a policy threshold.
     """
-    if (isinstance(minimum_eligible_children, bool)
-            or not isinstance(minimum_eligible_children, int)
-            or not MULTI_MIN_CHILDREN <= minimum_eligible_children <= MULTI_RESEARCH_BATCH_MIN_CHILDREN):
-        raise ValueError(
-            "minimum_eligible_children must be between 2 and 80"
-        )
-    if (isinstance(completed_simulation_count, bool)
-            or not isinstance(completed_simulation_count, int)
-            or completed_simulation_count < 0):
-        raise ValueError("completed_simulation_count must be a non-negative integer")
-    if (minimum_eligible_children < MULTI_RESEARCH_BATCH_MIN_CHILDREN
-            and completed_simulation_count < 4000):
-        raise ResearchReasonError(
-            "Multi batch minimum may be reduced only after 4000 completed Simulations",
-            "MULTI_BATCH_BELOW_MINIMUM",
-        )
     normalized_specs = list(specs or ())
-    if len(normalized_specs) < minimum_eligible_children:
-        raise ResearchReasonError(
-            f"Multi research batch requires at least {minimum_eligible_children} new candidates",
-            "MULTI_BATCH_BELOW_MINIMUM",
+    if not normalized_specs:
+        raise ValueError("Multi batch requires at least one candidate")
+    if len(normalized_specs) > MULTI_MAX_CANDIDATES_PER_CALL:
+        raise ValueError(
+            f"Multi batch accepts at most {MULTI_MAX_CANDIDATES_PER_CALL} candidates per call"
         )
     gateway = _simulation_gateway(
         client=client, config=config, state_dir=state_dir
@@ -821,7 +802,6 @@ def simulate_multi_batch(
         normalized_specs,
         child_batch_size=child_batch_size,
         max_concurrent_multi=max_concurrent_multi,
-        minimum_eligible_children=minimum_eligible_children,
     )
 
 
@@ -1294,7 +1274,8 @@ def get_alpha_recordsets(alpha_id, names, *, client=None, config=None):
 
 
 def compare_alphas(alpha_ids, *, client=None, config=None, depth="summary",
-                   max_concurrent=4):
+                   max_concurrent=4, pairwise_pnl=False, max_pairs=20):
+    """Read Alpha evidence or compare live daily PnL with pairwise_pnl=True."""
     ids = [str(item).strip() for item in (alpha_ids or ()) if str(item).strip()]
     try:
         concurrency = int(max_concurrent)
@@ -1303,10 +1284,27 @@ def compare_alphas(alpha_ids, *, client=None, config=None, depth="summary",
     if isinstance(max_concurrent, bool) or not 1 <= concurrency <= 4:
         raise ValueError("max_concurrent must be between 1 and 4")
     if not ids:
+        if pairwise_pnl:
+            return _evidence_provider(client=client).compare_alphas(
+                [], depth=depth, max_concurrent=concurrency,
+                pairwise_pnl=True, max_pairs=max_pairs,
+            )
         return {"source": "LIVE", "status": "AVAILABLE",
                 "evidence_status": "AVAILABLE", "depth": str(depth).upper(),
                 "alphas": []}
+    if pairwise_pnl:
+        if len(set(ids)) > MAX_PAIRWISE_ALPHA_IDS:
+            raise ValueError(
+                f"pairwise comparison accepts at most {MAX_PAIRWISE_ALPHA_IDS} Alpha IDs"
+            )
+        if any(len(alpha_id) > 128 for alpha_id in ids):
+            raise ValueError("pairwise Alpha IDs must be at most 128 characters")
     provider = _evidence_provider(client=client)
+    if pairwise_pnl:
+        return provider.compare_alphas(
+            ids, depth=depth, max_concurrent=concurrency,
+            pairwise_pnl=True, max_pairs=max_pairs,
+        )
     with ThreadPoolExecutor(max_workers=min(concurrency, len(ids))) as pool:
         alphas = list(pool.map(
             lambda item: provider.get_alpha_evidence(item, depth=depth), ids
@@ -1504,7 +1502,7 @@ _AGENT_CORE_TOOL_NAMES = frozenset({
     "get_operator_reference", "validate_simulation_spec",
     "simulate_batch", "simulate_multi_batch", "get_alpha_evidence",
     "reconcile_execution", "get_alpha_prod_correlation",
-    "get_pending_executions",
+    "get_pending_executions", "compare_alphas",
 })
 
 
@@ -1554,7 +1552,7 @@ def research_tool_manifest(profile="core"):
         {"name": "get_alpha_prod_correlation", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "get_alpha_recordsets", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "get_activity_diversity", "mode": "READ_ONLY", "owner": "BRAIN"},
-        {"name": "compare_alphas", "mode": "READ_ONLY", "owner": "BRAIN"},
+        {"name": "compare_alphas", "mode": "READ_ONLY", "owner": "RemoteAlphaEvidenceProvider"},
         {"name": "refresh_remote_alphas", "mode": "LOCAL_CACHE_WRITE", "local_write": True, "owner": "RemoteAlphaRepository"},
         {"name": "list_remote_alphas", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
         {"name": "get_remote_alpha", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},

@@ -2,7 +2,19 @@
 
 ## 证据深度
 
-宽面筛选用 Simulation 返回的 live Alpha detail，或调用 Core 工具 `get_alpha_evidence()` 读取默认 lightweight summary。只有问题需要 aggregates、PnL、self-correlation 或指定 recordsets 时，才为小型终选集合请求 full evidence。仅当当前 Research tool inventory 暴露 `get_alpha_prod_correlation()` 时，才为终选候选按需读取 PROD correlation；若未暴露，应报告能力缺失，不用 full evidence 代替，也不为普通探针等待它。
+宽面筛选用 Simulation 返回的 live Alpha detail，或调用 Core 工具 `get_alpha_evidence()` 读取默认 lightweight summary。只有问题需要 aggregates、PnL、self-correlation 或指定 recordsets 时，才为小型终选集合请求 `depth="full"`。Full evidence 通过现有 BRAIN evidence owner 读取 PnL 与 self-correlation；这是 self-correlation 的 canonical route，不新增并行 self-correlation 工具。仅当当前 Research tool inventory 暴露 `get_alpha_prod_correlation()` 时，才为终选候选按需读取 PROD correlation；若未暴露，应报告能力缺失，不用 self-correlation 或 pairwise PnL 代替，也不为普通探针等待它。
+
+## Target and submission are separate
+
+在当前 Agent 工作集中分别记录 `TARGET_MET` 与 `BRAIN_SUBMITTABLE`。前者表示目标性能条件（Sharpe、Fitness、Margin 与 Return 目标）有当前证据支持；后者只由当前 BRAIN hard checks/qualification evidence 决定。任何 Alpha 的 performance target 或低相关性都不能覆盖失败的 BRAIN hard check。Return 只在目标指标、qualification 与相关性约束满足后继续优化；不合并成 `AlphaScore` 或 `QualityScore`。
+
+Self-correlation 优先读取 `get_alpha_evidence(depth="full")` 的 live evidence。低 self-correlation、机制证据支持且没有明显失败的候选可以提前进入 Agent 的 OPTIMIZE lane，即使仍是 `TARGET_NOT_MET`；保留其真实状态，不把它描述为达标或可提交。缺少 live self-correlation evidence 时标 `UNKNOWN`，不得从旧报告补值。
+
+## Qualified pool and pairwise PnL correlation
+
+只有分别达到 performance target 且当前 BRAIN-submittable 的候选才有资格进入 qualified Alpha pool。用 canonical `compare_alphas()` 对当前候选列表比较 BRAIN daily PnL 的 pairwise correlation；单次最多比较 40 个 Alpha，以保证完整 MCP evidence 能返回。若合格候选多于 40 个，可依据 fresh individual evidence 先组成不超过 40 个的 shortlist，但低冗余结论只覆盖实际比较的 shortlist，未比较的候选不得声称已与该池正交。每个 Alpha 只有在与所有 peer 的比较都已知时才有完整的 maximum/peer。若部分 pair 缺失，只报告最大已知相关 peer 并标 `PARTIAL`；完整 pool 低冗余仍为 `UNKNOWN`。这是本地对 live BRAIN PnL 做的确定性比较，不等同于 self-correlation、PROD correlation 或 structural similarity。
+
+不设项目自有的固定 pairwise-correlation threshold。只有当前 BRAIN/platform 提供 owned threshold 时才应用；否则将 `NUMERIC_THRESHOLD = UNKNOWN`，依赖完整的 overlap/sample evidence、相对比较和候选分组。Pool 的低相关结论必须基于当前 pool 的 pairwise evidence；缺项或 overlap 不足时将 pool diversity 标为 `UNKNOWN`，不宣称已低冗余。高相关候选保留全部 evidence，但不要同时占据低冗余 qualified pool；在冗余候选间先比较 self-correlation，再比较 Sharpe、Fitness、Margin、Return 与 robustness。Correlation evidence 缺失或 overlap 不足时不能声称候选低相关。
 
 批次比较优先使用 `get_alpha_evidence()` 的默认 summary：一次轻量 summary 读取就是一个 Alpha detail 请求，不得为每个候选扇出为 PnL、年度聚合与相关性调用。
 

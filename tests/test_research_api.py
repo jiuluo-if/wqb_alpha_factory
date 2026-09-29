@@ -105,6 +105,7 @@ class TestResearchApi(unittest.TestCase):
             "simulate_batch", "simulate_multi_batch", "get_alpha_evidence",
             "reconcile_execution", "get_alpha_prod_correlation",
             "get_pending_executions", "list_templates", "generate_probes",
+            "compare_alphas",
         })
         dangerous = {"create_template", "sync_alpha_colors", "alpha_submission"}
         self.assertTrue(dangerous <= full_names)
@@ -325,7 +326,7 @@ class TestResearchApi(unittest.TestCase):
 
     def test_core_manifest_is_a_small_startup_surface(self):
         core = research_api.research_tool_manifest()
-        self.assertEqual(len(core), 14)
+        self.assertEqual(len(core), 15)
         self.assertEqual(core[0]["name"], "research_status")
 
     def test_generated_probe_api_requires_agent_selected_raw_inputs(self):
@@ -1072,7 +1073,7 @@ class TestResearchApi(unittest.TestCase):
         self.assertEqual(result, {"entries": []})
         guard_factory.assert_called_once_with("synthetic-state", reconcile=False)
 
-    def test_single_alias_and_multi_facade_delegate_to_gateway(self):
+    def test_single_alias_and_multi_facade_delegate_to_gateway_without_research_minimum(self):
         spec = SimulationSpec("rank(close)")
         with mock.patch("wqb_agent.research_api._simulation_gateway") as factory:
             gateway = factory.return_value
@@ -1083,45 +1084,52 @@ class TestResearchApi(unittest.TestCase):
         with mock.patch("wqb_agent.research_api._simulation_gateway") as factory:
             gateway = factory.return_value
             gateway.simulate_multi_batch.return_value = [{"status": "DONE"}]
-            specs = [SimulationSpec(f"rank(field_{index})") for index in range(80)]
+            specs = [SimulationSpec(f"rank(field_{index})") for index in range(23)]
             result = simulate_multi_batch(
                 specs, child_batch_size=10, max_concurrent_multi=8
             )
             self.assertEqual(result, [{"status": "DONE"}])
             gateway.simulate_multi_batch.assert_called_once_with(
                 specs, child_batch_size=10, max_concurrent_multi=8,
-                minimum_eligible_children=80,
             )
 
-    def test_public_multi_facade_rejects_batches_smaller_than_eighty_before_gateway(self):
-        specs = [SimulationSpec(f"rank(field_{index})") for index in range(79)]
+    def test_multi_facade_rejects_empty_and_over_100_candidate_lists(self):
         with mock.patch("wqb_agent.research_api._simulation_gateway") as factory:
-            with self.assertRaisesRegex(ValueError, "at least 80 new candidates"):
-                simulate_multi_batch(specs, client=object())
+            with self.assertRaisesRegex(ValueError, "at least one"):
+                simulate_multi_batch([])
+            with self.assertRaisesRegex(ValueError, "at most 100 candidates"):
+                simulate_multi_batch([
+                    SimulationSpec(f"rank(field_{index})")
+                    for index in range(101)
+                ])
         factory.assert_not_called()
 
-    def test_multi_facade_only_allows_reduced_minimum_after_4000_completed(self):
-        specs = [SimulationSpec(f"rank(field_{index})") for index in range(20)]
-        with mock.patch("wqb_agent.research_api._simulation_gateway") as factory:
-            with self.assertRaisesRegex(ValueError, "only after 4000"):
-                simulate_multi_batch(
-                    specs, minimum_eligible_children=20,
-                    completed_simulation_count=3999,
-                )
-            factory.assert_not_called()
-
+        specs = [SimulationSpec(f"rank(field_{index})") for index in range(23)]
         with mock.patch("wqb_agent.research_api._simulation_gateway") as factory:
             gateway = factory.return_value
             gateway.simulate_multi_batch.return_value = [{"status": "DONE"}]
-            result = simulate_multi_batch(
-                specs, minimum_eligible_children=20,
-                completed_simulation_count=4000,
-            )
+            result = simulate_multi_batch(specs)
         self.assertEqual(result, [{"status": "DONE"}])
         gateway.simulate_multi_batch.assert_called_once_with(
             specs, child_batch_size=10, max_concurrent_multi=8,
-            minimum_eligible_children=20,
         )
+
+    def test_probe_and_optimize_specs_can_share_one_batch_via_existing_note_mapping(self):
+        specs = [
+            SimulationSpec("rank(probe_a)", note="LANE:PROBE:H1"),
+            SimulationSpec("rank(probe_b)", note="LANE:PROBE:H2"),
+            SimulationSpec("rank(optimize_anchor)", note="LANE:OPTIMIZE:ALPHA_A"),
+        ]
+        with mock.patch("wqb_agent.research_api._simulation_gateway") as factory:
+            factory.return_value.simulate_multi_batch.return_value = [
+                {"status": "DONE"} for _ in specs
+            ]
+
+            results = simulate_multi_batch(specs)
+
+        self.assertEqual([row["status"] for row in results], ["DONE"] * 3)
+        sent_specs = factory.return_value.simulate_multi_batch.call_args.args[0]
+        self.assertEqual([spec.note for spec in sent_specs], [spec.note for spec in specs])
 
     def test_named_alpha_reads_are_direct_read_only_facade_calls(self):
         client = mock.Mock()
@@ -1205,6 +1213,31 @@ class TestResearchApi(unittest.TestCase):
         client.get_aggregates.assert_not_called()
         client.get_pnl.assert_not_called()
         client.get_self_correlation.assert_not_called()
+
+    def test_compare_alphas_exposes_pairwise_pnl_mode_through_public_facade(self):
+        client = mock.Mock()
+        client.get_pnl.side_effect = [
+            {"pnl": [
+                {"date": "2024-02-01", "value": 1.0},
+                {"date": "2024-02-02", "value": 2.0},
+                {"date": "2024-02-03", "value": 3.0},
+            ]},
+            {"pnl": [
+                {"date": "2024-02-01", "value": 3.0},
+                {"date": "2024-02-02", "value": 6.0},
+                {"date": "2024-02-03", "value": 9.0},
+            ]},
+        ]
+
+        result = research_api.compare_alphas(
+            ["alpha-a", "alpha-b"], client=client, pairwise_pnl=True,
+        )
+
+        self.assertEqual(result["method"], "PEARSON_DAILY_PNL")
+        self.assertEqual(result["strongest_pairs"][0]["correlation"], 1.0)
+        self.assertEqual(result["strongest_pairs"][0]["overlap_count"], 3)
+        client.get_pnl.assert_has_calls([mock.call("alpha-a"), mock.call("alpha-b")])
+        client.get_alpha.assert_not_called()
 
     def test_selected_recordsets_are_exposed_by_public_facade(self):
         client = mock.Mock()

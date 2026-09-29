@@ -116,5 +116,126 @@ class TestRemoteEvidence(unittest.TestCase):
         client.get_pnl.assert_not_called()
         client.get_self_correlation.assert_not_called()
 
+    def test_pairwise_pnl_comparison_uses_overlapping_dates_and_marks_unknown(self):
+        client = Mock()
+        client.get_pnl.side_effect = [
+            {"pnl": [
+                {"date": "2024-01-01", "value": 1.0},
+                {"date": "2024-01-02", "value": 2.0},
+                {"date": "2024-01-03", "value": 3.0},
+                {"date": "2024-01-04", "value": 4.0},
+            ]},
+            {"pnl": [
+                {"date": "2024-01-02", "value": 4.0},
+                {"date": "2024-01-03", "value": 6.0},
+                {"date": "2024-01-04", "value": 8.0},
+                {"date": "2024-01-05", "value": 10.0},
+            ]},
+            {"pnl": [
+                {"date": "2024-01-01", "value": 3.0},
+            ]},
+            {"schema": {"properties": {"date": {}, "pnl": {}}}, "records": [
+                ["2024-01-02", 7.0], ["2024-01-03", 5.0], ["2024-01-04", 3.0],
+            ]},
+        ]
+
+        result = RemoteAlphaEvidenceProvider(client).compare_alphas(
+            ["alpha-a", "alpha-b", "alpha-c", "alpha-d"],
+            pairwise_pnl=True, max_pairs=2,
+        )
+
+        self.assertEqual(result["method"], "PEARSON_DAILY_PNL")
+        self.assertEqual(result["source"], "BRAIN_LIVE")
+        self.assertEqual(result["total_pair_count"], 6)
+        self.assertEqual(result["available_pair_count"], 3)
+        self.assertEqual(result["unknown_pair_count"], 3)
+        self.assertTrue(result["pairs_truncated"])
+        pair = result["strongest_pairs"][0]
+        self.assertEqual((pair["alpha_id_a"], pair["alpha_id_b"]), ("alpha-a", "alpha-b"))
+        self.assertEqual(pair["correlation"], 1.0)
+        self.assertEqual(pair["overlap_count"], 3)
+        self.assertEqual(pair["overlap_start"], "2024-01-02")
+        self.assertEqual(pair["overlap_end"], "2024-01-04")
+        self.assertEqual(result["unknown_pair_reasons"], {"INSUFFICIENT_OVERLAP": 3})
+        per_alpha = {row["alpha_id"]: row for row in result["per_alpha_max"]}
+        self.assertEqual(per_alpha["alpha-c"]["status"], "AVAILABLE")
+        self.assertEqual(per_alpha["alpha-c"]["max_pairwise_status"], "UNKNOWN")
+        self.assertIsNone(per_alpha["alpha-c"]["max_abs_correlation"])
+        self.assertEqual(per_alpha["alpha-c"]["unknown_pair_count"], 3)
+        self.assertEqual(per_alpha["alpha-d"]["max_pairwise_status"], "PARTIAL")
+        self.assertIsNone(per_alpha["alpha-d"]["max_abs_correlation"])
+        self.assertEqual(
+            per_alpha["alpha-d"]["max_known_abs_correlation"], 1.0
+        )
+        self.assertEqual(
+            per_alpha["alpha-d"]["max_known_correlation"], -1.0
+        )
+        self.assertIn(
+            per_alpha["alpha-d"]["max_known_pairwise_alpha_id"],
+            {"alpha-a", "alpha-b"},
+        )
+        self.assertIsNone(per_alpha["alpha-d"]["max_pairwise_alpha_id"])
+        client.get_alpha.assert_not_called()
+        self.assertEqual(client.get_pnl.call_count, 4)
+
+    def test_pairwise_pnl_marks_constant_series_unknown(self):
+        client = Mock()
+        client.get_pnl.side_effect = [
+            {"pnl": [
+                {"date": "2024-03-01", "value": 1.0},
+                {"date": "2024-03-02", "value": 2.0},
+                {"date": "2024-03-03", "value": 3.0},
+            ]},
+            {"pnl": [
+                {"date": "2024-03-01", "value": 4.0},
+                {"date": "2024-03-02", "value": 4.0},
+                {"date": "2024-03-03", "value": 4.0},
+            ]},
+        ]
+
+        result = RemoteAlphaEvidenceProvider(client).compare_alphas(
+            ["alpha-trend", "alpha-constant"], pairwise_pnl=True,
+        )
+
+        self.assertEqual(result["available_pair_count"], 0)
+        self.assertEqual(result["unknown_pair_count"], 1)
+        self.assertEqual(result["strongest_pairs"], [])
+        self.assertEqual(result["unknown_pair_reasons"], {"ZERO_VARIANCE": 1})
+
+    def test_pairwise_complete_per_alpha_max_names_the_exact_peer(self):
+        client = Mock()
+        client.get_pnl.side_effect = [
+            {"pnl": [
+                {"date": "2024-05-01", "value": 1.0},
+                {"date": "2024-05-02", "value": 2.0},
+                {"date": "2024-05-03", "value": 4.0},
+            ]},
+            {"pnl": [
+                {"date": "2024-05-01", "value": 2.0},
+                {"date": "2024-05-02", "value": 4.0},
+                {"date": "2024-05-03", "value": 8.0},
+            ]},
+        ]
+
+        result = RemoteAlphaEvidenceProvider(client).compare_alphas(
+            ["alpha-a", "alpha-b"], pairwise_pnl=True,
+        )
+
+        rows = {row["alpha_id"]: row for row in result["per_alpha_max"]}
+        self.assertEqual(rows["alpha-a"]["max_pairwise_status"], "AVAILABLE")
+        self.assertEqual(rows["alpha-a"]["max_abs_correlation"], 1.0)
+        self.assertEqual(rows["alpha-a"]["max_pairwise_alpha_id"], "alpha-b")
+        self.assertEqual(rows["alpha-a"]["max_overlap_count"], 3)
+
+    def test_pairwise_pnl_caps_candidate_fanout_before_remote_reads(self):
+        client = Mock()
+
+        with self.assertRaisesRegex(ValueError, "at most 40 Alpha IDs"):
+            RemoteAlphaEvidenceProvider(client).compare_alphas(
+                [f"alpha-{index}" for index in range(41)], pairwise_pnl=True,
+            )
+
+        client.get_pnl.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()

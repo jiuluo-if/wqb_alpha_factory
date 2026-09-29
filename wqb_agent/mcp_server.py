@@ -20,7 +20,7 @@ MAX_LIST_ITEMS = 20
 MAX_STRING_CHARS = 8 * 1024
 MAX_RECORDSETS = 2
 MAX_SIMULATION_BATCH = 50
-MAX_MULTI_BATCH = 100
+MAX_MULTI_BATCH = research_api.MULTI_MAX_CANDIDATES_PER_CALL
 RESEARCH_WRITE_OPT_IN = "ALPHA_FACTORY_ENABLE_SIMULATION_WRITES"
 _SECRET_PARTS = ("password", "credential", "token", "secret", "authorization", "cookie", "api_key", "apikey")
 _SPEC_KEYS = frozenset({"expression", "settings", "fields", "field_datasets", "proposal_id", "note", "template_id", "simulation_type"})
@@ -368,16 +368,21 @@ def build_server(*, api=research_api, client=None, config=None, state_dir=None):
         )
 
     @server.tool(annotations=remote_read)
-    def get_alpha_evidence(alpha_id: str, recordsets: list[str] | None = None) -> dict[str, Any]:
+    def get_alpha_evidence(
+        alpha_id: str, recordsets: list[str] | None = None,
+        depth: str = "summary",
+    ) -> dict[str, Any]:
         """[READ_ONLY] Read one live Alpha evidence snapshot.
 
-        Without ``recordsets`` this stays at the cheap summary depth; selecting
-        recordsets reads the full evidence depth they require.
+        The default summary stays cheap. Request ``depth='full'`` for finalist
+        evidence including PnL and self-correlation; explicitly requested
+        recordsets also require full depth.
         """
         selected = recordsets or []
         if (
             not alpha_id.strip() or len(alpha_id) > 128
             or len(selected) > MAX_RECORDSETS
+            or depth not in {"summary", "full"}
             or any(
                 not isinstance(name, str) or not name.strip() or len(name) > 128
                 for name in selected
@@ -388,7 +393,7 @@ def build_server(*, api=research_api, client=None, config=None, state_dir=None):
             lambda: api.get_alpha_evidence(
                 alpha_id, client=resolve_client(), config=config, live=True,
                 recordsets=selected,
-                depth="full" if selected else "summary",
+                depth="full" if selected else depth,
             ),
             owner="research_api.get_alpha_evidence",
             allow_expression=True,
@@ -541,9 +546,15 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
 
     @server.tool(annotations=remote_read)
     def research_batch_status(specs: list[dict[str, Any]]) -> dict[str, Any]:
-        """[READ_ONLY] Check exact-candidate admission and reserved Multi capacity."""
+        """[READ_ONLY] Check each candidate and the Gateway's current Multi window.
+
+        The result includes READY proposal counts, available parent slots,
+        children per parent, and the upper-bound children in the active window.
+        It reports no research-size minimum and does not reserve or dispatch.
+        """
         parsed = parse_specs(
-            specs, minimum=2, maximum=MAX_MULTI_BATCH,
+            specs, minimum=research_api.MULTI_MIN_CHILDREN,
+            maximum=MAX_MULTI_BATCH,
             require_proposal_ids=True,
         )
         if parsed is None:
@@ -666,48 +677,82 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
         return write_facade("simulate_batch", parsed)
 
     @server.tool(annotations=simulation_write)
-    def simulate_multi_batch(
-        specs: list[dict[str, Any]],
-        minimum_eligible_children: int = 80,
-        completed_simulation_count: int = 0,
-    ) -> dict[str, Any]:
-        """[REMOTE_WRITE] Start a Multi wave (default 80; reduce only after 4000 completed simulations)."""
-        if (isinstance(minimum_eligible_children, bool)
-                or not isinstance(minimum_eligible_children, int)
-                or not 2 <= minimum_eligible_children <= 80
-                or isinstance(completed_simulation_count, bool)
-                or not isinstance(completed_simulation_count, int)
-                or completed_simulation_count < 0):
-            return _invalid_result(
-                owner="research_api.simulate_multi_batch",
-                access_mode="SIMULATION_WRITE", remote_write=True,
-            )
+    def simulate_multi_batch(specs: list[dict[str, Any]]) -> dict[str, Any]:
+        """[REMOTE_WRITE] Dispatch meaningful candidates through current bounded Multi capacity.
+
+        Send a two-or-more-child candidate set that admission marked READY.
+        There is no research-volume minimum; use simulate_batch for a single
+        candidate. Gateway groups, queues, and limits actual parent dispatches.
+        """
         parsed = parse_specs(
-            specs, minimum=minimum_eligible_children,
+            specs, minimum=research_api.MULTI_MIN_CHILDREN,
             maximum=MAX_MULTI_BATCH, require_proposal_ids=True,
         )
         if parsed is None:
             return _invalid_result(owner="research_api.simulate_multi_batch", access_mode="SIMULATION_WRITE", remote_write=True)
-        if (minimum_eligible_children < 80
-                and completed_simulation_count < 4000):
-            return _invalid_result(
-                owner="research_api.simulate_multi_batch",
-                access_mode="SIMULATION_WRITE", remote_write=True,
-                failure_code="MULTI_BATCH_BELOW_MINIMUM",
-            )
-        return write_facade(
-            "simulate_multi_batch", parsed,
-            minimum_eligible_children=minimum_eligible_children,
-            completed_simulation_count=completed_simulation_count,
+        return write_facade("simulate_multi_batch", parsed)
+
+    @server.tool(annotations=remote_read)
+    def get_alpha_evidence(
+        alpha_id: str, recordsets: list[str] | None = None,
+        depth: str = "summary",
+    ) -> dict[str, Any]:
+        """[READ_ONLY] Read summary evidence, or full finalist evidence on request.
+
+        Full depth includes the existing self-correlation read; selected
+        recordsets continue to imply full depth.
+        """
+        selected = recordsets or []
+        if (not alpha_id or len(alpha_id) > 128 or len(selected) > MAX_RECORDSETS
+                or depth not in {"summary", "full"}):
+            return _invalid_result(owner="research_api.get_alpha_evidence")
+        return read_facade(
+            "get_alpha_evidence", alpha_id, live=True, recordsets=selected,
+            depth="full" if selected else depth, allow_expression=True,
         )
 
     @server.tool(annotations=remote_read)
-    def get_alpha_evidence(alpha_id: str, recordsets: list[str] | None = None) -> dict[str, Any]:
-        """[READ_ONLY] Read one live Alpha evidence projection on request."""
-        selected = recordsets or []
-        if not alpha_id or len(alpha_id) > 128 or len(selected) > MAX_RECORDSETS:
-            return _invalid_result(owner="research_api.get_alpha_evidence")
-        return read_facade("get_alpha_evidence", alpha_id, live=True, recordsets=selected, depth="full" if selected else "summary", allow_expression=True)
+    def compare_alphas(
+        alpha_ids: list[str], max_concurrent: int = 4, max_pairs: int = 20,
+    ) -> dict[str, Any]:
+        """[READ_ONLY] Compare explicit candidates using pairwise live daily-PnL correlation.
+
+        Returns strongest absolute pair correlations, overlap/sample evidence,
+        and per-Alpha maximums. This is distinct from Alpha self-correlation,
+        PROD correlation, and structural similarity. It sets no acceptance
+        threshold; absent or insufficient PnL overlap stays UNKNOWN.
+        """
+        if (not isinstance(alpha_ids, list) or len(alpha_ids) < 2
+                or len(alpha_ids) > research_api.MAX_PAIRWISE_ALPHA_IDS
+                or any(not isinstance(alpha_id, str) or not alpha_id.strip()
+                       or len(alpha_id.strip()) > 128 for alpha_id in alpha_ids)):
+            return _invalid_result(owner="research_api.compare_alphas")
+        normalized_ids = [alpha_id.strip() for alpha_id in alpha_ids]
+        if (len(set(normalized_ids)) != len(normalized_ids)
+                or isinstance(max_concurrent, bool)
+                or not isinstance(max_concurrent, int)
+                or not 1 <= max_concurrent <= 4
+                or isinstance(max_pairs, bool)
+                or not isinstance(max_pairs, int)
+                or not 1 <= max_pairs <= 20):
+            return _invalid_result(owner="research_api.compare_alphas")
+        try:
+            payload = api.compare_alphas(
+                normalized_ids, client=resolve_client(), config=config,
+                pairwise_pnl=True, max_concurrent=max_concurrent,
+                max_pairs=max_pairs,
+            )
+        except Exception as exc:
+            return _failed_result(exc, owner="research_api.compare_alphas")
+        if not isinstance(payload, Mapping):
+            return _invalid_result(
+                owner="research_api.compare_alphas",
+                failure_code="INVALID_CORRELATION_RESULT",
+            )
+        return _envelope(
+            payload, owner="research_api.compare_alphas",
+            list_item_limit=MAX_MULTI_BATCH,
+        )
 
     @server.tool(annotations=remote_read)
     def get_alpha_prod_correlation(alpha_id: str) -> dict[str, Any]:

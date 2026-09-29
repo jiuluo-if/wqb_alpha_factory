@@ -214,6 +214,9 @@ class TestWriteReadiness(unittest.TestCase):
         self.assertEqual(result["blocked_count"], 1)
         self.assertEqual(result["active_multi_parent_count"], 1)
         self.assertEqual(result["effective_max_concurrent_multi"], 7)
+        self.assertEqual(result["available_multi_parent_slots"], 7)
+        self.assertEqual(result["children_per_multi_parent"], 10)
+        self.assertEqual(result["upper_bound_children_in_active_window"], 70)
 
     def test_batch_admission_blocks_when_all_candidates_match_unknown_guards(self):
         from wqb_agent.simulation_gateway import classify_batch_write_admission
@@ -257,6 +260,20 @@ class TestWriteReadiness(unittest.TestCase):
         self.assertEqual(result["write_readiness"], "BLOCKED_BY_REMOTE_STATE")
         self.assertEqual(result["effective_max_concurrent_multi"], 0)
         self.assertIn("MULTI_PARENT_CAPACITY_RESERVED", result["write_blockers"])
+
+    def test_batch_admission_keeps_capacity_unknown_when_execution_guard_is_unknown(self):
+        from wqb_agent.simulation_gateway import classify_batch_write_admission
+
+        result = classify_batch_write_admission(
+            **self._facts(execution_state_known=False, pending_entries=None),
+            candidate_fingerprints=["candidate-a"],
+        )
+
+        self.assertEqual(result["write_readiness"], "UNKNOWN")
+        self.assertIsNone(result["active_multi_parent_count"])
+        self.assertIsNone(result["effective_max_concurrent_multi"])
+        self.assertIsNone(result["available_multi_parent_slots"])
+        self.assertIsNone(result["upper_bound_children_in_active_window"])
 
     def test_write_readiness_waits_for_missing_capability_and_unknowns_broken_guard(self):
         waiting = classify_write_readiness(**self._facts(
@@ -355,7 +372,7 @@ class TestWriteReadiness(unittest.TestCase):
             for row in entries
         ))
 
-    def test_multi_batch_blocks_partial_write_below_required_new_child_count(self):
+    def test_multi_batch_dispatches_ready_remainder_without_padding_to_a_minimum(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = MultiGatewayClient()
             gateway = SimulationGateway(client, state_dir=tmp)
@@ -368,21 +385,16 @@ class TestWriteReadiness(unittest.TestCase):
                 f"rank(field_{index})", {"delay": 1}, proposal_id=f"candidate-{index}",
             ) for index in range(4)]
 
-            results = gateway.simulate_multi_batch(
-                specs, minimum_eligible_children=5,
-            )
+            results = gateway.simulate_multi_batch(specs)
             entries = gateway.guard.entries()
 
         self.assertEqual(results[0]["status"], "SUBMIT_UNKNOWN")
-        self.assertEqual(
-            [row["reason_code"] for row in results[1:]],
-            ["MULTI_BATCH_BELOW_MINIMUM"] * 4,
-        )
-        self.assertEqual(client.multi_submissions, [])
+        self.assertEqual([row["status"] for row in results[1:]], ["DONE"] * 4)
+        self.assertEqual([len(payloads) for payloads, _ in client.multi_submissions], [4])
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0]["execution_fingerprint"], unknown_fp)
 
-    def test_multi_batch_blocks_partial_write_after_remote_duplicate_scan(self):
+    def test_multi_batch_dispatches_nonduplicate_remainder_after_remote_scan(self):
         class DuplicateMultiClient(MultiGatewayClient):
             def get_all_user_alphas(self, **_kwargs):
                 return [{
@@ -396,14 +408,14 @@ class TestWriteReadiness(unittest.TestCase):
             results = gateway.simulate_multi_batch([
                 SimulationSpec("rank(close)", {"delay": 1}),
                 SimulationSpec("rank(open)", {"delay": 1}),
-            ], minimum_eligible_children=2)
+            ])
 
         self.assertEqual(results[0]["status"], "EXACT_DUPLICATE")
-        self.assertEqual(results[1]["status"], "BLOCKED_BY_REMOTE_STATE")
-        self.assertEqual(results[1]["reason_code"], "MULTI_BATCH_BELOW_MINIMUM")
+        self.assertEqual(results[1]["status"], "DONE")
+        self.assertEqual([row[0] for row in client.submissions], ["rank(open)"])
         self.assertEqual(client.multi_submissions, [])
 
-    def test_eighty_child_wave_uses_seven_slots_while_one_unknown_parent_is_quarantined(self):
+    def test_transport_capacity_uses_remaining_parent_slots_while_unknown_parent_is_quarantined(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = MultiGatewayClient()
             gateway = SimulationGateway(client, state_dir=tmp)
@@ -443,6 +455,75 @@ class TestWriteReadiness(unittest.TestCase):
             and row["status"] == "SUBMIT_UNKNOWN"
             for row in entries
         ))
+
+    def test_twenty_three_meaningful_candidates_dispatch_without_a_project_minimum(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = MultiGatewayClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            specs = [SimulationSpec(
+                f"rank(probe_{index})", {"delay": 1}, proposal_id=f"probe-{index}",
+                note="LANE:PROBE" if index < 18 else "LANE:OPTIMIZE",
+            ) for index in range(23)]
+
+            results = gateway.simulate_multi_batch(specs)
+
+        self.assertEqual([row["status"] for row in results], ["DONE"] * 23)
+        self.assertEqual([len(payloads) for payloads, _ in client.multi_submissions], [10, 10, 3])
+
+    def test_one_hundred_meaningful_candidates_fill_safe_multi_window_and_drain_queue(self):
+        class FirstWindowBarrierClient(MultiGatewayClient):
+            def __init__(self):
+                super().__init__()
+                self._call_count = 0
+                self._first_window = threading.Barrier(MULTI_MAX_CONCURRENCY)
+
+            def submit_multi_simulation(self, payloads, **kwargs):
+                with self._active_lock:
+                    self._active_multi += 1
+                    self._call_count += 1
+                    call_index = self._call_count
+                    self.max_active_multi = max(
+                        self.max_active_multi, self._active_multi,
+                    )
+                try:
+                    if call_index <= MULTI_MAX_CONCURRENCY:
+                        self._first_window.wait(timeout=5)
+                    self.multi_submissions.append((payloads, kwargs))
+                    progress_url = f"multi-progress-{len(self.multi_submissions)}"
+                    self._multi_sizes[progress_url] = len(payloads)
+                    return progress_url
+                finally:
+                    with self._active_lock:
+                        self._active_multi -= 1
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FirstWindowBarrierClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            specs = [SimulationSpec(
+                f"rank(wide_probe_{index})", {"delay": 1},
+                proposal_id=f"wide-probe-{index}",
+            ) for index in range(100)]
+
+            results = gateway.simulate_multi_batch(specs)
+
+        self.assertEqual([row["status"] for row in results], ["DONE"] * 100)
+        self.assertEqual([len(payloads) for payloads, _ in client.multi_submissions], [10] * 10)
+        self.assertEqual(client.max_active_multi, MULTI_MAX_CONCURRENCY)
+
+    def test_gateway_rejects_more_than_one_hundred_candidates_before_guarding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = MultiGatewayClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            specs = [SimulationSpec(
+                f"rank(oversize_probe_{index})", {"delay": 1},
+                proposal_id=f"oversize-probe-{index}",
+            ) for index in range(101)]
+
+            with self.assertRaisesRegex(ValueError, "at most 100 candidates"):
+                gateway.simulate_multi_batch(specs)
+
+            self.assertEqual(gateway.guard.entries(), [])
+            self.assertEqual(client.multi_submissions, [])
 
     def test_one_field_preflight_failure_does_not_discard_valid_multi_children(self):
         class PartiallyValidClient(MultiGatewayClient):

@@ -28,10 +28,12 @@ SERVER_NAME = "research_eval"
 WRITE_TOOLS = {"simulate_batch", "simulate_multi_batch"}
 KNOWN_TOOLS = {
     "research_status",
+    "research_batch_status",
     "list_datasets",
     "list_datafields",
     "list_templates",
     "generate_probes",
+    "compare_alphas",
     "get_operator_reference",
     "validate_simulation_spec",
     "simulate_batch",
@@ -75,7 +77,7 @@ ALLOWED_ENV = {
 
 
 def load_case_fixture(path: Path) -> dict[str, Any]:
-    """Load a synthetic fixture file that may contain A-H or cold-start cases."""
+    """Load a synthetic fixture file that may contain A-L or cold-start cases."""
     manifest = json.loads(path.read_text(encoding="utf-8"))
     if manifest.get("schema_version") != 1 or manifest.get("synthetic_only") is not True:
         raise ValueError("eval fixture must declare schema_version=1 and synthetic_only=true")
@@ -111,10 +113,10 @@ def load_case_fixture(path: Path) -> dict[str, Any]:
 
 
 def load_case_manifest(path: Path = FIXTURE) -> dict[str, Any]:
-    """Load the bounded A-I behavior fixture, preserving its synthetic scope."""
+    """Load the bounded A-L behavior fixture, preserving its synthetic scope."""
     manifest = load_case_fixture(path)
-    if [case.get("id") for case in manifest["cases"]] != list("ABCDEFGHI"):
-        raise ValueError("fixture must contain cases A-I in order")
+    if [case.get("id") for case in manifest["cases"]] != list("ABCDEFGHIJKL"):
+        raise ValueError("fixture must contain cases A-L in order")
     return manifest
 
 
@@ -231,6 +233,21 @@ def _contains_required(actual: Any, expected: Any) -> bool:
     return actual == expected
 
 
+def _contains_forbidden(actual: Any, forbidden: Any) -> bool:
+    if isinstance(forbidden, dict):
+        return isinstance(actual, dict) and any(
+            key in actual and _contains_forbidden(actual[key], value)
+            for key, value in forbidden.items()
+        )
+    if isinstance(forbidden, list):
+        if isinstance(actual, list):
+            return any(item in actual for item in forbidden)
+        return actual in forbidden
+    if isinstance(actual, list):
+        return forbidden in actual
+    return actual == forbidden
+
+
 def _final_values(payload: dict[str, Any] | None) -> set[str]:
     if not payload:
         return set()
@@ -282,6 +299,9 @@ def evaluate_case(
     for key, value in required_payload.items():
         if not _contains_required((payload or {}).get(key), value):
             issues.append(f"MISSING_FINAL_FIELD:{key}")
+    for key, value in expected.get("forbidden_payload_values", {}).items():
+        if _contains_forbidden((payload or {}).get(key), value):
+            issues.append(f"FORBIDDEN_FINAL_FIELD:{key}")
     required_calls = expected.get("required_calls", {})
     max_calls = expected.get("max_calls", {})
     for name, minimum in required_calls.items():
@@ -455,9 +475,29 @@ def build_fake_mcp(case_path: Path, case_id: str, log_path: Path) -> Any:
         result = {"source": "SYNTHETIC_EVAL_FIXTURE", "status": "DONE", "results": [{"proposal_id": spec.get("proposal_id"), "status": "DONE", "alpha_id": f"synthetic_{case_id.lower()}_{i}"} for i, spec in enumerate(specs)]}
         return record("simulate_multi_batch", {"specs": specs}, result, write=True)
 
-    def get_alpha_evidence(alpha_id: str, recordsets: list[str] | None = None) -> dict[str, Any]:
+    def research_batch_status(specs: list[dict[str, Any]]) -> dict[str, Any]:
+        result = evidence.get("research_batch_status", {
+            "source": "SimulationGateway", "status": "AVAILABLE",
+            "write_readiness": "READY", "eligible_count": len(specs),
+            "blocked_count": 0, "proposal_admissions": [],
+        })
+        return record("research_batch_status", {"specs": specs}, result)
+
+    def get_alpha_evidence(
+        alpha_id: str, recordsets: list[str] | None = None,
+        depth: str = "summary",
+    ) -> dict[str, Any]:
         result = evidence.get("alpha_evidence", {"source": "SYNTHETIC_EVAL_FIXTURE", "alpha_id": alpha_id, "status": "DONE"})
-        return record("get_alpha_evidence", {"alpha_id": alpha_id, "recordsets": recordsets or []}, result)
+        return record("get_alpha_evidence", {
+            "alpha_id": alpha_id, "recordsets": recordsets or [], "depth": depth,
+        }, result)
+
+    def compare_alphas(alpha_ids: list[str]) -> dict[str, Any]:
+        result = evidence.get("pairwise_pnl", {
+            "source": "SYNTHETIC_EVAL_FIXTURE", "status": "UNKNOWN",
+            "evidence_status": "UNKNOWN", "pairs": [],
+        })
+        return record("compare_alphas", {"alpha_ids": alpha_ids}, result)
 
     def get_alpha_prod_correlation(alpha_id: str) -> dict[str, Any]:
         result = evidence.get("prod_correlation", {"source": "SYNTHETIC_EVAL_FIXTURE", "alpha_id": alpha_id, "status": "UNKNOWN"})
@@ -503,6 +543,7 @@ def build_fake_mcp(case_path: Path, case_id: str, log_path: Path) -> Any:
 
     handlers.update({
         "research_status": research_status,
+        "research_batch_status": research_batch_status,
         "list_datasets": list_datasets,
         "list_datafields": list_datafields,
         "get_operator_reference": get_operator_reference,
@@ -510,6 +551,7 @@ def build_fake_mcp(case_path: Path, case_id: str, log_path: Path) -> Any:
         "simulate_batch": simulate_batch,
         "simulate_multi_batch": simulate_multi_batch,
         "get_alpha_evidence": get_alpha_evidence,
+        "compare_alphas": compare_alphas,
         "get_alpha_prod_correlation": get_alpha_prod_correlation,
         "reconcile_execution": reconcile_execution,
         "get_pending_executions": get_pending_executions,
@@ -873,8 +915,8 @@ def _serve_case(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-agent", action="store_true", help="Run real local Codex JSONL cases; may use model tokens")
-    parser.add_argument("--list-cases", action="store_true", help="List A-I cases without running an agent")
-    parser.add_argument("--cases", nargs="+", choices=list("ABCDEFGHI"), default=list("ABCDEFGHI"))
+    parser.add_argument("--list-cases", action="store_true", help="List A-L cases without running an agent")
+    parser.add_argument("--cases", nargs="+", choices=list("ABCDEFGHIJKL"), default=list("ABCDEFGHIJKL"))
     parser.add_argument("--codex", help="Codex executable; defaults to PATH discovery")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "tmp" / "logs")
     parser.add_argument("--timeout", type=int, default=180)

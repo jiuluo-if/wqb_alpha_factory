@@ -43,6 +43,17 @@ frontmatter 中 `metadata.wqb_alpha_factory_research_contract` 是本文件编�
 
 ## 每个研究批次
 
+### PROBE 与 OPTIMIZE 两条 Agent lane
+
+- `PROBE` 是持续主线：寻找新的 mechanism、dataset、field、template family、relationship 与有经济理由的 operator realization。开始优化不能关闭 Probe。
+- `OPTIMIZE` 只作用于有真实支持证据的 Alpha/family；可围绕一个已声明的 horizon、template slot、setting、neutralization/decay/truncation 或一个有理由的结构 sibling 优化，一次只改变一个有意义的轴，不做 Cartesian search。
+- `low self-correlation` 是重要研究优先级；同时检查性能、BRAIN hard checks 与当前 qualified pool 的 pairwise 冗余，再在约束满足时继续提高 Return。
+- 两条 lane 可在同一 research wave 和同一 Simulation batch 并行。复用现有 `proposal_id`、`note`、`template_id` 与 Agent-owned mapping 标记每个 proposal 的 lane、hypothesis、field provenance 和 changed axis；不添加 schema 或 Python 研究状态。
+- 每个方向的 `soft probe budget` 是该 wave 的 Agent work plan，由当前 live quota/capacity、数据/字段/模板宽度、研究不确定性与已有 BRAIN evidence 决定。新证据出现时可调整或开启 `EARLY OPTIMIZATION`；没有跨项目固定的批次或累计 Simulation 门槛。
+- 先准备所有当前有研究理由且 admission 为 READY 的候选，再按 Gateway/工具给出的当前容量提交。批次可以较小；单候选使用合法 Single path；Multi 由 Gateway 按兼容设置分组、限制并发并 refill capacity。不得为了填满 transport capacity 制造字段、operator、近义 template 或无意义 wrapper。
+- 若一个机制有支持证据、live self-correlation 较低且没有明显失败，Agent 可提前给它分配 OPTIMIZE lane，同时继续新的 PROBE；它仍可为 `TARGET_NOT_MET` 或 `BRAIN_SUBMITTABLE=false`。按[结果解释](references/result-interpretation.md#target-and-submission-are-separate)分别记录目标和 BRAIN 资格，Optimization 不放宽 hard checks。
+- 对终选集合使用 full Alpha evidence 取得 self-correlation；用当前 `compare_alphas()` inventory 对 qualified candidates 读取 pairwise daily-PnL correlation。按[结果解释](references/result-interpretation.md#qualified-pool-and-pairwise-pnl-correlation)判断冗余与 UNKNOWN；self / PROD / pairwise correlation 不互相替代。
+
 - 从多个竞争假设起步。使用 BRAIN 原始 dataset/datafield 列表，并解释每个 Agent 选定字段。
 - 探索新字段、自定义分组、字段复合、新算子或新模板时，先读[批次设计](references/batch-design.md)中的 live discovery 与结构判据。
 - 每个 proposal 都要有 batch 内唯一的 `proposal_id`，并在调用写工具前保留 `proposal_id → hypothesis/note/template` mapping。适用时提供有用的 `note` 和模板/家族标签。批次按对照组、本地兄弟组、证伪组与新探针分组。
@@ -52,9 +63,9 @@ frontmatter 中 `metadata.wqb_alpha_factory_research_contract` 是本文件编�
 - 保留探索。高结果只是比较候选，不是大举开发该方向的许可。
 - 本地变体保持字段、算子与表达式拓扑不变；拓扑变化是带独立假设的 `NEW_PROBE`。
 - 失败归因到假设、字段、算子、horizon、实现、相关性或稳健性。没有新证据不得重跑已明确失败的形态。
-- 每轮 broad-search 至少实际提交 80 个新的、准入为 `READY` 的 child（默认 8 个并发 Multi parent × 每 parent 10 个）。Research API 拒绝少于 80 个 proposals；Gateway 再次按 guard 和远端去重计算实际 eligible 数，少于下限时整批不 POST。候选级 admission 排除 guard/重复/无效项后若不足 80，就继续生成新 proposal 并检查，直到凑足 80 个可写项或真实平台 hard blocker 阻止；不能把被跳过项算进批量。仅当 fresh BRAIN evidence 确认累计已完成至少 4000 个 child 时，才在 `simulate_multi_batch` 显式设置较低的 `minimum_eligible_children` 并传入完成计数；handoff/cache 不能单独证明达到门槛。计数未知或未到 4000 时维持 80 批量。候选覆盖多种算子组合、新数据集/字段与有经济理由的自定义分组；控制相似度并用结果证据判断正交性。
+- 候选应覆盖能区分机制解释的数据集/字段、关系与有经济理由的算子 realization，并控制 selection pressure、冗余与多重检验；wave budget 由当前有价值的候选、研究不确定性与 live admission 决定，不为数量凑样本。
 - Cold start 先读 `research_status()`。若全局被已有 guard 标为 `BLOCKED_BY_REMOTE_STATE`，绝不重发、删除或绕过原请求；取得具体候选后调用 READ_ONLY `research_batch_status(specs)`。按 proposal admission 排除精确冲突的候选，继续本批可执行候选；不把一个 unknown 扩大成全体候选停摆。若批次状态也不是 `READY`，处理返回的能力/quota/capacity 原因或只跳过受影响分支，再继续不受影响的数据发现、表达式设计与证据整理。
-- 提交 80 个新 child 时调用 `simulate_multi_batch`。Gateway 在 POST 前重查全部事实；每个 unresolved Multi parent 占一个并发槽，最多 8 个，因此剩余 parent 并发自动为 `8 - unresolved_multi_parent_count`。全局状态和 exact-once guard 不因新批次恢复而被清除。
+- 多候选 batch 使用当前 `research_batch_status` 的 eligible/capacity evidence；Gateway 在写前重查全部事实，隔离精确冲突项并继续其余 READY 候选。传输容量与 unresolved guard 处理由 Gateway 管理，不把安全 blocker 扩大成研究数量门槛；未决写入绝不清除或重发。
 - Regular parent 晋升到 Region-Agnostic 时，使用 `REGION_AGNOSTIC` 与 `region=ALL` 的 live Simulation scope，并保留真实字段→dataset provenance。Gateway 会分别按 USA/EUR/ASI/GLB 查询 field catalog；表达式的所有字段须在至少两个相同子地区可用且 VECTOR 类型检查通过。`validate_simulation_spec()` 只证明请求形状，不能替代 Gateway 的 live field/write preflight。
 - Skill、记忆教训或历史运行不是 BRAIN 事实。记忆只保留少量可迁移研究教训；永不存完整转录。
 

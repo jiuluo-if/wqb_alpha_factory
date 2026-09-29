@@ -382,8 +382,9 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             "simulate_batch", "simulate_multi_batch", "get_alpha_evidence",
             "reconcile_execution", "get_alpha_prod_correlation",
             "get_pending_executions", "list_templates", "generate_probes",
+            "compare_alphas",
         })
-        self.assertEqual(len(by_name), 14)
+        self.assertEqual(len(by_name), 15)
         self.assertEqual(
             set(by_name),
             {row["name"] for row in mcp_server.research_api.research_tool_manifest(profile="core")},
@@ -407,11 +408,11 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                 field_datasets={f"synthetic_field_{index}": "synthetic_dataset"},
                 template_id="toy_template",
             )
-            for index in range(80)
+            for index in range(23)
         ]
         admission = Mock(return_value={
             "source": "SimulationGateway", "status": "AVAILABLE",
-            "write_readiness": "READY", "eligible_count": 80,
+            "write_readiness": "READY", "eligible_count": 23,
             "blocked_count": 0, "proposal_admissions": [],
         })
         inventory = Mock(return_value=[{
@@ -438,15 +439,15 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                 "limit": 20, "offset": 0,
             })
             generated = await client.call_tool("generate_probes", {
-                "template_ids": ["toy_template"], "count": 80,
+                "template_ids": ["toy_template"], "count": 23,
                 "fields": [{
                     "id": f"synthetic_field_{index}",
                     "dataset": "synthetic_dataset", "type": "MATRIX",
-                } for index in range(80)],
+                } for index in range(23)],
             })
 
             specs = generated.structured_content["data"]["specs"]
-            self.assertEqual(len(specs), 80)
+            self.assertEqual(len(specs), 23)
             self.assertFalse(generated.structured_content["truncated"])
             self.assertTrue(all(spec["proposal_id"] is None for spec in specs))
             for index, spec in enumerate(specs):
@@ -470,7 +471,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(template_summary["direction_reason"], "synthetic continuation hypothesis")
         self.assertIn("rank(synthetic_field_0)", specs[0]["expression"])
         self.assertIn("field_datasets", specs[0])
-        self.assertEqual(admitted.structured_content["data"]["eligible_count"], 80)
+        self.assertEqual(admitted.structured_content["data"]["eligible_count"], 23)
         self.assertTrue(listed["list_templates"].annotations.read_only_hint)
         self.assertTrue(listed["generate_probes"].annotations.read_only_hint)
         self.assertIn("private catalog", listed["list_templates"].description.lower())
@@ -484,8 +485,8 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(inventory.call_args.kwargs["config"])
         generator.assert_called_once()
         self.assertEqual(generator.call_args.kwargs["template_ids"], ["toy_template"])
-        self.assertEqual(generator.call_args.kwargs["count"], 80)
-        self.assertEqual(len(admission.call_args.args[0]), 80)
+        self.assertEqual(generator.call_args.kwargs["count"], 23)
+        self.assertEqual(len(admission.call_args.args[0]), 23)
 
     async def test_template_tools_fail_closed_when_private_catalog_is_missing(self):
         with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {self.ENV: "1"}):
@@ -505,6 +506,88 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["status"], "UNAVAILABLE")
             self.assertEqual(result["error"], "PRIVATE_TEMPLATE_CATALOG_MISSING")
             self.assertIsNone(result["data"])
+
+    async def test_full_alpha_evidence_exposes_self_correlation_without_new_tool(self):
+        evidence = Mock(return_value={
+            "source": "LIVE", "status": "AVAILABLE", "self_correlation": {
+                "status": "AVAILABLE", "max": 0.08,
+            },
+        })
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(
+                api=self.api(get_alpha_evidence=evidence), client=object(),
+            )
+        async with Client(server) as client:
+            tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+            result = await client.call_tool("get_alpha_evidence", {
+                "alpha_id": "synthetic-alpha", "depth": "full",
+            })
+
+        self.assertIn("depth", tools["get_alpha_evidence"].input_schema["properties"])
+        self.assertIn("compare_alphas", tools)
+        self.assertNotIn("get_alpha_self_correlation", tools)
+        self.assertEqual(evidence.call_args.kwargs["depth"], "full")
+        self.assertEqual(result.structured_content["data"]["self_correlation"]["max"], 0.08)
+
+    async def test_compare_alphas_returns_bounded_pairwise_live_pnl_evidence(self):
+        class PnlOnlyClient:
+            def get_pnl(self, alpha_id):
+                values = {
+                    "alpha-a": [("2024-01-01", 1), ("2024-01-02", 2), ("2024-01-03", 3)],
+                    "alpha-b": [("2024-01-01", 2), ("2024-01-02", 4), ("2024-01-03", 6)],
+                    "alpha-c": [("2024-01-03", 5)],
+                }
+                return {"pnl": [{"date": date, "value": value}
+                                 for date, value in values[alpha_id]]}
+
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(
+                api=mcp_server.research_api, client=PnlOnlyClient(),
+            )
+        async with Client(server) as client:
+            tool = next(item for item in (await client.list_tools()).tools
+                        if item.name == "compare_alphas")
+            result = await client.call_tool("compare_alphas", {
+                "alpha_ids": ["alpha-a", "alpha-b", "alpha-c"],
+                "max_pairs": 2,
+            })
+
+        self.assertTrue(tool.annotations.read_only_hint)
+        self.assertIn("pairwise", tool.description.lower())
+        self.assertIn("self-correlation", tool.description.lower())
+        data = result.structured_content["data"]
+        self.assertEqual(data["method"], "PEARSON_DAILY_PNL")
+        self.assertEqual(data["available_pair_count"], 1)
+        self.assertEqual(data["unknown_pair_count"], 2)
+        self.assertEqual(data["strongest_pairs"][0]["overlap_count"], 3)
+        self.assertEqual(data["strongest_pairs"][0]["correlation"], 1.0)
+        self.assertLessEqual(len(data["strongest_pairs"]), 2)
+
+    async def test_compare_alphas_max_candidate_set_fits_mcp_result_budget(self):
+        class PnlOnlyClient:
+            def get_pnl(self, alpha_id):
+                index = int(alpha_id.split("-")[1])
+                month = "02" if index % 2 else "01"
+                return {"pnl": [
+                    {"date": f"2024-{month}-{day:02d}", "value": day * day}
+                    for day in range(1, 6)
+                ]}
+
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(
+                api=mcp_server.research_api, client=PnlOnlyClient(),
+            )
+        async with Client(server) as client:
+            result = await client.call_tool("compare_alphas", {
+                "alpha_ids": [f"alpha-{index}" for index in range(40)],
+                "max_pairs": 20,
+            })
+
+        envelope = result.structured_content
+        self.assertFalse(envelope["truncated"])
+        self.assertIsNotNone(envelope["data"])
+        self.assertEqual(len(envelope["data"]["per_alpha_max"]), 40)
+        self.assertEqual(envelope["data"]["status"], "PARTIAL")
 
     async def test_probe_generation_live_read_error_keeps_live_source(self):
         generator = Mock(side_effect=RuntimeError("synthetic live capability failure"))
@@ -526,6 +609,9 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             "source": "SimulationGateway", "status": "AVAILABLE",
             "write_readiness": "READY", "eligible_count": 2,
             "blocked_count": 0, "proposal_admissions": [],
+            "available_multi_parent_slots": 7,
+            "children_per_multi_parent": 10,
+            "upper_bound_children_in_active_window": 70,
         })
         with patch.dict(os.environ, {self.ENV: "1"}):
             server = mcp_server.build_research_server(
@@ -548,6 +634,8 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["config"], None)
         self.assertEqual(kwargs["state_dir"], "synthetic-state")
         self.assertEqual(result.structured_content["data"]["eligible_count"], 2)
+        self.assertEqual(result.structured_content["data"]["available_multi_parent_slots"], 7)
+        self.assertEqual(result.structured_content["data"]["upper_bound_children_in_active_window"], 70)
         self.assertEqual(result.structured_content["owner"], "research_api.research_batch_status")
 
     async def test_research_mode_exposes_existing_pending_details_as_local_read_only(self):
@@ -660,6 +748,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             "research_status", "list_datasets", "list_datafields",
             "get_operator_reference", "validate_simulation_spec",
             "get_alpha_evidence", "reconcile_execution", "get_alpha_prod_correlation",
+            "compare_alphas",
         }
         for name in remote_read_names:
             annotations = by_name[name].annotations
@@ -667,6 +756,8 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(annotations.open_world_hint, True, name)
 
         self.assertIn("FINALIST_ONLY", by_name["get_alpha_prod_correlation"].description)
+        self.assertIn("pairwise", by_name["compare_alphas"].description.lower())
+        self.assertIn("daily-pnl", by_name["compare_alphas"].description.lower())
 
         for name in ("simulate_batch", "simulate_multi_batch"):
             annotations = by_name[name].annotations
@@ -778,7 +869,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         async with Client(parameters) as client:
             listed = await client.list_tools()
         names = {tool.name for tool in listed.tools}
-        self.assertEqual(len(names), 14)
+        self.assertEqual(len(names), 15)
         self.assertTrue({"research_status", "simulate_batch", "simulate_multi_batch"} <= names)
 
     async def test_alpha_expression_is_available_only_through_requested_evidence(self):
@@ -839,7 +930,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_write_specs_require_unique_nonempty_proposal_ids_before_facade(self):
         submit = Mock(return_value=[])
-        multi = Mock(return_value=[])
+        multi = Mock(return_value=[{"status": "DONE"} for _ in range(23)])
         with patch.dict(os.environ, {self.ENV: "1"}):
             server = mcp_server.build_research_server(
                 api=self.api(simulate_batch=submit, simulate_multi_batch=multi), client=object(),
@@ -863,31 +954,25 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                 {"expression": "rank(close)", "proposal_id": "dup"},
                 {"expression": "rank(volume)", "proposal_id": "dup"},
             ]})
-            undersized_multi = await client.call_tool("simulate_multi_batch", {"specs": [
+            small_ready_multi = await client.call_tool("simulate_multi_batch", {"specs": [
                 {"expression": f"rank(field_{index})", "proposal_id": f"p-{index}"}
-                for index in range(79)
+                for index in range(23)
             ]})
-            premature_reduction = await client.call_tool("simulate_multi_batch", {
-                "specs": [
-                    {"expression": f"rank(reduced_{index})", "proposal_id": f"r-{index}"}
-                    for index in range(20)
-                ],
-                "minimum_eligible_children": 20,
-                "completed_simulation_count": 3999,
-            })
+            multi_tool = next(
+                tool for tool in (await client.list_tools()).tools
+                if tool.name == "simulate_multi_batch"
+            )
         self.assertEqual(invalid_multi.structured_content["error"], "INVALID_ARGUMENT")
         self.assertEqual(invalid_multi.structured_content["access_mode"], "SIMULATION_WRITE")
         self.assertTrue(invalid_multi.structured_content["remote_write"])
-        self.assertEqual(undersized_multi.structured_content["error"], "INVALID_ARGUMENT")
-        self.assertEqual(undersized_multi.structured_content["access_mode"], "SIMULATION_WRITE")
-        self.assertTrue(undersized_multi.structured_content["remote_write"])
-        self.assertEqual(premature_reduction.structured_content["status"], "NOT_DISPATCHED")
+        self.assertEqual(small_ready_multi.structured_content["candidate_count"], 23)
+        self.assertEqual(multi.call_args.args[0][0].proposal_id, "p-0")
+        self.assertEqual(len(multi.call_args.args[0]), 23)
         self.assertEqual(
-            premature_reduction.structured_content["reason_code"],
-            "MULTI_BATCH_BELOW_MINIMUM",
+            set(multi_tool.input_schema["properties"]), {"specs"},
         )
         submit.assert_not_called()
-        multi.assert_not_called()
+        multi.assert_called_once()
 
     async def test_valid_proposal_identity_round_trips_without_echoing_agent_labels(self):
         proposal_id = "proposal-42"
@@ -984,7 +1069,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                 server = mcp_server.build_research_server(api=api, client=object(), state_dir=state_dir)
             specs = [
                 {"expression": f"rank(field_{index})", "proposal_id": f"proposal-{index}"}
-                for index in range(80)
+                for index in range(2)
             ]
             async with Client(server) as client:
                 simulated = await client.call_tool("simulate_multi_batch", {"specs": specs})
@@ -995,7 +1080,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(recovered.structured_content["data"]["status"], "SUBMIT_UNKNOWN")
         self.assertEqual(recovered.structured_content["data"]["fingerprint"], parent)
 
-    async def test_multi_batch_can_reduce_only_with_4000_completed_count(self):
+    async def test_multi_batch_accepts_small_meaningful_candidate_set(self):
         multi = Mock(return_value=[])
         with patch.dict(os.environ, {self.ENV: "1"}):
             server = mcp_server.build_research_server(
@@ -1003,19 +1088,16 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             )
         specs = [
             {"expression": f"rank(reduced_{index})", "proposal_id": f"r-{index}"}
-            for index in range(20)
+            for index in range(23)
         ]
         async with Client(server) as client:
-            result = await client.call_tool("simulate_multi_batch", {
-                "specs": specs, "minimum_eligible_children": 20,
-                "completed_simulation_count": 4000,
-            })
+            result = await client.call_tool("simulate_multi_batch", {"specs": specs})
 
-        self.assertEqual(result.structured_content["candidate_count"], 20)
+        self.assertEqual(result.structured_content["candidate_count"], 23)
         args, kwargs = multi.call_args
-        self.assertEqual(len(args[0]), 20)
-        self.assertEqual(kwargs["minimum_eligible_children"], 20)
-        self.assertEqual(kwargs["completed_simulation_count"], 4000)
+        self.assertEqual(len(args[0]), 23)
+        self.assertNotIn("minimum_eligible_children", kwargs)
+        self.assertNotIn("completed_simulation_count", kwargs)
 
     def test_write_projection_enforces_byte_limit_without_dropping_candidates(self):
         rows = [{

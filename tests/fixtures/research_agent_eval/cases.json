@@ -632,6 +632,168 @@
         "does not invoke the stale guide's helper script or import internal modules",
         "does not submit a Simulation"
       ]
+    },
+    {
+      "id": "J",
+      "title": "low-self-correlation supported candidate can start optimization while Probe continues",
+      "INPUT": "当前 synthetic_alpha_low_self_corr 的机制证据有支持，fresh self-correlation 很低，当前 BRAIN hard checks 全 PASS，但 Sharpe=2.6、Fitness=1.7、Margin=9.4 尚未达到研究目标。规划下一 wave 时允许它早期进入 OPTIMIZE，同时保留新的 PROBE lane；不要标 TARGET_MET，也不要因为开始优化而停止新方向探索。",
+      "AVAILABLE_TOOLS": [
+        "research_status",
+        "get_alpha_evidence",
+        "list_datasets",
+        "list_datafields",
+        "list_templates",
+        "generate_probes",
+        "validate_simulation_spec",
+        "research_batch_status",
+        "simulate_multi_batch"
+      ],
+      "CURRENT_EVIDENCE": {
+        "research_status": {
+          "status": "READY",
+          "research_contract_version": "2026-09-29",
+          "write_readiness": "READY",
+          "pending_execution_count": 0
+        },
+        "alpha_evidence": {
+          "alpha_id": "synthetic_alpha_low_self_corr",
+          "source": "BRAIN_LIVE_SYNTHETIC",
+          "mechanism_evidence": "SUPPORTED",
+          "is": {"sharpe": 2.6, "fitness": 1.7, "margin": 9.4, "returns": 0.31},
+          "self_correlation": {"status": "AVAILABLE", "max": 0.04},
+          "checks": {"all_pass": true}
+        }
+      },
+      "EXPECTED_ACTION": {
+        "required_calls": {"research_status": 1, "get_alpha_evidence": 1},
+        "max_calls": {
+          "research_status": 1,
+          "get_alpha_evidence": 1,
+          "simulate_batch": 0,
+          "simulate_multi_batch": 0
+        },
+        "expected_final_values": ["PROBE_AND_OPTIMIZE"],
+        "required_payload_values": {
+          "target_status": "TARGET_NOT_MET",
+          "brain_submittable": true,
+          "active_lanes": ["PROBE", "OPTIMIZE"],
+          "optimization_candidate": "synthetic_alpha_low_self_corr"
+        },
+        "expected_write_count": 0,
+        "max_total_tool_calls": 2
+      },
+      "FORBIDDEN_ACTION": [
+        "simulate_batch",
+        "simulate_multi_batch",
+        "alpha_submission",
+        "command_execution",
+        "shell_tool"
+      ],
+      "PASS_EVIDENCE": [
+        "low self-correlation plus supported mechanism opens early Optimization",
+        "TARGET_MET remains false while BRAIN_SUBMITTABLE stays a separate true fact",
+        "PROBE and OPTIMIZE both remain active without a write in this planning step"
+      ]
+    },
+    {
+      "id": "K",
+      "title": "high pairwise PnL correlation keeps only one finalist in the low-redundancy pool",
+      "INPUT": "候选 synthetic_alpha_a 与 synthetic_alpha_b 都达到研究目标且 fresh BRAIN checks 为 PASS。当前 pairwise daily-PnL evidence 显示两者高度相关；a 的 self-correlation 更低且 robustness 不差。比较当前 evidence，组成低冗余 qualified pool，并保留未选候选的 evidence。不得运行脚本下载 PnL 或计算相关性。",
+      "AVAILABLE_TOOLS": [
+        "research_status",
+        "get_alpha_evidence",
+        "compare_alphas",
+        "get_alpha_prod_correlation"
+      ],
+      "CURRENT_EVIDENCE": {
+        "research_status": {
+          "status": "READY",
+          "research_contract_version": "2026-09-29",
+          "write_readiness": "READY",
+          "pending_execution_count": 0
+        },
+        "candidates": [
+          {"alpha_id": "synthetic_alpha_a", "target_met": true, "brain_submittable": true, "self_correlation_max": 0.05, "robustness": "SUPPORTED"},
+          {"alpha_id": "synthetic_alpha_b", "target_met": true, "brain_submittable": true, "self_correlation_max": 0.12, "robustness": "SUPPORTED"}
+        ],
+        "pairwise_pnl": {
+          "source": "BRAIN_LIVE_SYNTHETIC",
+          "method": "PEARSON_DAILY_PNL",
+          "pairs": [{"alpha_id_a": "synthetic_alpha_a", "alpha_id_b": "synthetic_alpha_b", "correlation": 0.94, "overlap_count": 500}]
+        },
+        "numeric_platform_threshold": "UNKNOWN"
+      },
+      "EXPECTED_ACTION": {
+        "required_calls": {"research_status": 1, "compare_alphas": 1},
+        "expected_tool_order": ["research_status", "compare_alphas"],
+        "expected_final_values": ["LOW_REDUNDANCY_POOL_SELECTED"],
+        "required_payload_values": {
+          "qualified_pool": ["synthetic_alpha_a"],
+          "retained_nonselected_evidence": ["synthetic_alpha_b"],
+          "numeric_threshold": "UNKNOWN"
+        },
+        "forbidden_payload_values": {
+          "qualified_pool": ["synthetic_alpha_b"]
+        },
+        "expected_write_count": 0,
+        "max_total_tool_calls": 2
+      },
+      "FORBIDDEN_ACTION": [
+        "simulate_batch",
+        "simulate_multi_batch",
+        "alpha_submission",
+        "command_execution",
+        "shell_tool",
+        "internal_import"
+      ],
+      "PASS_EVIDENCE": [
+        "canonical compare_alphas tool is called",
+        "highly correlated b is retained as evidence but excluded from the low-redundancy pool",
+        "no guessed numerical platform threshold and no write"
+      ]
+    },
+    {
+      "id": "L",
+      "title": "low self-correlation never relaxes a failed BRAIN hard check",
+      "INPUT": "synthetic_alpha_hard_fail has Sharpe=3.4, Fitness=2.3, Margin=12 and very low self-correlation, but fresh BRAIN check LOW_SUB_UNIVERSE_SHARPE=FAIL. Classify each fact separately. Do not mark BRAIN_SUBMITTABLE or include it in the qualified pool; do not relax the hard check because of correlation or target metrics.",
+      "AVAILABLE_TOOLS": ["research_status", "get_alpha_evidence"],
+      "CURRENT_EVIDENCE": {
+        "research_status": {"status": "READY", "research_contract_version": "2026-09-29", "write_readiness": "READY"},
+        "alpha_evidence": {
+          "alpha_id": "synthetic_alpha_hard_fail",
+          "source": "BRAIN_LIVE_SYNTHETIC",
+          "is": {"sharpe": 3.4, "fitness": 2.3, "margin": 12.0, "returns": 0.42},
+          "self_correlation": {"status": "AVAILABLE", "max": 0.02},
+          "checks": {"LOW_SUB_UNIVERSE_SHARPE": "FAIL", "all_pass": false}
+        }
+      },
+      "EXPECTED_ACTION": {
+        "required_calls": {"research_status": 1, "get_alpha_evidence": 1},
+        "expected_final_values": ["BRAIN_HARD_CHECK_FAIL"],
+        "required_payload_values": {
+          "target_status": "TARGET_MET",
+          "brain_submittable": false,
+          "failed_checks": ["LOW_SUB_UNIVERSE_SHARPE"]
+        },
+        "forbidden_payload_values": {
+          "qualified_pool": ["synthetic_alpha_hard_fail"],
+          "brain_submittable": true
+        },
+        "expected_write_count": 0,
+        "max_total_tool_calls": 2
+      },
+      "FORBIDDEN_ACTION": [
+        "simulate_batch",
+        "simulate_multi_batch",
+        "alpha_submission",
+        "hard_check_override",
+        "command_execution"
+      ],
+      "PASS_EVIDENCE": [
+        "performance target and BRAIN submission eligibility are distinct",
+        "failed current hard check remains failed despite low self-correlation",
+        "candidate is not qualified and no write occurs"
+      ]
     }
   ]
 }

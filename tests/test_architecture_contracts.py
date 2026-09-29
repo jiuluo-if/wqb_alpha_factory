@@ -33,7 +33,7 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         self.assertEqual(skill_dirs, ["skill-authoring", "wqb-research"])
 
         self.assertEqual(research_api.RESEARCH_CONTRACT_VERSION, "2026-09-29")
-        self.assertEqual(len(research_api.research_tool_manifest(profile="core")), 14)
+        self.assertEqual(len(research_api.research_tool_manifest(profile="core")), 15)
         skill_path = skill_root / "wqb-research" / "SKILL.md"
         text = skill_path.read_text(encoding="utf-8")
         self.assertIn(
@@ -134,7 +134,7 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         self.assertIn("get_pending_executions", text)
         self.assertIn("get_alpha_prod_correlation", text)
         self.assertIn("FINALIST_ONLY", text)
-        self.assertIn("do not implicitly request PROD correlation", text)
+        self.assertIn("distinct from BRAIN self-correlation and PROD correlation", text)
 
     def test_template_first_and_local_data_lifecycle_have_canonical_routes(self):
         prompt = (ROOT / "prompts" / "research_agent.md").read_text(encoding="utf-8")
@@ -155,6 +155,27 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
             self.assertIn(phrase, policy)
         self.assertIn("run_research_agent_eval.py", scripts)
         self.assertIn("run_cold_start_eval.py", scripts)
+
+    def test_research_lane_budget_and_correlation_rules_are_agent_owned(self):
+        root = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        agent = (ROOT / "wqb_agent" / "AGENTS.md").read_text(encoding="utf-8")
+        prompt = (ROOT / "prompts" / "research_agent.md").read_text(encoding="utf-8")
+        skill = (ROOT / "skills" / "wqb-research" / "SKILL.md").read_text(encoding="utf-8")
+        result_guide = (ROOT / "skills" / "wqb-research" / "references" / "result-interpretation.md").read_text(encoding="utf-8")
+        combined = "\n".join((root, agent, prompt, skill, result_guide))
+
+        for phrase in (
+            "PROBE", "OPTIMIZE", "soft probe budget", "TARGET_MET",
+            "BRAIN_SUBMITTABLE", "low self-correlation", "pairwise",
+            "compare_alphas", "NUMERIC_THRESHOLD = UNKNOWN",
+        ):
+            self.assertIn(phrase, combined)
+        for obsolete in (
+            "minimum_eligible_children", "completed_simulation_count",
+            "4000 completed", "每批至少提交 80", "少于 80 个 proposals",
+        ):
+            self.assertNotIn(obsolete, combined)
+        self.assertIn("不合并成 `AlphaScore` 或 `QualityScore`", combined)
 
     def test_result_guide_uses_agent_owned_trial_context(self):
         text = (

@@ -18,6 +18,8 @@ Agent 架构地图见 [`docs/ARCHITECTURE_AGENT.md`](docs/ARCHITECTURE_AGENT.md)
 
 本项目的定向研究目标是大量产生高质量、低自相关、彼此正交的候选：在不同算子组合、live 数据集/字段、经济上可解释的自定义分组和模板机制之间开展批量 Multi GLB 实验；根据 BRAIN live evidence 筛选 Regular parent 晋升至 Region-Agnostic（RA）验证。候选目标为 Sharpe >3、Fitness >2、Margin >10、return 尽可能高；RA parent 在以上目标基础上至少两个地区 pass。低自相关可支持放宽次要研究阈值，但不得改写平台 hard checks，也须记录取舍证据。阈值是研究目标，不是平台能力真值。
 
+研究排序优先低 self-correlation，其次性能与候选池低相关，最后在其余条件满足时提高 Return。性能目标（`TARGET_MET`）和当前 BRAIN 可提交资格（`BRAIN_SUBMITTABLE`）是独立结论。低 self-correlation、机制证据支持且没有明显反证的候选可提前进入 OPTIMIZE，但不得据此标记 `TARGET_MET` 或放宽任何 BRAIN hard check。PROBE 长期持续；Agent 可在同一 wave 安排 PROBE 与 OPTIMIZE，并在方向/当前 wave 的工作集中设定可调整的 soft budget。
+
 ## Research Agent 与工具优化阶段
 
 ```text
@@ -66,7 +68,7 @@ Regular field capability 按候选自身的 live field scope 核验。`REGION_AG
 
 `research_status()` 的 `BLOCKED_BY_REMOTE_STATE` 表示至少一个已有写入未解决，不得重发或清除它；它不自动证明所有不同候选都不可运行。候选批次先用 READ_ONLY `research_batch_status(specs)` 让 Gateway 按真实执行指纹逐项检查：命中 guard 的 proposal 标为 `SUBMIT_UNKNOWN`/重复并排除，互不冲突且能力、权限、quota 和字段/算子检查通过的 proposal 可获 `READY`。Gateway 写入时再次执行全部准入检查与远端去重。Research Agent 不得自行重算或覆盖该结论；若一部分候选被阻断，应保留其隔离并继续独立可执行的候选，只有批次级准入也阻断时才暂停写入，并沿现有 reconcile/能力恢复路径处理具体原因。
 
-Multi 默认最多 8 个并发 parent；每个未解决的 `MULTI_PARENT`（包括 `SUBMIT_UNKNOWN`）保留一个平台并发槽，因此剩余容量为 `max(0, 8 - unresolved_multi_parents)`。容量不足时 Gateway 排队或返回明确 blocker，禁止超过平台总上限。Research API 与 MCP 默认拒绝少于 80 proposals 的 write wave；Gateway 在本地 guard 与远端去重后再次检查至少有 80 个新 child 可派发，低于下限时整批不 POST，已存在的 exact-once guard 保持原样。常规大规模研究每批至少提交 80 个经 candidate admission 确认的全新 child（8 个 parent ×10）；guard/重复/无效 proposals 不计入，须补充新候选。只有 fresh BRAIN evidence 可确认累计完成至少 4000 次后，Research Agent 才可显式请求较小的 `minimum_eligible_children` 并传入已完成计数；本地缓存/handoff 不能单独作为达标证明。计数未知或小于 4000 时保持 80。此批量要求不覆盖平台 quota、write readiness、exact-once 或远端 capability 硬限制。
+Multi 的每 parent 子项数、并发 parent capacity、quota、rate limit 与一次 write request 上限由 Gateway/runtime 的当前 transport contract 负责。每个未解决 `MULTI_PARENT`（包括 `SUBMIT_UNKNOWN`）会按实际 contract 保留一个并发槽；READ_ONLY candidate admission 返回当前可用 parent slots、可并发子项上界及逐 proposal eligibility，write 前 Gateway 重查全部事实。研究没有全项目固定最小批次或累计完成量解锁规则：Agent 按当前方向的 soft budget、候选解释价值、live admission 与工具 schema，尽可能 dispatch 所有有意义且 READY 的候选；候选不足时发送较小合法 batch，单候选可用 Single 路径。超出一次请求容量时由 Agent 分批，Gateway 在每次请求中继续限制并发与安全。不得制造候选填满容量。
 
 ExecutionGuard 是唯一远端写安全负责方，记录只允许指纹、`SUBMITTING/RUNNING/SUBMIT_UNKNOWN`、progress URL、时间戳、有界 `simulation_count`、`kind`（`SINGLE`/`MULTI_PARENT`/`MULTI_CHILD`）、MULTI_CHILD 的 `parent_fingerprint` 和可选远端 Alpha ID。`simulation_count` 只表示该未解决写入可能代表的 Simulation 数量，不保存 child payload 或结果；POST 前先持久化 `SUBMITTING`；进程异常后视为 `SUBMIT_UNKNOWN`，不得自动重 POST；已知 progress URL 只能轮询同一任务。exact-once 以单个 Simulation 为单位：Multi POST 前 parent 与每个 child 各自登记，重排、拆分、子集重试或 child 改走 Single 都不得再次 POST；恢复时 `MULTI_PARENT` 用 multi 轮询，child 跟随其 parent。
 

@@ -37,6 +37,7 @@ _REMOTE_ROWS_UNCHECKED = object()
 SUPPORTED_WRITE_SIMULATION_TYPES = SUPPORTED_SIMULATION_REQUEST_TYPES
 MULTI_MIN_CHILDREN = 2
 MULTI_MAX_CHILDREN = 10
+MULTI_MAX_CANDIDATES_PER_CALL = 100
 MULTI_DEFAULT_CHILD_BATCH_SIZE = 10
 MULTI_DEFAULT_CONCURRENCY = 8
 MULTI_MAX_CONCURRENCY = 8
@@ -201,6 +202,7 @@ def classify_batch_write_admission(
     execution_state_known=True,
     client_available=True,
     requested_max_concurrent_multi=MULTI_DEFAULT_CONCURRENCY,
+    requested_child_batch_size=MULTI_DEFAULT_CHILD_BATCH_SIZE,
 ):
     """Classify one candidate batch while quarantining exact unresolved writes.
 
@@ -214,6 +216,13 @@ def classify_batch_write_admission(
             or not 1 <= requested_max_concurrent_multi <= MULTI_MAX_CONCURRENCY):
         raise ValueError(
             f"requested_max_concurrent_multi must be between 1 and {MULTI_MAX_CONCURRENCY}"
+        )
+    if (isinstance(requested_child_batch_size, bool)
+            or not isinstance(requested_child_batch_size, int)
+            or not MULTI_MIN_CHILDREN <= requested_child_batch_size <= MULTI_MAX_CHILDREN):
+        raise ValueError(
+            f"requested_child_batch_size must be between {MULTI_MIN_CHILDREN} "
+            f"and {MULTI_MAX_CHILDREN}"
         )
     normalized = [str(value or "").strip() for value in candidate_fingerprints or ()]
     if any(not value for value in normalized):
@@ -290,9 +299,21 @@ def classify_batch_write_admission(
         "candidate_count": len(normalized),
         "eligible_count": eligible_count,
         "blocked_count": blocked_count,
-        "active_multi_parent_count": active_multi_parent_count,
+        "active_multi_parent_count": (
+            active_multi_parent_count if state_known else None
+        ),
         "requested_max_concurrent_multi": requested_max_concurrent_multi,
-        "effective_max_concurrent_multi": effective_concurrency,
+        "effective_max_concurrent_multi": (
+            effective_concurrency if state_known else None
+        ),
+        "available_multi_parent_slots": (
+            available_multi_slots if state_known else None
+        ),
+        "children_per_multi_parent": requested_child_batch_size,
+        "upper_bound_children_in_active_window": (
+            effective_concurrency * requested_child_batch_size
+            if state_known else None
+        ),
     }
 
 
@@ -1404,7 +1425,10 @@ class SimulationGateway:
                 "candidate_count": len(normalized), "eligible_count": 0,
                 "blocked_count": len(normalized), "proposal_admissions": [],
                 "active_multi_parent_count": None,
-                "effective_max_concurrent_multi": 0,
+                "effective_max_concurrent_multi": None,
+                "available_multi_parent_slots": None,
+                "children_per_multi_parent": child_batch_size,
+                "upper_bound_children_in_active_window": None,
                 "remote_duplicate_scan": "NOT_PERFORMED",
             }
 
@@ -1454,6 +1478,7 @@ class SimulationGateway:
             execution_state_known=execution_state_known,
             client_available=True,
             requested_max_concurrent_multi=max_concurrent_multi,
+            requested_child_batch_size=child_batch_size,
         )
         permissions = {
             str(item).upper()
@@ -1602,30 +1627,27 @@ class SimulationGateway:
     def simulate_multi_batch(
         self, specs, *, child_batch_size=MULTI_DEFAULT_CHILD_BATCH_SIZE,
         max_concurrent_multi=MULTI_DEFAULT_CONCURRENCY,
-        minimum_eligible_children=1,
     ):
         normalized_specs = list(specs or ())
-        if (isinstance(minimum_eligible_children, bool)
-                or not isinstance(minimum_eligible_children, int)
-                or not 1 <= minimum_eligible_children <= 100):
-            raise ValueError("minimum_eligible_children must be between 1 and 100")
-        if len(normalized_specs) < minimum_eligible_children:
+        if not normalized_specs:
             raise ResearchReasonError(
-                f"Multi batch requires at least {minimum_eligible_children} candidates",
-                "MULTI_BATCH_BELOW_MINIMUM",
+                "Multi batch requires at least one candidate", "INVALID_SPEC",
+            )
+        if len(normalized_specs) > MULTI_MAX_CANDIDATES_PER_CALL:
+            raise ValueError(
+                "Multi batch accepts at most "
+                f"{MULTI_MAX_CANDIDATES_PER_CALL} candidates per call"
             )
         with single_instance_scope(self.state_dir, operation="multi-simulation"):
             self.guard.reconcile()
             return self._simulate_multi_batch(
                 normalized_specs, child_batch_size=child_batch_size,
                 max_concurrent_multi=max_concurrent_multi,
-                minimum_eligible_children=minimum_eligible_children,
             )
 
     def _simulate_multi_batch(
         self, specs, *, child_batch_size=MULTI_DEFAULT_CHILD_BATCH_SIZE,
         max_concurrent_multi=MULTI_DEFAULT_CONCURRENCY,
-        minimum_eligible_children=1,
     ):
         """Execute large probe windows as bounded Multi-Simulation parents."""
         normalized_specs = [
@@ -1729,6 +1751,9 @@ class SimulationGateway:
                 continue
             eligible.append((index, spec, fingerprint))
 
+        if not eligible:
+            return self._attach_scan_evidence(results, remote_duplicates)
+
         active_multi_parents = sum(
             row.get("kind") == ExecutionGuard.MULTI_PARENT
             and row.get("status") in ExecutionGuard.STATUSES
@@ -1761,16 +1786,6 @@ class SimulationGateway:
                 else:
                     remote_eligible.append((index, spec, fingerprint))
             eligible = remote_eligible
-
-        if len(eligible) < minimum_eligible_children:
-            for index, spec, fingerprint in eligible:
-                results[index] = self._labelled_result(
-                    spec, "BLOCKED_BY_REMOTE_STATE", fingerprint,
-                    reason_code="MULTI_BATCH_BELOW_MINIMUM",
-                    eligible_count=len(eligible),
-                    minimum_eligible_children=minimum_eligible_children,
-                )
-            return self._attach_scan_evidence(results, remote_duplicates)
 
         batches = []
         grouped: list[list[tuple[int, SimulationSpec, str]]] = []
