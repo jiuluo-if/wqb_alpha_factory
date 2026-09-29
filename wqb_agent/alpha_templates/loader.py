@@ -22,6 +22,7 @@ _KINDS = {"baseline", "economic"}
 _DIRECTIONS = {"long", "reversal"}
 _SLOTS = {"p", "s", "t", "g", "data_field"}
 _GROUPS = {"default", "factory_default", "reversal", "relationship", "momentum", "candidate_scratch", "economic", "vector"}
+_SIMULATION_TYPES = {"REGULAR", "REGION_AGNOSTIC"}
 _REQUIRED = (
     "id", "version", "kind", "family", "expression", "required_slots",
     "economic_mechanism", "direction", "direction_transform",
@@ -145,6 +146,9 @@ def _parse(document, *, strict_schema=False):
         if template_mode == "PARTIAL_OPERATOR":
             if len(operator_slots) != 1:
                 raise ValueError(f"{template_id}: PARTIAL_OPERATOR requires one operator slot")
+        simulation_type = str(raw.get("simulation_type", "REGULAR")).upper()
+        if simulation_type not in _SIMULATION_TYPES:
+            raise ValueError(f"{template_id}: invalid simulation_type {simulation_type}")
         if len({slot.name for slot in numeric_slots}) != len(numeric_slots):
             raise ValueError(f"{template_id}: duplicate numeric slot name")
         if len({(slot.token, slot.occurrence) for slot in numeric_slots}) != len(numeric_slots):
@@ -194,6 +198,7 @@ def _parse(document, *, strict_schema=False):
             novelty_family=_text(raw.get("novelty_family", raw["family"]), "novelty_family"),
             template_mode=template_mode,
             operator_slots=operator_slots,
+            simulation_type=simulation_type,
         ))
     result = tuple(templates)
     if strict_schema:

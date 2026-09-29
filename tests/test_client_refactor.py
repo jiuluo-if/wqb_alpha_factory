@@ -952,6 +952,23 @@ class TestOfficialReadOnlyClientAdapters(unittest.TestCase):
         self.assertEqual(body["regular"], "rank(a)")
         c._wait_submission_slot.assert_called_once()
 
+    def test_dataset_discovery_accepts_explicit_region_scope(self):
+        c = make_client()
+        c.instrument_type = "EQUITY"
+        c.region = "USA"
+        c.delay = 1
+        c.universe = "TOP3000"
+        response = mock.Mock()
+        response.json.return_value = {"results": [{"id": "dataset_a"}]}
+        with mock.patch.object(
+            c, "_request", return_value=response
+        ) as request:
+            rows = c.get_datasets(scope={"region": "EUR", "universe": "TOPDIV3000"})
+
+        self.assertEqual(rows, [{"id": "dataset_a"}])
+        self.assertEqual(request.call_args.kwargs["params"]["region"], "EUR")
+        self.assertEqual(request.call_args.kwargs["params"]["universe"], "TOPDIV3000")
+
     def test_multi_submission_rejects_non_regular_child_before_post(self):
         c = make_client()
         c._wait_submission_slot = mock.Mock()

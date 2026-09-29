@@ -22,6 +22,8 @@ tracked catalog 只能包含 TOY/SYNTHETIC/NON-RESEARCH 示例；真实模板、
 
 模板默认 `CONCRETE`。只有显式 `PARTIAL_OPERATOR` probe 兄弟模板可声明恰好一个有界 `TemplateOperatorSlot`；该兄弟必须保留其 concrete 父模板的机制、字段关系、方向、数值 profile、settings 分支与家族。物化只用声明算子与当前 `LIVE_VERIFIED` BRAIN 能力的交集。静态语法与 fixture 数据永不是可用性事实；恢复永不重渲染已物化的 proposal。
 
+模板的 `simulation_type` 只能为 `REGULAR` 或 `REGION_AGNOSTIC`，默认 `REGULAR`。RA template 经 `AlphaFactory` 物化后必须输出 `REGION_AGNOSTIC` spec 且 `settings.region=ALL`；这只标明调用目标，不宣称字段准入、账号权限或执行 readiness 已通过。
+
 `AlphaFactory` 消费本 owner。不得在其他地方添加骨架、固定字段组合、参数网格或历史成功理由。
 
 ## 论文 candidate 与 Research mapping

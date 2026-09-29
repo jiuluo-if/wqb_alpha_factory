@@ -437,6 +437,7 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
             "field_roles", "direction", "direction_reason", "expected_horizon",
             "falsification", "novelty_family", "numeric_slots",
             "allowed_horizon_profiles", "allowed_settings_arms",
+            "simulation_type",
         ):
             self.assertIn(name, template_fields)
         self.assertTrue(hasattr(AlphaTemplate, "structural_fingerprint"))

@@ -149,6 +149,11 @@ def validate_template_contract(template, *, production=False):
         errors.append("REDUNDANT_OPERATOR_WRAPPER")
     mode = str(getattr(template, "template_mode", "CONCRETE") or "CONCRETE").upper()
     slots = tuple(getattr(template, "operator_slots", ()) or ())
+    simulation_type = str(
+        getattr(template, "simulation_type", "REGULAR") or "REGULAR"
+    ).upper()
+    if simulation_type not in {"REGULAR", "REGION_AGNOSTIC"}:
+        errors.append("INVALID_SIMULATION_TYPE")
     if mode not in {"CONCRETE", "PARTIAL_OPERATOR"}:
         errors.append("INVALID_TEMPLATE_MODE")
     if mode == "CONCRETE" and slots:

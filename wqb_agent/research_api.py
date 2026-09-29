@@ -117,35 +117,60 @@ def _state_directory(config: AppConfig, state_dir=None) -> str:
     return state_dir or config.runtime.state_dir
 
 
-def _client_scope(client):
-    return {
+_DATA_DISCOVERY_REGIONS = ("USA", "EUR", "ASI", "GLB")
+
+
+def _client_scope(client, region=None):
+    scope = {
         "instrumentType": getattr(client, "instrument_type", "EQUITY"),
-        "region": getattr(client, "region", "USA"),
+        "region": str(region or getattr(client, "region", "USA")).upper(),
         "universe": getattr(client, "universe", "TOP3000"),
         "delay": getattr(client, "delay", 1),
     }
+    return scope
 
 
-def list_datasets(*, client=None, config=None):
-    """List live datasets for the client's instrument scope."""
+def list_datasets(*, client=None, config=None, region="ALL"):
+    """List live datasets; ALL unions the four Region-Agnostic child regions."""
+    normalized_region = str(region or "ALL").strip().upper()
+    if normalized_region != "ALL" and normalized_region not in _DATA_DISCOVERY_REGIONS:
+        raise ValueError("region must be ALL, USA, EUR, ASI, or GLB")
     client = _remote_client(client=client)
     reader = getattr(client, "get_datasets", None)
     if not callable(reader):
         raise RuntimeError("LIVE_DATASET_CAPABILITY_REQUIRED")
+    regions = _DATA_DISCOVERY_REGIONS if normalized_region == "ALL" else (normalized_region,)
+    merged: dict[str, dict[str, Any]] = {}
+    for selected_region in regions:
+        rows = reader(scope=_client_scope(client, selected_region)) or ()
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            identity = str(row.get("id") or row.get("dataset_id") or "").strip()
+            if not identity:
+                continue
+            entry = merged.setdefault(identity, {**dict(row), "available_regions": []})
+            if selected_region not in entry["available_regions"]:
+                entry["available_regions"].append(selected_region)
     return {
         "source": "LIVE",
         "status": "AVAILABLE",
         "evidence_status": "AVAILABLE",
-        "scope": _client_scope(client),
-        "datasets": list(reader() or ()),
+        "scope": _client_scope(client, normalized_region),
+        "regions_searched": list(regions),
+        "datasets": list(merged.values()),
     }
 
 
 def list_datafields(
     dataset_id, *, client=None, config=None, limit=None, offset=0,
-    field_type=None,
+    field_type=None, region="ALL",
 ):
-    """Read one bounded live datafield page without an unbounded retry loop."""
+    """Read one bounded live datafield page without an unbounded retry loop.
+
+    ALL divides the requested page across USA/EUR/ASI/GLB. Its offset must be
+    a page boundary; count reports region-field occurrences, not unique IDs.
+    """
     normalized_id = str(dataset_id or "").strip()
     if not normalized_id:
         raise ValueError("dataset_id must be non-empty")
@@ -160,31 +185,86 @@ def list_datafields(
         raise ValueError("limit must be between 1 and 50")
     if page_offset < 0:
         raise ValueError("offset must be non-negative")
+    normalized_region = str(region or "ALL").strip().upper()
+    if normalized_region != "ALL" and normalized_region not in _DATA_DISCOVERY_REGIONS:
+        raise ValueError("region must be ALL, USA, EUR, ASI, or GLB")
+    regions = _DATA_DISCOVERY_REGIONS if normalized_region == "ALL" else (normalized_region,)
+    if normalized_region == "ALL" and page_limit < len(regions):
+        raise ValueError("ALL region search limit must be at least 4")
+    if normalized_region == "ALL" and page_offset % page_limit:
+        raise ValueError("ALL region search offset must be a multiple of limit")
     client = _remote_client(client=client)
     reader = getattr(client, "get_datafields", None)
     if not callable(reader):
         raise RuntimeError("LIVE_DATAFIELD_CAPABILITY_REQUIRED")
-    fields, count = reader(
-        normalized_id,
-        limit=page_limit,
-        offset=page_offset,
-        field_type=field_type,
+    merged: dict[str, dict[str, Any]] = {}
+    region_count = 0
+    regional_fields: dict[str, list[str]] = {}
+    region_limit = (
+        page_limit if normalized_region != "ALL"
+        else page_limit // len(regions)
     )
+    region_offset = (
+        page_offset if normalized_region != "ALL"
+        else (page_offset // page_limit) * region_limit
+    )
+    for selected_region in regions:
+        fields, count = reader(
+            normalized_id,
+            limit=region_limit,
+            offset=region_offset,
+            field_type=field_type,
+            scope=_client_scope(client, selected_region),
+        )
+        region_count += int(count or 0)
+        regional_fields[selected_region] = []
+        for field in fields or ():
+            if not isinstance(field, Mapping):
+                continue
+            identity = str(field.get("id") or field.get("field_id") or "").strip()
+            if not identity:
+                continue
+            regional_fields[selected_region].append(identity)
+            if normalized_region != "ALL":
+                merged[identity] = dict(field)
+                continue
+            entry = merged.setdefault(identity, {**dict(field), "available_regions": []})
+            if selected_region not in entry["available_regions"]:
+                entry["available_regions"].append(selected_region)
+    if normalized_region == "ALL":
+        ordered_ids = []
+        seen_ids = set()
+        max_region_rows = max((len(values) for values in regional_fields.values()), default=0)
+        for index in range(max_region_rows):
+            for selected_region in regions:
+                ids = regional_fields[selected_region]
+                if index < len(ids) and ids[index] not in seen_ids:
+                    seen_ids.add(ids[index])
+                    ordered_ids.append(ids[index])
+        fields = [merged[identity] for identity in ordered_ids[:page_limit]]
+    else:
+        fields = list(merged.values())
     return {
         "source": "LIVE",
-        "scope": _client_scope(client),
+        "scope": _client_scope(client, normalized_region),
+        "regions_searched": list(regions),
         "dataset_id": normalized_id,
         "field_type": field_type,
         "limit": page_limit,
         "offset": page_offset,
-        "count": count,
-        "fields": list(fields or ()),
+        "count": region_count,
+        "count_exact": normalized_region != "ALL",
+        "count_semantics": (
+            "region_field_occurrences" if normalized_region == "ALL"
+            else "field_rows"
+        ),
+        "fields": fields,
     }
 
 
 def list_all_datafields(
     dataset_id, *, client=None, config=None, page_limit=None,
-    field_type=None, max_pages=None,
+    field_type=None, max_pages=None, region="ALL",
 ):
     """Read every live datafield page within a bounded pagination budget."""
     typed = _normalized_config(config)
@@ -200,6 +280,40 @@ def list_all_datafields(
             f"max_pages must be between 1 and {MAX_DATAFIELD_PAGES}"
         )
 
+    normalized_region = str(region or "ALL").strip().upper()
+    if normalized_region != "ALL" and normalized_region not in _DATA_DISCOVERY_REGIONS:
+        raise ValueError("region must be ALL, USA, EUR, ASI, or GLB")
+    client = _remote_client(client=client)
+    if normalized_region == "ALL":
+        regional = [
+            list_all_datafields(
+                dataset_id, client=client, config=typed,
+                page_limit=page_limit, field_type=field_type,
+                max_pages=page_cap, region=child_region,
+            )
+            for child_region in _DATA_DISCOVERY_REGIONS
+        ]
+        merged: dict[str, dict[str, Any]] = {}
+        for child_region, result in zip(_DATA_DISCOVERY_REGIONS, regional):
+            for field in result["fields"]:
+                identity = str(field.get("id") or field.get("field_id") or "")
+                if not identity:
+                    continue
+                entry = merged.setdefault(identity, {**field, "available_regions": []})
+                if child_region not in entry["available_regions"]:
+                    entry["available_regions"].append(child_region)
+        fields = list(merged.values())
+        first = regional[0] if regional else {}
+        return {
+            "source": "LIVE", "scope": _client_scope(client, "ALL"),
+            "regions_searched": list(_DATA_DISCOVERY_REGIONS),
+            "dataset_id": str(dataset_id).strip(), "field_type": field_type,
+            "limit": first.get("limit", page_limit), "offset": 0,
+            "count": len(fields), "count_exact": True,
+            "pages": sum(int(result.get("pages", 0)) for result in regional),
+            "complete": all(bool(result.get("complete")) for result in regional),
+            "fields": fields,
+        }
     first = list_datafields(
         dataset_id,
         client=client,
@@ -207,6 +321,7 @@ def list_all_datafields(
         limit=page_limit,
         offset=0,
         field_type=field_type,
+        region=normalized_region,
     )
     fields = list(first["fields"])
     total = first["count"]
@@ -222,6 +337,7 @@ def list_all_datafields(
             limit=first["limit"],
             offset=offset,
             field_type=field_type,
+            region=normalized_region,
         )
         chunk = list(page["fields"])
         if not chunk or page["count"] != total:

@@ -719,15 +719,16 @@ class WQBClient:
 
     # ---- API ----
 
-    def get_datasets(self):
+    def get_datasets(self, *, scope=None):
+        scope = scope if isinstance(scope, Mapping) else {}
         resp = self._request(
             "GET",
             f"{self.base_url}/data-sets",
             params={
-                "instrumentType": self.instrument_type,
-                "region": self.region,
-                "delay": self.delay,
-                "universe": self.universe,
+                "instrumentType": scope.get("instrumentType", self.instrument_type),
+                "region": scope.get("region", self.region),
+                "delay": scope.get("delay", self.delay),
+                "universe": scope.get("universe", self.universe),
             },
             context="GET /data-sets",
         )

@@ -37,7 +37,7 @@ frontmatter 中 `metadata.wqb_alpha_factory_research_contract` 是本文件编�
 
 ## Canonical Agent path
 
-按当前会话实际 `tools/list` 和返回 schema 工作：先读 readiness，再发现 live dataset、field 和 operator evidence；需要模板候选时读 `list_templates` 的私有 catalog inventory，并由 Agent 选择模板、字段及数量后调用 `generate_probes`。Inventory 提供当前经济机制、方向理由、角色、字段槽、关系契约、horizon/settings arms 和已声明 numeric/operator slots；Generator 只物化 Agent 指定的输入，不为 Agent 排名或挑选模板、字段、候选。
+按当前会话实际 `tools/list` 和返回 schema 工作：先读 readiness，再发现 live dataset、field 和 operator evidence；`list_datasets`/`list_datafields` 默认 `region=ALL`，即合并 USA/EUR/ASI/GLB 的 live catalog。需要模板候选时读 `list_templates` 的私有 catalog inventory，并由 Agent 选择模板、字段及数量后调用 `generate_probes`。Inventory 提供当前经济机制、方向理由、角色、字段槽、关系契约、horizon/settings arms、已声明 numeric/operator slots 和 `simulation_type`；选择 RA 模板时 Factory 会生成 `REGION_AGNOSTIC` spec 与 `region=ALL`。Generator 只物化 Agent 指定的输入，不为 Agent 排名或挑选模板、字段、候选。
 
 保留 generator 返回的 `SimulationSpec` 字段与 dataset provenance，由 Agent 加上唯一 `proposal_id` 和本地 hypothesis/note/template mapping，再调用 spec validation 与 `research_batch_status`。按 admission 与当前用户目标选择后续 write tool；Gateway 再做完整写入准入。模板 inventory 和 generation 使用同一配置下的显式 private catalog；缺失时 fail closed，不回退到 public synthetic catalog。若工具、schema 或私有 catalog 不可用，报告能力限制；不猜 template ID、不直接 import 内部模块、不用 shell 或辅助脚本补缺。
 

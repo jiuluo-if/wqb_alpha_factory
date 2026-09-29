@@ -6,7 +6,8 @@
 - Simulation 只能经 `SimulationGateway → Simulator → WQBClient` 写入 BRAIN。
 - `ExecutionGuard` 只保存未解决远端写安全记录；`SUBMIT_UNKNOWN` 永不自动重 POST，已知 progress URL 只能原地轮询。exact-once 以单个 Simulation 为单位：Multi 的 parent 与每个 child 各自登记 `kind`/`parent_fingerprint`，重排、拆分、子集重试或 child 改走 Single 都不得再次 POST；恢复时按 `kind` 选择 Single 或 Multi 轮询。
 - 全局 `research_status()` 的 pending blocker 保持原样。对新候选先调用 Gateway-owned READ_ONLY `research_batch_status(specs)`；它只隔离精确冲突的 proposals，为每个未解决 Multi parent 预留一个 8 槽上限中的位置，并返回其余候选的 live admission。写入前 Gateway 重复完整 preflight；不得清 guard、重发 unknown 或在 Agent/Python 里实现第二套准入判断。部分 blocked 不应让无关候选停摆。
-- Region-Agnostic field preflight 由 Gateway 对 USA/EUR/ASI/GLB 子地区做 live catalog 查询；只有全部表达式字段在至少两个相同地区可用且类型检查通过时才派发。`region=ALL` 是 RA Simulation scope，不是 field-catalog scope；Agent 不得通过省略 fields 或改 scope 绕过准入。
+- Region-Agnostic field preflight 由 Gateway 对 USA/EUR/ASI/GLB 子地区做 live catalog 查询；只有全部表达式字段在至少两个相同地区可用且类型检查通过时才派发。数据发现 API 的 `region=ALL` 会读取并合并四个子地区 catalog，不向 BRAIN field-catalog endpoint 发送 `ALL`；RA Simulation spec 的 `region=ALL` 仍是平台写入 scope。Agent 不得通过省略 fields 或改 scope 绕过准入。
+- Private AlphaTemplate 可声明 `simulation_type=REGION_AGNOSTIC`；Factory 物化时必须生成同类型 `SimulationSpec` 并把 setting region 设为 `ALL`。模板生成仍是纯候选操作，实际写入只经 Gateway 的权限、字段交集和 write-readiness 检查。
 - Gateway 是当前 Multi child/parent、并发、quota 与 rate-limit capacity 的唯一 owner。`research_batch_status()` 返回逐 proposal admission 和按未决 parent 保留槽位后的当前容量；写入前 Gateway 重查。Research API/MCP 不设研究批次最小值或累计 Simulation 解锁数。Research Agent 按研究理由与当前可用 capacity 提交任意有意义且 READY 的候选；小批次正常提交，单候选用 Single，不足容量时不填充候选。
 - `RemoteAlphaRepository` 负责远端 Alpha 读取和可重建滚动缓存；live 响应优先。
 - `AlphaFactory` 与 `alpha_templates/` 只负责纯候选生成和 schema/能力校验，不提交、不写研究结果、不输出下一步研究决策。

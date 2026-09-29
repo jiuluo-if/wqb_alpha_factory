@@ -37,7 +37,7 @@ _TEMPLATE_INVENTORY_KEYS = (
     "direction", "direction_transform", "expected_horizon", "falsification",
     "self_correlation_impact", "numeric_slots", "allowed_horizon_profiles",
     "allowed_settings_arms", "mechanism_tags", "novelty_family",
-    "template_mode", "operator_slots", "tags", "source",
+    "template_mode", "operator_slots", "tags", "source", "simulation_type",
 )
 
 
@@ -351,18 +351,22 @@ def build_server(*, api=research_api, client=None, config=None, state_dir=None):
         )
 
     @server.tool(annotations=remote_read)
-    def list_datafields(dataset_id: str, limit: int = 20, offset: int = 0, field_type: str | None = None) -> dict[str, Any]:
+    def list_datafields(dataset_id: str, limit: int = 20, offset: int = 0, field_type: str | None = None, region: str = "ALL") -> dict[str, Any]:
         """[READ_ONLY] Read one live data-field page; output is capped at 20 rows."""
+        region = str(region or "ALL").strip().upper()
         if (
             not dataset_id.strip() or len(dataset_id) > 256
             or (field_type is not None and len(field_type) > 64)
             or not 1 <= limit <= 50 or offset < 0
+            or region.upper() not in {"ALL", "USA", "EUR", "ASI", "GLB"}
+            or (region == "ALL" and limit < 4)
+            or (region == "ALL" and offset % limit != 0)
         ):
             return _invalid_result(owner="research_api.list_datafields")
         return wrap(
             lambda: api.list_datafields(
                 dataset_id, client=resolve_client(), config=config,
-                limit=limit, offset=offset, field_type=field_type,
+                limit=limit, offset=offset, field_type=field_type, region=region,
             ),
             owner="research_api.list_datafields",
         )
@@ -564,21 +568,28 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
         )
 
     @server.tool(annotations=remote_read)
-    def list_datasets() -> dict[str, Any]:
-        """[READ_ONLY] List live datasets in the authorized account scope."""
-        return read_facade("list_datasets")
+    def list_datasets(region: str = "ALL") -> dict[str, Any]:
+        """[READ_ONLY] List datasets across ALL regions or one child region."""
+        region = str(region or "ALL").strip().upper()
+        if region.upper() not in {"ALL", "USA", "EUR", "ASI", "GLB"}:
+            return _invalid_result(owner="research_api.list_datasets")
+        return read_facade("list_datasets", region=region)
 
     @server.tool(annotations=remote_read)
-    def list_datafields(dataset_id: str, limit: int = 20, offset: int = 0, field_type: str | None = None) -> dict[str, Any]:
+    def list_datafields(dataset_id: str, limit: int = 20, offset: int = 0, field_type: str | None = None, region: str = "ALL") -> dict[str, Any]:
         """[READ_ONLY] Read one bounded live datafield page."""
-        return read_facade("list_datafields", dataset_id, limit=limit, offset=offset, field_type=field_type)
+        region = str(region or "ALL").strip().upper()
+        if region.upper() not in {"ALL", "USA", "EUR", "ASI", "GLB"}:
+            return _invalid_result(owner="research_api.list_datafields")
+        return read_facade("list_datafields", dataset_id, limit=limit, offset=offset, field_type=field_type, region=region)
 
     @server.tool(annotations=local_read)
     def list_templates(offset: int = 0, limit: int = 20) -> dict[str, Any]:
         """[READ_ONLY] List one page of validated templates from the configured private catalog.
 
         Use to choose an existing template and review its field/slot contract before
-        calling generate_probes. This reads the same private catalog used by the
+        calling generate_probes. RA entries report REGION_AGNOSTIC and the Factory
+        emits region=ALL specs. This reads the same private catalog used by the
         generator; a missing catalog is reported as unavailable with no public
         synthetic-catalog fallback. Expressions and fixed field bindings are omitted.
         """

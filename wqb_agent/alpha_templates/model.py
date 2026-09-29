@@ -113,6 +113,7 @@ class AlphaTemplate:
     novelty_family: str
     template_mode: str
     operator_slots: tuple
+    simulation_type: str
 
     def __init__(self, template_id, family=None, expression=None,
                  required_slots=("p",),
@@ -129,7 +130,7 @@ class AlphaTemplate:
                  direction_reason="", allowed_horizon_profiles=(),
                  allowed_settings_arms=("BASE",), mechanism_tags=(),
                   novelty_family="", template_mode="CONCRETE",
-                  operator_slots=()):
+                  operator_slots=(), simulation_type="REGULAR"):
         object.__setattr__(self, "template_id", str(template_id))
         object.__setattr__(self, "family", family or "")
         object.__setattr__(self, "expression", expression or "")
@@ -163,6 +164,7 @@ class AlphaTemplate:
         object.__setattr__(self, "novelty_family", novelty_family or self.family)
         object.__setattr__(self, "template_mode", str(template_mode or "CONCRETE").upper())
         object.__setattr__(self, "operator_slots", tuple(operator_slots))
+        object.__setattr__(self, "simulation_type", str(simulation_type or "REGULAR").upper())
 
     @property
     def economic(self):
@@ -231,6 +233,7 @@ class AlphaTemplate:
     def structural_fingerprint(self):
         return self._digest({
             "expression": self.expression,
+            "simulation_type": self.simulation_type,
             "required_slots": self.required_slots,
             "horizon_slots": tuple(slot.name for slot in self.numeric_slots),
             "direction_transform": self.direction_transform,
@@ -343,6 +346,7 @@ class AlphaTemplate:
             "mechanism_tags": list(self.mechanism_tags),
             "novelty_family": self.novelty_family,
             "template_mode": self.template_mode,
+            "simulation_type": self.simulation_type,
             "operator_slots": [
                 {"name": slot.name, "role": slot.role,
                  "placeholder": slot.placeholder,

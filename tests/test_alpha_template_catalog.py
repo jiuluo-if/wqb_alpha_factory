@@ -46,6 +46,53 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
         self.assertEqual(slot["name"], "fast")
         self.assertIn(66, slot["allowed_values"])
 
+    def test_ra_template_generates_region_agnostic_specs_with_all_region(self):
+        template = AlphaTemplate(
+            "synthetic-ra", family="synthetic", expression="rank({p})",
+            required_slots=("p",), role="CONTROL_ALPHA",
+            semantic_contract="SYNTHETIC_FIXTURE",
+            economic_mechanism="synthetic RA fixture",
+            field_relationship="single field", direction_reason="synthetic",
+            expected_horizon="short-term", falsification="synthetic falsification",
+            simulation_type="REGION_AGNOSTIC",
+        )
+        factory = AlphaFactory(registry=AlphaTemplateRegistry([template]))
+
+        spec, = factory.generate(
+            {"template_ids": ["synthetic-ra"]},
+            [{"id": "field_a", "dataset": "dataset_a"}], count=1,
+            settings={"region": "USA", "delay": 1},
+        )
+
+        self.assertEqual(spec.simulation_type, "REGION_AGNOSTIC")
+        self.assertEqual(spec.settings["region"], "ALL")
+        self.assertEqual(spec.fields, ("field_a",))
+        self.assertEqual(template.catalog_entry()["simulation_type"], "REGION_AGNOSTIC")
+
+    def test_template_loader_rejects_unknown_simulation_type(self):
+        source = _partial_document().replace(
+            'selection_groups = ["relationship"]',
+            'selection_groups = ["relationship"]\nsimulation_type = "SUPER"',
+            1,
+        )
+
+        with self.assertRaisesRegex(ValueError, "simulation_type"):
+            load_templates(io.StringIO(source))
+
+    def test_simulation_type_is_part_of_template_structural_identity(self):
+        regular = self._control_template("same", "rank({p})")
+        ra = AlphaTemplate(
+            "same", family="synthetic", expression="rank({p})",
+            required_slots=("p",), role="CONTROL_ALPHA",
+            semantic_contract="SYNTHETIC_FIXTURE",
+            economic_mechanism="synthetic RA fixture",
+            field_relationship="single field", direction_reason="synthetic",
+            expected_horizon="short-term", falsification="synthetic falsification",
+            simulation_type="REGION_AGNOSTIC",
+        )
+
+        self.assertNotEqual(regular.structural_fingerprint, ra.structural_fingerprint)
+
     def test_numeric_slot_kind_must_be_explicit_in_catalog_input(self):
         source = _partial_document().replace('kind = "RESEARCH_HORIZON"\n', "", 1)
         with self.assertRaisesRegex(ValueError, "numeric slot kind"):

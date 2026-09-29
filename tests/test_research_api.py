@@ -1279,7 +1279,8 @@ class TestResearchApi(unittest.TestCase):
         )
 
         result = list_all_datafields(
-            "analyst69", client=client, page_limit=2, field_type="MATRIX"
+            "analyst69", client=client, page_limit=2, field_type="MATRIX",
+            region="GLB",
         )
 
         self.assertTrue(result["complete"])
@@ -1296,6 +1297,7 @@ class TestResearchApi(unittest.TestCase):
             list_all_datafields(
                 "dataset", client=client,
                 config={"simulation": {}, "runtime": {"max_pagination_pages": 1}},
+                region="USA",
             )
 
     def test_list_all_datafields_rejects_oversized_page_cap(self):
@@ -1306,20 +1308,112 @@ class TestResearchApi(unittest.TestCase):
             list_all_datafields("dataset", client=client, max_pages=101)
 
     def test_list_datasets_exposes_live_scope(self):
+        calls = []
+
+        def get_datasets(*, scope):
+            calls.append(scope["region"])
+            rows = {
+                "USA": [{"id": "dataset_a", "name": "A"}],
+                "EUR": [{"id": "dataset_a", "name": "A"}],
+                "ASI": [{"id": "dataset_b", "name": "B"}],
+                "GLB": [],
+            }
+            return rows[scope["region"]]
+
         client = SimpleNamespace(
             instrument_type="EQUITY",
             region="GLB",
             universe="TOPDIV300",
             delay=1,
-            get_datasets=lambda: [{"id": "analyst69"}],
+            get_datasets=get_datasets,
         )
 
         result = list_datasets(client=client)
 
         self.assertEqual(result["source"], "LIVE")
-        self.assertEqual(result["scope"]["region"], "GLB")
+        self.assertEqual(result["scope"]["region"], "ALL")
         self.assertEqual(result["scope"]["universe"], "TOPDIV300")
-        self.assertEqual(result["datasets"], [{"id": "analyst69"}])
+        self.assertEqual(calls, ["USA", "EUR", "ASI", "GLB"])
+        self.assertEqual(
+            result["datasets"],
+            [
+                {"id": "dataset_a", "name": "A", "available_regions": ["USA", "EUR"]},
+                {"id": "dataset_b", "name": "B", "available_regions": ["ASI"]},
+            ],
+        )
+
+    def test_list_datafields_all_merges_region_availability(self):
+        calls = []
+
+        def get_datafields(dataset_id, **kwargs):
+            region = kwargs["scope"]["region"]
+            calls.append(region)
+            rows = {
+                "USA": ([{"id": "field_a", "type": "MATRIX"}], 1),
+                "EUR": ([{"id": "field_a", "type": "MATRIX"}], 1),
+                "ASI": ([{"id": "field_b", "type": "MATRIX"}], 1),
+                "GLB": ([], 0),
+            }
+            return rows[region]
+
+        client = SimpleNamespace(
+            instrument_type="EQUITY", region="USA", universe="TOP3000", delay=1,
+            get_datafields=get_datafields,
+        )
+
+        result = list_datafields("dataset_a", client=client, limit=10)
+
+        self.assertEqual(calls, ["USA", "EUR", "ASI", "GLB"])
+        self.assertEqual(result["scope"]["region"], "ALL")
+        self.assertEqual(result["regions_searched"], ["USA", "EUR", "ASI", "GLB"])
+        self.assertFalse(result["count_exact"])
+        self.assertEqual(
+            result["fields"],
+            [
+                {"id": "field_a", "type": "MATRIX", "available_regions": ["USA", "EUR"]},
+                {"id": "field_b", "type": "MATRIX", "available_regions": ["ASI"]},
+            ],
+        )
+
+    def test_list_datafields_all_requires_page_aligned_offset(self):
+        with self.assertRaisesRegex(ValueError, "multiple of limit"):
+            list_datafields("dataset_a", limit=20, offset=1, region="ALL")
+
+    def test_list_all_datafields_all_merges_complete_region_catalogs(self):
+        catalogs = {
+            "USA": ([{"id": "field_a", "type": "MATRIX"}], 1),
+            "EUR": ([{"id": "field_a", "type": "MATRIX"},
+                     {"id": "field_b", "type": "MATRIX"}], 2),
+            "ASI": ([], 0),
+            "GLB": ([{"id": "field_b", "type": "MATRIX"}], 1),
+        }
+
+        def get_datafields(_dataset_id, **kwargs):
+            fields, count = catalogs[kwargs["scope"]["region"]]
+            start = kwargs["offset"]
+            stop = start + kwargs["limit"]
+            return fields[start:stop], count
+
+        client = SimpleNamespace(
+            instrument_type="EQUITY", region="USA", universe="TOP3000", delay=1,
+            get_datafields=get_datafields,
+        )
+
+        result = list_all_datafields(
+            "dataset_a", client=client, page_limit=1, region="ALL",
+        )
+
+        self.assertTrue(result["complete"])
+        self.assertTrue(result["count_exact"])
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["regions_searched"], ["USA", "EUR", "ASI", "GLB"])
+        self.assertEqual(
+            result["fields"],
+            [
+                {"id": "field_a", "type": "MATRIX", "available_regions": ["USA", "EUR"]},
+                {"id": "field_b", "type": "MATRIX", "available_regions": ["EUR", "GLB"]},
+            ],
+        )
 
     def test_list_datafields_is_bounded_and_preserves_count(self):
         calls = []
@@ -1337,7 +1431,8 @@ class TestResearchApi(unittest.TestCase):
         )
 
         result = list_datafields(
-            "analyst69", client=client, limit=10, offset=20, field_type="MATRIX"
+            "analyst69", client=client, limit=10, offset=20, field_type="MATRIX",
+            region="GLB",
         )
 
         self.assertEqual(result["source"], "LIVE")
@@ -1348,7 +1443,9 @@ class TestResearchApi(unittest.TestCase):
             calls,
             [(
                 "analyst69",
-                {"limit": 10, "offset": 20, "field_type": "MATRIX"},
+                {"limit": 10, "offset": 20, "field_type": "MATRIX",
+                 "scope": {"instrumentType": "EQUITY", "region": "GLB",
+                           "universe": "TOPDIV300", "delay": 1}},
             )],
         )
         with self.assertRaisesRegex(ValueError, "between 1 and 50"):
@@ -1374,6 +1471,7 @@ class TestResearchApi(unittest.TestCase):
             "analyst69",
             client=client,
             config=normalize_config({"runtime": {"pagination_limit": 7}}),
+            region="GLB",
         )
 
         self.assertEqual(calls[0][1]["limit"], 7)

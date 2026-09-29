@@ -143,6 +143,8 @@ class AlphaFactory:
                                operator_mapping=None, operator_capability=None,
                                relationship_memo=None, expression_memo=None):
         """Yield valid records for one template without materializing its space."""
+        if template.simulation_type not in {"REGULAR", "REGION_AGNOSTIC"}:
+            return
         relationship_memo = relationship_memo if relationship_memo is not None else {}
         expression_memo = expression_memo if expression_memo is not None else {}
         mappings = ([operator_mapping] if operator_mapping is not None
@@ -191,6 +193,7 @@ class AlphaFactory:
                         "rationale": template.economic_mechanism,
                         "field_refs": field_refs,
                         "template_id": template.template_id,
+                        "simulation_type": template.simulation_type,
                     },
                 }
 
@@ -209,21 +212,29 @@ class AlphaFactory:
             operator_mapping=operator_mapping,
             operator_capability=operator_capability,
         )
-        return [SimulationSpec(
-            expression=item["expression"],
-            settings=dict(settings or item.get("settings") or {}),
-            fields=tuple(
-                ref.get("id") for ref in item.get("field_refs", ())
-                if isinstance(ref, dict) and ref.get("id")
-            ),
-            field_datasets={
-                str(ref["id"]): str(ref["dataset"])
-                for ref in item.get("field_refs", ())
-                if isinstance(ref, dict) and ref.get("id") and ref.get("dataset")
-            },
-            note=item.get("rationale"),
-            template_id=item.get("template_id"),
-        ) for item in records]
+        specs = []
+        for item in records:
+            simulation_type = str(item.get("simulation_type") or "REGULAR").upper()
+            effective_settings = dict(settings or item.get("settings") or {})
+            if simulation_type == "REGION_AGNOSTIC":
+                effective_settings["region"] = "ALL"
+            specs.append(SimulationSpec(
+                expression=item["expression"],
+                settings=effective_settings,
+                fields=tuple(
+                    ref.get("id") for ref in item.get("field_refs", ())
+                    if isinstance(ref, dict) and ref.get("id")
+                ),
+                field_datasets={
+                    str(ref["id"]): str(ref["dataset"])
+                    for ref in item.get("field_refs", ())
+                    if isinstance(ref, dict) and ref.get("id") and ref.get("dataset")
+                },
+                note=item.get("rationale"),
+                template_id=item.get("template_id"),
+                simulation_type=simulation_type,
+            ))
+        return specs
 
     def catalog(self):
         return self.registry.catalog()
