@@ -1086,6 +1086,29 @@ class TestResearchApi(unittest.TestCase):
                 simulate_multi_batch(specs, client=object())
         factory.assert_not_called()
 
+    def test_multi_facade_only_allows_reduced_minimum_after_4000_completed(self):
+        specs = [SimulationSpec(f"rank(field_{index})") for index in range(20)]
+        with mock.patch("wqb_agent.research_api._simulation_gateway") as factory:
+            with self.assertRaisesRegex(ValueError, "only after 4000"):
+                simulate_multi_batch(
+                    specs, minimum_eligible_children=20,
+                    completed_simulation_count=3999,
+                )
+            factory.assert_not_called()
+
+        with mock.patch("wqb_agent.research_api._simulation_gateway") as factory:
+            gateway = factory.return_value
+            gateway.simulate_multi_batch.return_value = [{"status": "DONE"}]
+            result = simulate_multi_batch(
+                specs, minimum_eligible_children=20,
+                completed_simulation_count=4000,
+            )
+        self.assertEqual(result, [{"status": "DONE"}])
+        gateway.simulate_multi_batch.assert_called_once_with(
+            specs, child_batch_size=10, max_concurrent_multi=8,
+            minimum_eligible_children=20,
+        )
+
     def test_named_alpha_reads_are_direct_read_only_facade_calls(self):
         client = mock.Mock()
         client.get_aggregates.return_value = {"kind": "aggregates"}

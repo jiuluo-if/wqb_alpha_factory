@@ -776,6 +776,8 @@ def simulate_multi_batch(
     specs, *, client=None, config=None, state_dir=None,
     child_batch_size=MULTI_DEFAULT_CHILD_BATCH_SIZE,
     max_concurrent_multi=MULTI_DEFAULT_CONCURRENCY,
+    minimum_eligible_children=MULTI_RESEARCH_BATCH_MIN_CHILDREN,
+    completed_simulation_count=0,
 ):
     """Execute probe windows as Multi-Simulation parents.
 
@@ -784,10 +786,26 @@ def simulate_multi_batch(
     until they are safely reconciled. Research waves require at least 80 new
     eligible children; the Gateway rechecks after local and remote dedupe.
     """
-    normalized_specs = list(specs or ())
-    if len(normalized_specs) < MULTI_RESEARCH_BATCH_MIN_CHILDREN:
+    if (isinstance(minimum_eligible_children, bool)
+            or not isinstance(minimum_eligible_children, int)
+            or not MULTI_MIN_CHILDREN <= minimum_eligible_children <= MULTI_RESEARCH_BATCH_MIN_CHILDREN):
+        raise ValueError(
+            "minimum_eligible_children must be between 2 and 80"
+        )
+    if (isinstance(completed_simulation_count, bool)
+            or not isinstance(completed_simulation_count, int)
+            or completed_simulation_count < 0):
+        raise ValueError("completed_simulation_count must be a non-negative integer")
+    if (minimum_eligible_children < MULTI_RESEARCH_BATCH_MIN_CHILDREN
+            and completed_simulation_count < 4000):
         raise ResearchReasonError(
-            "Multi research batch requires at least 80 new candidates",
+            "Multi batch minimum may be reduced only after 4000 completed Simulations",
+            "MULTI_BATCH_BELOW_MINIMUM",
+        )
+    normalized_specs = list(specs or ())
+    if len(normalized_specs) < minimum_eligible_children:
+        raise ResearchReasonError(
+            f"Multi research batch requires at least {minimum_eligible_children} new candidates",
             "MULTI_BATCH_BELOW_MINIMUM",
         )
     gateway = _simulation_gateway(
@@ -797,7 +815,7 @@ def simulate_multi_batch(
         normalized_specs,
         child_batch_size=child_batch_size,
         max_concurrent_multi=max_concurrent_multi,
-        minimum_eligible_children=MULTI_RESEARCH_BATCH_MIN_CHILDREN,
+        minimum_eligible_children=minimum_eligible_children,
     )
 
 

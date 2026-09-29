@@ -178,8 +178,11 @@ def _failed_result(exc: Exception, *, owner: str, source: str = "BRAIN_LIVE") ->
     }
 
 
-def _invalid_result(*, owner: str, source: str = "NOT_READ", access_mode: str = "READ_ONLY", remote_write: bool = False) -> dict[str, Any]:
-    return {
+def _invalid_result(
+    *, owner: str, source: str = "NOT_READ", access_mode: str = "READ_ONLY",
+    remote_write: bool = False, failure_code: str | None = None,
+) -> dict[str, Any]:
+    result = {
         "access_mode": access_mode,
         "owner": owner,
         "source": source,
@@ -190,9 +193,13 @@ def _invalid_result(*, owner: str, source: str = "NOT_READ", access_mode: str = 
         "age_sec": None,
         "truncated": False,
         "data": None,
-        "error": "INVALID_ARGUMENT",
+        "error": failure_code or "INVALID_ARGUMENT",
         **({"remote_write": True} if remote_write else {}),
     }
+    if failure_code:
+        result["status"] = "NOT_DISPATCHED"
+        result["reason_code"] = failure_code
+    return result
 
 
 def _pending_guard_payload(api, *, state_dir, config):
@@ -427,11 +434,12 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
             payload = {"source": "UNKNOWN", "status": "UNKNOWN", "result": payload}
         return _envelope(payload, owner=f"research_api.{name}", allow_expression=allow_expression)
 
-    def write_facade(name, specs):
+    def write_facade(name, specs, **options):
         count = len(specs)
         try:
             results = getattr(api, name)(
                 specs, client=resolve_client(), config=config, state_dir=state_dir,
+                **options,
             )
         except Exception as exc:  # Never serialize exception text from a write path.
             code = getattr(exc, "reason_code", None)
@@ -512,12 +520,40 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
         return write_facade("simulate_batch", parsed)
 
     @server.tool(annotations=simulation_write)
-    def simulate_multi_batch(specs: list[dict[str, Any]]) -> dict[str, Any]:
-        """[REMOTE_WRITE] Start 80–100 compatible new candidates through Gateway Multi batching."""
-        parsed = parse_specs(specs, minimum=80, maximum=MAX_MULTI_BATCH, require_proposal_ids=True)
+    def simulate_multi_batch(
+        specs: list[dict[str, Any]],
+        minimum_eligible_children: int = 80,
+        completed_simulation_count: int = 0,
+    ) -> dict[str, Any]:
+        """[REMOTE_WRITE] Start a Multi wave (default 80; reduce only after 4000 completed simulations)."""
+        if (isinstance(minimum_eligible_children, bool)
+                or not isinstance(minimum_eligible_children, int)
+                or not 2 <= minimum_eligible_children <= 80
+                or isinstance(completed_simulation_count, bool)
+                or not isinstance(completed_simulation_count, int)
+                or completed_simulation_count < 0):
+            return _invalid_result(
+                owner="research_api.simulate_multi_batch",
+                access_mode="SIMULATION_WRITE", remote_write=True,
+            )
+        parsed = parse_specs(
+            specs, minimum=minimum_eligible_children,
+            maximum=MAX_MULTI_BATCH, require_proposal_ids=True,
+        )
         if parsed is None:
             return _invalid_result(owner="research_api.simulate_multi_batch", access_mode="SIMULATION_WRITE", remote_write=True)
-        return write_facade("simulate_multi_batch", parsed)
+        if (minimum_eligible_children < 80
+                and completed_simulation_count < 4000):
+            return _invalid_result(
+                owner="research_api.simulate_multi_batch",
+                access_mode="SIMULATION_WRITE", remote_write=True,
+                failure_code="MULTI_BATCH_BELOW_MINIMUM",
+            )
+        return write_facade(
+            "simulate_multi_batch", parsed,
+            minimum_eligible_children=minimum_eligible_children,
+            completed_simulation_count=completed_simulation_count,
+        )
 
     @server.tool(annotations=remote_read)
     def get_alpha_evidence(alpha_id: str, recordsets: list[str] | None = None) -> dict[str, Any]:

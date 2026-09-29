@@ -382,6 +382,27 @@ class TestWriteReadiness(unittest.TestCase):
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0]["execution_fingerprint"], unknown_fp)
 
+    def test_multi_batch_blocks_partial_write_after_remote_duplicate_scan(self):
+        class DuplicateMultiClient(MultiGatewayClient):
+            def get_all_user_alphas(self, **_kwargs):
+                return [{
+                    "id": "alpha-existing", "regular": "rank(close)",
+                    "settings": {"delay": 1}, "status": "UNSUBMITTED",
+                }]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = DuplicateMultiClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            results = gateway.simulate_multi_batch([
+                SimulationSpec("rank(close)", {"delay": 1}),
+                SimulationSpec("rank(open)", {"delay": 1}),
+            ], minimum_eligible_children=2)
+
+        self.assertEqual(results[0]["status"], "EXACT_DUPLICATE")
+        self.assertEqual(results[1]["status"], "BLOCKED_BY_REMOTE_STATE")
+        self.assertEqual(results[1]["reason_code"], "MULTI_BATCH_BELOW_MINIMUM")
+        self.assertEqual(client.multi_submissions, [])
+
     def test_eighty_child_wave_uses_seven_slots_while_one_unknown_parent_is_quarantined(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = MultiGatewayClient()

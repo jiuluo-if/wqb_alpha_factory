@@ -740,12 +740,25 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                 {"expression": f"rank(field_{index})", "proposal_id": f"p-{index}"}
                 for index in range(79)
             ]})
+            premature_reduction = await client.call_tool("simulate_multi_batch", {
+                "specs": [
+                    {"expression": f"rank(reduced_{index})", "proposal_id": f"r-{index}"}
+                    for index in range(20)
+                ],
+                "minimum_eligible_children": 20,
+                "completed_simulation_count": 3999,
+            })
         self.assertEqual(invalid_multi.structured_content["error"], "INVALID_ARGUMENT")
         self.assertEqual(invalid_multi.structured_content["access_mode"], "SIMULATION_WRITE")
         self.assertTrue(invalid_multi.structured_content["remote_write"])
         self.assertEqual(undersized_multi.structured_content["error"], "INVALID_ARGUMENT")
         self.assertEqual(undersized_multi.structured_content["access_mode"], "SIMULATION_WRITE")
         self.assertTrue(undersized_multi.structured_content["remote_write"])
+        self.assertEqual(premature_reduction.structured_content["status"], "NOT_DISPATCHED")
+        self.assertEqual(
+            premature_reduction.structured_content["reason_code"],
+            "MULTI_BATCH_BELOW_MINIMUM",
+        )
         submit.assert_not_called()
         multi.assert_not_called()
 
@@ -854,6 +867,28 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                 recovered = await client.call_tool("reconcile_execution", {"fingerprint": row["fingerprint"]})
         self.assertEqual(recovered.structured_content["data"]["status"], "SUBMIT_UNKNOWN")
         self.assertEqual(recovered.structured_content["data"]["fingerprint"], parent)
+
+    async def test_multi_batch_can_reduce_only_with_4000_completed_count(self):
+        multi = Mock(return_value=[])
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(
+                api=self.api(simulate_multi_batch=multi), client=object(),
+            )
+        specs = [
+            {"expression": f"rank(reduced_{index})", "proposal_id": f"r-{index}"}
+            for index in range(20)
+        ]
+        async with Client(server) as client:
+            result = await client.call_tool("simulate_multi_batch", {
+                "specs": specs, "minimum_eligible_children": 20,
+                "completed_simulation_count": 4000,
+            })
+
+        self.assertEqual(result.structured_content["candidate_count"], 20)
+        args, kwargs = multi.call_args
+        self.assertEqual(len(args[0]), 20)
+        self.assertEqual(kwargs["minimum_eligible_children"], 20)
+        self.assertEqual(kwargs["completed_simulation_count"], 4000)
 
     def test_write_projection_enforces_byte_limit_without_dropping_candidates(self):
         rows = [{
