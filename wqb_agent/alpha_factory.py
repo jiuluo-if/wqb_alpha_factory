@@ -316,7 +316,16 @@ class AlphaFactory:
         """Score unary template fit; unknown semantics remain explicitly weak."""
         traits = traits or _derive_field_semantic_traits(profile)
         field_type = str(profile.get("type") or "").upper()
-        uses_vector = "vec_avg" in template.expression or "vec_sum" in template.expression
+        # Any ``vec_*`` call is a vector aggregation, not only ``vec_avg`` and
+        # ``vec_sum``: matching those two alone rejected legitimate VECTOR
+        # templates whose aggregator is e.g. ``vec_max``/``vec_min``, so an
+        # explicitly declared VECTOR contract could never be materialized.
+        operators = analyze_expression(
+            getattr(template, "expression", "") or ""
+        ).operators
+        uses_vector = any(
+            str(operator).startswith("vec_") for operator in operators
+        )
         return evaluate_semantic_contract(
             effective_semantic_contract(template), traits,
             field_type=field_type, uses_vector_operator=uses_vector,

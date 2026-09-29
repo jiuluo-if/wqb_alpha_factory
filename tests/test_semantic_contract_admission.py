@@ -13,11 +13,11 @@ from wqb_agent.alpha_templates.validation import evaluate_semantic_contract
 
 
 def _template(*, template_id="fixture", family="arbitrary-family",
-              semantic_contract="SYNTHETIC_FIXTURE"):
+              semantic_contract="SYNTHETIC_FIXTURE", expression="rank({p})"):
     return AlphaTemplate(
         template_id=template_id,
         family=family,
-        expression="rank({p})",
+        expression=expression,
         required_slots=("p",),
         role="CONTROL_ALPHA",
         economic_mechanism="synthetic fixture",
@@ -113,6 +113,58 @@ class TestSemanticContractAdmission(unittest.TestCase):
         )
         self.assertEqual(vector["admission"], "ALLOW")
         self.assertEqual(matrix["admission"], "REJECT")
+
+    def test_factory_recognizes_every_vector_aggregation_operator(self):
+        profile = {
+            "id": "arbitrary-vector-field",
+            "description": "analyst estimate dispersion",
+            "dataset": "arbitrary-dataset",
+            "type": "VECTOR",
+            "frequency": "daily",
+        }
+        traits = {
+            "concept": "analyst_dispersion", "measurement": "dispersion",
+            "behavior": "signed", "frequency": "daily",
+            "sign_semantics": "nonnegative_dispersion",
+            "semantic_admission": "ALLOW",
+        }
+        factory = AlphaFactory()
+        for expression in (
+            "rank(ts_rank(subtract(vec_max({p}), vec_min({p})), 22))",
+            "rank(vec_stddev({p}))",
+            "rank(vec_range({p}))",
+            "rank(vec_count({p}))",
+            "rank(vec_avg({p}))",
+            "rank(vec_sum({p}))",
+        ):
+            result = factory._template_semantic_compatibility(
+                _template(semantic_contract="VECTOR_AGGREGATION", expression=expression),
+                profile, traits,
+            )
+            self.assertEqual(result["admission"], "ALLOW", expression)
+
+    def test_matrix_field_is_still_rejected_by_vector_contract(self):
+        profile = {
+            "id": "arbitrary-matrix-field",
+            "description": "analyst estimate dispersion",
+            "dataset": "arbitrary-dataset",
+            "type": "MATRIX",
+            "frequency": "daily",
+        }
+        traits = {
+            "concept": "analyst_dispersion", "measurement": "dispersion",
+            "behavior": "signed", "frequency": "daily",
+            "sign_semantics": "nonnegative_dispersion",
+            "semantic_admission": "ALLOW",
+        }
+        result = AlphaFactory()._template_semantic_compatibility(
+            _template(
+                semantic_contract="VECTOR_AGGREGATION",
+                expression="rank(ts_rank(subtract(vec_max({p}), vec_min({p})), 22))",
+            ),
+            profile, traits,
+        )
+        self.assertEqual(result["admission"], "REJECT")
 
     def test_private_catalog_cannot_use_synthetic_contract_bypass(self):
         document = """

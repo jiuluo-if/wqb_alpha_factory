@@ -120,7 +120,15 @@ def _frequency_text(profile: Mapping[str, object]) -> str:
     value = profile.get("frequency")
     if isinstance(value, Mapping):
         value = value.get("name") or value.get("id")
-    return str(value or "").lower()
+    text = str(value or "").lower()
+    if text:
+        return text
+    # A live BRAIN field catalog carries no frequency attribute, so every
+    # pair/triple template stayed at frequency ``unknown`` and could never clear
+    # the compatibility gate.  Fall back to the field's own declared text,
+    # where an explicit cadence ("daily returns", "most recent fiscal year") is
+    # stated; text without a cadence term still resolves to ``unknown``.
+    return _profile_text(profile, include_dataset=False)
 
 
 def derive_field_semantic_traits(
