@@ -44,6 +44,17 @@ MULTI_MAX_CONCURRENCY = 8
 # These are the child scopes observed in BRAIN REGION_AGNOSTIC outputs.  The
 # aggregate ALL scope is not a field-catalog scope, so verify each child scope.
 REGION_AGNOSTIC_CHILD_REGIONS = ("USA", "EUR", "ASI", "GLB")
+# A REGION_AGNOSTIC spec is written with the aggregate ``universe=LARGE``
+# scope, but the field catalog is a per-region endpoint: queried with that
+# aggregate universe it returns an empty page for every child region, which
+# would make every RA candidate look uncovered.  Each child region therefore
+# has to be probed with the universe BRAIN itself assigns to that region.  The
+# mapping below is live-observed: the child scopes of REGION_AGNOSTIC outputs
+# are USA/TOP3000, EUR/TOP2500, ASI/MINVOL1M and GLB/MINVOL1M, and each pair
+# returns a non-empty catalog while the aggregate universe returns none.
+REGION_AGNOSTIC_CHILD_UNIVERSES = {
+    "USA": "TOP3000", "EUR": "TOP2500", "ASI": "MINVOL1M", "GLB": "MINVOL1M",
+}
 
 # Current bounded scan policy follows verified platform behavior.  Widening
 # the window requires new live evidence; scan results remain explicitly incomplete.
@@ -1155,7 +1166,8 @@ class SimulationGateway:
                 # four child-region scopes; a field must exist in at least two
                 # complete child scopes before the writer will dispatch it.
                 field_scopes = (
-                    [{**scope, "region": region}
+                    [{**scope, "region": region,
+                      "universe": REGION_AGNOSTIC_CHILD_UNIVERSES[region]}
                      for region in REGION_AGNOSTIC_CHILD_REGIONS]
                     if spec.simulation_type == REGION_AGNOSTIC_SIMULATION_TYPE
                     else [scope]

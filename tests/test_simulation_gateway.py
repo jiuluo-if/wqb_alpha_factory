@@ -637,6 +637,7 @@ class TestWriteReadiness(unittest.TestCase):
             def __init__(self):
                 super().__init__()
                 self.field_regions = []
+                self.field_scopes = []
 
             def get_authentication_status(self):
                 return {"authenticated": True, "permissions": ["REGION_AGNOSTIC"]}
@@ -651,6 +652,7 @@ class TestWriteReadiness(unittest.TestCase):
             def get_field_capability(self, field_sources, *, scope=None):
                 region = scope["region"]
                 self.field_regions.append(region)
+                self.field_scopes.append(dict(scope))
                 fields = [field for selected in field_sources.values() for field in selected]
                 available = region in {"ASI", "GLB"}
                 return {
@@ -679,6 +681,12 @@ class TestWriteReadiness(unittest.TestCase):
 
         self.assertEqual(result["status"], "DONE")
         self.assertEqual(client.field_regions, ["USA", "EUR", "ASI", "GLB"])
+        # The aggregate REGION_AGNOSTIC universe is not a field-catalog scope;
+        # each child region is probed with its own catalog universe.
+        self.assertEqual(
+            [scope["universe"] for scope in client.field_scopes],
+            ["TOP3000", "TOP2500", "MINVOL1M", "MINVOL1M"],
+        )
         self.assertEqual(len(client.submissions), 1)
         self.assertIsNotNone(unrelated_guard)
 
