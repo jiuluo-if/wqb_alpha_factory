@@ -101,6 +101,12 @@ class UnauthenticatedGatewayClient(FakeGatewayClient):
 
 
 class TestWriteReadiness(unittest.TestCase):
+    def test_simulation_spec_rejects_non_string_expression_without_stringifying(self):
+        for value in (None, 123, {"code": "rank(close)"}):
+            with self.subTest(value_type=type(value).__name__):
+                with self.assertRaisesRegex(TypeError, "expression must be a string"):
+                    SimulationSpec(value)
+
     def _facts(self, **overrides):
         facts = {
             "pending_entries": [],

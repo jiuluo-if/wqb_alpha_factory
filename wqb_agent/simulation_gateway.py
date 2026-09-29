@@ -308,7 +308,9 @@ class SimulationSpec:
     proposal_id: str | None = None
 
     def __post_init__(self):
-        expression = str(self.expression or "").strip()
+        if not isinstance(self.expression, str):
+            raise TypeError("expression must be a string")
+        expression = self.expression.strip()
         if not expression:
             raise ValueError("expression must be non-empty")
         if not isinstance(self.settings, Mapping):
