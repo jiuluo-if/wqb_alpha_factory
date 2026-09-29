@@ -1537,18 +1537,31 @@ class SimulationGateway:
 
     def simulate_multi_batch(
         self, specs, *, child_batch_size=MULTI_DEFAULT_CHILD_BATCH_SIZE,
-        max_concurrent_multi=MULTI_DEFAULT_CONCURRENCY
+        max_concurrent_multi=MULTI_DEFAULT_CONCURRENCY,
+        minimum_eligible_children=1,
     ):
+        normalized_specs = list(specs or ())
+        if (isinstance(minimum_eligible_children, bool)
+                or not isinstance(minimum_eligible_children, int)
+                or not 1 <= minimum_eligible_children <= 100):
+            raise ValueError("minimum_eligible_children must be between 1 and 100")
+        if len(normalized_specs) < minimum_eligible_children:
+            raise ResearchReasonError(
+                f"Multi batch requires at least {minimum_eligible_children} candidates",
+                "MULTI_BATCH_BELOW_MINIMUM",
+            )
         with single_instance_scope(self.state_dir, operation="multi-simulation"):
             self.guard.reconcile()
             return self._simulate_multi_batch(
-                specs, child_batch_size=child_batch_size,
+                normalized_specs, child_batch_size=child_batch_size,
                 max_concurrent_multi=max_concurrent_multi,
+                minimum_eligible_children=minimum_eligible_children,
             )
 
     def _simulate_multi_batch(
         self, specs, *, child_batch_size=MULTI_DEFAULT_CHILD_BATCH_SIZE,
-        max_concurrent_multi=MULTI_DEFAULT_CONCURRENCY
+        max_concurrent_multi=MULTI_DEFAULT_CONCURRENCY,
+        minimum_eligible_children=1,
     ):
         """Execute large probe windows as bounded Multi-Simulation parents."""
         normalized_specs = [
@@ -1684,6 +1697,16 @@ class SimulationGateway:
                 else:
                     remote_eligible.append((index, spec, fingerprint))
             eligible = remote_eligible
+
+        if len(eligible) < minimum_eligible_children:
+            for index, spec, fingerprint in eligible:
+                results[index] = self._labelled_result(
+                    spec, "BLOCKED_BY_REMOTE_STATE", fingerprint,
+                    reason_code="MULTI_BATCH_BELOW_MINIMUM",
+                    eligible_count=len(eligible),
+                    minimum_eligible_children=minimum_eligible_children,
+                )
+            return self._attach_scan_evidence(results, remote_duplicates)
 
         batches = []
         grouped: list[list[tuple[int, SimulationSpec, str]]] = []

@@ -355,6 +355,33 @@ class TestWriteReadiness(unittest.TestCase):
             for row in entries
         ))
 
+    def test_multi_batch_blocks_partial_write_below_required_new_child_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = MultiGatewayClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            unknown = SimulationSpec("rank(field_unknown)", {"delay": 1})
+            unknown_fp = gateway.execution_fingerprint(unknown)
+            gateway.guard.register(
+                unknown_fp, status="SUBMIT_UNKNOWN", kind=ExecutionGuard.SINGLE,
+            )
+            specs = [unknown] + [SimulationSpec(
+                f"rank(field_{index})", {"delay": 1}, proposal_id=f"candidate-{index}",
+            ) for index in range(4)]
+
+            results = gateway.simulate_multi_batch(
+                specs, minimum_eligible_children=5,
+            )
+            entries = gateway.guard.entries()
+
+        self.assertEqual(results[0]["status"], "SUBMIT_UNKNOWN")
+        self.assertEqual(
+            [row["reason_code"] for row in results[1:]],
+            ["MULTI_BATCH_BELOW_MINIMUM"] * 4,
+        )
+        self.assertEqual(client.multi_submissions, [])
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["execution_fingerprint"], unknown_fp)
+
     def test_eighty_child_wave_uses_seven_slots_while_one_unknown_parent_is_quarantined(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = MultiGatewayClient()
@@ -982,10 +1009,10 @@ class TestSimulationGateway(unittest.TestCase):
     def test_multi_parent_remote_error_is_projected_to_every_child(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = RemoteErrorMultiGatewayClient()
-            results = research_api.simulate_multi_batch([
+            results = SimulationGateway(client, state_dir=tmp).simulate_multi_batch([
                 SimulationSpec("rank(field_a)", {"delay": 1}),
                 SimulationSpec("rank(field_b)", {"delay": 1}),
-            ], client=client, state_dir=tmp)
+            ])
 
             self.assertEqual([item["status"] for item in results], ["FAILED", "FAILED"])
             parents = [item["parent"] for item in results]
@@ -1008,12 +1035,12 @@ class TestSimulationGateway(unittest.TestCase):
     def test_multi_parent_submit_unknown_is_preserved_and_observable(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = UnknownMultiGatewayClient()
-            results = research_api.simulate_multi_batch([
+            results = SimulationGateway(client, state_dir=tmp).simulate_multi_batch([
                 SimulationSpec("rank(field_a)", {"delay": 1}),
                 SimulationSpec("rank(field_b)", {"delay": 1}),
                 SimulationSpec("rank(field_c)", {"delay": 1}),
                 SimulationSpec("rank(field_d)", {"delay": 1}),
-            ], client=client, state_dir=tmp, child_batch_size=4)
+            ], child_batch_size=4)
 
             parent = results[0]["parent"]
             self.assertEqual(parent["status"], "SUBMIT_UNKNOWN")
@@ -1052,10 +1079,10 @@ class TestSimulationGateway(unittest.TestCase):
     def test_multi_parent_known_url_unknown_is_reconcilable_and_observable(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = KnownParentReadFailureClient()
-            results = research_api.simulate_multi_batch([
+            results = SimulationGateway(client, state_dir=tmp).simulate_multi_batch([
                 SimulationSpec("rank(field_a)", {"delay": 1}),
                 SimulationSpec("rank(field_b)", {"delay": 1}),
-            ], client=client, state_dir=tmp)
+            ])
 
             parent = results[0]["parent"]
             self.assertEqual(parent["status"], "UNKNOWN")
@@ -1077,10 +1104,10 @@ class TestSimulationGateway(unittest.TestCase):
     def test_multi_parent_known_url_timeout_keeps_timeout_kind_and_guard(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = KnownParentTimeoutClient()
-            results = research_api.simulate_multi_batch([
+            results = SimulationGateway(client, state_dir=tmp).simulate_multi_batch([
                 SimulationSpec("rank(field_a)", {"delay": 1}),
                 SimulationSpec("rank(field_b)", {"delay": 1}),
-            ], client=client, state_dir=tmp)
+            ])
 
             parent = results[0]["parent"]
             self.assertEqual(parent["status"], "UNKNOWN")
@@ -1091,10 +1118,10 @@ class TestSimulationGateway(unittest.TestCase):
     def test_multi_parent_diagnostic_redacts_child_expression(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = PrivateMessageMultiGatewayClient()
-            results = research_api.simulate_multi_batch([
+            results = SimulationGateway(client, state_dir=tmp).simulate_multi_batch([
                 SimulationSpec("rank(private_secret_field)", {"delay": 1}),
                 SimulationSpec("rank(other_private_field)", {"delay": 1}),
-            ], client=client, state_dir=tmp)
+            ])
 
             error = results[0]["parent"]["error"]
             self.assertNotIn("rank(private_secret_field)", error)

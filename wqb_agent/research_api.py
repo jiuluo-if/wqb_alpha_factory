@@ -52,7 +52,7 @@ from .expression import (
     operator_occurrence_count,
     operator_occurrence_signature,
 )
-from .failures import reason_code_for_failure
+from .failures import ResearchReasonError, reason_code_for_failure
 from .operator_reference import (
     load_operator_syntax_reference,
     load_packaged_operator_syntax_reference,
@@ -78,6 +78,7 @@ from .simulation_gateway import (
 MAX_PROBE_FIELDS = 100
 MAX_PROBE_TEMPLATES = 100
 MAX_PROBE_COUNT = 100
+MULTI_RESEARCH_BATCH_MIN_CHILDREN = 80
 
 # The research contract version is the compatibility handshake between the
 # single research Skill and this runtime.  A Skill that declares a different
@@ -780,16 +781,23 @@ def simulate_multi_batch(
 
     Each parent contains two to ten children. The safe default dispatches
     eight parent jobs concurrently; unresolved Multi parents reserve slots
-    until they are safely reconciled.
-    The Gateway remains the only write path.
+    until they are safely reconciled. Research waves require at least 80 new
+    eligible children; the Gateway rechecks after local and remote dedupe.
     """
+    normalized_specs = list(specs or ())
+    if len(normalized_specs) < MULTI_RESEARCH_BATCH_MIN_CHILDREN:
+        raise ResearchReasonError(
+            "Multi research batch requires at least 80 new candidates",
+            "MULTI_BATCH_BELOW_MINIMUM",
+        )
     gateway = _simulation_gateway(
         client=client, config=config, state_dir=state_dir
     )
     return gateway.simulate_multi_batch(
-        specs,
+        normalized_specs,
         child_batch_size=child_batch_size,
         max_concurrent_multi=max_concurrent_multi,
+        minimum_eligible_children=MULTI_RESEARCH_BATCH_MIN_CHILDREN,
     )
 
 

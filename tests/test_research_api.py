@@ -1069,13 +1069,22 @@ class TestResearchApi(unittest.TestCase):
         with mock.patch("wqb_agent.research_api._simulation_gateway") as factory:
             gateway = factory.return_value
             gateway.simulate_multi_batch.return_value = [{"status": "DONE"}]
+            specs = [SimulationSpec(f"rank(field_{index})") for index in range(80)]
             result = simulate_multi_batch(
-                [spec], child_batch_size=1, max_concurrent_multi=1
+                specs, child_batch_size=10, max_concurrent_multi=8
             )
             self.assertEqual(result, [{"status": "DONE"}])
             gateway.simulate_multi_batch.assert_called_once_with(
-                [spec], child_batch_size=1, max_concurrent_multi=1
+                specs, child_batch_size=10, max_concurrent_multi=8,
+                minimum_eligible_children=80,
             )
+
+    def test_public_multi_facade_rejects_batches_smaller_than_eighty_before_gateway(self):
+        specs = [SimulationSpec(f"rank(field_{index})") for index in range(79)]
+        with mock.patch("wqb_agent.research_api._simulation_gateway") as factory:
+            with self.assertRaisesRegex(ValueError, "at least 80 new candidates"):
+                simulate_multi_batch(specs, client=object())
+        factory.assert_not_called()
 
     def test_named_alpha_reads_are_direct_read_only_facade_calls(self):
         client = mock.Mock()

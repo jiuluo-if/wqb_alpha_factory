@@ -513,8 +513,8 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
 
     @server.tool(annotations=simulation_write)
     def simulate_multi_batch(specs: list[dict[str, Any]]) -> dict[str, Any]:
-        """[REMOTE_WRITE] Start 2–100 compatible candidates through Gateway Multi batching."""
-        parsed = parse_specs(specs, minimum=2, maximum=MAX_MULTI_BATCH, require_proposal_ids=True)
+        """[REMOTE_WRITE] Start 80–100 compatible new candidates through Gateway Multi batching."""
+        parsed = parse_specs(specs, minimum=80, maximum=MAX_MULTI_BATCH, require_proposal_ids=True)
         if parsed is None:
             return _invalid_result(owner="research_api.simulate_multi_batch", access_mode="SIMULATION_WRITE", remote_write=True)
         return write_facade("simulate_multi_batch", parsed)

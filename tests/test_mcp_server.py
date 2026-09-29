@@ -736,9 +736,16 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                 {"expression": "rank(close)", "proposal_id": "dup"},
                 {"expression": "rank(volume)", "proposal_id": "dup"},
             ]})
+            undersized_multi = await client.call_tool("simulate_multi_batch", {"specs": [
+                {"expression": f"rank(field_{index})", "proposal_id": f"p-{index}"}
+                for index in range(79)
+            ]})
         self.assertEqual(invalid_multi.structured_content["error"], "INVALID_ARGUMENT")
         self.assertEqual(invalid_multi.structured_content["access_mode"], "SIMULATION_WRITE")
         self.assertTrue(invalid_multi.structured_content["remote_write"])
+        self.assertEqual(undersized_multi.structured_content["error"], "INVALID_ARGUMENT")
+        self.assertEqual(undersized_multi.structured_content["access_mode"], "SIMULATION_WRITE")
+        self.assertTrue(undersized_multi.structured_content["remote_write"])
         submit.assert_not_called()
         multi.assert_not_called()
 
@@ -836,8 +843,8 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             with patch.dict(os.environ, {self.ENV: "1"}):
                 server = mcp_server.build_research_server(api=api, client=object(), state_dir=state_dir)
             specs = [
-                {"expression": "rank(close)", "proposal_id": "proposal-0"},
-                {"expression": "rank(volume)", "proposal_id": "proposal-1"},
+                {"expression": f"rank(field_{index})", "proposal_id": f"proposal-{index}"}
+                for index in range(80)
             ]
             async with Client(server) as client:
                 simulated = await client.call_tool("simulate_multi_batch", {"specs": specs})
@@ -936,16 +943,18 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         fake_api = self.api(simulate_multi_batch=multi)
         with patch.dict(os.environ, {self.ENV: "1"}):
             server = mcp_server.build_research_server(api=fake_api, client=object())
-        specs = [{"expression": "rank(close)", "proposal_id": f"p-{i}"} for i in range(2)]
+        specs = [
+            {"expression": f"rank(field_{i})", "proposal_id": f"p-{i}"}
+            for i in range(80)
+        ]
         async with Client(server) as client:
             result = await client.call_tool("simulate_multi_batch", {"specs": specs})
 
         multi.assert_called_once()
         self.assertTrue(multi.called)
-        self.assertEqual(
-            [row["status"] for row in result.structured_content["results"]],
-            ["EXACT_DUPLICATE", "SUBMIT_UNKNOWN"],
-        )
+        statuses = [row["status"] for row in result.structured_content["results"]]
+        self.assertEqual(statuses[:2], ["EXACT_DUPLICATE", "SUBMIT_UNKNOWN"])
+        self.assertEqual(statuses[2:], ["UNKNOWN"] * 78)
 
     async def test_transport_bounds_reject_oversized_batch_without_calling_facade(self):
         submit = Mock(return_value=[])
