@@ -82,7 +82,7 @@ MAX_PROBE_COUNT = 100
 # The research contract version is the compatibility handshake between the
 # single research Skill and this runtime.  A Skill that declares a different
 # ``metadata.wqb_alpha_factory_research_contract`` is stale and must be re-read, not reused.
-RESEARCH_CONTRACT_VERSION = "2026-09-26"
+RESEARCH_CONTRACT_VERSION = "2026-09-29"
 RESEARCH_STATUS_TIMEOUT_SEC = 15.0
 
 # Region-Agnostic simulations are written through the same gateway as REGULAR ones;
@@ -779,7 +779,8 @@ def simulate_multi_batch(
     """Execute probe windows as Multi-Simulation parents.
 
     Each parent contains two to ten children. The safe default dispatches
-    two parent jobs concurrently; the supported hard maximum is eight.
+    eight parent jobs concurrently; unresolved Multi parents reserve slots
+    until they are safely reconciled.
     The Gateway remains the only write path.
     """
     gateway = _simulation_gateway(
@@ -788,6 +789,24 @@ def simulate_multi_batch(
     return gateway.simulate_multi_batch(
         specs,
         child_batch_size=child_batch_size,
+        max_concurrent_multi=max_concurrent_multi,
+    )
+
+
+def research_batch_status(
+    specs, *, client=None, config=None, state_dir=None,
+    child_batch_size=MULTI_DEFAULT_CHILD_BATCH_SIZE,
+    max_concurrent_multi=MULTI_DEFAULT_CONCURRENCY,
+):
+    """Read candidate-scoped admission without relaxing global readiness.
+
+    The Gateway checks exact fingerprints, live write capabilities, and
+    unresolved parent capacity. It does not mutate guards or submit writes.
+    """
+    return _simulation_gateway(
+        client=client, config=config, state_dir=state_dir
+    ).research_batch_status(
+        specs, child_batch_size=child_batch_size,
         max_concurrent_multi=max_concurrent_multi,
     )
 
@@ -1448,7 +1467,7 @@ def sync_alpha_colors(plan=None, *, exact_plan=None, client=None, config=None,
 
 
 _AGENT_CORE_TOOL_NAMES = frozenset({
-    "research_status", "list_datasets", "list_datafields",
+    "research_status", "research_batch_status", "list_datasets", "list_datafields",
     "get_operator_reference", "validate_simulation_spec",
     "simulate_batch", "simulate_multi_batch", "get_alpha_evidence",
     "reconcile_execution", "get_alpha_prod_correlation",
@@ -1460,6 +1479,7 @@ def research_tool_manifest(profile="core"):
     """Return a deterministic default CORE surface or the opt-in full catalog."""
     rows: list[dict[str, Any]] = [
         {"name": "research_status", "mode": "READ_ONLY", "owner": "research_api"},
+        {"name": "research_batch_status", "mode": "READ_ONLY", "owner": "SimulationGateway"},
         {"name": "get_capabilities", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "get_operators", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "get_operator_reference", "mode": "READ_ONLY", "owner": "BRAIN"},
@@ -1534,7 +1554,7 @@ __all__ = [
     "simulate", "simulate_single", "simulate_batch",
     "simulate_multi_batch", "get_simulation_modes", "get_live_preflight",
     "get_pending_executions", "resume_execution",
-    "reconcile_execution", "research_status",
+    "reconcile_execution", "research_status", "research_batch_status",
     "get_alpha", "get_alpha_summary", "get_alpha_evidence", "get_alpha_metrics",
     "get_alpha_aggregates", "get_alpha_pnl", "get_alpha_self_correlation",
     "get_alpha_prod_correlation",

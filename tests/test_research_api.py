@@ -100,7 +100,7 @@ class TestResearchApi(unittest.TestCase):
         }
         self.assertEqual(full_names, expected_full | {"alpha_submission"})
         self.assertEqual(core_names, {
-            "research_status", "list_datasets", "list_datafields",
+            "research_status", "research_batch_status", "list_datasets", "list_datafields",
             "get_operator_reference", "validate_simulation_spec",
             "simulate_batch", "simulate_multi_batch", "get_alpha_evidence",
             "reconcile_execution", "get_alpha_prod_correlation",
@@ -164,6 +164,70 @@ class TestResearchApi(unittest.TestCase):
         self.assertNotIn("pending_executions", result)
         self.assertEqual(pending_detail_count, 3)
         self.assertEqual(result["write_readiness"], "BLOCKED_BY_REMOTE_STATE")
+
+    def test_research_batch_status_allows_disjoint_batch_while_global_status_reports_unknown(self):
+        class Client:
+            region = "GLB"
+            universe = "MINVOL1M"
+            instrument_type = "EQUITY"
+            delay = 1
+
+            def get_authentication_status(self):
+                return {"authenticated": True, "permissions": ["MULTI_SIMULATION"]}
+
+            def get_simulation_capability(self):
+                return {
+                    "status": "AVAILABLE", "capability_status": "AVAILABLE",
+                    "simulation_type_choices": ["REGULAR"],
+                    "settings": {}, "required_settings": [],
+                }
+
+            def get_operator_capability(self):
+                return {
+                    "valid": True, "status": "AVAILABLE",
+                    "source": "BRAIN_LIVE_ONLY",
+                    "operators": ["rank"],
+                }
+
+            def get_simulation_quota_observation(self):
+                return {"status": "UNKNOWN", "source": "BRAIN_SIMULATION_HEADERS"}
+
+            def get_all_user_alphas(self, **_kwargs):
+                return []
+
+        client = Client()
+        with tempfile.TemporaryDirectory() as tmp:
+            gateway = SimulationGateway(client, state_dir=tmp)
+            gateway.guard.register(
+                "unknown-parent", status="SUBMIT_UNKNOWN",
+                kind=ExecutionGuard.MULTI_PARENT, simulation_count=10,
+            )
+            unknown = SimulationSpec(
+                "rank(field_unknown)", {"region": "GLB", "universe": "MINVOL1M", "delay": 1}
+            )
+            gateway.guard.register(
+                gateway.execution_fingerprint(unknown), status="SUBMIT_UNKNOWN",
+                kind=ExecutionGuard.MULTI_CHILD, simulation_count=1,
+                parent_fingerprint="unknown-parent",
+            )
+            specs = [
+                unknown,
+                SimulationSpec("rank(field_a)", {"region": "GLB", "universe": "MINVOL1M", "delay": 1}, proposal_id="new-a"),
+                SimulationSpec("rank(field_b)", {"region": "GLB", "universe": "MINVOL1M", "delay": 1}, proposal_id="new-b"),
+            ]
+
+            global_status = research_api.research_status(client=client, state_dir=tmp)
+            result = research_api.research_batch_status(
+                specs, client=client, state_dir=tmp, max_concurrent_multi=8,
+            )
+
+        self.assertEqual(global_status["write_readiness"], "BLOCKED_BY_REMOTE_STATE")
+        self.assertEqual(result["write_readiness"], "READY")
+        self.assertEqual(result["eligible_count"], 2)
+        self.assertEqual(result["blocked_count"], 1)
+        self.assertEqual(result["active_multi_parent_count"], 1)
+        self.assertEqual(result["effective_max_concurrent_multi"], 7)
+        self.assertEqual(result["proposal_admissions"][0]["status"], "SUBMIT_UNKNOWN")
 
     def test_research_status_keeps_unobserved_official_quota_non_blocking(self):
         client = mock.Mock()
@@ -247,7 +311,7 @@ class TestResearchApi(unittest.TestCase):
 
     def test_core_manifest_is_a_small_startup_surface(self):
         core = research_api.research_tool_manifest()
-        self.assertEqual(len(core), 11)
+        self.assertEqual(len(core), 12)
         self.assertEqual(core[0]["name"], "research_status")
 
     def test_generated_probe_api_requires_agent_selected_raw_inputs(self):
@@ -726,7 +790,7 @@ class TestResearchApi(unittest.TestCase):
         self.assertEqual(modes["multi"]["children_per_job"], 10)
         self.assertEqual(modes["multi"]["min_children_per_job"], 2)
         self.assertEqual(modes["multi"]["max_children_per_job"], 10)
-        self.assertEqual(modes["multi"]["default_concurrent_jobs"], 2)
+        self.assertEqual(modes["multi"]["default_concurrent_jobs"], 8)
         self.assertEqual(modes["multi"]["max_concurrent_jobs"], 8)
         self.assertFalse(modes["region_agnostic"]["available"])
 

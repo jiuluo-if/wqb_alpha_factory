@@ -179,6 +179,79 @@ class TestWriteReadiness(unittest.TestCase):
         self.assertEqual(result["write_readiness"], "BLOCKED_BY_REMOTE_STATE")
         self.assertIn("UNRESOLVED_EXECUTIONS", result["write_blockers"])
 
+    def test_batch_admission_allows_disjoint_child_and_reserves_unknown_parent_slot(self):
+        from wqb_agent.simulation_gateway import classify_batch_write_admission
+
+        pending = [
+            {
+                "execution_fingerprint": "unknown-parent",
+                "kind": ExecutionGuard.MULTI_PARENT,
+                "status": "SUBMIT_UNKNOWN",
+                "simulation_count": 10,
+            },
+            {
+                "execution_fingerprint": "unknown-child",
+                "kind": ExecutionGuard.MULTI_CHILD,
+                "status": "SUBMIT_UNKNOWN",
+                "parent_fingerprint": "unknown-parent",
+            },
+        ]
+        result = classify_batch_write_admission(
+            **self._facts(pending_entries=pending),
+            candidate_fingerprints=["unknown-child", "new-child"],
+            requested_max_concurrent_multi=8,
+        )
+
+        self.assertEqual(result["write_readiness"], "READY")
+        self.assertEqual(result["write_blockers"], [])
+        self.assertEqual(result["eligible_count"], 1)
+        self.assertEqual(result["blocked_count"], 1)
+        self.assertEqual(result["active_multi_parent_count"], 1)
+        self.assertEqual(result["effective_max_concurrent_multi"], 7)
+
+    def test_batch_admission_blocks_when_all_candidates_match_unknown_guards(self):
+        from wqb_agent.simulation_gateway import classify_batch_write_admission
+
+        result = classify_batch_write_admission(
+            **self._facts(pending_entries=[
+                {
+                    "execution_fingerprint": "unknown-child",
+                    "kind": ExecutionGuard.MULTI_CHILD,
+                    "status": "SUBMIT_UNKNOWN",
+                    "parent_fingerprint": "unknown-parent",
+                },
+            ]),
+            candidate_fingerprints=["unknown-child"],
+            requested_max_concurrent_multi=8,
+        )
+
+        self.assertEqual(result["write_readiness"], "BLOCKED_BY_REMOTE_STATE")
+        self.assertEqual(result["eligible_count"], 0)
+        self.assertEqual(result["blocked_count"], 1)
+        self.assertIn("NO_ELIGIBLE_CANDIDATES", result["write_blockers"])
+
+    def test_batch_admission_blocks_when_unknown_parents_reserve_all_multi_slots(self):
+        from wqb_agent.simulation_gateway import classify_batch_write_admission
+
+        pending = [
+            {
+                "execution_fingerprint": f"parent-{index}",
+                "kind": ExecutionGuard.MULTI_PARENT,
+                "status": "SUBMIT_UNKNOWN",
+                "simulation_count": 10,
+            }
+            for index in range(MULTI_MAX_CONCURRENCY)
+        ]
+        result = classify_batch_write_admission(
+            **self._facts(pending_entries=pending),
+            candidate_fingerprints=["new-child"],
+            requested_max_concurrent_multi=MULTI_MAX_CONCURRENCY,
+        )
+
+        self.assertEqual(result["write_readiness"], "BLOCKED_BY_REMOTE_STATE")
+        self.assertEqual(result["effective_max_concurrent_multi"], 0)
+        self.assertIn("MULTI_PARENT_CAPACITY_RESERVED", result["write_blockers"])
+
     def test_write_readiness_waits_for_missing_capability_and_unknowns_broken_guard(self):
         waiting = classify_write_readiness(**self._facts(
             client_available=False,
@@ -192,7 +265,7 @@ class TestWriteReadiness(unittest.TestCase):
         self.assertEqual(unknown["write_readiness"], "UNKNOWN")
         self.assertIn("EXECUTION_STATE_UNKNOWN", unknown["write_blockers"])
 
-    def test_gateway_blocks_new_write_when_an_unresolved_guard_exists(self):
+    def test_gateway_allows_disjoint_single_write_when_an_unresolved_guard_exists(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = FakeGatewayClient()
             gateway = SimulationGateway(client, state_dir=tmp)
@@ -201,9 +274,154 @@ class TestWriteReadiness(unittest.TestCase):
                 simulation_count=1, kind=ExecutionGuard.SINGLE,
             )
             result = gateway.simulate_batch([SimulationSpec("rank(close)")])[0]
-        self.assertEqual(result["status"], "BLOCKED_BY_REMOTE_STATE")
-        self.assertEqual(result["reason_code"], "UNRESOLVED_EXECUTIONS")
-        self.assertEqual(client.submissions, [])
+            entries = gateway.guard.entries()
+        self.assertEqual(result["status"], "DONE")
+        self.assertEqual(len(client.submissions), 1)
+        self.assertTrue(any(
+            row["execution_fingerprint"] == "another-unresolved-fingerprint"
+            and row["status"] == "SUBMIT_UNKNOWN"
+            for row in entries
+        ))
+
+    def test_research_batch_status_admits_disjoint_specs_and_reserves_unknown_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = MultiGatewayClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            gateway.guard.register(
+                "unknown-parent", status="SUBMIT_UNKNOWN", kind=ExecutionGuard.MULTI_PARENT,
+                simulation_count=10,
+            )
+            unknown_child = SimulationSpec("rank(field_unknown)", {"delay": 1})
+            gateway.guard.register(
+                gateway.execution_fingerprint(unknown_child),
+                status="SUBMIT_UNKNOWN", kind=ExecutionGuard.MULTI_CHILD,
+                simulation_count=1, parent_fingerprint="unknown-parent",
+            )
+
+            result = gateway.research_batch_status([
+                SimulationSpec("rank(field_a)", {"delay": 1}),
+                SimulationSpec("rank(field_b)", {"delay": 1}),
+            ], max_concurrent_multi=8)
+
+        self.assertEqual(result["write_readiness"], "READY")
+        self.assertEqual(result["eligible_count"], 2)
+        self.assertEqual(result["blocked_count"], 0)
+        self.assertEqual(result["active_multi_parent_count"], 1)
+        self.assertEqual(result["effective_max_concurrent_multi"], 7)
+
+    def test_multi_batch_continues_disjoint_children_without_reposting_unknown_child(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = MultiGatewayClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            gateway.guard.register(
+                "unknown-parent", status="SUBMIT_UNKNOWN", kind=ExecutionGuard.MULTI_PARENT,
+                simulation_count=10,
+            )
+            unknown_child = SimulationSpec("rank(field_unknown)", {"delay": 1})
+            unknown_fingerprint = gateway.execution_fingerprint(unknown_child)
+            gateway.guard.register(
+                unknown_fingerprint, status="SUBMIT_UNKNOWN",
+                kind=ExecutionGuard.MULTI_CHILD, simulation_count=1,
+                parent_fingerprint="unknown-parent",
+            )
+            specs = [unknown_child] + [
+                SimulationSpec(f"rank(field_{index})", {"delay": 1})
+                for index in range(9)
+            ]
+
+            results = gateway.simulate_multi_batch(
+                specs, child_batch_size=10, max_concurrent_multi=8
+            )
+            entries = gateway.guard.entries()
+
+        self.assertEqual(results[0]["status"], "SUBMIT_UNKNOWN")
+        self.assertEqual([row["status"] for row in results[1:]], ["DONE"] * 9)
+        self.assertEqual(len(client.multi_submissions), 1)
+        self.assertEqual(len(client.multi_submissions[0][0]), 9)
+        self.assertTrue(any(
+            row["execution_fingerprint"] == unknown_fingerprint
+            and row["status"] == "SUBMIT_UNKNOWN"
+            for row in entries
+        ))
+        self.assertTrue(any(
+            row["execution_fingerprint"] == "unknown-parent"
+            and row["status"] == "SUBMIT_UNKNOWN"
+            for row in entries
+        ))
+
+    def test_eighty_child_wave_uses_seven_slots_while_one_unknown_parent_is_quarantined(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = MultiGatewayClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            gateway.guard.register(
+                "unknown-parent", status="SUBMIT_UNKNOWN",
+                kind=ExecutionGuard.MULTI_PARENT, simulation_count=10,
+            )
+            quarantined = SimulationSpec("rank(field_quarantined)", {"delay": 1})
+            quarantined_fp = gateway.execution_fingerprint(quarantined)
+            gateway.guard.register(
+                quarantined_fp, status="SUBMIT_UNKNOWN",
+                kind=ExecutionGuard.MULTI_CHILD, simulation_count=1,
+                parent_fingerprint="unknown-parent",
+            )
+            specs = [SimulationSpec(
+                f"rank(field_wave_{index})", {"delay": 1},
+                proposal_id=f"wave-{index}",
+            ) for index in range(80)]
+
+            admission = gateway.research_batch_status(specs)
+            results = gateway.simulate_multi_batch(specs)
+            entries = gateway.guard.entries()
+
+        self.assertEqual(admission["write_readiness"], "READY")
+        self.assertEqual(admission["eligible_count"], 80)
+        self.assertEqual(admission["effective_max_concurrent_multi"], 7)
+        self.assertEqual([item["status"] for item in results], ["DONE"] * 80)
+        self.assertEqual(len(client.multi_submissions), 8)
+        self.assertLessEqual(client.max_active_multi, 7)
+        self.assertTrue(any(
+            row["execution_fingerprint"] == "unknown-parent"
+            and row["status"] == "SUBMIT_UNKNOWN"
+            for row in entries
+        ))
+        self.assertTrue(any(
+            row["execution_fingerprint"] == quarantined_fp
+            and row["status"] == "SUBMIT_UNKNOWN"
+            for row in entries
+        ))
+
+    def test_one_field_preflight_failure_does_not_discard_valid_multi_children(self):
+        class PartiallyValidClient(MultiGatewayClient):
+            def get_field_capability(self, field_sources, *, scope=None):
+                fields = [field for selected in field_sources.values() for field in selected]
+                if "missing_field" in fields:
+                    return {
+                        "valid": False, "fields": [],
+                        "source": "BRAIN_LIVE_ONLY",
+                    }
+                return {
+                    "valid": True, "fields": fields,
+                    "source": "BRAIN_LIVE_ONLY",
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = PartiallyValidClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            specs = [SimulationSpec(
+                "rank(missing_field)", {"delay": 1}, fields=("missing_field",),
+                field_datasets={"missing_field": "synthetic"}, proposal_id="bad",
+            )] + [SimulationSpec(
+                f"rank(field_{index})", {"delay": 1}, fields=(f"field_{index}",),
+                field_datasets={f"field_{index}": "synthetic"}, proposal_id=f"ok-{index}",
+            ) for index in range(9)]
+
+            results = gateway.simulate_multi_batch(specs)
+
+        self.assertEqual(results[0]["status"], "NOT_DISPATCHED")
+        self.assertEqual(results[0]["reason_code"], "CAPABILITY_UNAVAILABLE")
+        self.assertEqual([item["status"] for item in results[1:]], ["DONE"] * 9)
+        self.assertEqual(len(client.multi_submissions), 1)
+        self.assertEqual(len(client.multi_submissions[0][0]), 9)
 
     def test_gateway_allows_new_write_when_official_quota_is_unobserved(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -636,7 +854,7 @@ class TestSimulationGateway(unittest.TestCase):
         self.assertEqual(MULTI_MIN_CHILDREN, 2)
         self.assertEqual(MULTI_MAX_CHILDREN, 10)
         self.assertEqual(MULTI_DEFAULT_CHILD_BATCH_SIZE, 10)
-        self.assertEqual(MULTI_DEFAULT_CONCURRENCY, 2)
+        self.assertEqual(MULTI_DEFAULT_CONCURRENCY, 8)
         self.assertEqual(MULTI_MAX_CONCURRENCY, 8)
         gateway_signature = inspect.signature(
             SimulationGateway.simulate_multi_batch
@@ -1575,9 +1793,10 @@ class TestSimulationGateway(unittest.TestCase):
             self.assertEqual(results[0]["guard_action"], "EXISTING_GUARD")
             self.assertEqual(
                 [item["status"] for item in results[1:]],
-                ["BLOCKED_BY_REMOTE_STATE", "BLOCKED_BY_REMOTE_STATE"],
+                ["DONE", "DONE"],
             )
-            self.assertEqual(multi_client.multi_submissions, [])
+            self.assertEqual(len(multi_client.multi_submissions), 1)
+            self.assertEqual(len(multi_client.multi_submissions[0][0]), 2)
 
     def test_multi_parent_recovers_with_multi_polling_from_persisted_kind(self):
         class ProgressOnlyMultiClient(MultiGatewayClient):
@@ -1719,9 +1938,10 @@ class TestSimulationGateway(unittest.TestCase):
             self.assertEqual(results[0]["guard_action"], "EXISTING_GUARD")
             self.assertEqual(
                 [item["status"] for item in results[1:]],
-                ["BLOCKED_BY_REMOTE_STATE", "BLOCKED_BY_REMOTE_STATE"],
+                ["DONE", "DONE"],
             )
-            self.assertEqual(client.multi_submissions, [])
+            self.assertEqual(len(client.multi_submissions), 1)
+            self.assertEqual(len(client.multi_submissions[0][0]), 2)
 
     def test_timed_out_multi_parent_recovers_through_persisted_kind(self):
         with tempfile.TemporaryDirectory() as tmp:

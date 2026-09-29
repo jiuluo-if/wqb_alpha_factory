@@ -37,7 +37,7 @@ SUPPORTED_WRITE_SIMULATION_TYPES = SUPPORTED_SIMULATION_REQUEST_TYPES
 MULTI_MIN_CHILDREN = 2
 MULTI_MAX_CHILDREN = 10
 MULTI_DEFAULT_CHILD_BATCH_SIZE = 10
-MULTI_DEFAULT_CONCURRENCY = 2
+MULTI_DEFAULT_CONCURRENCY = 8
 MULTI_MAX_CONCURRENCY = 8
 
 # Current bounded scan policy follows verified platform behavior.  Widening
@@ -184,6 +184,112 @@ def classify_write_readiness(
     else:
         readiness = "READY"
     return {"write_readiness": readiness, "write_blockers": blockers}
+
+
+def classify_batch_write_admission(
+    *,
+    candidate_fingerprints,
+    pending_entries,
+    official_quota,
+    simulation_capability,
+    operator_capability,
+    authentication,
+    execution_state_known=True,
+    client_available=True,
+    requested_max_concurrent_multi=MULTI_DEFAULT_CONCURRENCY,
+):
+    """Classify one candidate batch while quarantining exact unresolved writes.
+
+    Global ``research_status`` remains blocked while unresolved guards exist.
+    A batch may still admit fingerprints that do not match any unresolved
+    Single, Multi parent, or Multi child. Unknown Multi parents reserve one of
+    the platform's bounded parent-concurrency slots until they are reconciled.
+    """
+    if (isinstance(requested_max_concurrent_multi, bool)
+            or not isinstance(requested_max_concurrent_multi, int)
+            or not 1 <= requested_max_concurrent_multi <= MULTI_MAX_CONCURRENCY):
+        raise ValueError(
+            f"requested_max_concurrent_multi must be between 1 and {MULTI_MAX_CONCURRENCY}"
+        )
+    normalized = [str(value or "").strip() for value in candidate_fingerprints or ()]
+    if any(not value for value in normalized):
+        raise ValueError("candidate fingerprints must be non-empty strings")
+
+    rows = pending_entries if isinstance(pending_entries, list) else None
+    state_known = execution_state_known and rows is not None
+    if state_known:
+        state_known = all(
+            isinstance(row, Mapping)
+            and isinstance(row.get("execution_fingerprint"), str)
+            and row.get("status") in ExecutionGuard.STATUSES
+            and row.get("kind") in ExecutionGuard.KINDS
+            for row in rows
+        )
+
+    platform = classify_write_readiness(
+        pending_entries=[], official_quota=official_quota,
+        simulation_capability=simulation_capability,
+        operator_capability=operator_capability,
+        authentication=authentication,
+        execution_state_known=state_known,
+        client_available=client_available,
+    )
+    pending = rows or []
+    guarded = {row["execution_fingerprint"] for row in pending}
+    active_multi_parent_count = sum(
+        row.get("kind") == ExecutionGuard.MULTI_PARENT
+        and row.get("status") in ExecutionGuard.STATUSES
+        for row in pending
+    )
+    available_multi_slots = max(
+        0, MULTI_MAX_CONCURRENCY - active_multi_parent_count
+    )
+    effective_concurrency = min(
+        requested_max_concurrent_multi, available_multi_slots
+    )
+    seen = set()
+    eligible_count = 0
+    blocked_count = 0
+    for fingerprint in normalized:
+        if fingerprint in seen or fingerprint in guarded:
+            blocked_count += 1
+            continue
+        seen.add(fingerprint)
+        eligible_count += 1
+
+    blockers = list(platform["write_blockers"])
+    if platform["write_readiness"] == "READY":
+        if not state_known:
+            blockers.append("EXECUTION_STATE_UNKNOWN")
+        elif effective_concurrency == 0:
+            blockers.append("MULTI_PARENT_CAPACITY_RESERVED")
+        elif eligible_count == 0:
+            blockers.append("NO_ELIGIBLE_CANDIDATES")
+
+    if "EXECUTION_STATE_UNKNOWN" in blockers:
+        readiness = "UNKNOWN"
+    elif any(code in blockers for code in (
+        "OFFICIAL_QUOTA_EXHAUSTED", "AUTHENTICATION_UNAVAILABLE",
+        "SIMULATION_CAPABILITY_UNAVAILABLE", "OPERATOR_CAPABILITY_UNAVAILABLE",
+        "MULTI_PARENT_CAPACITY_RESERVED", "NO_ELIGIBLE_CANDIDATES",
+    )):
+        readiness = "BLOCKED_BY_REMOTE_STATE"
+    elif not client_available or any(code.endswith("UNKNOWN") for code in blockers):
+        readiness = "WAITING_FOR_CAPABILITY"
+    elif blockers:
+        readiness = "WAITING_FOR_CAPABILITY"
+    else:
+        readiness = "READY"
+    return {
+        "write_readiness": readiness,
+        "write_blockers": blockers,
+        "candidate_count": len(normalized),
+        "eligible_count": eligible_count,
+        "blocked_count": blocked_count,
+        "active_multi_parent_count": active_multi_parent_count,
+        "requested_max_concurrent_multi": requested_max_concurrent_multi,
+        "effective_max_concurrent_multi": effective_concurrency,
+    }
 
 
 @dataclass(frozen=True)
@@ -845,7 +951,7 @@ class SimulationGateway:
         }
 
 
-    def _current_state_write_blockers(self):
+    def _current_state_write_blockers(self, *, allow_disjoint_pending=False):
         try:
             pending = self.guard.entries()
             state_known = True
@@ -857,8 +963,15 @@ class SimulationGateway:
             official_quota = quota_reader() if callable(quota_reader) else None
         except Exception:
             official_quota = None
+        if allow_disjoint_pending and state_known:
+            # Known unresolved writes quarantine their own fingerprints. They
+            # do not freeze unrelated work; candidate conflicts are checked
+            # against the guard immediately before registration below.
+            pending_for_gate = []
+        else:
+            pending_for_gate = pending
         return _write_state_blockers(
-            pending, official_quota, execution_state_known=state_known
+            pending_for_gate, official_quota, execution_state_known=state_known
         )
 
     def _block_specs_for_state(self, specs, blockers, *, readiness=None):
@@ -912,6 +1025,8 @@ class SimulationGateway:
     def _preflight_specs(
         self, specs, *, simulation_capability=_CAPABILITY_UNCHECKED,
         authentication=_AUTHENTICATION_UNCHECKED,
+        operator_capability=_CAPABILITY_UNCHECKED,
+        allow_disjoint_pending=False, scan_remote_history=True,
     ):
         normalized = [
             item if isinstance(item, SimulationSpec)
@@ -929,7 +1044,9 @@ class SimulationGateway:
             _validate_write_simulation_type(spec)
 
         blocked = self._block_specs_for_state(
-            normalized, self._current_state_write_blockers()
+            normalized, self._current_state_write_blockers(
+                allow_disjoint_pending=allow_disjoint_pending
+            )
         )
         if blocked is not None:
             return blocked, [], {}
@@ -942,11 +1059,12 @@ class SimulationGateway:
                     simulation_capability = capability_reader()
                 except Exception:
                     simulation_capability = {"status": "UNKNOWN"}
-        operator_reader = getattr(self.client, "get_operator_capability", None)
-        operator_capability = (
-            operator_reader() if callable(operator_reader)
-            else _CAPABILITY_READER_ABSENT
-        )
+        if operator_capability is _CAPABILITY_UNCHECKED:
+            operator_reader = getattr(self.client, "get_operator_capability", None)
+            operator_capability = (
+                operator_reader() if callable(operator_reader)
+                else _CAPABILITY_READER_ABSENT
+            )
         if authentication is _AUTHENTICATION_UNCHECKED:
             authentication_reader = getattr(
                 self.client, "get_authentication_status", None
@@ -965,7 +1083,7 @@ class SimulationGateway:
         except Exception:
             official_quota = None
         readiness = classify_write_readiness(
-            pending_entries=state_entries,
+            pending_entries=([] if allow_disjoint_pending else state_entries),
             official_quota=official_quota,
             simulation_capability=simulation_capability,
             operator_capability=(
@@ -1071,8 +1189,224 @@ class SimulationGateway:
             executable.append((index, spec, _fingerprint))
         return (
             results, executable,
-            self._remote_history_matches(executable),
+            self._remote_history_matches(executable)
+            if scan_remote_history else {},
         )
+
+    def _preflight_specs_isolated(
+        self, specs, *, simulation_capability=_CAPABILITY_UNCHECKED,
+        authentication=_AUTHENTICATION_UNCHECKED,
+        operator_capability=_CAPABILITY_UNCHECKED, scan_remote_history=True,
+    ):
+        """Keep a single invalid candidate from discarding a valid batch.
+
+        The normal path validates the whole batch efficiently. Only when that
+        path raises does the Gateway isolate candidates, retain valid ones,
+        and report deterministic failures against their proposal IDs.
+        """
+        normalized = [
+            item if isinstance(item, SimulationSpec)
+            else SimulationSpec(**dict(item))
+            for item in (specs or ())
+        ]
+        try:
+            return self._preflight_specs(
+                normalized, simulation_capability=simulation_capability,
+                authentication=authentication,
+                operator_capability=operator_capability,
+                allow_disjoint_pending=True,
+                scan_remote_history=scan_remote_history,
+            )
+        except Exception:
+            results: list[dict[str, Any] | None] = [None] * len(normalized)
+            executable = []
+            for index, spec in enumerate(normalized):
+                try:
+                    single_results, single_executable, _ = self._preflight_specs(
+                        [spec], simulation_capability=simulation_capability,
+                        authentication=authentication,
+                        operator_capability=operator_capability,
+                        allow_disjoint_pending=True,
+                        scan_remote_history=False,
+                    )
+                except Exception as exc:
+                    try:
+                        fingerprint = self.execution_fingerprint(spec)
+                    except Exception:
+                        fingerprint = ""
+                    reason_code = getattr(exc, "reason_code", None) or reason_code_for_failure(
+                        "NOT_DISPATCHED", str(exc)
+                    ) or "SPEC_PREFLIGHT_FAILED"
+                    isolated_failure = self._labelled_result(
+                        spec, "NOT_DISPATCHED", fingerprint,
+                        reason_code=reason_code,
+                        error=str(exc)[:300],
+                    )
+                    isolated_failure["reason_code"] = reason_code
+                    results[index] = isolated_failure
+                    continue
+                results[index] = single_results[0]
+                if single_executable:
+                    _single_index, _single_spec, fingerprint = single_executable[0]
+                    executable.append((index, spec, fingerprint))
+            remote = (
+                self._remote_history_matches(executable)
+                if scan_remote_history and executable else {}
+            )
+            return results, executable, remote
+
+    def research_batch_status(
+        self, specs, *, child_batch_size=MULTI_DEFAULT_CHILD_BATCH_SIZE,
+        max_concurrent_multi=MULTI_DEFAULT_CONCURRENCY,
+    ):
+        """Return candidate-scoped, read-only admission for a Multi batch.
+
+        The global status can remain BLOCKED while an unrelated execution is
+        unresolved. This report admits only candidates that do not reuse any
+        guarded fingerprint and reserves one parent slot for each unresolved
+        Multi parent. The writer repeats all checks before registering writes.
+        """
+        normalized = [
+            item if isinstance(item, SimulationSpec)
+            else SimulationSpec(**dict(item))
+            for item in (specs or ())
+        ]
+        if len(normalized) < MULTI_MIN_CHILDREN:
+            raise ValueError(
+                f"Multi batch requires at least {MULTI_MIN_CHILDREN} candidates"
+            )
+        if isinstance(child_batch_size, bool) or not isinstance(child_batch_size, int):
+            raise TypeError("child_batch_size must be an integer")
+        if not MULTI_MIN_CHILDREN <= child_batch_size <= MULTI_MAX_CHILDREN:
+            raise ValueError(
+                f"child_batch_size must be between {MULTI_MIN_CHILDREN} and {MULTI_MAX_CHILDREN}"
+            )
+        if (isinstance(max_concurrent_multi, bool)
+                or not isinstance(max_concurrent_multi, int)
+                or not 1 <= max_concurrent_multi <= MULTI_MAX_CONCURRENCY):
+            raise ValueError(
+                f"max_concurrent_multi must be between 1 and {MULTI_MAX_CONCURRENCY}"
+            )
+        for spec in normalized:
+            if _spec_simulation_type(spec) != REGULAR_SIMULATION_TYPE:
+                raise ValueError("Multi-Simulation only accepts REGULAR children")
+
+        authentication_reader = getattr(self.client, "get_authentication_status", None)
+        try:
+            authentication = (
+                authentication_reader() if callable(authentication_reader) else None
+            )
+        except Exception:
+            authentication = None
+        capability_reader = getattr(self.client, "get_simulation_capability", None)
+        try:
+            simulation_capability = (
+                capability_reader() if callable(capability_reader)
+                else {"status": "UNKNOWN"}
+            )
+        except Exception:
+            simulation_capability = {"status": "UNKNOWN"}
+        operator_reader = getattr(self.client, "get_operator_capability", None)
+        try:
+            operator_capability = (
+                operator_reader() if callable(operator_reader) else None
+            )
+        except Exception:
+            operator_capability = None
+        quota_reader = getattr(self.client, "get_simulation_quota_observation", None)
+        try:
+            official_quota = quota_reader() if callable(quota_reader) else None
+        except Exception:
+            official_quota = None
+
+        try:
+            results, validated, _ = self._preflight_specs_isolated(
+                normalized,
+                simulation_capability=simulation_capability or {"status": "UNKNOWN"},
+                authentication=authentication,
+                operator_capability=operator_capability or _CAPABILITY_READER_ABSENT,
+                scan_remote_history=False,
+            )
+            rows = self.guard.entries()
+            execution_state_known = True
+        except Exception as exc:
+            return {
+                "source": "SimulationGateway", "status": "UNAVAILABLE",
+                "evidence_status": "INCONCLUSIVE",
+                "write_readiness": "UNKNOWN",
+                "write_blockers": [getattr(exc, "reason_code", None) or "BATCH_PREFLIGHT_UNAVAILABLE"],
+                "candidate_count": len(normalized), "eligible_count": 0,
+                "blocked_count": len(normalized), "proposal_admissions": [],
+                "active_multi_parent_count": None,
+                "effective_max_concurrent_multi": 0,
+                "remote_duplicate_scan": "NOT_PERFORMED",
+            }
+
+        fingerprint_by_index = {
+            index: fingerprint for index, _spec, fingerprint in validated
+        }
+        guarded = {row.get("execution_fingerprint"): row for row in rows}
+        seen = set()
+        candidate_fingerprints = []
+        proposal_admissions = []
+        for index, spec in enumerate(normalized):
+            proposal_id = spec.proposal_id or f"candidate-{index + 1}"
+            preflight_result = results[index]
+            fingerprint = fingerprint_by_index.get(index)
+            status = "READY"
+            reason_code = None
+            if isinstance(preflight_result, Mapping):
+                status = str(preflight_result.get("status") or "BLOCKED")
+                reason_code = preflight_result.get("reason_code")
+            elif fingerprint is None:
+                status, reason_code = "BLOCKED", "SPEC_PREFLIGHT_FAILED"
+            elif fingerprint in seen:
+                status, reason_code = "EXACT_DUPLICATE", "EXACT_DUPLICATE"
+            elif fingerprint in guarded:
+                row = guarded[fingerprint]
+                status = (
+                    "SUBMIT_UNKNOWN"
+                    if row.get("status") == "SUBMIT_UNKNOWN" else "EXACT_DUPLICATE"
+                )
+                reason_code = status
+            else:
+                seen.add(fingerprint)
+                candidate_fingerprints.append(fingerprint)
+            proposal_admissions.append({
+                "proposal_id": proposal_id,
+                "status": status,
+                **({"reason_code": reason_code} if reason_code else {}),
+            })
+
+        admission = classify_batch_write_admission(
+            candidate_fingerprints=candidate_fingerprints,
+            pending_entries=rows,
+            official_quota=official_quota,
+            simulation_capability=simulation_capability,
+            operator_capability=operator_capability,
+            authentication=authentication,
+            execution_state_known=execution_state_known,
+            client_available=True,
+            requested_max_concurrent_multi=max_concurrent_multi,
+        )
+        permissions = {
+            str(item).upper()
+            for item in (authentication or {}).get("permissions", ())
+        }
+        if "MULTI_SIMULATION" not in permissions:
+            admission["write_readiness"] = "BLOCKED_BY_REMOTE_STATE"
+            if "MULTI_SIMULATION_PERMISSION_UNAVAILABLE" not in admission["write_blockers"]:
+                admission["write_blockers"].append("MULTI_SIMULATION_PERMISSION_UNAVAILABLE")
+        admission.update({
+            "source": "SimulationGateway", "status": "AVAILABLE",
+            "evidence_status": "AVAILABLE",
+            "candidate_count": len(normalized),
+            "eligible_count": len(candidate_fingerprints),
+            "blocked_count": len(normalized) - len(candidate_fingerprints),
+            "proposal_admissions": proposal_admissions,
+            "remote_duplicate_scan": "DEFERRED_TO_WRITE_PREFLIGHT",
+        })
+        return admission
 
     def simulate(self, spec):
         return self.simulate_batch([spec])[0]
@@ -1088,13 +1422,17 @@ class SimulationGateway:
         The batch remains one guarded execution per spec; only dispatch and
         polling share the existing bounded worker pool.
         """
+        defer_remote_scan = preflight is None
         results, validated, remote_duplicates = (
-            preflight if preflight is not None else self._preflight_specs(specs)
+            preflight if preflight is not None else self._preflight_specs(
+                specs, allow_disjoint_pending=True, scan_remote_history=False
+            )
         )
         if not validated:
             return results
         prepared = []
         seen = set()
+        remote_scanned = not defer_remote_scan
         for index, spec, fingerprint in validated:
             if fingerprint in seen:
                 results[index] = self._labelled_result(
@@ -1114,6 +1452,13 @@ class SimulationGateway:
                         spec, "EXACT_DUPLICATE", fingerprint
                     )
                 continue
+            if not remote_scanned:
+                scan_candidates = [
+                    row for row in validated
+                    if self.guard.find(row[2]) is None
+                ]
+                remote_duplicates = self._remote_history_matches(scan_candidates)
+                remote_scanned = True
             remote = remote_duplicates.get(fingerprint)
             if remote is not None:
                 results[index] = self._labelled_result(
@@ -1209,15 +1554,15 @@ class SimulationGateway:
             else SimulationSpec(**dict(item))
             for item in (specs or ())
         ]
-        if len(normalized_specs) > 1:
-            for spec in normalized_specs:
-                simulation_type = _spec_simulation_type(spec)
-                if (simulation_type != REGULAR_SIMULATION_TYPE
-                        and simulation_type in SUPPORTED_WRITE_SIMULATION_TYPES):
-                    raise ResearchReasonError(
-                        "Multi-Simulation only accepts REGULAR children",
-                        "INVALID_SPEC",
-                    )
+        for spec in normalized_specs:
+            _validate_write_simulation_type(spec)
+            simulation_type = _spec_simulation_type(spec)
+            if (len(normalized_specs) > 1
+                    and simulation_type != REGULAR_SIMULATION_TYPE):
+                raise ResearchReasonError(
+                    "Multi-Simulation only accepts REGULAR children",
+                    "INVALID_SPEC",
+                )
         if isinstance(child_batch_size, bool) or not isinstance(child_batch_size, int):
             raise TypeError("child_batch_size must be an integer")
         if child_batch_size < MULTI_MIN_CHILDREN or child_batch_size > MULTI_MAX_CHILDREN:
@@ -1237,7 +1582,9 @@ class SimulationGateway:
             return self._simulate_batch(normalized_specs)
 
         blocked = self._block_specs_for_state(
-            normalized_specs, self._current_state_write_blockers()
+            normalized_specs, self._current_state_write_blockers(
+                allow_disjoint_pending=True
+            )
         )
         if blocked is not None:
             return blocked
@@ -1264,9 +1611,9 @@ class SimulationGateway:
             ):
                 raise ValueError("SIMULATION_CAPABILITY_UNAVAILABLE")
 
-        results, validated, remote_duplicates = self._preflight_specs(
+        results, validated, remote_duplicates = self._preflight_specs_isolated(
             normalized_specs, simulation_capability=capability,
-            authentication=authentication,
+            authentication=authentication, scan_remote_history=False,
         )
         if not validated:
             return results
@@ -1302,6 +1649,39 @@ class SimulationGateway:
                 )
                 continue
             eligible.append((index, spec, fingerprint))
+
+        active_multi_parents = sum(
+            row.get("kind") == ExecutionGuard.MULTI_PARENT
+            and row.get("status") in ExecutionGuard.STATUSES
+            for row in self.guard.entries()
+        )
+        available_multi_slots = max(
+            0, MULTI_MAX_CONCURRENCY - active_multi_parents
+        )
+        effective_max_concurrent = min(
+            max_concurrent_multi, available_multi_slots
+        )
+        if eligible and effective_max_concurrent == 0:
+            for index, spec, fingerprint in eligible:
+                results[index] = self._labelled_result(
+                    spec, "BLOCKED_BY_REMOTE_STATE", fingerprint,
+                    reason_code="MULTI_PARENT_CAPACITY_RESERVED",
+                    active_multi_parent_count=active_multi_parents,
+                )
+            return results
+
+        if eligible:
+            remote_duplicates = self._remote_history_matches(eligible)
+            remote_eligible = []
+            for index, spec, fingerprint in eligible:
+                remote = remote_duplicates.get(fingerprint)
+                if remote is not None:
+                    results[index] = self._labelled_result(
+                        spec, "EXACT_DUPLICATE", fingerprint, **remote
+                    )
+                else:
+                    remote_eligible.append((index, spec, fingerprint))
+            eligible = remote_eligible
 
         batches = []
         grouped: list[list[tuple[int, SimulationSpec, str]]] = []
@@ -1467,7 +1847,7 @@ class SimulationGateway:
         completed = self.simulator.run_multi(
             [batch for _fingerprint, batch in batches],
             on_update=on_update,
-            max_concurrent=max_concurrent_multi,
+            max_concurrent=effective_max_concurrent or max_concurrent_multi,
         )
         completed_fingerprints = {
             batch.submission_fingerprint for batch in completed

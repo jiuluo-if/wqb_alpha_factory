@@ -16,6 +16,8 @@ Agent 架构地图见 [`docs/ARCHITECTURE_AGENT.md`](docs/ARCHITECTURE_AGENT.md)
 
 目标是长期可持续 Alpha 产出，同时兼顾高质量、低冗余以及当前 BRAIN submission / checks / correlation / cost 约束和 Genius / Theme / competition / consultant 等实际平台机会。平台规则、资格、活动和报酬属于易变 live facts；Research Agent 每个 research wave 应按当前 BRAIN/account evidence 与实际可用工具刷新，不能从旧 tmp 快照或固定 Skill/Python 阈值推断。没有当前证据时标 `UNKNOWN`。活动机会不能替代机制证据，也不能覆盖 BRAIN hard checks、安全约束或长期稳健性；不得承诺收益。
 
+本项目的定向研究目标是大量产生高质量、低自相关、彼此正交的候选：在不同算子组合、live 数据集/字段、经济上可解释的自定义分组和模板机制之间开展批量 Multi GLB 实验；根据 BRAIN live evidence 筛选 Regular parent 晋升至 Region-Agnostic（RA）验证。候选目标为 Sharpe >3、Fitness >2、Margin >10、return 尽可能高；RA parent 在以上目标基础上至少两个地区 pass。低自相关可支持放宽次要研究阈值，但不得改写平台 hard checks，也须记录取舍证据。阈值是研究目标，不是平台能力真值。
+
 ## Research Agent 与工具优化阶段
 
 ```text
@@ -58,7 +60,11 @@ research_api.simulate / simulate_batch / simulate_multi_batch
 
 Gateway 只负责：规范化有效 settings、基本请求 schema、live 字段/算子能力、执行指纹、精确去重、并发与配额、传输安全、提交、轮询和恢复。不得把研究判断变成执行前硬 gate。
 
-`SimulationGateway` 是唯一 Simulation 写入准入 owner。`research_status()` 必须返回只表达“是否允许新的 Simulation write”的 `write_readiness`、有界 `write_blockers`、pending 计数和 contract version；Agent 只消费该结果，不自行放宽或重算。状态只取 `READY`、`BLOCKED_BY_REMOTE_STATE`、`WAITING_FOR_CAPABILITY`、`UNKNOWN`；只有 `READY` 允许新 POST。任一未解决 guard、`SUBMIT_UNKNOWN`、官方 quota **已知耗尽**、write capability 不可用都 fail closed。官方 quota 只在成功 Simulation response 的 header 中出现，因此尚未观察到该事实时它保持 `UNKNOWN`，且不阻塞新的 Simulation write（否则任何新进程都无法发出第一个 POST）；`APPROXIMATE` estimate 永远不能把官方 quota `UNKNOWN` 提升为已知值或 `READY`。Startup status 只返回 pending summary；逐行诊断仅按需通过现有 READ_ONLY `research_api.get_pending_executions()` 获取。
+`SimulationGateway` 是唯一 Simulation 写入准入 owner。`research_status()` 必须返回只表达“是否允许新的 Simulation write”的 `write_readiness`、有界 `write_blockers`、pending 计数和 contract version；Agent 只消费该结果，不自行放宽或重算。状态只取 `READY`、`BLOCKED_BY_REMOTE_STATE`、`WAITING_FOR_CAPABILITY`、`UNKNOWN`；只有适用的 Gateway admission scope 返回 `READY` 才允许新 POST：全局 `research_status()` 适用于无未决 guard 的场景，候选级 `research_batch_status(specs)` 仅允许该批中精确不冲突且其余条件通过的 proposals。任一 candidate 的 unresolved guard、官方 quota **已知耗尽**、write capability 不可用都 fail closed。官方 quota 只在成功 Simulation response 的 header 中出现，因此尚未观察到该事实时它保持 `UNKNOWN`，且不阻塞新的 Simulation write（否则任何新进程都无法发出第一个 POST）；`APPROXIMATE` estimate 永远不能把官方 quota `UNKNOWN` 提升为已知值或 `READY`。Startup status 只返回 pending summary；逐行诊断仅按需通过现有 READ_ONLY `research_api.get_pending_executions()` 获取。
+
+`research_status()` 的 `BLOCKED_BY_REMOTE_STATE` 表示至少一个已有写入未解决，不得重发或清除它；它不自动证明所有不同候选都不可运行。候选批次先用 READ_ONLY `research_batch_status(specs)` 让 Gateway 按真实执行指纹逐项检查：命中 guard 的 proposal 标为 `SUBMIT_UNKNOWN`/重复并排除，互不冲突且能力、权限、quota 和字段/算子检查通过的 proposal 可获 `READY`。Gateway 写入时再次执行全部准入检查与远端去重。Research Agent 不得自行重算或覆盖该结论；若一部分候选被阻断，应保留其隔离并继续独立可执行的候选，只有批次级准入也阻断时才暂停写入，并沿现有 reconcile/能力恢复路径处理具体原因。
+
+Multi 默认最多 8 个并发 parent；每个未解决的 `MULTI_PARENT`（包括 `SUBMIT_UNKNOWN`）保留一个平台并发槽，因此剩余容量为 `max(0, 8 - unresolved_multi_parents)`。容量不足时 Gateway 排队或返回明确 blocker，禁止超过平台总上限。常规大规模研究每批至少提交 80 个经 candidate admission 确认的全新 child（8 个 parent ×10）；guard/重复 proposals 不计入，须补充新候选。未满 4000 个累计 child 前不得因局部失败或低产出自行缩小批量；达到 4000 以可确认的 BRAIN live evidence 为准，计数未知时维持 80 批量。此批量要求不覆盖平台 quota、write readiness、exact-once 或远端 capability 硬限制。
 
 ExecutionGuard 是唯一远端写安全负责方，记录只允许指纹、`SUBMITTING/RUNNING/SUBMIT_UNKNOWN`、progress URL、时间戳、有界 `simulation_count`、`kind`（`SINGLE`/`MULTI_PARENT`/`MULTI_CHILD`）、MULTI_CHILD 的 `parent_fingerprint` 和可选远端 Alpha ID。`simulation_count` 只表示该未解决写入可能代表的 Simulation 数量，不保存 child payload 或结果；POST 前先持久化 `SUBMITTING`；进程异常后视为 `SUBMIT_UNKNOWN`，不得自动重 POST；已知 progress URL 只能轮询同一任务。exact-once 以单个 Simulation 为单位：Multi POST 前 parent 与每个 child 各自登记，重排、拆分、子集重试或 child 改走 Single 都不得再次 POST；恢复时 `MULTI_PARENT` 用 multi 轮询，child 跟随其 parent。
 

@@ -468,6 +468,19 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
         return read_facade("research_status", state_dir=state_dir)
 
     @server.tool(annotations=remote_read)
+    def research_batch_status(specs: list[dict[str, Any]]) -> dict[str, Any]:
+        """[READ_ONLY] Check exact-candidate admission and reserved Multi capacity."""
+        parsed = parse_specs(
+            specs, minimum=2, maximum=MAX_MULTI_BATCH,
+            require_proposal_ids=True,
+        )
+        if parsed is None:
+            return _invalid_result(owner="research_api.research_batch_status")
+        return read_facade(
+            "research_batch_status", parsed, state_dir=state_dir,
+        )
+
+    @server.tool(annotations=remote_read)
     def list_datasets() -> dict[str, Any]:
         """[READ_ONLY] List live datasets in the authorized account scope."""
         return read_facade("list_datasets")
