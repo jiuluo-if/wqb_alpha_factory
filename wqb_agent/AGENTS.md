@@ -6,6 +6,7 @@
 - Simulation 只能经 `SimulationGateway → Simulator → WQBClient` 写入 BRAIN。
 - `ExecutionGuard` 只保存未解决远端写安全记录；`SUBMIT_UNKNOWN` 永不自动重 POST，已知 progress URL 只能原地轮询。exact-once 以单个 Simulation 为单位：Multi 的 parent 与每个 child 各自登记 `kind`/`parent_fingerprint`，重排、拆分、子集重试或 child 改走 Single 都不得再次 POST；恢复时按 `kind` 选择 Single 或 Multi 轮询。
 - 全局 `research_status()` 的 pending blocker 保持原样。对新候选先调用 Gateway-owned READ_ONLY `research_batch_status(specs)`；它只隔离精确冲突的 proposals，为每个未解决 Multi parent 预留一个 8 槽上限中的位置，并返回其余候选的 live admission。写入前 Gateway 重复完整 preflight；不得清 guard、重发 unknown 或在 Agent/Python 里实现第二套准入判断。部分 blocked 不应让无关候选停摆。
+- Region-Agnostic field preflight 由 Gateway 对 USA/EUR/ASI/GLB 子地区做 live catalog 查询；只有全部表达式字段在至少两个相同地区可用且类型检查通过时才派发。`region=ALL` 是 RA Simulation scope，不是 field-catalog scope；Agent 不得通过省略 fields 或改 scope 绕过准入。
 - 默认最多 8 个 Multi parent 并发、每 parent 10 child；遇到一个未决 parent 时 Gateway 自动把新 parent 并发压到 7。常规研究 wave 每批 80 个新 child，4000 个累计 child 前保持该规模；受平台事实与安全限制时由 Gateway 限流并报告 blocker。
 - `RemoteAlphaRepository` 负责远端 Alpha 读取和可重建滚动缓存；live 响应优先。
 - `AlphaFactory` 与 `alpha_templates/` 只负责纯候选生成和 schema/能力校验，不提交、不写研究结果、不输出下一步研究决策。

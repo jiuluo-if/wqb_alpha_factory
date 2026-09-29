@@ -40,6 +40,7 @@ frontmatter 中 `metadata.wqb_alpha_factory_research_contract` 是本文件编�
 - 从多个竞争假设起步。使用 BRAIN 原始 dataset/datafield 列表，并解释每个 Agent 选定字段。
 - 探索新字段、自定义分组、字段复合、新算子或新模板时，先读[批次设计](references/batch-design.md)中的 live discovery 与结构判据。
 - 每个 proposal 都要有 batch 内唯一的 `proposal_id`，并在调用写工具前保留 `proposal_id → hypothesis/note/template` mapping。适用时提供有用的 `note` 和模板/家族标签。批次按对照组、本地兄弟组、证伪组与新探针分组。
+- 每份 `SimulationSpec.settings` 都要从当前 `get_simulation_config()` 的完整设置开始，再显式覆盖本实验要改的 scope/settings；Gateway 与 BRAIN 使用 spec 实际传入的 settings，不会替 Agent 默默合并 config defaults。
 - `note` 可使用 `H2:EXPLORE`、`H3:CONTROL`、`H2:FALSIFY`、`H2:LOCAL` 等假设标签，由 Agent 在 mapping 中解释；Simulation payload/result 细节遵循当前 MCP tool schema。
 - 说明每组测试什么机制、什么结果会改变下一次决策、使用多少 Simulation。大量有目的的 Simulation 受欢迎；不可追溯的随机表达式不受欢迎。
 - 保留探索。高结果只是比较候选，不是大举开发该方向的许可。
@@ -48,6 +49,7 @@ frontmatter 中 `metadata.wqb_alpha_factory_research_contract` 是本文件编�
 - 每轮 broad-search 至少实际提交 80 个新的、准入为 `READY` 的 child（默认 8 个并发 Multi parent × 每 parent 10 个）。Research API 拒绝少于 80 个 proposals；Gateway 再次按 guard 和远端去重计算实际 eligible 数，少于下限时整批不 POST。候选级 admission 排除 guard/重复/无效项后若不足 80，就继续生成新 proposal 并检查，直到凑足 80 个可写项或真实平台 hard blocker 阻止；不能把被跳过项算进批量。仅当 fresh BRAIN evidence 确认累计已完成至少 4000 个 child 时，才在 `simulate_multi_batch` 显式设置较低的 `minimum_eligible_children` 并传入完成计数；handoff/cache 不能单独证明达到门槛。计数未知或未到 4000 时维持 80 批量。候选覆盖多种算子组合、新数据集/字段与有经济理由的自定义分组；控制相似度并用结果证据判断正交性。
 - Cold start 先读 `research_status()`。若全局被已有 guard 标为 `BLOCKED_BY_REMOTE_STATE`，绝不重发、删除或绕过原请求；取得具体候选后调用 READ_ONLY `research_batch_status(specs)`。按 proposal admission 排除精确冲突的候选，继续本批可执行候选；不把一个 unknown 扩大成全体候选停摆。若批次状态也不是 `READY`，处理返回的能力/quota/capacity 原因或只跳过受影响分支，再继续不受影响的数据发现、表达式设计与证据整理。
 - 提交 80 个新 child 时调用 `simulate_multi_batch`。Gateway 在 POST 前重查全部事实；每个 unresolved Multi parent 占一个并发槽，最多 8 个，因此剩余 parent 并发自动为 `8 - unresolved_multi_parent_count`。全局状态和 exact-once guard 不因新批次恢复而被清除。
+- Regular parent 晋升到 Region-Agnostic 时，使用 `REGION_AGNOSTIC` 与 `region=ALL` 的 live Simulation scope，并保留真实字段→dataset provenance。Gateway 会分别按 USA/EUR/ASI/GLB 查询 field catalog；表达式的所有字段须在至少两个相同子地区可用且 VECTOR 类型检查通过。`validate_simulation_spec()` 只证明请求形状，不能替代 Gateway 的 live field/write preflight。
 - Skill、记忆教训或历史运行不是 BRAIN 事实。记忆只保留少量可迁移研究教训；永不存完整转录。
 
 ## 方向与局部优化

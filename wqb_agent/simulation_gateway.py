@@ -13,6 +13,7 @@ from typing import Any
 
 from .artifacts import atomic_write_json_if_changed
 from .client import (
+    REGION_AGNOSTIC_SIMULATION_TYPE,
     REGULAR_SIMULATION_TYPE,
     SUPPORTED_SIMULATION_REQUEST_TYPES,
     WQBSimulationError,
@@ -39,6 +40,9 @@ MULTI_MAX_CHILDREN = 10
 MULTI_DEFAULT_CHILD_BATCH_SIZE = 10
 MULTI_DEFAULT_CONCURRENCY = 8
 MULTI_MAX_CONCURRENCY = 8
+# These are the child scopes observed in BRAIN REGION_AGNOSTIC outputs.  The
+# aggregate ALL scope is not a field-catalog scope, so verify each child scope.
+REGION_AGNOSTIC_CHILD_REGIONS = ("USA", "EUR", "ASI", "GLB")
 
 # Current bounded scan policy follows verified platform behavior.  Widening
 # the window requires new live evidence; scan results remain explicitly incomplete.
@@ -1106,6 +1110,7 @@ class SimulationGateway:
         field_reader = getattr(self.client, "get_field_capability", None)
         field_groups = {}
         spec_field_groups = {}
+        spec_field_regions = {}
         for index, spec in enumerate(normalized):
             self._validate_settings(spec, simulation_capability)
             fingerprint = self.execution_fingerprint(spec)
@@ -1125,14 +1130,40 @@ class SimulationGateway:
                             f"FIELD_CAPABILITY_UNAVAILABLE: missing dataset for {field_id}",
                             "CAPABILITY_UNAVAILABLE",
                         )
-                    scope_key = tuple(sorted((key, str(value)) for key, value in scope.items()))
-                    group_key = (scope_key, str(dataset_id))
-                    group = field_groups.setdefault(group_key, {
-                        "scope": scope, "dataset_id": str(dataset_id), "fields": set(),
-                    })
-                    group["fields"].add(field_id)
-                    groups_for_spec.add(group_key)
+                # A Region-Agnostic parent runs the same expression in its
+                # four child-region scopes; a field must exist in at least two
+                # complete child scopes before the writer will dispatch it.
+                field_scopes = (
+                    [{**scope, "region": region}
+                     for region in REGION_AGNOSTIC_CHILD_REGIONS]
+                    if spec.simulation_type == REGION_AGNOSTIC_SIMULATION_TYPE
+                    else [scope]
+                )
+                region_groups = {}
+                for field_scope in field_scopes:
+                    region = str(field_scope.get("region") or "")
+                    region_group_keys = set()
+                    for field_id in spec.fields:
+                        dataset_id = spec.field_datasets[field_id]
+                        scope_key = tuple(sorted(
+                            (key, str(value)) for key, value in field_scope.items()
+                        ))
+                        is_ra_scope = (
+                            spec.simulation_type == REGION_AGNOSTIC_SIMULATION_TYPE
+                        )
+                        group_key = (scope_key, str(dataset_id), is_ra_scope)
+                        group = field_groups.setdefault(group_key, {
+                            "scope": field_scope,
+                            "dataset_id": str(dataset_id), "fields": set(),
+                            "region_agnostic": is_ra_scope,
+                        })
+                        group["fields"].add(field_id)
+                        groups_for_spec.add(group_key)
+                        region_group_keys.add(group_key)
+                    region_groups[region] = region_group_keys
                 spec_field_groups[index] = groups_for_spec
+                if spec.simulation_type == REGION_AGNOSTIC_SIMULATION_TYPE:
+                    spec_field_regions[index] = region_groups
             validated.append((index, spec, fingerprint))
         capabilities = {}
         for group_key, group in field_groups.items():
@@ -1141,14 +1172,15 @@ class SimulationGateway:
                 scope=group["scope"],
             )
             if (not isinstance(capability, Mapping)
-                    or capability.get("valid") is not True
                     or capability.get("source") != "BRAIN_LIVE_ONLY"):
                 raise ResearchReasonError(
                     "FIELD_CAPABILITY_UNAVAILABLE", "CAPABILITY_UNAVAILABLE"
                 )
             available = {str(item).casefold() for item in capability.get("fields", ())}
             missing = {field_id.casefold() for field_id in group["fields"]} - available
-            if missing:
+            if not group["region_agnostic"] and (
+                capability.get("valid") is not True or missing
+            ):
                 raise ResearchReasonError(
                     "FIELD_CAPABILITY_UNAVAILABLE: " + ", ".join(sorted(missing)),
                     "CAPABILITY_UNAVAILABLE",
@@ -1161,15 +1193,47 @@ class SimulationGateway:
         for index, spec, _fingerprint in validated:
             field_capability = _CAPABILITY_READER_ABSENT
             if spec.fields:
-                groups = [capabilities[key] for key in spec_field_groups[index]]
-                available = set().union(*(entry["fields"] for entry in groups))
-                live_types = {}
-                for entry in groups:
-                    live_types.update(entry["field_types"])
-                field_capability = {
-                    "valid": True, "source": "BRAIN_LIVE_ONLY",
-                    "fields": available,
-                }
+                required_fields = {field.casefold() for field in spec.fields}
+                if spec.simulation_type == REGION_AGNOSTIC_SIMULATION_TYPE:
+                    usable_regions = []
+                    live_types = {}
+                    for region, group_keys in spec_field_regions[index].items():
+                        groups = [capabilities[key] for key in group_keys]
+                        available = set().union(*(entry["fields"] for entry in groups))
+                        if not required_fields <= available:
+                            continue
+                        region_types = {}
+                        for entry in groups:
+                            region_types.update(entry["field_types"])
+                        if self._unaggregated_vector_fields(spec, region_types):
+                            continue
+                        usable_regions.append(region)
+                        live_types.update(region_types)
+                    if len(usable_regions) < 2:
+                        blocked = self._labelled_result(
+                            spec, "NOT_DISPATCHED", _fingerprint,
+                            error="RA_FIELD_COVERAGE_UNAVAILABLE",
+                            available_regions=usable_regions,
+                            required_region_count=2,
+                        )
+                        blocked["reason_code"] = "RA_FIELD_COVERAGE_UNAVAILABLE"
+                        results[index] = blocked
+                        continue
+                    available = required_fields
+                    field_capability = {
+                        "valid": True, "source": "BRAIN_LIVE_ONLY",
+                        "fields": available, "regions": usable_regions,
+                    }
+                else:
+                    groups = [capabilities[key] for key in spec_field_groups[index]]
+                    available = set().union(*(entry["fields"] for entry in groups))
+                    live_types = {}
+                    for entry in groups:
+                        live_types.update(entry["field_types"])
+                    field_capability = {
+                        "valid": True, "source": "BRAIN_LIVE_ONLY",
+                        "fields": available,
+                    }
                 # A VECTOR field used as a scalar is deterministically invalid
                 # and would make the whole Multi parent terminate with ERROR,
                 # discarding every valid child in the same POST. Block only the

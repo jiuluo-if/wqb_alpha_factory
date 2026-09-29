@@ -551,6 +551,139 @@ class TestWriteReadiness(unittest.TestCase):
         self.assertEqual(results[0]["status"], "DONE")
         self.assertEqual(len(client.submissions), 1)
 
+    def test_region_agnostic_fields_are_checked_in_child_regions(self):
+        class RegionAwareClient(FakeGatewayClient):
+            def __init__(self):
+                super().__init__()
+                self.field_regions = []
+
+            def get_authentication_status(self):
+                return {"authenticated": True, "permissions": ["REGION_AGNOSTIC"]}
+
+            def get_simulation_capability(self):
+                return {
+                    "status": "AVAILABLE", "capability_status": "AVAILABLE",
+                    "simulation_type_choices": ["REGULAR", "REGION_AGNOSTIC"],
+                    "settings": {}, "required_fields": [], "required_settings": [],
+                }
+
+            def get_field_capability(self, field_sources, *, scope=None):
+                region = scope["region"]
+                self.field_regions.append(region)
+                fields = [field for selected in field_sources.values() for field in selected]
+                available = region in {"ASI", "GLB"}
+                return {
+                    "valid": available,
+                    "fields": fields if available else [],
+                    "source": "BRAIN_LIVE_ONLY",
+                    "field_types": {field: "MATRIX" for field in fields if available},
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = RegionAwareClient()
+            guard = ExecutionGuard(tmp, reconcile=False)
+            guard.register(
+                "unrelated-unknown", status="SUBMIT_UNKNOWN", kind="MULTI_PARENT",
+                simulation_count=10,
+            )
+            result = SimulationGateway(client, state_dir=tmp).simulate(SimulationSpec(
+                "rank(field_a)",
+                {"region": "ALL", "universe": "MINVOL1M", "delay": 1},
+                fields=("field_a",), field_datasets={"field_a": "dataset_a"},
+                simulation_type="REGION_AGNOSTIC",
+            ))
+            unrelated_guard = ExecutionGuard(tmp, reconcile=False).find(
+                "unrelated-unknown"
+            )
+
+        self.assertEqual(result["status"], "DONE")
+        self.assertEqual(client.field_regions, ["USA", "EUR", "ASI", "GLB"])
+        self.assertEqual(len(client.submissions), 1)
+        self.assertIsNotNone(unrelated_guard)
+
+    def test_region_agnostic_field_coverage_requires_two_child_regions(self):
+        class OneRegionClient(FakeGatewayClient):
+            def get_authentication_status(self):
+                return {"authenticated": True, "permissions": ["REGION_AGNOSTIC"]}
+
+            def get_simulation_capability(self):
+                return {
+                    "status": "AVAILABLE", "capability_status": "AVAILABLE",
+                    "simulation_type_choices": ["REGULAR", "REGION_AGNOSTIC"],
+                    "settings": {}, "required_fields": [], "required_settings": [],
+                }
+
+            def get_field_capability(self, field_sources, *, scope=None):
+                fields = [field for selected in field_sources.values() for field in selected]
+                available = scope["region"] == "GLB"
+                return {
+                    "valid": available,
+                    "fields": fields if available else [],
+                    "source": "BRAIN_LIVE_ONLY",
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = OneRegionClient()
+            result = SimulationGateway(client, state_dir=tmp).simulate(SimulationSpec(
+                "rank(field_a)",
+                {"region": "ALL", "universe": "MINVOL1M", "delay": 1},
+                fields=("field_a",), field_datasets={"field_a": "dataset_a"},
+                simulation_type="REGION_AGNOSTIC",
+            ))
+
+        self.assertEqual(result["status"], "NOT_DISPATCHED")
+        self.assertEqual(result["reason_code"], "RA_FIELD_COVERAGE_UNAVAILABLE")
+        self.assertEqual(client.submissions, [])
+
+    def test_region_agnostic_fields_must_coexist_in_two_regions(self):
+        class SplitRegionClient(FakeGatewayClient):
+            def get_authentication_status(self):
+                return {"authenticated": True, "permissions": ["REGION_AGNOSTIC"]}
+
+            def get_operator_capability(self):
+                return {
+                    "valid": True, "status": "AVAILABLE",
+                    "source": "BRAIN_LIVE_ONLY",
+                    "operators": ["multiply", "rank"],
+                }
+
+            def get_simulation_capability(self):
+                return {
+                    "status": "AVAILABLE", "capability_status": "AVAILABLE",
+                    "simulation_type_choices": ["REGULAR", "REGION_AGNOSTIC"],
+                    "settings": {}, "required_fields": [], "required_settings": [],
+                }
+
+            def get_field_capability(self, field_sources, *, scope=None):
+                region = scope["region"]
+                dataset_id, requested = next(iter(field_sources.items()))
+                available = {
+                    ("USA", "dataset_a"): {"field_a"},
+                    ("EUR", "dataset_b"): {"field_b"},
+                    ("ASI", "dataset_a"): {"field_a"},
+                    ("GLB", "dataset_b"): {"field_b"},
+                }.get((region, dataset_id), set())
+                fields = sorted(available.intersection(requested))
+                return {
+                    "valid": len(fields) == len(requested), "fields": fields,
+                    "source": "BRAIN_LIVE_ONLY",
+                    "field_types": {field: "MATRIX" for field in fields},
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = SplitRegionClient()
+            result = SimulationGateway(client, state_dir=tmp).simulate(SimulationSpec(
+                "multiply(rank(field_a),rank(field_b))",
+                {"region": "ALL", "universe": "MINVOL1M", "delay": 1},
+                fields=("field_a", "field_b"),
+                field_datasets={"field_a": "dataset_a", "field_b": "dataset_b"},
+                simulation_type="REGION_AGNOSTIC",
+            ))
+
+        self.assertEqual(result["status"], "NOT_DISPATCHED")
+        self.assertEqual(result["reason_code"], "RA_FIELD_COVERAGE_UNAVAILABLE")
+        self.assertEqual(client.submissions, [])
+
 
 class _EmptyQuotaRepository:
     retention_days = 7
