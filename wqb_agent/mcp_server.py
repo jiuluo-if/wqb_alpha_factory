@@ -28,6 +28,17 @@ _WRITE_RESULT_KEYS = (
     "proposal_id", "status", "reason_code", "fingerprint", "alpha_id",
     "field_validation",
 )
+_TEMPLATE_INVENTORY_KEYS = (
+    "template_id", "version", "kind", "family", "role", "economic",
+    "economic_mechanism", "direction_reason",
+    "required_slots", "economic_field_slots", "control_slots",
+    "economic_field_count", "field_roles", "allowed_field_families",
+    "field_relationship", "relationship_contract", "semantic_contract",
+    "direction", "direction_transform", "expected_horizon", "falsification",
+    "self_correlation_impact", "numeric_slots", "allowed_horizon_profiles",
+    "allowed_settings_arms", "mechanism_tags", "novelty_family",
+    "template_mode", "operator_slots", "tags", "source",
+)
 
 
 def _is_secret_key(key: object) -> bool:
@@ -35,7 +46,10 @@ def _is_secret_key(key: object) -> bool:
     return any("".join(char for char in part if char.isalnum()) in normalized for part in _SECRET_PARTS)
 
 
-def _bounded(value: Any, *, allow_expression: bool = False) -> tuple[Any, bool]:
+def _bounded(
+    value: Any, *, allow_expression: bool = False,
+    list_item_limit: int = MAX_LIST_ITEMS,
+) -> tuple[Any, bool]:
     """Return JSON-safe data with bounded depth, lists, strings, and secrets redacted."""
     truncated = False
 
@@ -47,8 +61,8 @@ def _bounded(value: Any, *, allow_expression: bool = False) -> tuple[Any, bool]:
         if isinstance(item, Mapping):
             result = {}
             rows = list(item.items())
-            if len(rows) > MAX_LIST_ITEMS:
-                rows = rows[:MAX_LIST_ITEMS]
+            if len(rows) > list_item_limit:
+                rows = rows[:list_item_limit]
                 truncated = True
             for key, child in rows:
                 name = str(key)
@@ -61,8 +75,8 @@ def _bounded(value: Any, *, allow_expression: bool = False) -> tuple[Any, bool]:
             return result
         if isinstance(item, (list, tuple, set)):
             values = list(item)
-            if len(values) > MAX_LIST_ITEMS:
-                values = values[:MAX_LIST_ITEMS]
+            if len(values) > list_item_limit:
+                values = values[:list_item_limit]
                 truncated = True
             return [project(child, depth + 1) for child in values]
         if isinstance(item, str):
@@ -108,9 +122,15 @@ def _finite_number(value: Any) -> bool:
         return False
 
 
-def _envelope(payload: Mapping[str, Any], *, owner: str, allow_expression: bool = False) -> dict[str, Any]:
+def _envelope(
+    payload: Mapping[str, Any], *, owner: str, allow_expression: bool = False,
+    list_item_limit: int = MAX_LIST_ITEMS,
+) -> dict[str, Any]:
     source = _short_text(payload.get("source") or "UNKNOWN")
-    bounded, truncated = _bounded(payload, allow_expression=allow_expression)
+    bounded, truncated = _bounded(
+        payload, allow_expression=allow_expression,
+        list_item_limit=list_item_limit,
+    )
     raw_status = payload.get("status")
     if isinstance(raw_status, Mapping):
         status = _short_text(raw_status.get("alpha_detail") or "UNKNOWN")
@@ -213,6 +233,50 @@ def _pending_guard_payload(api, *, state_dir, config):
         "fetched_at": None,
         "entries": result["entries"],
     }
+
+
+def _private_catalog_failure(
+    exc: Exception, *, owner: str, source: str = "LOCAL_PRIVATE_CATALOG",
+) -> dict[str, Any]:
+    code = getattr(exc, "code", None)
+    if code == "PRIVATE_TEMPLATE_CATALOG_MISSING":
+        return {
+            "access_mode": "READ_ONLY",
+            "owner": owner,
+            "source": "LOCAL_PRIVATE_CATALOG",
+            "status": "UNAVAILABLE",
+            "evidence_status": "UNAVAILABLE",
+            "freshness": "NOT_READ",
+            "fetched_at": None,
+            "age_sec": None,
+            "truncated": False,
+            "data": None,
+            "error": code,
+        }
+    return _failed_result(exc, owner=owner, source=source)
+
+
+def _candidate_spec_payload(spec: Any) -> dict[str, Any] | None:
+    if isinstance(spec, Mapping):
+        raw = dict(spec)
+    else:
+        names = (
+            "expression", "settings", "fields", "field_datasets", "proposal_id",
+            "note", "template_id", "simulation_type",
+        )
+        if any(not hasattr(spec, name) for name in names):
+            return None
+        raw = {name: getattr(spec, name) for name in names}
+    if set(raw) - _SPEC_KEYS or not isinstance(raw.get("expression"), str):
+        return None
+    raw["settings"] = dict(raw.get("settings") or {})
+    raw["fields"] = list(raw.get("fields") or ())
+    raw["field_datasets"] = dict(raw.get("field_datasets") or {})
+    raw.setdefault("proposal_id", None)
+    raw.setdefault("note", None)
+    raw.setdefault("template_id", None)
+    raw.setdefault("simulation_type", "REGULAR")
+    return raw
 
 
 def build_server(*, api=research_api, client=None, config=None, state_dir=None):
@@ -497,6 +561,88 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
     def list_datafields(dataset_id: str, limit: int = 20, offset: int = 0, field_type: str | None = None) -> dict[str, Any]:
         """[READ_ONLY] Read one bounded live datafield page."""
         return read_facade("list_datafields", dataset_id, limit=limit, offset=offset, field_type=field_type)
+
+    @server.tool(annotations=local_read)
+    def list_templates(offset: int = 0, limit: int = 20) -> dict[str, Any]:
+        """[READ_ONLY] List one page of validated templates from the configured private catalog.
+
+        Use to choose an existing template and review its field/slot contract before
+        calling generate_probes. This reads the same private catalog used by the
+        generator; a missing catalog is reported as unavailable with no public
+        synthetic-catalog fallback. Expressions and fixed field bindings are omitted.
+        """
+        if (isinstance(offset, bool) or not isinstance(offset, int) or offset < 0
+                or isinstance(limit, bool) or not isinstance(limit, int)
+                or not 1 <= limit <= MAX_LIST_ITEMS):
+            return _invalid_result(owner="research_api.list_templates")
+        owner = "research_api.list_templates"
+        try:
+            rows = api.list_templates(require_private=True, config=config)
+        except Exception as exc:
+            return _private_catalog_failure(exc, owner=owner)
+        if not isinstance(rows, (list, tuple)) or any(
+            not isinstance(row, Mapping) for row in rows
+        ):
+            return _invalid_result(owner=owner, failure_code="INVALID_TEMPLATE_CATALOG")
+        page = rows[offset:offset + limit]
+        summaries = [
+            {key: row[key] for key in _TEMPLATE_INVENTORY_KEYS if key in row}
+            for row in page
+        ]
+        return _envelope({
+            "source": "LOCAL_PRIVATE_CATALOG",
+            "status": "AVAILABLE",
+            "evidence_status": "AVAILABLE",
+            "count": len(rows),
+            "offset": offset,
+            "limit": limit,
+            "complete": offset + len(page) >= len(rows),
+            "next_offset": None if offset + len(page) >= len(rows) else offset + len(page),
+            "templates": summaries,
+        }, owner=owner, list_item_limit=limit)
+
+    @server.tool(annotations=remote_read)
+    def generate_probes(
+        template_ids: list[str], count: int, fields: list[dict[str, Any]],
+        dataset_id: str | None = None,
+    ) -> dict[str, Any]:
+        """[READ_ONLY] Generate candidate SimulationSpecs from explicitly selected inputs.
+
+        Supply template IDs, a count, and BRAIN field rows with their dataset
+        provenance. Uses current operator capability and the configured private
+        catalog. It does not rank/select fields or templates, validate admission,
+        or submit Simulations; next retain unique proposal_id values, validate, then
+        call research_batch_status before the appropriate Simulation write tool.
+        """
+        if (not isinstance(template_ids, list) or not 1 <= len(template_ids) <= MAX_MULTI_BATCH
+                or isinstance(count, bool) or not isinstance(count, int)
+                or not 1 <= count <= MAX_MULTI_BATCH
+                or not isinstance(fields, list) or not fields
+                or len(fields) > MAX_MULTI_BATCH
+                or any(not isinstance(row, (Mapping, str)) for row in fields)):
+            return _invalid_result(owner="research_api.generate_probes")
+        owner = "research_api.generate_probes"
+        try:
+            specs = api.generate_probes(
+                template_ids=template_ids, count=count, fields=fields,
+                dataset_id=dataset_id, client=resolve_client(), config=config,
+            )
+        except Exception as exc:
+            return _private_catalog_failure(exc, owner=owner, source="BRAIN_LIVE")
+        if not isinstance(specs, (list, tuple)) or len(specs) > MAX_MULTI_BATCH:
+            return _invalid_result(owner=owner, failure_code="INVALID_GENERATOR_RESULT")
+        payload_specs = [_candidate_spec_payload(spec) for spec in specs]
+        if any(spec is None for spec in payload_specs):
+            return _invalid_result(owner=owner, failure_code="INVALID_GENERATOR_RESULT")
+        return _envelope({
+            "source": "BRAIN_LIVE",
+            "catalog_source": "LOCAL_PRIVATE_CATALOG",
+            "status": "AVAILABLE",
+            "evidence_status": "AVAILABLE",
+            "requested_count": count,
+            "generated_count": len(payload_specs),
+            "specs": payload_specs,
+        }, owner=owner, allow_expression=True, list_item_limit=MAX_MULTI_BATCH)
 
     @server.tool(annotations=remote_read)
     def get_operator_reference() -> dict[str, Any]:

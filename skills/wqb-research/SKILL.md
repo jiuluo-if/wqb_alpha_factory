@@ -35,6 +35,12 @@ frontmatter 中 `metadata.wqb_alpha_factory_research_contract` 是本文件编�
 
 本 Skill/reference 提到的具体研究工具必须对照当前会话实际 inventory。Core 未暴露的低频能力若无可用路径，标记 `LOCAL_RESEARCH_CAPABILITY_LIMIT` 并跳过受影响分支；不得臆造工具。
 
+## Canonical Agent path
+
+按当前会话实际 `tools/list` 和返回 schema 工作：先读 readiness，再发现 live dataset、field 和 operator evidence；需要模板候选时读 `list_templates` 的私有 catalog inventory，并由 Agent 选择模板、字段及数量后调用 `generate_probes`。Inventory 提供当前经济机制、方向理由、角色、字段槽、关系契约、horizon/settings arms 和已声明 numeric/operator slots；Generator 只物化 Agent 指定的输入，不为 Agent 排名或挑选模板、字段、候选。
+
+保留 generator 返回的 `SimulationSpec` 字段与 dataset provenance，由 Agent 加上唯一 `proposal_id` 和本地 hypothesis/note/template mapping，再调用 spec validation 与 `research_batch_status`。按 admission 与当前用户目标选择后续 write tool；Gateway 再做完整写入准入。模板 inventory 和 generation 使用同一配置下的显式 private catalog；缺失时 fail closed，不回退到 public synthetic catalog。若工具、schema 或私有 catalog 不可用，报告能力限制；不猜 template ID、不直接 import 内部模块、不用 shell 或辅助脚本补缺。
+
 ## 每个研究批次
 
 - 从多个竞争假设起步。使用 BRAIN 原始 dataset/datafield 列表，并解释每个 Agent 选定字段。
@@ -57,7 +63,7 @@ frontmatter 中 `metadata.wqb_alpha_factory_research_contract` 是本文件编�
 - Probe 开始前声明 `direction`、`direction_reason` 和 `direction_transform`，理由必须先于结果；不得因 Sharpe 为负而事后反转方向。
 - 复杂度按最终表达式的 effective operator occurrence 计算，`direction_transform` 等机械 wrapper 也计数。CONTROL 为 1–3，PROBE 为 4–6；上限是硬约束，不是目标，不加无经济理由的算子凑数。
 - 局部优化先声明 immutable anchor。每个 variant 只改一个已声明的 numeric slot 或一个 settings key；字段、template、mechanism、算子顺序/拓扑和 operator count 保持不变。需要改拓扑时另立 `NEW_PROBE` 假设。
-- 仅当当前 inventory 或明确进入 full profile 的 direct facade 暴露 `inspect_template()` 时，才依据其 `default`、`allowed_values` 与 `economic_role` 做 template-slot optimization。否则报告 `TEMPLATE_INSPECTION_CAPABILITY_MISSING`，归类为 `LOCAL_RESEARCH_CAPABILITY_LIMIT`；不得猜 allowed values、从旧缓存恢复当前 template contract、优化或提交依赖该槽位的 Simulation，但可继续普通 `NEW_PROBE`、字段研究和非 template-specific settings research。
+- Template-slot optimization 只使用当前 `list_templates` inventory 明确返回的 `default`、`allowed_values` 与 `economic_role`。需要的信息未暴露时报告 `TEMPLATE_SLOT_METADATA_MISSING`，归类为 `LOCAL_RESEARCH_CAPABILITY_LIMIT`；不得猜 allowed values、从旧缓存恢复当前 template contract，或提交依赖该槽位的 Simulation，但可继续普通 `NEW_PROBE`、字段研究和非 template-specific settings research。
 - baseline 已有证据时不重复提交它。解释时比较 baseline 与所有 variants，不自动选 winner；若邻近变化没有一致、可解释的支持证据，停止该优化维度并保留其他解释。
 
 ## 研究工作集

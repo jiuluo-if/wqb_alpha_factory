@@ -351,8 +351,14 @@ def get_operators(*, client=None, config=None) -> list[str]:
     ).get("operators") or [])
 
 
-def list_templates(*, catalog_path=None, require_private=False):
-    """List validated template metadata without constructing research state."""
+def list_templates(*, catalog_path=None, require_private=False, config=None):
+    """List validated template metadata without constructing research state.
+
+    Private inventory reads use the same configured catalog as probe generation
+    and fail closed when that catalog is missing.
+    """
+    if require_private and catalog_path is None:
+        catalog_path = _normalized_config(config).runtime.alpha_template_catalog
     registry = (
         AlphaTemplateRegistry.from_private(catalog_path)
         if require_private else AlphaTemplateRegistry(private_catalog=catalog_path)
@@ -1494,6 +1500,7 @@ def sync_alpha_colors(plan=None, *, exact_plan=None, client=None, config=None,
 
 _AGENT_CORE_TOOL_NAMES = frozenset({
     "research_status", "research_batch_status", "list_datasets", "list_datafields",
+    "list_templates", "generate_probes",
     "get_operator_reference", "validate_simulation_spec",
     "simulate_batch", "simulate_multi_batch", "get_alpha_evidence",
     "reconcile_execution", "get_alpha_prod_correlation",

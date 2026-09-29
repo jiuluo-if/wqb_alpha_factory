@@ -340,6 +340,8 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             "research_status": lambda **_: {"source": "LIVE", "status": "AVAILABLE"},
             "list_datasets": lambda **_: {"source": "LIVE", "datasets": []},
             "list_datafields": lambda *_, **__: {"source": "LIVE", "fields": []},
+            "list_templates": lambda **_: [],
+            "generate_probes": lambda **_: [],
             "get_operator_reference": lambda **_: {"source": "BRAIN_LIVE", "operators": []},
             "validate_simulation_spec": lambda spec, **_: {"status": "VALID", "expression": spec.expression},
             "simulate_batch": lambda specs, **_: [
@@ -379,9 +381,9 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             "get_operator_reference", "validate_simulation_spec",
             "simulate_batch", "simulate_multi_batch", "get_alpha_evidence",
             "reconcile_execution", "get_alpha_prod_correlation",
-            "get_pending_executions",
+            "get_pending_executions", "list_templates", "generate_probes",
         })
-        self.assertEqual(len(by_name), 12)
+        self.assertEqual(len(by_name), 14)
         self.assertEqual(
             set(by_name),
             {row["name"] for row in mcp_server.research_api.research_tool_manifest(profile="core")},
@@ -393,6 +395,131 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         for tool in listed.tools:
             self.assertNotIn("state_dir", tool.input_schema.get("properties", {}))
         self.assertNotIn("alpha_submission", by_name)
+
+    async def test_template_first_path_composes_inventory_generation_and_admission(self):
+        from wqb_agent.research_api import SimulationSpec
+
+        template_expression = "rank(private_template_field)"
+        generated_specs = [
+            SimulationSpec(
+                expression=f"rank(synthetic_field_{index})",
+                fields=(f"synthetic_field_{index}",),
+                field_datasets={f"synthetic_field_{index}": "synthetic_dataset"},
+                template_id="toy_template",
+            )
+            for index in range(80)
+        ]
+        admission = Mock(return_value={
+            "source": "SimulationGateway", "status": "AVAILABLE",
+            "write_readiness": "READY", "eligible_count": 80,
+            "blocked_count": 0, "proposal_admissions": [],
+        })
+        inventory = Mock(return_value=[{
+            "template_id": "toy_template", "family": "synthetic",
+            "role": "PROBE_ALPHA", "expression": template_expression,
+            "economic_field_slots": ["p"], "economic_field_count": 1,
+            "economic_mechanism": "synthetic persistent state",
+            "direction_reason": "synthetic continuation hypothesis",
+            "semantic_contract": "DATA_QUALITY", "numeric_slots": [],
+        }])
+        generator = Mock(return_value=generated_specs)
+        api = self.api(list_templates=inventory, generate_probes=generator,
+                       research_batch_status=admission)
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(api=api, client=object())
+
+        async with Client(server) as client:
+            listed = {tool.name: tool for tool in (await client.list_tools()).tools}
+            dataset_result = await client.call_tool("list_datasets", {})
+            field_result = await client.call_tool("list_datafields", {
+                "dataset_id": "synthetic_dataset", "limit": 20, "offset": 0,
+            })
+            template_result = await client.call_tool("list_templates", {
+                "limit": 20, "offset": 0,
+            })
+            generated = await client.call_tool("generate_probes", {
+                "template_ids": ["toy_template"], "count": 80,
+                "fields": [{
+                    "id": f"synthetic_field_{index}",
+                    "dataset": "synthetic_dataset", "type": "MATRIX",
+                } for index in range(80)],
+            })
+
+            specs = generated.structured_content["data"]["specs"]
+            self.assertEqual(len(specs), 80)
+            self.assertFalse(generated.structured_content["truncated"])
+            self.assertTrue(all(spec["proposal_id"] is None for spec in specs))
+            for index, spec in enumerate(specs):
+                spec["proposal_id"] = f"toy-proposal-{index}"
+                validation = await client.call_tool(
+                    "validate_simulation_spec", {"spec": spec},
+                )
+                self.assertEqual(validation.structured_content["data"]["status"], "VALID")
+            admitted = await client.call_tool(
+                "research_batch_status", {"specs": specs},
+            )
+
+        self.assertEqual(dataset_result.structured_content["data"]["datasets"], [])
+        self.assertEqual(field_result.structured_content["data"]["fields"], [])
+        self.assertNotIn(
+            template_expression,
+            json.dumps(template_result.structured_content, ensure_ascii=False),
+        )
+        template_summary = template_result.structured_content["data"]["templates"][0]
+        self.assertEqual(template_summary["economic_mechanism"], "synthetic persistent state")
+        self.assertEqual(template_summary["direction_reason"], "synthetic continuation hypothesis")
+        self.assertIn("rank(synthetic_field_0)", specs[0]["expression"])
+        self.assertIn("field_datasets", specs[0])
+        self.assertEqual(admitted.structured_content["data"]["eligible_count"], 80)
+        self.assertTrue(listed["list_templates"].annotations.read_only_hint)
+        self.assertTrue(listed["generate_probes"].annotations.read_only_hint)
+        self.assertIn("private catalog", listed["list_templates"].description.lower())
+        self.assertIn("does not rank/select", listed["generate_probes"].description.lower())
+        self.assertTrue({"template_ids", "count", "fields"}.issubset(
+            listed["generate_probes"].input_schema["properties"]
+        ))
+        self.assertTrue(listed["simulate_multi_batch"].annotations.open_world_hint)
+        inventory.assert_called_once()
+        self.assertIs(inventory.call_args.kwargs["require_private"], True)
+        self.assertIsNone(inventory.call_args.kwargs["config"])
+        generator.assert_called_once()
+        self.assertEqual(generator.call_args.kwargs["template_ids"], ["toy_template"])
+        self.assertEqual(generator.call_args.kwargs["count"], 80)
+        self.assertEqual(len(admission.call_args.args[0]), 80)
+
+    async def test_template_tools_fail_closed_when_private_catalog_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {self.ENV: "1"}):
+            missing_catalog = Path(temp) / "missing-private.toml"
+            config = {"runtime": {"alpha_template_catalog": str(missing_catalog)}}
+            server = mcp_server.build_research_server(
+                api=mcp_server.research_api, client=object(), config=config,
+            )
+            async with Client(server) as client:
+                inventory = await client.call_tool("list_templates", {})
+                generated = await client.call_tool("generate_probes", {
+                    "template_ids": ["toy_template"], "count": 1,
+                    "fields": [{"id": "toy_field", "dataset": "toy_dataset"}],
+                })
+
+        for result in (inventory.structured_content, generated.structured_content):
+            self.assertEqual(result["status"], "UNAVAILABLE")
+            self.assertEqual(result["error"], "PRIVATE_TEMPLATE_CATALOG_MISSING")
+            self.assertIsNone(result["data"])
+
+    async def test_probe_generation_live_read_error_keeps_live_source(self):
+        generator = Mock(side_effect=RuntimeError("synthetic live capability failure"))
+        api = self.api(generate_probes=generator)
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(api=api, client=object())
+            async with Client(server) as client:
+                result = await client.call_tool("generate_probes", {
+                    "template_ids": ["toy_template"], "count": 1,
+                    "fields": [{"id": "toy_field", "dataset": "toy_dataset"}],
+                })
+
+        self.assertEqual(result.structured_content["source"], "BRAIN_LIVE")
+        self.assertEqual(result.structured_content["error"], "REMOTE_READ_FAILED")
+        self.assertIsNone(result.structured_content["data"])
 
     async def test_research_batch_status_is_read_only_and_uses_injected_state(self):
         admission = Mock(return_value={
@@ -651,7 +778,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         async with Client(parameters) as client:
             listed = await client.list_tools()
         names = {tool.name for tool in listed.tools}
-        self.assertEqual(len(names), 12)
+        self.assertEqual(len(names), 14)
         self.assertTrue({"research_status", "simulate_batch", "simulate_multi_batch"} <= names)
 
     async def test_alpha_expression_is_available_only_through_requested_evidence(self):

@@ -70,6 +70,38 @@
 | `maintenance/` | inventory、候选表、迁移 manifest 和 cleanup 记录 | 文件直接放在本目录，维护当前清单 |
 | `knowledge/` | 脱敏后的可复用经验和索引 | 稳定语义名；不按普通缓存年龄清理 |
 
+## Research data lifecycle
+
+Treat each local artifact as either `SHORT_TERM` working material or `LONG_TERM_LOCAL` reusable knowledge. BRAIN, the configured ExecutionGuard, and current runtime capability remain `LIVE_TRUTH`; a tmp copy never becomes a second source of truth.
+
+### Existing inventory owner
+
+`tmp/maintenance/inventory.csv` is the single local file inventory. Extend this CSV when new retention metadata is needed; do not create another index, database, sync process, watcher, or scheduler. Alongside its path/category/size/identity columns, each row records:
+
+| Column | Meaning |
+|---|---|
+| `owner` | Task/wave for short-term artifacts, or the maintained library owner for long-term material |
+| `source` | Evidence source/provenance class; derived artifacts name their source inventory path |
+| `captured_or_verified_at` | ISO-8601 content capture or evidence verification time; `UNKNOWN` when unavailable |
+| `scope` | Task/wave or bounded subject scope; keep private identifiers only in this ignored local inventory |
+| `freshness` | `CURRENT`, `STALE`, or `UNKNOWN`, based on the owning source/contract rather than file metadata |
+| `retention_status` | `SHORT_TERM`, `LONG_TERM_LOCAL`, `DELETE_CANDIDATE`, `HISTORICAL`, or `REVIEW_REQUIRED` |
+| `supersedes` | Replacing inventory path or `UNKNOWN`; the previous artifact then becomes historical or a deletion candidate |
+
+Existing rows with no provenance review stay `UNKNOWN` with `REVIEW_REQUIRED`; do not infer owner, source, freshness, or permission to delete from `last_write`, mtime, hash, filename, or extension. Inventory identity columns such as SHA remain integrity/grouping evidence only.
+
+### Short-term and long-term handling
+
+- `SHORT_TERM` covers the current task/wave, recovery context, temporary evidence, diagnostics, plans, and logs. Record owner, source, `captured_or_verified_at`, scope, and whether it is current or superseded. At wave/task end, finish required reconciliation and choose `DELETE` or explicit promotion.
+- `LONG_TERM_LOCAL` is limited to reusable, privacy-safe `knowledge/`, `field_library/`, or unique historical evidence that has provenance, scope, and a current freshness state. Do not promote one-time winners, live BRAIN snapshots, reconstructible caches, full expressions, or sensitive run state.
+- Promote only when the material is reusable across tasks, non-sensitive, not cheaply re-readable/rebuildable, has an identified source, and will prevent real repeated work. Promotion is explicit, never automatic.
+- On use, re-check long-term freshness against its owner. At a natural research-wave boundary, review short-term artifacts. On an owner/schema/contract change, review only inventory entries that name that owner/source. This is `ON_USE + WAVE_BOUNDARY + OWNER_CHANGE`, not a background process.
+- If newer live/repository evidence replaces a local artifact, mark the old row `STALE` and connect it through `supersedes`; delete it when it has no historical value, or retain it as `HISTORICAL` and exclude it from default Agent context. Keep at most one current pointer per artifact class; use inventory/navigation for prior versions.
+
+### Deletion decision
+
+`DELETE_CANDIDATE` is not an instruction to delete. Before removal, identify the exact row/path, owner, source, consumer references, task/reconciliation status, and why it is reconstructible or fully superseded. Preserve unknown and unique evidence as `REVIEW_REQUIRED`. Never delete unresolved guard/checkpoint state, `SUBMIT_UNKNOWN` evidence, or material referenced by an unfinished task. After an approved cleanup, refresh only the affected inventory rows and record the action; never clear the tmp root or apply a single age-based cutoff.
+
 - 新时间快照日期优先取文件内 capture/create/save 日期，其次可信内容日期；没有时才以所属日期语义或 mtime 回退，并在 manifest 标注来源。
 - 保留真实 round/实验标识；不新造 `round1`、`batch2` 等无意义编号。
 - 历史材料在 2026-09-26 按性质平铺归类；历史正文和脚本内的路径文字保留原样。只更新当前 README、目录索引和 selector，使人能导航到新位置。

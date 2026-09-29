@@ -104,7 +104,7 @@ class TestResearchApi(unittest.TestCase):
             "get_operator_reference", "validate_simulation_spec",
             "simulate_batch", "simulate_multi_batch", "get_alpha_evidence",
             "reconcile_execution", "get_alpha_prod_correlation",
-            "get_pending_executions",
+            "get_pending_executions", "list_templates", "generate_probes",
         })
         dangerous = {"create_template", "sync_alpha_colors", "alpha_submission"}
         self.assertTrue(dangerous <= full_names)
@@ -115,6 +115,20 @@ class TestResearchApi(unittest.TestCase):
             "simulate_single", "find_similar_alphas",
             "list_all_datafields", "get_live_preflight", "simulation_quota",
         })
+
+    def test_private_template_inventory_uses_configured_catalog_and_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = pathlib.Path(tmp) / "private.toml"
+            with self.assertRaises(FileNotFoundError) as caught:
+                research_api.list_templates(
+                    require_private=True,
+                    config={"runtime": {"alpha_template_catalog": str(missing)}},
+                )
+
+        self.assertEqual(
+            getattr(caught.exception, "code", None),
+            "PRIVATE_TEMPLATE_CATALOG_MISSING",
+        )
 
     def test_research_status_answers_startup_checks_without_a_live_client(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -311,7 +325,7 @@ class TestResearchApi(unittest.TestCase):
 
     def test_core_manifest_is_a_small_startup_surface(self):
         core = research_api.research_tool_manifest()
-        self.assertEqual(len(core), 12)
+        self.assertEqual(len(core), 14)
         self.assertEqual(core[0]["name"], "research_status")
 
     def test_generated_probe_api_requires_agent_selected_raw_inputs(self):

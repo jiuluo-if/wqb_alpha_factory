@@ -30,6 +30,8 @@ KNOWN_TOOLS = {
     "research_status",
     "list_datasets",
     "list_datafields",
+    "list_templates",
+    "generate_probes",
     "get_operator_reference",
     "validate_simulation_spec",
     "simulate_batch",
@@ -109,10 +111,10 @@ def load_case_fixture(path: Path) -> dict[str, Any]:
 
 
 def load_case_manifest(path: Path = FIXTURE) -> dict[str, Any]:
-    """Load the original A-H behavior fixture, preserving its exact scope."""
+    """Load the bounded A-I behavior fixture, preserving its synthetic scope."""
     manifest = load_case_fixture(path)
-    if [case.get("id") for case in manifest["cases"]] != list("ABCDEFGH"):
-        raise ValueError("A-H fixture must contain cases A-H in order")
+    if [case.get("id") for case in manifest["cases"]] != list("ABCDEFGHI"):
+        raise ValueError("fixture must contain cases A-I in order")
     return manifest
 
 
@@ -871,8 +873,8 @@ def _serve_case(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-agent", action="store_true", help="Run real local Codex JSONL cases; may use model tokens")
-    parser.add_argument("--list-cases", action="store_true", help="List A-H cases without running an agent")
-    parser.add_argument("--cases", nargs="+", choices=list("ABCDEFGH"), default=list("ABCDEFGH"))
+    parser.add_argument("--list-cases", action="store_true", help="List A-I cases without running an agent")
+    parser.add_argument("--cases", nargs="+", choices=list("ABCDEFGHI"), default=list("ABCDEFGHI"))
     parser.add_argument("--codex", help="Codex executable; defaults to PATH discovery")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "tmp" / "logs")
     parser.add_argument("--timeout", type=int, default=180)

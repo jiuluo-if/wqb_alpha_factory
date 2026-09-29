@@ -33,7 +33,7 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         self.assertEqual(skill_dirs, ["skill-authoring", "wqb-research"])
 
         self.assertEqual(research_api.RESEARCH_CONTRACT_VERSION, "2026-09-29")
-        self.assertEqual(len(research_api.research_tool_manifest(profile="core")), 12)
+        self.assertEqual(len(research_api.research_tool_manifest(profile="core")), 14)
         skill_path = skill_root / "wqb-research" / "SKILL.md"
         text = skill_path.read_text(encoding="utf-8")
         self.assertIn(
@@ -128,11 +128,33 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
 
     def test_mcp_reference_documents_prod_correlation_as_a_finalist_tool(self):
         text = (ROOT / "docs" / "MCP_READ_ONLY.md").read_text(encoding="utf-8")
-        self.assertIn("Research Mode 暴露 11 个工具", text)
+        self.assertNotRegex(text, r"Research Mode 暴露 \d+ 个工具")
+        self.assertIn('research_tool_manifest(profile="core")', text)
+        self.assertIn("tools/list", text)
         self.assertIn("get_pending_executions", text)
         self.assertIn("get_alpha_prod_correlation", text)
         self.assertIn("FINALIST_ONLY", text)
-        self.assertIn("不隐式", text)
+        self.assertIn("do not implicitly request PROD correlation", text)
+
+    def test_template_first_and_local_data_lifecycle_have_canonical_routes(self):
+        prompt = (ROOT / "prompts" / "research_agent.md").read_text(encoding="utf-8")
+        skill = (ROOT / "skills" / "wqb-research" / "SKILL.md").read_text(encoding="utf-8")
+        policy = (ROOT / "docs" / "TMP_WORKSPACE_POLICY.md").read_text(encoding="utf-8")
+        scripts = (ROOT / "scripts" / "README.md").read_text(encoding="utf-8")
+        combined = "\n".join((prompt, skill))
+
+        for phrase in (
+            "list_templates", "generate_probes", "proposal_id",
+            "不得改用 shell", "private catalog",
+        ):
+            self.assertIn(phrase, combined)
+        for phrase in (
+            "SHORT_TERM", "LONG_TERM_LOCAL", "captured_or_verified_at", "supersedes",
+            "REVIEW_REQUIRED", "ON_USE", "WAVE_BOUNDARY", "OWNER_CHANGE",
+        ):
+            self.assertIn(phrase, policy)
+        self.assertIn("run_research_agent_eval.py", scripts)
+        self.assertIn("run_cold_start_eval.py", scripts)
 
     def test_result_guide_uses_agent_owned_trial_context(self):
         text = (
