@@ -734,6 +734,36 @@ class TestResearchApi(unittest.TestCase):
             self.assertEqual(entry["fixed_field_bindings"], [binding])
             written = catalog.read_text(encoding="utf-8")
             self.assertIn('metadata = {source = "synthetic", labels = ["one", "two"]}', written)
+    def test_private_template_round_trip_persists_simulation_type(self):
+        from wqb_agent.alpha_templates.loader import load_builtin_templates
+        from wqb_agent.research_api import create_template, inspect_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = pathlib.Path("wqb_agent/alpha_templates/catalog/builtin.toml")
+            catalog = pathlib.Path(tmp) / "private.toml"
+            catalog.write_text(
+                source.read_text(encoding="utf-8").replace(
+                    'semantic_contract = "SYNTHETIC_FIXTURE"',
+                    'semantic_contract = "DATA_QUALITY"',
+                ),
+                encoding="utf-8",
+            )
+            template = replace(
+                load_builtin_templates()[0],
+                template_id="private_ra_round_trip",
+                semantic_contract="DATA_QUALITY",
+                simulation_type="REGION_AGNOSTIC",
+            )
+
+            created = create_template(template, catalog_path=catalog)
+            self.assertEqual(created["simulation_type"], "REGION_AGNOSTIC")
+            self.assertIn(
+                'simulation_type = "REGION_AGNOSTIC"', catalog.read_text(encoding="utf-8")
+            )
+            entry = inspect_template(
+                "private_ra_round_trip", catalog_path=catalog, require_private=True
+            )
+            self.assertEqual(entry["simulation_type"], "REGION_AGNOSTIC")
     def test_discovery_simulation_and_remote_boundaries_accept_equivalent_configs(self):
         raw = {
             "simulation": {},

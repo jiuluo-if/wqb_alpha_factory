@@ -717,6 +717,7 @@ def _template_raw(template):
         "allowed_settings_arms": list(template.allowed_settings_arms),
         "mechanism_tags": list(template.mechanism_tags), "novelty_family": template.novelty_family,
         "template_mode": template.template_mode,
+        "simulation_type": template.simulation_type,
     }
     raw["numeric_slots"] = [{
         "name": slot.name, "kind": slot.kind, "default": slot.default,
