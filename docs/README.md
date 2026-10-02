@@ -1,6 +1,6 @@
 # 文档导航
 
-默认入口是根目录 [`AGENTS.md`](../AGENTS.md)、[`ARCHITECTURE_AGENT.md`](ARCHITECTURE_AGENT.md) 和 [`wqb_agent/research_api.py`](../wqb_agent/research_api.py)。
+默认入口是根目录 [`AGENTS.md`](../AGENTS.md) 与 [`wqb_agent/research_api.py`](../wqb_agent/research_api.py)。跨组件架构问题再按需阅读 [`ARCHITECTURE_AGENT.md`](ARCHITECTURE_AGENT.md)。
 
 | 要回答的问题 | 阅读 |
 |---|---|
