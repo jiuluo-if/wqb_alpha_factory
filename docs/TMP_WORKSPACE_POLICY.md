@@ -100,7 +100,7 @@ Existing rows with no provenance review stay `UNKNOWN` with `REVIEW_REQUIRED`; d
 
 ### Deletion decision
 
-`DELETE_CANDIDATE` is not an instruction to delete. Before removal, identify the exact row/path, owner, source, consumer references, task/reconciliation status, and why it is reconstructible or fully superseded. Preserve unknown and unique evidence as `REVIEW_REQUIRED`. Never delete unresolved guard/checkpoint state, `SUBMIT_UNKNOWN` evidence, or material referenced by an unfinished task. After an approved cleanup, refresh only the affected inventory rows and record the action; never clear the tmp root or apply a single age-based cutoff.
+`DELETE_CANDIDATE` is not authorization to delete. Before removal, verify the exact row/path, owner/source, active references, task/reconciliation status, and the replacement or rebuild source. Preserve unknown or unique evidence under the prohibitions below. After removal, refresh only the affected inventory rows.
 
 - 新时间快照日期优先取文件内 capture/create/save 日期，其次可信内容日期；没有时才以所属日期语义或 mtime 回退，并在 manifest 标注来源。
 - 保留真实 round/实验标识；不新造 `round1`、`batch2` 等无意义编号。
@@ -134,15 +134,5 @@ Existing rows with no provenance review stay `UNKNOWN` with `REVIEW_REQUIRED`; d
 
 1. 先生成候选清单，包含完整相对路径、大小、修改时间、类型和删除理由；明确区分 cache、日志、研究证据、脚本和归档文档。
 2. 搜索实际消费者，确认缓存源可用、历史材料非唯一副本，并核对相关任务已结项。
-3. 删除时只指定已审查的文件/缓存子目录；不得对 `tmp/` 根目录执行递归清空，也不得使用单一年龄阈值批量删除。
+3. 删除时只指定已审查的文件/缓存子目录；不得对 `tmp/` 根目录执行递归清空。
 4. 删除后重新枚举目标并记录数量/空间变化；保留的研究证据和归档不因本轮清理而重排。
-
-## 2026-09-26 基线
-
-本次只读盘点看到 1,304 个文件（约 16.8 MB）：532 JSON、451 Python、201 log、99 Markdown、11 pyc，其余为少量文本、JSONL、patch 和 plan selector。文件覆盖 2026-09-17 至 2026-09-26，说明这里同时承担了临时脚本、研究证据和历史归档，不应整目录删除。确认并清理的缓存限于 11 个 Python bytecode 文件；`v2-archive/` 中的历史计划与根部 playbook 作为不可重建资料保留。
-
-清理后剩余 1,293 个文件（16,652,896 bytes）：根目录 1,003 个、`field_library/` 116 个、`glb_research/` 66 个、`v2-archive/` 108 个。该数字和目录描述为性质分类前的历史基线；当前布局以本节一级分类表及 `tmp/maintenance/inventory.csv` 为准。
-
-## 2026-09-26 平铺整理基线
-
-当日的迁移验收记录为：材料按性质平铺到九个一级目录，分类目录无子目录；README、知识索引和 planning selector 指向迁移位置。历史正文/脚本中的旧路径文字保留。此基线不证明当前 tmp 文件布局或研究运行状态；本机路径映射与 SHA-256 由 `tmp/README.md` 导航到维护清单。
