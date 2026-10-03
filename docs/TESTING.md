@@ -32,4 +32,4 @@ python scripts/check_repo_privacy.py
 
 必须持续覆盖：唯一 Simulation 写链、ExecutionGuard 的 exactly-once、`SUBMIT_UNKNOWN` 不重 POST、已知 progress URL 只读轮询、远端证据缺失保持 UNKNOWN、live/缓存优先级、execution/strict structural/variant-family 三层 identity、显式 family 颜色 plan、颜色 PATCH 回读、过期 plan 不写入、facade 授权与隐私。
 
-颜色和 family CI 使用 synthetic 证据与 mock setter；质量字段只能作为文本状态，不能自动产生颜色。`family_member_count` 只代表当前证据快照/窗口的可见成员数，`observed_execution_count` 只代表其中不同执行指纹的可观察下界，二者都不代表完整试验计数。每个生产 Python 模块必须在 `scripts/run_targeted_tests.py` 的 `DIRECT_TESTS` 中有显式路由；映射不存在或过期都 fail closed。
+颜色和 family CI 使用 synthetic 证据与 mock setter；质量字段只能作为文本状态，不能自动产生颜色。`family_member_count` 只代表当前证据快照/窗口的可见成员数，`observed_execution_count` 只代表其中不同执行指纹的可观察下界，二者都不代表完整试验计数。
