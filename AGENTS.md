@@ -82,6 +82,8 @@ BRAIN 是 Alpha、Simulation、指标、检查项、聚合、PnL 和相关性的
 
 `tmp/` 是被 Git 忽略的本机临时工作区，不是研究事实源、备份或交付目录。tmp/ 历史材料已按性质平铺到一级 `scripts/`、`snapshots/`、`logs/`、`docs/`、`planning/`、`field_library/`、`patches/`、`maintenance/`、`knowledge/`，分类目录内不得建立子目录。新任务按性质直接写入这些目录，日期/task-id 编入文件名。历史文件正文和脚本路径文字不改写，只更新当前导航和 selector。缓存须可从明确来源重建并记录 owner/source；结项时清理缓存，失去 owner 的缓存在 30 天后进入清理候选。清理规则、分类和保护范围见 [`docs/TMP_WORKSPACE_POLICY.md`](docs/TMP_WORKSPACE_POLICY.md)。
 
+`tmp/field_library/` 是本机唯一 dataset-keyed 字段 lookup。Research Agent 每个研究周首次使用时检查 `field_library_index.json.__meta__` 的 freshness：全地区 dataset inventory 超过 7 天则调用本机 `python tmp/scripts/build_field_library.py` 刷新全部 `list_datasets(region="ALL")` 结果；字段仅为 Agent 本轮显式使用的 dataset IDs 拉取，不扫全库字段。首次使用新 dataset 时用 `--datasets <comma-separated-ids>` 登记并拉取；成功字段快照超过 7 天后更新。若新机器没有本机 builder，Agent 用公开 READ_ONLY research tools 按同一 freshness/usage 规则更新本地字段库，不直连 BRAIN API。builder 只发 READ_ONLY BRAIN GET，不 POST；不完整分页写成 `INCOMPLETE`，不能冒充完整缓存。字段 JSON、dataset catalog 与 index 都留在 Git 忽略的 `tmp/`，不推送。缓存只供检索，SimulationSpec 的字段 provenance、能力和地区交集仍由 Gateway 实时核验。
+
 ## 模板与隐私
 
 模板变更前必须阅读本文件、`wqb_agent/AGENTS.md` 和 `wqb_agent/alpha_templates/AGENTS.md`。`alpha_templates` 是唯一模板负责方；公开 catalog 只能使用 synthetic 数据，私有 catalog 必须按显式路径加载且缺失时 fail closed。
