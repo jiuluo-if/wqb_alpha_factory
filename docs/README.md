@@ -1,7 +1,5 @@
 # 文档导航
 
-默认入口是根目录 [`AGENTS.md`](../AGENTS.md) 与 [`wqb_agent/research_api.py`](../wqb_agent/research_api.py)。
-
 | 要回答的问题 | 阅读 |
 |---|---|
 | Agent 如何理解项目和事实层级？ | [`ARCHITECTURE_AGENT.md`](ARCHITECTURE_AGENT.md) |
