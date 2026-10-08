@@ -98,7 +98,9 @@ class RemoteAlphaRepository:
                     result.append(row)
             return result
 
-        submitted_rows = unique(fetch("SUBMITTED", "submitted"))
+        # BRAIN can report submitted Alphas as ACTIVE; the submission date is
+        # the stable selector for this feed, while status is kept as metadata.
+        submitted_rows = unique(fetch(None, "submitted"))
         simulated_rows = unique(fetch("UNSUBMITTED", "created"))
 
         def bucket_for(value):
@@ -152,6 +154,7 @@ class RemoteAlphaRepository:
         latest = date.fromisoformat(self.cache.local_date)
         start = latest - timedelta(days=days - 1)
         result = []
+        requested_status = str(status).upper() if status is not None else None
         for raw_day, bucket in (payload.get("days") or {}).items():
             try:
                 bucket_day = date.fromisoformat(str(raw_day))
@@ -161,7 +164,11 @@ class RemoteAlphaRepository:
                 continue
             for key in ("simulations", "submitted_alphas"):
                 for row in bucket.get(key, ()) if isinstance(bucket, Mapping) else ():
-                    if status is None or str(row.get("status") or "").upper() == str(status).upper():
+                    row_status = str(row.get("status") or "").upper()
+                    if (requested_status is None
+                            or row_status == requested_status
+                            or (requested_status == "SUBMITTED"
+                                and row.get("date_submitted"))):
                         result.append(dict(row))
         seen = set()
         return [row for row in result if not (str(row.get("alpha_id")) in seen or seen.add(str(row.get("alpha_id"))))]

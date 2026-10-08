@@ -15,7 +15,7 @@ FAKE_NOW = datetime(2026, 9, 24, 12, tzinfo=UTC)
 class FakeAlphaReader:
     def __call__(self, **kwargs):
         now = FAKE_NOW.isoformat().replace("+00:00", "Z")
-        if kwargs.get("status") == "SUBMITTED":
+        if kwargs.get("date_submitted_after") is not None:
             return [{
                 "id": "submitted-1",
                 "status": "SUBMITTED",
@@ -53,7 +53,7 @@ class ManySyntheticAlphaReader:
         ]
 
     def __call__(self, **kwargs):
-        if kwargs.get("status") == "SUBMITTED":
+        if kwargs.get("date_submitted_after") is not None:
             return []
         return list(self.rows)
 
@@ -63,12 +63,43 @@ class SubmittedAlphaReader:
         self.rows = list(rows)
 
     def __call__(self, **kwargs):
-        if kwargs.get("status") == "SUBMITTED":
+        if kwargs.get("date_submitted_after") is not None:
             return list(self.rows)
         return []
 
 
 class TestRemoteAlphaRepository(unittest.TestCase):
+    def test_refresh_finds_active_alpha_with_submission_date(self):
+        def reader(**kwargs):
+            if kwargs.get("date_submitted_after") is not None:
+                return ([{
+                    "id": "active-submission",
+                    "status": "ACTIVE",
+                    "dateCreated": "2026-09-22T12:00:00Z",
+                    "dateSubmitted": "2026-09-23T12:00:00Z",
+                }] if kwargs.get("status") is None else [])
+            return []
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repository = RemoteAlphaRepository(
+                reader, cache_path=f"{tmp}/remote.json", retention_days=7,
+                clock=lambda: 1790164800,
+            )
+
+            refreshed = repository.refresh_remote_alphas()
+            submitted = [row for row in repository.list_remote_alphas()
+                         if row.get("date_submitted")]
+
+            self.assertEqual(refreshed["submitted_count"], 1)
+            self.assertEqual(len(submitted), 1)
+            self.assertEqual(submitted[0]["alpha_id"], "active-submission")
+            self.assertEqual(submitted[0]["status"], "ACTIVE")
+            self.assertEqual(
+                [row["alpha_id"] for row in repository.list_remote_alphas(
+                    status="SUBMITTED")],
+                ["active-submission"],
+            )
+
     def test_refresh_keeps_all_retained_metadata_without_quota_cap(self):
         with tempfile.TemporaryDirectory() as tmp:
             repository = RemoteAlphaRepository(
