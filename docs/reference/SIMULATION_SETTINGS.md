@@ -16,5 +16,5 @@ Gateway 会使用规范化后的完整 settings 计算 execution fingerprint；�
 ## Simulation 模式
 
 - `simulate()` / `simulate_batch()`：分别执行一个或一组独立 Single Simulation；批次默认最多 10 个并发。
-- `simulate_multi_batch()`：大规模探针入口；每个 parent 最多 10 个 child，最多 8 个 parent 并发。一个 parent 内的 child 必须共享 region 和 delay。
-- `REGION_AGNOSTIC`：当前 writer 实现的独立 Simulation 类型，由 scope 提供 `region="ALL"` 等约束；实际提交仍需通过当前 live capability 校验。它不会悄悄降级为 Multi-Simulation。
+- `simulate_multi_batch()`：Multi dispatch 入口；每个 parent 含 2–10 个 child（默认 10），writer 的 parent 并发上限为 8。未解决的 parent guard 会减少当前可用槽位；准入状态由根目录 [`AGENTS.md`](../../AGENTS.md) 定义。一个 parent 内的 child 必须共享 region 和 delay。
+- `REGION_AGNOSTIC`：当前 writer 实现的独立 Simulation 类型，SimulationSpec 使用 `region="ALL"`。字段能力按子地区核验，细节见根目录 [`AGENTS.md`](../../AGENTS.md)；它不会悄悄降级为 Multi-Simulation。
