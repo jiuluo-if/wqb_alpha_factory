@@ -207,15 +207,18 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
 
     def test_tool_optimization_reference_prioritizes_direct_evidence(self):
         prompt = (ROOT / "prompts" / "maintenance_agent.md").read_text(encoding="utf-8")
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
         for name in (
             "TASK_TARGET:", "DIRECT_VERIFICATION:", "CONSTRAINTS:",
             "CURRENT_BLOCKER:", "NEXT_USEFUL_ACTION:",
             "RUNTIME_EVIDENCE", "CHANGE", "DIRECT_VERIFICATION:",
-            "RESEARCH_IMPACT", "REMAINING_BLOCKER", "mtime 只决定是否值得重读",
+            "RESEARCH_IMPACT", "REMAINING_BLOCKER", "STALE_RUN_EVIDENCE",
             "运行每条新命令前先问", "读取最少的 artifact/runtime evidence",
-            "SHA 只标示来源", "不能单独构成 blocker",
+            "不能单独构成 blocker", "TMP_WORKSPACE_POLICY.md",
         ):
             self.assertIn(name, prompt)
+        self.assertIn("mtime 只帮助判断是否值得重新读取", agents)
+        self.assertIn("Git SHA 可确认 runtime evidence 对应版本", agents)
 
     def test_research_agent_owns_evidence_triggered_tool_optimization(self):
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
