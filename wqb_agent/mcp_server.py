@@ -21,6 +21,7 @@ MAX_STRING_CHARS = 8 * 1024
 MAX_RECORDSETS = 2
 MAX_SIMULATION_BATCH = 50
 MAX_MULTI_BATCH = research_api.MULTI_MAX_CANDIDATES_PER_CALL
+SUPPORTED_DATA_REGIONS = research_api.SUPPORTED_DATA_REGIONS
 RESEARCH_WRITE_OPT_IN = "ALPHA_FACTORY_ENABLE_SIMULATION_WRITES"
 _SECRET_PARTS = ("password", "credential", "token", "secret", "authorization", "cookie", "api_key", "apikey")
 _SPEC_KEYS = frozenset({"expression", "settings", "fields", "field_datasets", "proposal_id", "note", "template_id", "simulation_type"})
@@ -358,7 +359,7 @@ def build_server(*, api=research_api, client=None, config=None, state_dir=None):
             not dataset_id.strip() or len(dataset_id) > 256
             or (field_type is not None and len(field_type) > 64)
             or not 1 <= limit <= 50 or offset < 0
-            or region.upper() not in {"ALL", "USA", "EUR", "ASI", "GLB"}
+            or region not in {"ALL", *SUPPORTED_DATA_REGIONS}
             or (region == "ALL" and limit < 4)
             or (region == "ALL" and offset % limit != 0)
         ):
@@ -569,9 +570,9 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
 
     @server.tool(annotations=remote_read)
     def list_datasets(region: str = "ALL") -> dict[str, Any]:
-        """[READ_ONLY] List datasets across ALL regions or one child region."""
+        """[READ_ONLY] List the RA child catalog or one supported regular region."""
         region = str(region or "ALL").strip().upper()
-        if region.upper() not in {"ALL", "USA", "EUR", "ASI", "GLB"}:
+        if region not in {"ALL", *SUPPORTED_DATA_REGIONS}:
             return _invalid_result(owner="research_api.list_datasets")
         return read_facade("list_datasets", region=region)
 
@@ -579,7 +580,7 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
     def list_datafields(dataset_id: str, limit: int = 20, offset: int = 0, field_type: str | None = None, region: str = "ALL") -> dict[str, Any]:
         """[READ_ONLY] Read one bounded live datafield page."""
         region = str(region or "ALL").strip().upper()
-        if region.upper() not in {"ALL", "USA", "EUR", "ASI", "GLB"}:
+        if region not in {"ALL", *SUPPORTED_DATA_REGIONS}:
             return _invalid_result(owner="research_api.list_datafields")
         return read_facade("list_datafields", dataset_id, limit=limit, offset=offset, field_type=field_type, region=region)
 

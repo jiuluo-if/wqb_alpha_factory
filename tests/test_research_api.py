@@ -1372,6 +1372,21 @@ class TestResearchApi(unittest.TestCase):
             ],
         )
 
+    def test_list_datasets_supports_gbr_regular_region(self):
+        calls = []
+        client = SimpleNamespace(
+            instrument_type="EQUITY", region="GBR", universe="TOP700", delay=0,
+            get_datasets=lambda *, scope: calls.append(scope) or [{"id": "other17"}],
+        )
+
+        result = list_datasets(client=client, region="GBR")
+
+        self.assertEqual(result["datasets"], [{"id": "other17", "available_regions": ["GBR"]}])
+        self.assertEqual(calls, [{
+            "instrumentType": "EQUITY", "region": "GBR",
+            "universe": "TOP700", "delay": 0,
+        }])
+
     def test_list_datafields_all_merges_region_availability(self):
         calls = []
 
@@ -1404,6 +1419,21 @@ class TestResearchApi(unittest.TestCase):
                 {"id": "field_b", "type": "MATRIX", "available_regions": ["ASI"]},
             ],
         )
+
+    def test_list_datafields_supports_gbr_regular_region(self):
+        calls = []
+        client = SimpleNamespace(
+            instrument_type="EQUITY", region="GBR", universe="TOP700", delay=0,
+            get_datafields=lambda _dataset_id, **kwargs: (
+                calls.append(kwargs) or ([{"id": "gbr_field", "type": "MATRIX"}], 1)
+            ),
+        )
+
+        result = list_datafields("other17", client=client, limit=10, region="GBR")
+
+        self.assertEqual(result["regions_searched"], ["GBR"])
+        self.assertEqual(result["fields"], [{"id": "gbr_field", "type": "MATRIX"}])
+        self.assertEqual(calls[0]["scope"]["region"], "GBR")
 
     def test_list_datafields_all_requires_page_aligned_offset(self):
         with self.assertRaisesRegex(ValueError, "multiple of limit"):

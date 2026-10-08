@@ -118,6 +118,9 @@ def _state_directory(config: AppConfig, state_dir=None) -> str:
 
 
 _DATA_DISCOVERY_REGIONS = ("USA", "EUR", "ASI", "GLB")
+# Explicit REGULAR discovery may target a country pool; ALL remains the four
+# Region-Agnostic child catalogs above.
+SUPPORTED_DATA_REGIONS = frozenset((*_DATA_DISCOVERY_REGIONS, "GBR"))
 
 
 def _client_scope(client, region=None):
@@ -131,10 +134,10 @@ def _client_scope(client, region=None):
 
 
 def list_datasets(*, client=None, config=None, region="ALL"):
-    """List live datasets; ALL unions the four Region-Agnostic child regions."""
+    """List live datasets; ALL unions RA children, or one supported regular region."""
     normalized_region = str(region or "ALL").strip().upper()
-    if normalized_region != "ALL" and normalized_region not in _DATA_DISCOVERY_REGIONS:
-        raise ValueError("region must be ALL, USA, EUR, ASI, or GLB")
+    if normalized_region != "ALL" and normalized_region not in SUPPORTED_DATA_REGIONS:
+        raise ValueError("region must be ALL or a supported data region")
     client = _remote_client(client=client)
     reader = getattr(client, "get_datasets", None)
     if not callable(reader):
@@ -186,8 +189,8 @@ def list_datafields(
     if page_offset < 0:
         raise ValueError("offset must be non-negative")
     normalized_region = str(region or "ALL").strip().upper()
-    if normalized_region != "ALL" and normalized_region not in _DATA_DISCOVERY_REGIONS:
-        raise ValueError("region must be ALL, USA, EUR, ASI, or GLB")
+    if normalized_region != "ALL" and normalized_region not in SUPPORTED_DATA_REGIONS:
+        raise ValueError("region must be ALL or a supported data region")
     regions = _DATA_DISCOVERY_REGIONS if normalized_region == "ALL" else (normalized_region,)
     if normalized_region == "ALL" and page_limit < len(regions):
         raise ValueError("ALL region search limit must be at least 4")
@@ -281,8 +284,8 @@ def list_all_datafields(
         )
 
     normalized_region = str(region or "ALL").strip().upper()
-    if normalized_region != "ALL" and normalized_region not in _DATA_DISCOVERY_REGIONS:
-        raise ValueError("region must be ALL, USA, EUR, ASI, or GLB")
+    if normalized_region != "ALL" and normalized_region not in SUPPORTED_DATA_REGIONS:
+        raise ValueError("region must be ALL or a supported data region")
     client = _remote_client(client=client)
     if normalized_region == "ALL":
         regional = [

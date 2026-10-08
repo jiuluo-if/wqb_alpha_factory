@@ -397,6 +397,34 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("state_dir", tool.input_schema.get("properties", {}))
         self.assertNotIn("alpha_submission", by_name)
 
+    async def test_research_server_allows_gbr_data_discovery(self):
+        dataset_calls = []
+        field_calls = []
+        api = self.api(
+            list_datasets=lambda **kwargs: dataset_calls.append(kwargs) or {
+                "source": "LIVE", "status": "AVAILABLE",
+                "evidence_status": "AVAILABLE", "datasets": [],
+            },
+            list_datafields=lambda *args, **kwargs: field_calls.append((args, kwargs)) or {
+                "source": "LIVE", "status": "AVAILABLE",
+                "evidence_status": "AVAILABLE", "fields": [],
+            },
+        )
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(api=api, client=object())
+
+        async with Client(server) as client:
+            datasets = await client.call_tool("list_datasets", {"region": "GBR"})
+            fields = await client.call_tool("list_datafields", {
+                "dataset_id": "other17", "limit": 20, "offset": 0,
+                "region": "GBR",
+            })
+
+        self.assertEqual(datasets.structured_content["status"], "AVAILABLE")
+        self.assertEqual(fields.structured_content["status"], "AVAILABLE")
+        self.assertEqual(dataset_calls[0]["region"], "GBR")
+        self.assertEqual(field_calls[0][1]["region"], "GBR")
+
     async def test_template_first_path_composes_inventory_generation_and_admission(self):
         from wqb_agent.research_api import SimulationSpec
 
