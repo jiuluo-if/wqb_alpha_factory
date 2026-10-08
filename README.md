@@ -17,7 +17,7 @@ AI → wqb_agent.research_api → SimulationGateway → Simulator → WQBClient 
 - 读取 BRAIN Alpha evidence；本地缓存是可重建视图，不是研究结果事实源。
 - 默认 Agent 工具清单使用 CORE profile；按需能力见 [`research_api.py`](wqb_agent/research_api.py) 与 [`docs/README.md`](docs/README.md)。
 
-## 使用与验证
+## 本机使用
 
 配置格式见 [`config.example.json`](config.example.json)。安装可选只读 MCP 依赖后，可按 [`docs/MCP_READ_ONLY.md`](docs/MCP_READ_ONLY.md) 启动只读工具。
 
@@ -25,9 +25,6 @@ AI → wqb_agent.research_api → SimulationGateway → Simulator → WQBClient 
 python main.py diagnostics doctor
 python main.py diagnostics audit
 python main.py datasets
-python -m unittest discover -s tests
-python -m ruff check .
-python scripts/check_repo_privacy.py
 ```
 
-测试和隐私规则见 [`docs/TESTING.md`](docs/TESTING.md) 与 [`docs/PRIVACY.md`](docs/PRIVACY.md)。研究方法见唯一核心 Skill [`skills/wqb-research/SKILL.md`](skills/wqb-research/SKILL.md)。
+测试与隐私验证见 [`docs/TESTING.md`](docs/TESTING.md) 和 [`docs/PRIVACY.md`](docs/PRIVACY.md)。研究方法见唯一核心 Skill [`skills/wqb-research/SKILL.md`](skills/wqb-research/SKILL.md)。
