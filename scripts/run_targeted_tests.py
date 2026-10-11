@@ -34,6 +34,11 @@ DIRECT_TESTS = {
     "wqb_agent/protocol.py": ("tests/test_protocol_truth.py",),
     "wqb_agent/query_errors.py": ("tests/test_client_refactor.py",),
     "wqb_agent/alpha_semantics.py": ("tests/test_alpha_semantics.py",),
+    "wqb_agent/alpha_quality.py": ("tests/test_alpha_quality.py",),
+    "wqb_agent/osmosis_allocation.py": ("tests/test_osmosis_allocation.py",),
+    "tests/test_aqaf_api.py": ("tests/test_aqaf_api.py",),
+    "tests/test_alpha_quality.py": ("tests/test_alpha_quality.py",),
+    "tests/test_osmosis_allocation.py": ("tests/test_osmosis_allocation.py",),
     "wqb_agent/alpha_relationships.py": ("tests/test_alpha_relationships.py",),
     "tests/test_architecture_contracts.py": (
         "tests/test_architecture_contracts.py",

@@ -25,9 +25,10 @@ import json
 import os
 import re
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
+from datetime import date, datetime
 from typing import Any
 
 from .alpha_factory import AlphaFactory
@@ -36,6 +37,7 @@ from .alpha_grouping import (
     find_remote_similar,
     group_remote_evidence,
 )
+from .alpha_quality import evaluate_quality
 from .alpha_semantics import derive_field_semantic_traits
 from .alpha_templates import (
     AlphaTemplate,
@@ -56,6 +58,12 @@ from .failures import reason_code_for_failure
 from .operator_reference import (
     load_operator_syntax_reference,
     load_packaged_operator_syntax_reference,
+)
+from .osmosis_allocation import (
+    compare_osmosis_allocation_plans as _compare_osmosis_allocation_plans,
+)
+from .osmosis_allocation import (
+    preview_osmosis_allocation as _preview_osmosis_allocation,
 )
 from .protocol import endpoint_truth
 from .remote_alpha_repository import RemoteAlphaRepository
@@ -1322,6 +1330,413 @@ def _remote_client(*, client=None):
     return WQBClient()
 
 
+MAX_AQAF_ALPHA_IDS = 100
+
+
+def _unit_declaration(value):
+    if not isinstance(value, Mapping):
+        return None, None
+    unit = str(value.get("unit") or "").strip()
+    source = str(value.get("source") or "").strip()
+    if (not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._%/-]{0,31}", unit)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_]{0,47}", source)):
+        return None, None
+    return unit, source.upper()
+
+
+def _aqaf_scope(alpha):
+    if not isinstance(alpha, Mapping):
+        return None
+    settings = alpha.get("settings")
+    if not isinstance(settings, Mapping):
+        return None
+    region = settings.get("region")
+    universe = settings.get("universe")
+    delay = settings.get("delay")
+    if not isinstance(region, str) or not region.strip():
+        return None
+    if not isinstance(universe, str) or not universe.strip():
+        return None
+    if isinstance(delay, bool) or not isinstance(delay, (str, int)) or not str(delay).strip():
+        return None
+    delay_value = delay
+    if isinstance(delay, str) and delay.strip().isdigit():
+        delay_value = int(delay.strip())
+    return {"region": region.strip().upper(), "universe": universe.strip(), "delay": delay_value}
+
+
+def _submission_fact(alpha):
+    if not isinstance(alpha, Mapping):
+        return "UNKNOWN", None
+    remote_status = str(alpha.get("status") or "").strip().upper()
+    submitted_at = alpha.get("dateSubmitted", alpha.get("date_submitted"))
+    if isinstance(submitted_at, str) and submitted_at.strip():
+        value = submitted_at.strip()
+        try:
+            if len(value) == 10:
+                date.fromisoformat(value)
+            else:
+                datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return "UNKNOWN", None
+        if remote_status in {"UNSUBMITTED", "SIMULATED", "NOT_SUBMITTED"}:
+            return "UNKNOWN", None
+        return "SUBMITTED", value[:64]
+    if remote_status == "SUBMITTED":
+        return "SUBMITTED", None
+    return "UNKNOWN", None
+
+
+def _failed_alpha_checks(metrics):
+    checks = metrics.get("checks") if isinstance(metrics, Mapping) else None
+    if not isinstance(checks, list):
+        return []
+    failed = []
+    for item in checks:
+        if not isinstance(item, Mapping):
+            continue
+        result = str(item.get("status", item.get("result", ""))).strip().upper()
+        if result in {"FAIL", "FAILED", "ERROR"}:
+            failed.append("BRAIN_CHECK_FAILED")
+    return sorted(set(failed))
+
+
+def _unknown_aqaf_result(alpha_id, reason, *, source="UNKNOWN", fetched_at=None):
+    return {
+        "alpha_id": str(alpha_id), "source": source, "status": "UNKNOWN",
+        "submission_status": "SUBMISSION_UNKNOWN", "submitted_at": None,
+        "scope": None, "reason_code": reason,
+        "quality": {
+            "status": "UNKNOWN", "grade": "U", "q_mid": 50.0,
+            "q_low": 0.0, "q_high": 100.0, "coverage": 0.0,
+            "config_version": None,
+        },
+        "metrics": {}, "risk_alerts": [reason], "fetched_at": fetched_at,
+        "evidence_status": "UNKNOWN",
+    }
+
+
+def _evaluate_submitted_alpha_snapshot(
+    alpha_id, *, client, calibration, metric_units, expected_trading_dates,
+    expected_trading_dates_source, pnl_unit, pnl_unit_source, as_of,
+    type_label, type_source,
+):
+    evidence = _evidence_provider(client=client).get_alpha_evidence(
+        alpha_id, live=True, depth="full",
+    )
+    fetched_at = evidence.get("fetched_at") if isinstance(evidence, Mapping) else None
+    alpha = evidence.get("alpha") if isinstance(evidence, Mapping) else None
+    submission_status, submitted_at = _submission_fact(alpha)
+    if submission_status != "SUBMITTED":
+        return {
+            **_unknown_aqaf_result(
+                alpha_id, "SUBMISSION_UNKNOWN", source="BRAIN_LIVE",
+                fetched_at=fetched_at,
+            ),
+            "evidence_status": "UNAVAILABLE",
+        }, None
+    scope = _aqaf_scope(alpha)
+    detail = alpha.get("is") if isinstance(alpha, Mapping) else None
+    detail = detail if isinstance(detail, Mapping) else {}
+    unit_values = {}
+    unit_sources = {}
+    metric_units = metric_units if isinstance(metric_units, Mapping) else {}
+    for name, declaration in metric_units.items():
+        unit, source = _unit_declaration(declaration)
+        if unit:
+            unit_values[str(name)] = unit
+            unit_sources[str(name)] = source
+    pnl_unit_value, pnl_unit_source_value = _unit_declaration(
+        {"unit": pnl_unit, "source": pnl_unit_source},
+    )
+    expected_dates = None
+    if (isinstance(expected_trading_dates, Sequence)
+            and not isinstance(expected_trading_dates, (str, bytes))
+            and _unit_declaration({
+                "unit": "calendar", "source": expected_trading_dates_source,
+            })[1]):
+        expected_dates = [str(item) for item in expected_trading_dates]
+    if scope is None:
+        score = _unknown_aqaf_result(
+            alpha_id, "SCOPE_UNKNOWN", source="BRAIN_LIVE", fetched_at=fetched_at,
+        )
+        score["submission_status"] = submission_status
+        score["submitted_at"] = submitted_at
+        score["evidence_status"] = "AVAILABLE"
+        return score, None
+    aggregates = evidence.get("aggregates") if isinstance(evidence, Mapping) else None
+    yearly_data = aggregates
+    pnl = evidence.get("pnl") if isinstance(evidence, Mapping) else None
+    self_correlation = evidence.get("self_correlation") if isinstance(evidence, Mapping) else None
+    calculated = evaluate_quality(
+        alpha_id=alpha_id, alpha_scope=scope, metrics=detail,
+        yearly_data=yearly_data, pnl_rows=pnl,
+        pnl_unit=(pnl_unit_value if pnl_unit_source_value and expected_dates is not None
+                  else None),
+        expected_trading_dates=expected_dates,
+        self_correlation=self_correlation, calibration=calibration,
+        as_of=as_of or date.today(), metric_units=unit_values,
+        type_label=type_label, type_source=type_source,
+    )
+    statuses = evidence.get("status") if isinstance(evidence, Mapping) else {}
+    if not isinstance(statuses, Mapping):
+        statuses = {}
+    failed_checks = _failed_alpha_checks(detail)
+    calculated_alerts = sorted(set(calculated["risk_alerts"]) | set(failed_checks))
+    quality = dict(calculated["quality"])
+    if failed_checks and quality.get("grade") != "U":
+        quality["grade"] = "D"
+        quality["risk_grade_cap"] = "D"
+    record = {
+        "alpha_id": str(alpha_id), "source": "BRAIN_LIVE",
+        "status": "AVAILABLE" if calculated["quality"]["status"] == "AVAILABLE" else "UNKNOWN",
+        "submission_status": submission_status, "submitted_at": submitted_at,
+        "scope": scope,
+        "reason_code": (
+            "QUALITY_EVIDENCE_INCOMPLETE"
+            if quality.get("status") != "AVAILABLE" or quality.get("grade") == "U"
+            else None
+        ),
+        "quality": quality, "type": calculated["type"],
+        "metrics": calculated["metrics"], "risk_alerts": calculated_alerts,
+        "fitness_diagnostic": calculated["fitness_diagnostic"],
+        "config_version": calculated["quality"]["config_version"],
+        "fetched_at": fetched_at,
+        "evidence_status": "AVAILABLE",
+        "provenance": {
+            "alpha_detail": "BRAIN_LIVE", "aggregates": statuses.get("aggregates", "UNKNOWN"),
+            "pnl": statuses.get("pnl", "UNKNOWN"),
+            "self_correlation": statuses.get("self_correlation", "UNKNOWN"),
+            "pnl_unit_source": pnl_unit_source_value,
+            "trading_calendar_source": (
+                _unit_declaration({"unit": "calendar", "source": expected_trading_dates_source})[1]
+                if expected_dates is not None else None
+            ),
+            "metric_unit_sources": unit_sources,
+        },
+        "scope_compatibility": "VERIFIED_FROM_ALPHA_SETTINGS",
+    }
+    internal = {
+        "alpha_id": str(alpha_id), "submission_status": submission_status,
+        "scope": scope, "quality": quality,
+        "disqualifying_risks": failed_checks,
+        "pnl": {
+            "rows": pnl.get("pnl") if isinstance(pnl, Mapping) else None,
+            "unit": pnl_unit_value if pnl_unit_source_value else None,
+            "expected_dates": expected_dates,
+        },
+    }
+    return record, internal
+
+
+def evaluate_submitted_alpha(
+    alpha_id, *, calibration=None, metric_units=None,
+    expected_trading_dates=None, expected_trading_dates_source=None,
+    pnl_unit=None, pnl_unit_source=None, type_label=None, type_source=None,
+    as_of=None, client=None, config=None,
+):
+    """Evaluate one explicit Alpha using fresh live evidence only."""
+    normalized_id = str(alpha_id or "").strip()
+    if not normalized_id or len(normalized_id) > 128:
+        raise ValueError("alpha_id must be non-empty and at most 128 characters")
+    if as_of is not None and not isinstance(as_of, date):
+        raise ValueError("as_of must be a date")
+    if metric_units is not None and not isinstance(metric_units, Mapping):
+        raise ValueError("metric_units must be a mapping")
+    if expected_trading_dates is not None and (
+        not isinstance(expected_trading_dates, Sequence)
+        or isinstance(expected_trading_dates, (str, bytes))
+    ):
+        raise ValueError("expected_trading_dates must be a sequence of dates")
+    result, _ = _evaluate_submitted_alpha_snapshot(
+        normalized_id, client=client, calibration=calibration,
+        metric_units=metric_units, expected_trading_dates=expected_trading_dates,
+        expected_trading_dates_source=expected_trading_dates_source,
+        pnl_unit=pnl_unit, pnl_unit_source=pnl_unit_source, as_of=as_of,
+        type_label=type_label, type_source=type_source,
+    )
+    return result
+
+
+def evaluate_submitted_alphas(
+    alpha_ids, *, calibration=None, metric_units=None,
+    expected_trading_dates_by_alpha=None, expected_trading_dates_source=None,
+    pnl_unit_by_alpha=None, type_labels=None, type_sources=None,
+    as_of=None, max_concurrent=1, client=None, config=None,
+):
+    """Evaluate a bounded explicit ID set; no feed omission becomes not-submitted."""
+    if not isinstance(alpha_ids, list) or not alpha_ids or len(alpha_ids) > MAX_AQAF_ALPHA_IDS:
+        raise ValueError(f"alpha_ids must contain 1 to {MAX_AQAF_ALPHA_IDS} IDs (at most {MAX_AQAF_ALPHA_IDS})")
+    ids = [str(item).strip() for item in alpha_ids]
+    if any(not item or len(item) > 128 for item in ids):
+        raise ValueError("alpha_ids must be non-empty and at most 128 characters")
+    if len(set(ids)) != len(ids):
+        raise ValueError("alpha_ids must be unique")
+    if isinstance(max_concurrent, bool) or not isinstance(max_concurrent, int) or not 1 <= max_concurrent <= 4:
+        raise ValueError("max_concurrent must be between 1 and 4")
+    if as_of is not None and not isinstance(as_of, date):
+        raise ValueError("as_of must be a date")
+    if metric_units is not None and not isinstance(metric_units, Mapping):
+        raise ValueError("metric_units must be a mapping")
+    for name, value in (
+        ("expected_trading_dates_by_alpha", expected_trading_dates_by_alpha),
+        ("pnl_unit_by_alpha", pnl_unit_by_alpha),
+        ("type_labels", type_labels), ("type_sources", type_sources),
+    ):
+        if value is not None and not isinstance(value, Mapping):
+            raise ValueError(f"{name} must be a mapping")
+    expected_trading_dates_by_alpha = expected_trading_dates_by_alpha or {}
+    pnl_unit_by_alpha = pnl_unit_by_alpha or {}
+    type_labels = type_labels or {}
+    type_sources = type_sources or {}
+    for name, value in (
+        ("expected_trading_dates_by_alpha", expected_trading_dates_by_alpha),
+        ("pnl_unit_by_alpha", pnl_unit_by_alpha),
+        ("type_labels", type_labels), ("type_sources", type_sources),
+    ):
+        if not isinstance(value, Mapping):
+            raise ValueError(f"{name} must be a mapping")
+    active_client = _remote_client(client=client)
+    def evaluate(item):
+        alpha_id = item
+        declaration = pnl_unit_by_alpha.get(alpha_id, {})
+        return _evaluate_submitted_alpha_snapshot(
+            alpha_id, client=active_client, calibration=calibration,
+            metric_units=metric_units,
+            expected_trading_dates=expected_trading_dates_by_alpha.get(alpha_id),
+            expected_trading_dates_source=expected_trading_dates_source,
+            pnl_unit=declaration.get("unit") if isinstance(declaration, Mapping) else None,
+            pnl_unit_source=declaration.get("source") if isinstance(declaration, Mapping) else None,
+            as_of=as_of, type_label=type_labels.get(alpha_id),
+            type_source=type_sources.get(alpha_id),
+        )[0]
+
+    with ThreadPoolExecutor(max_workers=min(max_concurrent, len(ids))) as pool:
+        records = list(pool.map(evaluate, ids))
+    return {
+        "source": "BRAIN_LIVE", "status": "AVAILABLE",
+        "evaluation_count": len(records), "evaluations": records,
+        "network_write": False,
+    }
+
+
+def _collect_allocation_candidates(
+    alpha_ids, *, scope, calibration, metric_units,
+    expected_trading_dates_by_alpha, expected_trading_dates_source,
+    pnl_unit_by_alpha, family_labels, type_labels, type_sources,
+    as_of, client,
+):
+    if not isinstance(scope, Mapping) or not scope:
+        raise ValueError("scope must be explicit")
+    if not isinstance(alpha_ids, list) or not 1 <= len(alpha_ids) <= MAX_AQAF_ALPHA_IDS:
+        raise ValueError(f"alpha_ids must contain 1 to {MAX_AQAF_ALPHA_IDS} IDs (at most {MAX_AQAF_ALPHA_IDS})")
+    for name, value in (
+        ("metric_units", metric_units),
+        ("expected_trading_dates_by_alpha", expected_trading_dates_by_alpha),
+        ("pnl_unit_by_alpha", pnl_unit_by_alpha),
+        ("family_labels", family_labels), ("type_labels", type_labels),
+        ("type_sources", type_sources),
+    ):
+        if value is not None and not isinstance(value, Mapping):
+            raise ValueError(f"{name} must be a mapping")
+    if len(set(str(item).strip() for item in alpha_ids)) != len(alpha_ids):
+        raise ValueError("alpha_ids must be unique")
+    active_client = _remote_client(client=client)
+    candidates = []
+    for alpha_id in alpha_ids:
+        alpha_id = str(alpha_id).strip()
+        pnl_declaration = (pnl_unit_by_alpha or {}).get(alpha_id, {})
+        unit = pnl_declaration.get("unit") if isinstance(pnl_declaration, Mapping) else None
+        source = pnl_declaration.get("source") if isinstance(pnl_declaration, Mapping) else None
+        record, private = _evaluate_submitted_alpha_snapshot(
+            alpha_id, client=active_client, calibration=calibration,
+            metric_units=metric_units,
+            expected_trading_dates=(expected_trading_dates_by_alpha or {}).get(alpha_id),
+            expected_trading_dates_source=expected_trading_dates_source,
+            pnl_unit=unit, pnl_unit_source=source, as_of=as_of,
+            type_label=(type_labels or {}).get(alpha_id),
+            type_source=(type_sources or {}).get(alpha_id),
+        )
+        family = (family_labels or {}).get(alpha_id)
+        candidates.append({
+            "alpha_id": alpha_id,
+            "submission_status": (
+                "UNKNOWN" if record.get("submission_status") == "SUBMISSION_UNKNOWN"
+                else record.get("submission_status", "UNKNOWN")
+            ),
+            "scope": record.get("scope"), "quality": record.get("quality"),
+            "family": family,
+            "pnl": private.get("pnl") if private is not None else None,
+            "fetched_at": record.get("fetched_at"),
+            "quality_status": (record.get("quality") or {}).get("status"),
+            "config_version": record.get("config_version"),
+            "provenance": record.get("provenance"),
+        })
+    return candidates
+
+
+def preview_osmosis_allocation(
+    alpha_ids, *, scope, calibration, metric_units=None,
+    expected_trading_dates_by_alpha=None, expected_trading_dates_source=None,
+    pnl_unit_by_alpha=None, family_labels=None, type_labels=None,
+    type_sources=None, as_of=None, client=None, config=None, **options,
+):
+    """Fetch explicit live evidence and return a per-scope internal point preview."""
+    candidates = _collect_allocation_candidates(
+        alpha_ids, scope=scope, calibration=calibration,
+        metric_units=metric_units,
+        expected_trading_dates_by_alpha=expected_trading_dates_by_alpha,
+        expected_trading_dates_source=expected_trading_dates_source,
+        pnl_unit_by_alpha=pnl_unit_by_alpha, family_labels=family_labels,
+        type_labels=type_labels, type_sources=type_sources,
+        as_of=as_of, client=client,
+    )
+    result = _preview_osmosis_allocation(candidates, scope=scope, **options)
+    result.update({
+        "source": "BRAIN_LIVE_PLUS_LOCAL_CALCULATION", "network_write": False,
+        "evidence_freshness": {
+            item["alpha_id"]: {
+                "source": "BRAIN_LIVE", "fetched_at": item.get("fetched_at"),
+                "quality_status": item.get("quality_status"),
+                "config_version": item.get("config_version"),
+                "provenance": item.get("provenance"),
+            } for item in candidates
+        },
+    })
+    return result
+
+
+def compare_osmosis_allocation_plans(
+    alpha_ids, *, scope, calibration, metric_units=None,
+    expected_trading_dates_by_alpha=None, expected_trading_dates_source=None,
+    pnl_unit_by_alpha=None, family_labels=None, type_labels=None,
+    type_sources=None, as_of=None, client=None, config=None, **options,
+):
+    """Compare three historical read-only allocation baselines for one scope."""
+    candidates = _collect_allocation_candidates(
+        alpha_ids, scope=scope, calibration=calibration,
+        metric_units=metric_units,
+        expected_trading_dates_by_alpha=expected_trading_dates_by_alpha,
+        expected_trading_dates_source=expected_trading_dates_source,
+        pnl_unit_by_alpha=pnl_unit_by_alpha, family_labels=family_labels,
+        type_labels=type_labels, type_sources=type_sources,
+        as_of=as_of, client=client,
+    )
+    result = _compare_osmosis_allocation_plans(candidates, scope=scope, **options)
+    result.update({
+        "source": "BRAIN_LIVE_PLUS_LOCAL_CALCULATION", "network_write": False,
+        "evidence_freshness": {
+            item["alpha_id"]: {
+                "source": "BRAIN_LIVE", "fetched_at": item.get("fetched_at"),
+                "quality_status": item.get("quality_status"),
+                "config_version": item.get("config_version"),
+                "provenance": item.get("provenance"),
+            } for item in candidates
+        },
+    })
+    return result
+
+
 def _evidence_provider(*, client=None):
     return RemoteAlphaEvidenceProvider(_remote_client(client=client))
 
@@ -1671,6 +2086,10 @@ def research_tool_manifest(profile="core"):
         {"name": "get_alpha_self_correlation", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "get_alpha_prod_correlation", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "get_alpha_recordsets", "mode": "READ_ONLY", "owner": "BRAIN"},
+        {"name": "evaluate_submitted_alpha", "mode": "READ_ONLY", "owner": "AQAF"},
+        {"name": "evaluate_submitted_alphas", "mode": "READ_ONLY", "owner": "AQAF"},
+        {"name": "preview_osmosis_allocation", "mode": "READ_ONLY", "owner": "AQAF"},
+        {"name": "compare_osmosis_allocation_plans", "mode": "READ_ONLY", "owner": "AQAF"},
         {"name": "get_activity_diversity", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "compare_alphas", "mode": "READ_ONLY", "owner": "RemoteAlphaEvidenceProvider"},
         {"name": "refresh_remote_alphas", "mode": "LOCAL_CACHE_WRITE", "local_write": True, "owner": "RemoteAlphaRepository"},
@@ -1710,6 +2129,8 @@ __all__ = [
     "get_alpha_aggregates", "get_alpha_pnl", "get_alpha_self_correlation",
     "get_alpha_prod_correlation",
     "get_alpha_recordsets",
+    "evaluate_submitted_alpha", "evaluate_submitted_alphas",
+    "preview_osmosis_allocation", "compare_osmosis_allocation_plans",
     "compare_alphas", "refresh_remote_alphas", "list_remote_alphas",
     "get_activity_diversity",
     "get_remote_alpha", "get_remote_alpha_evidence", "remote_cache_status",

@@ -18,6 +18,41 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReadOnlyMCPServerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_aqaf_tools_are_opt_in_full_profile_only(self):
+        api = SimpleNamespace()
+        core = build_server(api=api, client=object())
+        full = build_server(api=api, client=object(), profile="full")
+        async with Client(core) as client:
+            core_names = {tool.name for tool in (await client.list_tools()).tools}
+        async with Client(full) as client:
+            tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+        self.assertFalse(core_names & {
+            "evaluate_submitted_alpha", "evaluate_submitted_alphas",
+            "preview_osmosis_allocation", "compare_osmosis_allocation_plans",
+        })
+        for name in (
+            "evaluate_submitted_alpha", "evaluate_submitted_alphas",
+            "preview_osmosis_allocation", "compare_osmosis_allocation_plans",
+        ):
+            self.assertTrue(tools[name].annotations.read_only_hint)
+
+    async def test_full_profile_aqaf_tool_calls_read_only_facade_with_bounded_input(self):
+        from unittest.mock import Mock
+
+        evaluator = Mock(return_value={
+            "source": "BRAIN_LIVE", "status": "UNKNOWN",
+            "submission_status": "SUBMISSION_UNKNOWN", "network_write": False,
+        })
+        api = SimpleNamespace(evaluate_submitted_alpha=evaluator)
+        server = build_server(api=api, client=object(), profile="full")
+        async with Client(server) as client:
+            result = await client.call_tool("evaluate_submitted_alpha", {
+                "alpha_id": "synthetic-alpha", "calibration": {"version": "synthetic"},
+            })
+        self.assertEqual(result.structured_content["access_mode"], "READ_ONLY")
+        evaluator.assert_called_once()
+        self.assertFalse(evaluator.call_args.kwargs.get("remote_write", False))
+
     def test_oversized_result_drops_payload_instead_of_returning_an_unbounded_table(self):
         payload = {"source": "LIVE", "rows": [{"value": "x" * 8_000} for _ in range(12)]}
 

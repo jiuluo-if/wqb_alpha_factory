@@ -19,6 +19,7 @@ MAX_RESULT_BYTES = 48 * 1024
 MAX_LIST_ITEMS = 20
 MAX_STRING_CHARS = 8 * 1024
 MAX_RECORDSETS = 2
+MAX_AQAF_MCP_ALPHA_IDS = 20
 MAX_SIMULATION_BATCH = 50
 MAX_MULTI_BATCH = research_api.MULTI_MAX_CANDIDATES_PER_CALL
 SUPPORTED_DATA_REGIONS = research_api.SUPPORTED_DATA_REGIONS
@@ -280,8 +281,10 @@ def _candidate_spec_payload(spec: Any) -> dict[str, Any] | None:
     return raw
 
 
-def build_server(*, api=research_api, client=None, config=None, state_dir=None):
+def build_server(*, api=research_api, client=None, config=None, state_dir=None, profile="core"):
     """Build an MCP server containing only bounded READ_ONLY facade tools."""
+    if profile not in {"core", "full"}:
+        raise ValueError("profile must be 'core' or 'full'")
     try:
         from mcp.server import MCPServer
         from mcp.types import ToolAnnotations
@@ -309,7 +312,10 @@ def build_server(*, api=research_api, client=None, config=None, state_dir=None):
             active_client = WQBClient()
         return active_client
 
-    def wrap(call, *, owner: str, allow_expression: bool = False, failure_source: str = "BRAIN_LIVE"):
+    def wrap(
+        call, *, owner: str, allow_expression: bool = False,
+        failure_source: str = "BRAIN_LIVE", list_item_limit: int = MAX_LIST_ITEMS,
+    ):
         try:
             payload = call()
         except Exception as exc:  # Keep remote messages/URLs/expressions out of MCP errors.
@@ -319,7 +325,10 @@ def build_server(*, api=research_api, client=None, config=None, state_dir=None):
                 "source": "UNKNOWN", "status": "UNKNOWN",
                 "evidence_status": "UNAVAILABLE", "result": payload,
             }
-        return _envelope(payload, owner=owner, allow_expression=allow_expression)
+        return _envelope(
+            payload, owner=owner, allow_expression=allow_expression,
+            list_item_limit=list_item_limit,
+        )
 
     @server.tool(annotations=remote_read)
     def get_capabilities() -> dict[str, Any]:
@@ -412,6 +421,172 @@ def build_server(*, api=research_api, client=None, config=None, state_dir=None):
             owner="research_api.get_pending_executions",
             failure_source="LOCAL_EXECUTION_GUARD",
         )
+
+    if profile == "full":
+        def valid_payload(value, *, max_bytes=32 * 1024):
+            if not isinstance(value, Mapping):
+                return False
+            try:
+                return len(json.dumps(value, ensure_ascii=False).encode("utf-8")) <= max_bytes
+            except (TypeError, ValueError):
+                return False
+
+        def valid_ids(alpha_ids):
+            return (
+                isinstance(alpha_ids, list)
+                and 1 <= len(alpha_ids) <= MAX_AQAF_MCP_ALPHA_IDS
+                and all(isinstance(item, str) and item.strip() and len(item) <= 128
+                        for item in alpha_ids)
+                and len({item.strip() for item in alpha_ids}) == len(alpha_ids)
+            )
+
+        def valid_calendars(value):
+            if value is None:
+                return True
+            if not isinstance(value, Mapping) or len(value) > MAX_AQAF_MCP_ALPHA_IDS:
+                return False
+            if any(
+                not isinstance(alpha_id, str) or len(alpha_id) > 128
+                or not isinstance(days, list) or len(days) > 5000
+                or any(not isinstance(day, str) or len(day) > 32 for day in days)
+                for alpha_id, days in value.items()
+            ):
+                return False
+            return valid_payload(value, max_bytes=4 * 1024 * 1024)
+
+        @server.tool(annotations=remote_read)
+        def evaluate_submitted_alpha(
+            alpha_id: str, calibration: dict[str, Any],
+            metric_units: dict[str, Any] | None = None,
+            expected_trading_dates: list[str] | None = None,
+            expected_trading_dates_source: str | None = None,
+            pnl_unit: dict[str, Any] | None = None,
+            type_label: str | None = None, type_source: str | None = None,
+        ) -> dict[str, Any]:
+            """[READ_ONLY][FULL] Score one explicitly named submitted Alpha."""
+            if (not isinstance(alpha_id, str) or not alpha_id.strip() or len(alpha_id) > 128
+                    or not valid_payload(calibration)
+                    or metric_units is not None and not valid_payload(metric_units)
+                    or pnl_unit is not None and not valid_payload(pnl_unit)
+                    or expected_trading_dates is not None and (
+                        not isinstance(expected_trading_dates, list)
+                        or len(expected_trading_dates) > 5000
+                        or any(not isinstance(item, str) or len(item) > 32
+                               for item in expected_trading_dates)
+                    )):
+                return _invalid_result(owner="research_api.evaluate_submitted_alpha")
+            return wrap(lambda: api.evaluate_submitted_alpha(
+                alpha_id.strip(), calibration=calibration, metric_units=metric_units,
+                expected_trading_dates=expected_trading_dates,
+                expected_trading_dates_source=expected_trading_dates_source,
+                pnl_unit=(pnl_unit or {}).get("unit"),
+                pnl_unit_source=(pnl_unit or {}).get("source"),
+                type_label=type_label, type_source=type_source,
+                client=resolve_client(), config=config,
+            ), owner="research_api.evaluate_submitted_alpha")
+
+        @server.tool(annotations=remote_read)
+        def evaluate_submitted_alphas(
+            alpha_ids: list[str], calibration: dict[str, Any],
+            metric_units: dict[str, Any] | None = None,
+            expected_trading_dates_by_alpha: dict[str, list[str]] | None = None,
+            expected_trading_dates_source: str | None = None,
+            pnl_unit_by_alpha: dict[str, Any] | None = None,
+            type_labels: dict[str, str] | None = None,
+            type_sources: dict[str, str] | None = None,
+            max_concurrent: int = 1,
+        ) -> dict[str, Any]:
+            """[READ_ONLY][FULL] Evaluate a bounded explicit Alpha ID set."""
+            if (not valid_ids(alpha_ids) or not valid_payload(calibration)
+                    or isinstance(max_concurrent, bool) or not isinstance(max_concurrent, int)
+                    or not 1 <= max_concurrent <= 4
+                    or not valid_calendars(expected_trading_dates_by_alpha)
+                    or any(value is not None and not valid_payload(value) for value in (
+                        metric_units, pnl_unit_by_alpha,
+                        type_labels, type_sources,
+                    ))):
+                return _invalid_result(owner="research_api.evaluate_submitted_alphas")
+            return wrap(lambda: api.evaluate_submitted_alphas(
+                alpha_ids, calibration=calibration, metric_units=metric_units,
+                expected_trading_dates_by_alpha=expected_trading_dates_by_alpha,
+                expected_trading_dates_source=expected_trading_dates_source,
+                pnl_unit_by_alpha=pnl_unit_by_alpha, type_labels=type_labels,
+                type_sources=type_sources, max_concurrent=max_concurrent,
+                client=resolve_client(), config=config,
+            ), owner="research_api.evaluate_submitted_alphas",
+                list_item_limit=MAX_AQAF_MCP_ALPHA_IDS,
+            )
+
+        def allocation_call(name, method, alpha_ids, scope, calibration, metric_units,
+                            expected_trading_dates_by_alpha, expected_trading_dates_source,
+                            pnl_unit_by_alpha,
+                            family_labels, allocation_options):
+            if (not valid_ids(alpha_ids) or not valid_payload(scope, max_bytes=4096)
+                    or not valid_payload(calibration)
+                    or not valid_calendars(expected_trading_dates_by_alpha)
+                    or any(value is not None and not valid_payload(value) for value in (
+                        metric_units, pnl_unit_by_alpha,
+                        family_labels, allocation_options,
+                    ))):
+                return _invalid_result(owner=f"research_api.{name}")
+            allowed = {
+                "max_alpha_share", "max_family_share", "min_coverage",
+                "min_correlation_observations", "min_positive_alphas",
+                "correlation_threshold", "correlation_lambda",
+                "volatility_tilt_min", "volatility_tilt_max",
+            }
+            options = dict(allocation_options or {})
+            if set(options) - allowed:
+                return _invalid_result(owner=f"research_api.{name}")
+            return wrap(lambda: method(
+                alpha_ids, scope=scope, calibration=calibration,
+                metric_units=metric_units,
+                expected_trading_dates_by_alpha=expected_trading_dates_by_alpha,
+                expected_trading_dates_source=expected_trading_dates_source,
+                pnl_unit_by_alpha=pnl_unit_by_alpha, family_labels=family_labels,
+                client=resolve_client(), config=config, **options,
+            ), owner=f"research_api.{name}",
+                list_item_limit=MAX_AQAF_MCP_ALPHA_IDS,
+            )
+
+        @server.tool(annotations=remote_read)
+        def preview_osmosis_allocation(
+            alpha_ids: list[str], scope: dict[str, Any], calibration: dict[str, Any],
+            metric_units: dict[str, Any] | None = None,
+            expected_trading_dates_by_alpha: dict[str, list[str]] | None = None,
+            expected_trading_dates_source: str | None = None,
+            pnl_unit_by_alpha: dict[str, Any] | None = None,
+            family_labels: dict[str, Any] | None = None,
+            allocation_options: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            """[READ_ONLY][FULL] Preview internal 10,000-point scope allocation."""
+            return allocation_call(
+                "preview_osmosis_allocation", api.preview_osmosis_allocation,
+                alpha_ids, scope, calibration, metric_units,
+                expected_trading_dates_by_alpha, expected_trading_dates_source,
+                pnl_unit_by_alpha,
+                family_labels, allocation_options,
+            )
+
+        @server.tool(annotations=remote_read)
+        def compare_osmosis_allocation_plans(
+            alpha_ids: list[str], scope: dict[str, Any], calibration: dict[str, Any],
+            metric_units: dict[str, Any] | None = None,
+            expected_trading_dates_by_alpha: dict[str, list[str]] | None = None,
+            expected_trading_dates_source: str | None = None,
+            pnl_unit_by_alpha: dict[str, Any] | None = None,
+            family_labels: dict[str, Any] | None = None,
+            allocation_options: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            """[READ_ONLY][FULL] Compare equal, quality, and risk-adjusted previews."""
+            return allocation_call(
+                "compare_osmosis_allocation_plans",
+                api.compare_osmosis_allocation_plans,
+                alpha_ids, scope, calibration, metric_units,
+                expected_trading_dates_by_alpha, expected_trading_dates_source,
+                pnl_unit_by_alpha,
+                family_labels, allocation_options,
+            )
 
     return server
 

@@ -64,6 +64,10 @@ __all__ = [
     "research_status",
     "research_batch_status",
     "research_tool_manifest",
+    "evaluate_submitted_alpha",
+    "evaluate_submitted_alphas",
+    "preview_osmosis_allocation",
+    "compare_osmosis_allocation_plans",
 ]
 
 
@@ -98,6 +102,8 @@ def __getattr__(name):
         "research_status",
         "research_batch_status",
         "research_tool_manifest",
+        "evaluate_submitted_alpha", "evaluate_submitted_alphas",
+        "preview_osmosis_allocation", "compare_osmosis_allocation_plans",
     }:
         from . import research_api
 
