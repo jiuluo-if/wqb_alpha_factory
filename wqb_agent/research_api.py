@@ -1309,19 +1309,18 @@ def get_pending_executions(*, state_dir=None, config=None):
 
 
 def resume_execution(fingerprint, *, client=None, config=None,
-                     state_dir=None, poll_timeout_sec=None):
+                     state_dir=None):
     return _simulation_gateway(
-        client=client, config=config, state_dir=state_dir,
-        poll_timeout_sec=poll_timeout_sec,
+        client=client, config=config, state_dir=state_dir
     ).resume_execution(fingerprint)
 
 
 def reconcile_execution(fingerprint, *, client=None, config=None,
-                        state_dir=None, poll_timeout_sec=None):
+                        state_dir=None):
     """Read-only recovery of one guarded execution; never submits again."""
     return resume_execution(
         fingerprint, client=client, config=config,
-        state_dir=state_dir, poll_timeout_sec=poll_timeout_sec,
+        state_dir=state_dir,
     )
 
 
