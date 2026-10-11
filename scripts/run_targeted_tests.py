@@ -34,8 +34,8 @@ DIRECT_TESTS = {
     "wqb_agent/protocol.py": ("tests/test_protocol_truth.py",),
     "wqb_agent/query_errors.py": ("tests/test_client_refactor.py",),
     "wqb_agent/alpha_semantics.py": ("tests/test_alpha_semantics.py",),
-    "wqb_agent/alpha_quality.py": ("tests/test_alpha_quality.py",),
-    "wqb_agent/osmosis_allocation.py": ("tests/test_osmosis_allocation.py",),
+    "wqb_agent/alpha_quality.py": ("tests/test_aqaf.py",),
+    "wqb_agent/osmosis_allocation.py": ("tests/test_aqaf.py",),
     "tests/test_aqaf_api.py": ("tests/test_aqaf_api.py",),
     "tests/test_alpha_quality.py": ("tests/test_alpha_quality.py",),
     "tests/test_osmosis_allocation.py": ("tests/test_osmosis_allocation.py",),
@@ -56,6 +56,7 @@ DIRECT_TESTS = {
     "wqb_agent/field_metadata.py": ("tests/test_research_api.py",),
     "wqb_agent/__init__.py": (
         "tests/test_research_api.py",
+        "tests/test_aqaf.py",
     ),
     "wqb_agent/reference/__init__.py": (
         "tests/test_research_api.py",
@@ -102,6 +103,7 @@ DIRECT_TESTS = {
     "wqb_agent/research_api.py": (
         "tests/test_research_api.py",
         "tests/test_alpha_grouping.py",
+        "tests/test_aqaf.py",
         "tests/test_remote_colors.py",
     ),
     "wqb_agent/mcp_server.py": ("tests/test_mcp_server.py",),

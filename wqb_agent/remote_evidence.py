@@ -7,12 +7,13 @@ import time
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from .client import WQBCorrelationPendingError, WQBNotFoundError
 
 MAX_PAIRWISE_ALPHA_IDS = 40
+MAX_DAILY_PNL_ROWS = 10_000
 
 
 def decode_recordset(payload):
@@ -41,64 +42,78 @@ def decode_recordset(payload):
     }
 
 
-def _daily_pnl_series(payload):
-    """Extract date-keyed daily PnL without guessing unsupported schemas."""
+def _daily_date(value):
+    if not isinstance(value, str):
+        return None
+    try:
+        if len(value) == 10:
+            normalized = date.fromisoformat(value).isoformat()
+            return normalized if normalized == value else None
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        return None
+
+
+def decode_daily_pnl(payload):
+    """Decode direct PnL rows and official recordsets into one daily contract."""
     if payload is None:
-        return {}, "PNL_PENDING", 0
-    if not isinstance(payload, Mapping):
-        return {}, "PNL_SCHEMA_UNAVAILABLE", 0
-    direct_rows = payload.get("pnl")
-    if isinstance(direct_rows, list):
-        rows = direct_rows
+        return {"status": "PENDING_DATA", "reason_code": "PNL_PENDING", "rows": []}
+    if isinstance(payload, Mapping) and isinstance(payload.get("pnl"), list):
+        source_rows = payload["pnl"]
+    elif (isinstance(payload, Mapping) and isinstance(payload.get("rows"), list)
+          and isinstance(payload.get("columns"), list)):
+        source_rows = payload["rows"]
     else:
         decoded = decode_recordset(payload)
+        if decoded["status"] == "PENDING_DATA":
+            return {"status": "PENDING_DATA", "reason_code": "PNL_PENDING", "rows": []}
         if decoded["status"] != "AVAILABLE":
-            return {}, f"PNL_{decoded['status']}", 0
-        rows = decoded["rows"]
-    if not rows:
-        return {}, "PNL_EMPTY", 0
-
+            return {"status": decoded["status"], "reason_code": "PNL_SCHEMA_UNAVAILABLE", "rows": []}
+        source_rows = decoded["rows"]
+    if not isinstance(source_rows, list):
+        return {"status": "UNAVAILABLE", "reason_code": "PNL_SCHEMA_UNAVAILABLE", "rows": []}
+    if len(source_rows) > MAX_DAILY_PNL_ROWS:
+        return {"status": "UNAVAILABLE", "reason_code": "PNL_HISTORY_EXCEEDS_SAFE_LIMIT", "rows": []}
     columns = {
-        str(key)
-        for row in rows if isinstance(row, Mapping)
-        for key in row
+        str(key) for row in source_rows if isinstance(row, Mapping) for key in row
     }
-    date_key = "date" if "date" in columns else None
-    value_key = next((key for key in ("pnl", "value") if key in columns), None)
-    if date_key is None or value_key is None:
-        return {}, "PNL_SCHEMA_UNAVAILABLE", 0
-
-    series = {}
-    skipped = 0
-    for row in rows:
+    value_key = "pnl" if "pnl" in columns else "value" if "value" in columns else None
+    if value_key is None or "date" not in columns:
+        return {"status": "UNAVAILABLE", "reason_code": "PNL_SCHEMA_UNAVAILABLE", "rows": []}
+    normalized = []
+    seen = set()
+    for row in source_rows:
         if not isinstance(row, Mapping):
-            skipped += 1
-            continue
-        raw_date = row.get(date_key)
-        if not isinstance(raw_date, str) or len(raw_date) < 10:
-            return {}, "INVALID_PNL_DATE", skipped + 1
-        try:
-            day = date.fromisoformat(raw_date[:10]).isoformat()
-        except ValueError:
-            return {}, "INVALID_PNL_DATE", skipped + 1
+            return {"status": "UNAVAILABLE", "reason_code": "PNL_SCHEMA_UNAVAILABLE", "rows": []}
+        day = _daily_date(row.get("date"))
+        if day is None:
+            return {"status": "UNAVAILABLE", "reason_code": "INVALID_PNL_DATE", "rows": []}
         raw_value = row.get(value_key)
         if isinstance(raw_value, bool) or raw_value is None:
-            skipped += 1
-            continue
+            return {"status": "UNAVAILABLE", "reason_code": "INVALID_PNL_VALUE", "rows": []}
         try:
             value = float(raw_value)
         except (TypeError, ValueError, OverflowError):
-            skipped += 1
-            continue
+            return {"status": "UNAVAILABLE", "reason_code": "INVALID_PNL_VALUE", "rows": []}
         if not math.isfinite(value):
-            skipped += 1
-            continue
-        if day in series:
-            return {}, "DUPLICATE_PNL_DATE", skipped
-        series[day] = value
-    if not series:
-        return {}, "PNL_EMPTY", skipped
-    return series, None, skipped
+            return {"status": "UNAVAILABLE", "reason_code": "INVALID_PNL_VALUE", "rows": []}
+        if day in seen:
+            return {"status": "UNAVAILABLE", "reason_code": "DUPLICATE_PNL_DATE", "rows": []}
+        seen.add(day)
+        normalized.append({"date": day, "pnl": value})
+    if not normalized:
+        return {"status": "EMPTY", "reason_code": "PNL_EMPTY", "rows": []}
+    if [row["date"] for row in normalized] != sorted(seen):
+        return {"status": "UNAVAILABLE", "reason_code": "PNL_DATE_ORDER_INVALID", "rows": []}
+    return {"status": "AVAILABLE", "reason_code": None, "rows": normalized}
+
+
+def _daily_pnl_series(payload):
+    """Extract date-keyed daily PnL without guessing unsupported schemas."""
+    decoded = decode_daily_pnl(payload)
+    if decoded["status"] != "AVAILABLE":
+        return {}, decoded["reason_code"], 0
+    return {row["date"]: row["pnl"] for row in decoded["rows"]}, None, 0
 
 
 def _pearson_correlation(left, right):
@@ -182,9 +197,18 @@ class _RemoteEvidenceCollector:
             status=status, availability=availability,
         )
 
-    def collect_full(self, alpha_id, *, recordsets=()) -> RemoteAlphaEvidence:
+    def collect_full(self, alpha_id, *, recordsets=(), alpha_detail=None) -> RemoteAlphaEvidence:
         """Fetch finalist evidence while leaving ``collect`` cheap."""
-        snapshot = self.collect(alpha_id, recordsets=recordsets)
+        if alpha_detail is None:
+            snapshot = self.collect(alpha_id, recordsets=recordsets)
+        elif isinstance(alpha_detail, Mapping):
+            snapshot = RemoteAlphaEvidence(
+                alpha_id=str(alpha_id).strip(), alpha_detail=alpha_detail,
+                status={"alpha_detail": "AVAILABLE"},
+                availability={"alpha_detail": "AVAILABLE"},
+            )
+        else:
+            raise ValueError("alpha_detail must be a verified mapping")
         alpha_id = snapshot.alpha_id
         aggregates = self._slot(
             "aggregates", self.client.get_aggregates, alpha_id, allow_not_found=True,
@@ -277,7 +301,8 @@ class RemoteAlphaEvidenceProvider(_RemoteEvidenceCollector):
             "depth": "SUMMARY",
         }
 
-    def get_alpha_evidence(self, alpha_id, *, live=True, recordsets=(), depth="summary"):
+    def get_alpha_evidence(self, alpha_id, *, live=True, recordsets=(), depth="summary",
+                           alpha_detail=None):
         if not live:
             raise ValueError("LIVE_EVIDENCE_REQUIRED")
         normalized_depth = str(depth or "").strip().lower()
@@ -287,7 +312,9 @@ class RemoteAlphaEvidenceProvider(_RemoteEvidenceCollector):
             return self.get_alpha_summary(alpha_id)
         if normalized_depth != "full":
             raise ValueError("depth must be 'summary' or 'full'")
-        snapshot = self.collect_full(alpha_id, recordsets=recordsets)
+        snapshot = self.collect_full(
+            alpha_id, recordsets=recordsets, alpha_detail=alpha_detail,
+        )
         return {
             "alpha_id": snapshot.alpha_id,
             "source": "LIVE",

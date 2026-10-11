@@ -2,7 +2,11 @@ import unittest
 from unittest.mock import Mock, call
 
 from wqb_agent.client import WQBNotFoundError
-from wqb_agent.remote_evidence import RemoteAlphaEvidenceProvider, decode_recordset
+from wqb_agent.remote_evidence import (
+    RemoteAlphaEvidenceProvider,
+    decode_daily_pnl,
+    decode_recordset,
+)
 
 
 class TestRemoteEvidence(unittest.TestCase):
@@ -56,6 +60,36 @@ class TestRemoteEvidence(unittest.TestCase):
             "schema": {"properties": {"metric": {}}}, "records": [],
         })["status"], "EMPTY")
         self.assertEqual(decode_recordset(None)["status"], "PENDING_DATA")
+
+    def test_daily_pnl_decoder_normalizes_direct_and_recordset_values(self):
+        direct = decode_daily_pnl({"pnl": [
+            {"date": "2024-01-02T00:00:00Z", "value": "1.25"},
+        ]})
+        recordset = decode_daily_pnl({
+            "schema": {"properties": {"date": {}, "pnl": {}}},
+            "records": [["2024-01-02", 1.25]],
+        })
+        expected = [{"date": "2024-01-02", "pnl": 1.25}]
+        self.assertEqual(direct["rows"], expected)
+        self.assertEqual(recordset["rows"], expected)
+
+    def test_daily_pnl_decoder_rejects_missing_invalid_and_duplicate_data(self):
+        self.assertEqual(decode_daily_pnl(None)["status"], "PENDING_DATA")
+        self.assertEqual(
+            decode_daily_pnl({"pnl": [{"date": "not-a-date", "value": 1}]})["status"],
+            "UNAVAILABLE",
+        )
+        self.assertEqual(
+            decode_daily_pnl({"pnl": [{"date": "2024-01-02", "value": float("nan")}]})["status"],
+            "UNAVAILABLE",
+        )
+        self.assertEqual(
+            decode_daily_pnl({"pnl": [
+                {"date": "2024-01-02", "value": 1},
+                {"date": "2024-01-02", "value": 2},
+            ]})["reason_code"],
+            "DUPLICATE_PNL_DATE",
+        )
 
     def test_selected_recordset_not_discovered_is_unavailable_without_read(self):
         client = Mock()

@@ -12,6 +12,8 @@ from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from typing import Any
 
+from .remote_evidence import decode_daily_pnl
+
 METRIC_WEIGHTS = {
     "sharpe": 25,
     "returns": 10,
@@ -63,6 +65,8 @@ _DIRECTIONS = {
     "self_correlation": -1.0,
 }
 MAX_PNL_OBSERVATIONS = 10_000
+MAX_CALIBRATION_REFERENCE_ROWS = 1_000
+CALIBRATION_ARTIFACT_SCHEMA = "AQAF_CALIBRATION_1"
 
 
 def _number(value: Any) -> float | None:
@@ -205,26 +209,44 @@ def _quantile(values: Sequence[float], probability: float) -> float:
 
 def _stability(
     yearly_data: Any, *, calibration: Any, as_of: date,
+    expected_trading_dates: Sequence[str] | None, pnl_rows: Any,
 ) -> dict[str, Any]:
     rows = _extract_yearly_data(yearly_data)
+    pnl = decode_daily_pnl(pnl_rows)
+    if pnl["status"] != "AVAILABLE" or not expected_trading_dates:
+        return {"value": None, "status": "UNAVAILABLE",
+                "reason_code": "YEAR_COMPLETENESS_EVIDENCE_UNKNOWN"}
+    try:
+        calendar_rows = [
+            date.fromisoformat(str(item)).isoformat() for item in expected_trading_dates
+        ]
+    except (TypeError, ValueError):
+        return {"value": None, "status": "UNAVAILABLE",
+                "reason_code": "TRADING_CALENDAR_INVALID"}
+    if (any(len(str(item)) != 10 or str(item) != normalized
+            for item, normalized in zip(expected_trading_dates, calendar_rows))
+            or calendar_rows != sorted(calendar_rows)
+            or len(calendar_rows) != len(set(calendar_rows))):
+        return {"value": None, "status": "UNAVAILABLE",
+                "reason_code": "TRADING_CALENDAR_INVALID"}
+    calendar = set(calendar_rows)
+    pnl_dates = {row["date"] for row in pnl["rows"]}
     yearly: list[tuple[int, float, float]] = []
     for row in rows:
         year = row.get("year")
         try:
+            if isinstance(year, bool):
+                continue
             year = int(year)
         except (TypeError, ValueError, OverflowError):
             continue
+        if year < 1900 or year > as_of.year:
+            continue
         returns = _number(row.get("returns"))
         sharpe = _number(row.get("sharpe"))
-        explicit_complete = row.get("complete") is True
-        start = row.get("start_date")
-        end = row.get("end_date")
-        if isinstance(start, str) and isinstance(end, str):
-            explicit_complete = explicit_complete or (
-                start[:10] == f"{year:04d}-01-01"
-                and end[:10] == f"{year:04d}-12-31"
-            )
-        if (year < as_of.year and explicit_complete
+        year_days = {day for day in calendar if day.startswith(f"{year:04d}-")}
+        pnl_year_days = {day for day in pnl_dates if day.startswith(f"{year:04d}-")}
+        if (year < as_of.year and year_days and year_days == pnl_year_days
                 and returns is not None and sharpe is not None):
             yearly.append((year, returns, sharpe))
     yearly.sort(key=lambda row: row[0])
@@ -258,41 +280,35 @@ def _stability(
 def _correlation_value(payload: Any) -> tuple[float | None, str | None]:
     if not isinstance(payload, Mapping):
         return None, "SELF_CORRELATION_UNAVAILABLE"
-    if str(payload.get("status") or "").upper() in {
-        "PENDING", "RUNNING", "QUEUED", "UNSETTLED", "UNKNOWN",
-    }:
-        return None, "SELF_CORRELATION_PENDING"
+
+    pending = {"PENDING", "RUNNING", "QUEUED", "UNSETTLED", "UNKNOWN"}
+    failed = {"FAILED", "FAIL", "ERROR"}
+    settled = {"AVAILABLE", "COMPLETE", "COMPLETED", "SETTLED", "PASS", "PASSED",
+               "SUCCESS", "SUCCEEDED"}
+    for envelope in (payload, payload.get("is"), payload.get("data")):
+        if not isinstance(envelope, Mapping):
+            continue
+        states = [envelope.get(key) for key in ("status", "result")]
+        if any(str(state or "").strip().upper() in pending for state in states):
+            return None, "SELF_CORRELATION_PENDING"
+        if any(str(state or "").strip().upper() in failed for state in states):
+            return None, "SELF_CORRELATION_FAILED"
+        if any(
+            state is not None and str(state).strip()
+            and str(state).strip().upper() not in settled
+            for state in states
+        ):
+            return None, "SELF_CORRELATION_SCHEMA_OR_RANGE_UNKNOWN"
     body = payload.get("is")
-    if not isinstance(body, Mapping):
-        body = payload
-    value = _number(body.get("correlation"))
+    if isinstance(body, Mapping):
+        value = _number(body.get("correlation"))
+    elif isinstance(payload.get("data"), Mapping):
+        value = _number(payload["data"].get("correlation"))
+    else:
+        value = _number(payload.get("correlation"))
     if value is None or not -1.0 <= value <= 1.0:
         return None, "SELF_CORRELATION_SCHEMA_OR_RANGE_UNKNOWN"
     return value, None
-
-
-def _daily_rows(payload: Any) -> list[Mapping[str, Any]]:
-    if isinstance(payload, Mapping):
-        direct = payload.get("pnl")
-        if isinstance(direct, list):
-            payload = direct
-        else:
-            rows = payload.get("records")
-            schema = payload.get("schema")
-            props = schema.get("properties") if isinstance(schema, Mapping) else None
-            if not isinstance(rows, list) or not isinstance(props, Mapping):
-                return []
-            names = list(props)
-            payload = [
-                ({name: item.get(name) for name in names} if isinstance(item, Mapping)
-                 else {name: item[index] if index < len(item) else None
-                       for index, name in enumerate(names)}
-                 if isinstance(item, (list, tuple)) else {})
-                for item in rows
-            ]
-    if not isinstance(payload, list):
-        return []
-    return [row for row in payload if isinstance(row, Mapping)]
 
 
 def pnl_drawdown_strength(
@@ -304,26 +320,18 @@ def pnl_drawdown_strength(
         return {"status": "UNAVAILABLE", "reason_code": "PNL_UNIT_UNKNOWN"}
     if not isinstance(expected_dates, Sequence) or isinstance(expected_dates, (str, bytes)):
         return {"status": "UNAVAILABLE", "reason_code": "TRADING_CALENDAR_UNKNOWN"}
-    rows = _daily_rows(pnl_rows)
+    decoded = decode_daily_pnl(pnl_rows)
+    if decoded["status"] != "AVAILABLE":
+        return {"status": "UNAVAILABLE", "reason_code": decoded["reason_code"]}
+    rows = decoded["rows"]
     if len(rows) > MAX_PNL_OBSERVATIONS or len(expected_dates) > MAX_PNL_OBSERVATIONS:
         return {"status": "UNAVAILABLE", "reason_code": "PNL_HISTORY_EXCEEDS_SAFE_LIMIT"}
     if len(rows) < 252 or len(expected_dates) < 252:
         return {"status": "UNAVAILABLE", "reason_code": "INSUFFICIENT_PNL_HISTORY"}
     parsed: list[tuple[str, float]] = []
     for row in rows:
-        raw_day = row.get("date")
-        raw_value = row.get("pnl", row.get("value"))
-        if not isinstance(raw_day, str):
-            return {"status": "UNAVAILABLE", "reason_code": "INVALID_PNL_DATE"}
-        try:
-            if len(raw_day) == 10:
-                normalized_day = date.fromisoformat(raw_day).isoformat()
-            else:
-                parsed_timestamp = datetime.fromisoformat(raw_day.replace("Z", "+00:00"))
-                normalized_day = parsed_timestamp.date().isoformat()
-        except ValueError:
-            return {"status": "UNAVAILABLE", "reason_code": "INVALID_PNL_DATE"}
-        value = _number(raw_value)
+        normalized_day = row["date"]
+        value = _number(row["pnl"])
         if value is None:
             return {"status": "UNAVAILABLE", "reason_code": "INVALID_PNL_VALUE"}
         parsed.append((normalized_day, value))
@@ -418,6 +426,8 @@ def evaluate_quality(
     scope = dict(alpha_scope) if isinstance(alpha_scope, Mapping) else None
     compatible = bool(
         isinstance(calibration, Mapping)
+        and calibration.get("status") == "AVAILABLE"
+        and calibration.get("schema") == CALIBRATION_ARTIFACT_SCHEMA
         and _safe_calibration_version(calibration.get("version"))
         and str(calibration.get("reference_id") or "").strip()
         and str(calibration.get("frozen_at") or "").strip()
@@ -427,6 +437,8 @@ def evaluate_quality(
         and isinstance(scope, Mapping)
         and isinstance(calibration.get("scope"), Mapping)
         and dict(calibration["scope"]) == scope
+        and calibration.get("exclusion_policy") == "LEAVE_CANDIDATE_OUT"
+        and str(calibration.get("excluded_alpha_id") or "") == alpha_id
     )
     if not compatible:
         calibration = None
@@ -499,7 +511,10 @@ def evaluate_quality(
             "source": "BRAIN_DAILY_PNL", "unit": "SCALE_INVARIANT_PNL_STRENGTH",
         }
 
-    stability = _stability(yearly_data, calibration=calibration, as_of=as_of)
+    stability = _stability(
+        yearly_data, calibration=calibration, as_of=as_of,
+        expected_trading_dates=expected_trading_dates, pnl_rows=pnl_rows,
+    )
     results["stability"] = _metric_result(
         stability.get("value"), "stability", calibration, "score",
     ) if compatible and stability.get("status") == "AVAILABLE" else {
@@ -570,6 +585,35 @@ def evaluate_quality(
         grade = "D"
     else:
         grade = "C"
+    economic_diagnostics = []
+    returns_value = raw_sources["returns"]
+    margin_value = raw_sources["margin"]
+    sharpe_value = raw_sources["sharpe"]
+    if returns_value is not None:
+        if returns_value <= 0:
+            economic_diagnostics.append("NON_POSITIVE_RETURNS")
+        reference, _ = _reference(calibration, "returns", raw_units["returns"])
+        if reference is not None:
+            upper_bound = float(reference["median"]) + 10.0 * max(
+                1.4826 * float(reference["mad"]), float(reference["scale_floor"]),
+            )
+            if returns_value > upper_bound:
+                economic_diagnostics.append("RETURNS_OUTSIDE_CALIBRATION_RANGE")
+    if margin_value is not None and margin_value < 0:
+        economic_diagnostics.append("NEGATIVE_MARGIN")
+    if (returns_value is not None and sharpe_value is not None
+            and ((returns_value > 0 and sharpe_value <= -2.0)
+                 or (returns_value < 0 and sharpe_value >= 2.0))):
+        economic_diagnostics.append("SHARPE_RETURNS_SIGN_CONFLICT")
+    fitness_value = _number(metrics.get("fitness"))
+    if (fitness_value is not None and sharpe_value is not None
+            and fitness_value * sharpe_value < 0):
+        economic_diagnostics.append("FITNESS_SHARPE_SIGN_CONFLICT")
+    turnover_raw = _number(metrics.get("turnover"))
+    if turnover_raw is not None and turnover_raw < 0:
+        economic_diagnostics.append("NEGATIVE_TURNOVER")
+    if economic_diagnostics and grade == "A":
+        grade = "B"
     alerts = [
         result["reason_code"] for result in results.values()
         if result.get("status") != "AVAILABLE" and result.get("reason_code")
@@ -586,6 +630,7 @@ def evaluate_quality(
             "config_version": calibration.get("version") if compatible else None,
         },
         "risk_alerts": sorted(set(alerts)),
+        "economic_diagnostics": sorted(set(economic_diagnostics)),
         "fitness_diagnostic": {
             "value": _number(metrics.get("fitness")),
             "source": "BRAIN_ALPHA_IS", "weight": 0.0,
@@ -601,3 +646,110 @@ def _safe_calibration_version(value: Any) -> bool:
         version and len(version) <= 64 and version.isascii()
         and all(char.isalnum() or char in "._-" for char in version)
     )
+
+
+def build_calibration(
+    reference_rows: Sequence[Mapping[str, Any]], *, candidate_alpha_id: str,
+    scope: Mapping[str, Any], minimum_reference_count: int,
+    scale_floors: Mapping[str, float], units: Mapping[str, str],
+    frozen_at: str, reference_id: str, source: str, version: str,
+    pnl_unit: str, turnover_budget_unit: str,
+    turnover_budgets: Mapping[str, float],
+) -> dict[str, Any]:
+    """Build a deterministic leave-one-candidate-out calibration artifact.
+
+    Input rows are transient offline reference observations. The returned
+    artifact contains only scoped robust summaries and counts, never IDs or
+    per-Alpha metrics from the reference set.
+    """
+    candidate_id = str(candidate_alpha_id or "").strip()
+    required_scope = {"region", "universe", "delay"}
+    if (not candidate_id or len(candidate_id) > 128 or not isinstance(scope, Mapping)
+            or not required_scope.issubset(scope)
+            or not isinstance(reference_rows, Sequence)
+            or isinstance(reference_rows, (str, bytes))):
+        return {"status": "UNKNOWN", "reason_code": "CALIBRATION_INPUT_INVALID"}
+    if len(reference_rows) > MAX_CALIBRATION_REFERENCE_ROWS:
+        return {"status": "UNKNOWN", "reason_code": "CALIBRATION_REFERENCE_SET_TOO_LARGE"}
+    if (isinstance(minimum_reference_count, bool)
+            or not isinstance(minimum_reference_count, int)
+            or minimum_reference_count < 2):
+        return {"status": "UNKNOWN", "reason_code": "CALIBRATION_MINIMUM_INVALID"}
+    if not all(str(value or "").strip() for value in (
+        reference_id, source, version, frozen_at, pnl_unit, turnover_budget_unit,
+    )):
+        return {"status": "UNKNOWN", "reason_code": "CALIBRATION_PROVENANCE_INCOMPLETE"}
+    if (not _safe_calibration_version(version)
+            or len(str(reference_id)) > 128 or len(str(source)) > 128):
+        return {"status": "UNKNOWN", "reason_code": "CALIBRATION_PROVENANCE_INVALID"}
+    try:
+        parsed_frozen_at = datetime.fromisoformat(frozen_at.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return {"status": "UNKNOWN", "reason_code": "CALIBRATION_TIMESTAMP_INVALID"}
+    if parsed_frozen_at.tzinfo is None:
+        return {"status": "UNKNOWN", "reason_code": "CALIBRATION_TIMESTAMP_INVALID"}
+    if not isinstance(scale_floors, Mapping) or not isinstance(units, Mapping):
+        return {"status": "UNKNOWN", "reason_code": "CALIBRATION_SCHEMA_INVALID"}
+    if not isinstance(turnover_budgets, Mapping):
+        return {"status": "UNKNOWN", "reason_code": "CALIBRATION_SCHEMA_INVALID"}
+
+    distinct = {}
+    for row in reference_rows:
+        if not isinstance(row, Mapping):
+            continue
+        alpha_id = str(row.get("alpha_id") or "").strip()
+        if not alpha_id or alpha_id == candidate_id or alpha_id in distinct:
+            continue
+        row_scope = row.get("scope")
+        if not isinstance(row_scope, Mapping) or any(
+            row_scope.get(key) != scope.get(key) for key in required_scope
+        ):
+            continue
+        distinct[alpha_id] = row
+    required_metrics = set(METRIC_WEIGHTS) | {
+        "yearly_sharpe", "recent_sharpe_change",
+    }
+    if not required_metrics.issubset(units) or not required_metrics.issubset(scale_floors):
+        return {"status": "UNKNOWN", "reason_code": "CALIBRATION_METRIC_SCHEMA_INCOMPLETE"}
+    metric_names = sorted(required_metrics)
+    metric_references = {}
+    for metric in metric_names:
+        values = [
+            number for row in distinct.values()
+            if isinstance(row.get("metrics"), Mapping)
+            and (number := _number(row["metrics"].get(metric))) is not None
+        ]
+        floor = _number(scale_floors.get(metric))
+        unit = str(units.get(metric) or "").strip()
+        if floor is None or floor <= 0 or not unit:
+            return {"status": "UNKNOWN", "reason_code": "CALIBRATION_METRIC_SCHEMA_INVALID"}
+        if len(values) < minimum_reference_count:
+            return {"status": "UNKNOWN", "reason_code": "CALIBRATION_REFERENCE_COUNT_INSUFFICIENT"}
+        median = _quantile(values, .5)
+        mad = _quantile([abs(value - median) for value in values], .5)
+        metric_references[metric] = {
+            "median": median, "mad": mad, "scale_floor": floor,
+            "unit": unit, "sample_count": len(values), "source": source,
+        }
+    if not metric_references or len(distinct) < minimum_reference_count:
+        return {"status": "UNKNOWN", "reason_code": "CALIBRATION_REFERENCE_COUNT_INSUFFICIENT"}
+    budgets = {}
+    for kind in ("GENERAL", "HIGH_TURNOVER", "LOW_TURNOVER"):
+        budget = _number(turnover_budgets.get(kind))
+        if budget is None or budget < 0:
+            return {"status": "UNKNOWN", "reason_code": "CALIBRATION_TURNOVER_BUDGET_INVALID"}
+        budgets[kind] = budget
+    artifact = {
+        "status": "AVAILABLE", "schema": CALIBRATION_ARTIFACT_SCHEMA,
+        "version": version, "reference_id": reference_id,
+        "frozen_at": frozen_at, "source": source,
+        "scope": {key: scope[key] for key in sorted(required_scope)},
+        "excluded_alpha_id": candidate_id,
+        "exclusion_policy": "LEAVE_CANDIDATE_OUT",
+        "minimum_reference_count": minimum_reference_count,
+        "reference_count": len(distinct), "metric_references": metric_references,
+        "pnl_unit": pnl_unit, "turnover_budget_unit": turnover_budget_unit,
+        "turnover_budgets": budgets,
+        "audit": {"method": "MEDIAN_MAD", "input_ids_retained": False},
+    }
+    return artifact

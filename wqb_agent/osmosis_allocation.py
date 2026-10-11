@@ -7,6 +7,8 @@ from collections.abc import Mapping, Sequence
 from datetime import date
 from typing import Any
 
+from .remote_evidence import decode_daily_pnl
+
 TOTAL_NORMALIZED_POINTS = 10_000
 DEFAULT_MAX_ALPHA_SHARE = 0.15
 DEFAULT_MAX_FAMILY_SHARE = 0.25
@@ -104,23 +106,17 @@ def _pnl_series(candidate: Mapping[str, Any], min_observations: int):
     unit = str(pnl.get("unit") or "").strip()
     rows = pnl.get("rows")
     expected = pnl.get("expected_dates")
-    if not unit or not isinstance(rows, list) or not isinstance(expected, list):
+    if (not unit or not isinstance(rows, (list, Mapping))
+            or not isinstance(expected, list)):
         return None, "PNL_UNIT_OR_CALENDAR_UNKNOWN"
-    if len(rows) > MAX_PNL_OBSERVATIONS or len(expected) > MAX_PNL_OBSERVATIONS:
+    if len(expected) > MAX_PNL_OBSERVATIONS:
         return None, "PNL_HISTORY_EXCEEDS_SAFE_LIMIT"
-    parsed = []
-    for row in rows:
-        if not isinstance(row, Mapping) or not isinstance(row.get("date"), str):
-            return None, "PNL_SCHEMA_INVALID"
-        value = _finite(row.get("pnl", row.get("value")))
-        if value is None:
-            return None, "PNL_VALUE_INVALID"
-        raw_day = row["date"]
-        try:
-            normalized_day = date.fromisoformat(raw_day).isoformat()
-        except ValueError:
-            return None, "PNL_DATE_INVALID"
-        parsed.append((normalized_day, value))
+    decoded = decode_daily_pnl({"pnl": rows} if isinstance(rows, list) else rows)
+    if decoded["status"] != "AVAILABLE":
+        return None, decoded["reason_code"] or "PNL_SCHEMA_INVALID"
+    if len(decoded["rows"]) > MAX_PNL_OBSERVATIONS:
+        return None, "PNL_HISTORY_EXCEEDS_SAFE_LIMIT"
+    parsed = [(row["date"], row["pnl"]) for row in decoded["rows"]]
     dates = [item[0] for item in parsed]
     try:
         expected = [date.fromisoformat(str(item)).isoformat() for item in expected]
@@ -295,7 +291,9 @@ def _integerize(weights, families, *, total_points, max_alpha_share, max_family_
     return points, None
 
 
-def _portfolio_metrics(candidates, points, series, matrix, drawdown_matrix):
+def _portfolio_metrics(
+    candidates, points, series, matrix, drawdown_matrix, *, min_observations,
+):
     if not candidates or any(series.get(item["alpha_id"]) is None for item in candidates):
         return {"status": "UNKNOWN", "reason_code": "PORTFOLIO_PNL_UNAVAILABLE"}
     units = {series[item["alpha_id"]]["unit"] for item in candidates}
@@ -304,7 +302,7 @@ def _portfolio_metrics(candidates, points, series, matrix, drawdown_matrix):
     common = set.intersection(*[
         set(series[item["alpha_id"]]["values"]) for item in candidates
     ])
-    if len(common) < DEFAULT_MIN_CORRELATION_OBSERVATIONS:
+    if len(common) < min_observations:
         return {"status": "UNKNOWN", "reason_code": "PORTFOLIO_OVERLAP_INSUFFICIENT"}
     dates = sorted(common)
     weights = {key: value / TOTAL_NORMALIZED_POINTS for key, value in points.items()}
@@ -384,7 +382,7 @@ def _portfolio_metrics(candidates, points, series, matrix, drawdown_matrix):
 def _plan(
     candidates, *, name, raw_weights, families, series, matrix, drawdown_matrix,
     total_points, max_alpha_share, max_family_share, min_positive_alphas,
-    platform_rules,
+    platform_rules, min_correlation_observations=DEFAULT_MIN_CORRELATION_OBSERVATIONS,
 ):
     weights = _apply_caps(raw_weights, families, max_alpha_share, max_family_share)
     if weights is None:
@@ -401,22 +399,17 @@ def _plan(
     for alpha_id, value in points.items():
         family = families[alpha_id]
         family_totals[family] = family_totals.get(family, 0) + value
-    verified_platform_total = None
-    if (isinstance(platform_rules, Mapping)
-            and platform_rules.get("status") == "LIVE_VERIFIED"
-            and platform_rules.get("source") == "BRAIN_ACCOUNT"
-            and str(platform_rules.get("fetched_at") or "").strip()
-            and platform_rules.get("point_total") == 100_000):
-        verified_platform_total = 100_000
     family_labels = {
         family: f"family_{index:03d}"
         for index, family in enumerate(sorted(family_totals), start=1)
     }
     allocations = [{
         "alpha_id": alpha_id, "weight": weights[alpha_id],
+        "target_weight": weights[alpha_id],
+        "integerized_weight": points[alpha_id] / total_points,
         "normalized_points": points[alpha_id],
         "points": points[alpha_id],
-        "platform_points": points[alpha_id] * 10 if verified_platform_total else None,
+        "platform_points": None,
         "family_id": family_labels[families[alpha_id]],
         "quality_q_low": _finite(next(
             item["quality"].get("q_low") for item in candidates
@@ -426,18 +419,24 @@ def _plan(
     } for alpha_id in sorted(points)]
     portfolio_metrics = _portfolio_metrics(
         candidates, points, series, matrix, drawdown_matrix,
+        min_observations=min_correlation_observations,
     )
     hhi = sum((value / total_points) ** 2 for value in points.values())
     return {
-        "status": "READY", "name": name, "allocations": allocations,
+        "status": "INTERNAL_PREVIEW", "name": name, "allocations": allocations,
         "points": points, "hhi": hhi,
         "effective_alpha_count": 1.0 / hhi if hhi else 0,
         "family_concentration": {
             family_labels[key]: value / total_points for key, value in sorted(family_totals.items())
         },
         "portfolio_metrics": portfolio_metrics,
-        "platform_rules_status": "LIVE_VERIFIED" if verified_platform_total else "UNKNOWN",
-        "platform_points_total": verified_platform_total,
+        "platform_rules_status": "INTERNAL_PREVIEW",
+        "platform_rule_evidence_status": "UNKNOWN",
+        "platform_rule_diagnostics": [
+            "AUTHORITATIVE_SOURCE_UNKNOWN", "ACQUISITION_TIME_UNVERIFIED",
+            "APPLICABLE_SCOPE_UNKNOWN", "RULE_VERSION_UNKNOWN",
+            "ACCOUNT_AUTHORITY_UNKNOWN",
+        ],
         "total_normalized_points": total_points,
     }
 
@@ -525,7 +524,9 @@ def preview_osmosis_allocation(
             "status": "UNKNOWN", "reason_codes": reason_codes,
             "allocations": None, "excluded": excluded,
             "eligible_count": len(accepted), "correlation_status": "UNKNOWN",
-            "platform_rules_status": "UNKNOWN", "total_normalized_points": total_points,
+            "platform_rules_status": "INTERNAL_PREVIEW",
+            "platform_rule_evidence_status": "UNKNOWN",
+            "total_normalized_points": total_points,
         }
     vols = {}
     mdd_strengths = {}
@@ -560,6 +561,7 @@ def preview_osmosis_allocation(
     raw = {alpha_id: quality_factor[alpha_id] * risk_adjustment[alpha_id]
            for alpha_id in quality_factor}
     weights = None
+    converged = False
     for _ in range(40):
         provisional = _apply_caps(raw, families, max_alpha_share, max_family_share)
         if provisional is None:
@@ -585,12 +587,16 @@ def preview_osmosis_allocation(
         gap = max(abs(weights[key] - provisional[key]) for key in weights)
         raw = revised
         if gap < 1e-9:
+            converged = True
             break
+    if not converged:
+        return {"status": "UNKNOWN", "reason_codes": ["WEIGHT_ITERATION_NOT_CONVERGED"],
+                "allocations": None, "excluded": excluded,
+                "eligible_count": len(accepted), "correlation_status": "AVAILABLE",
+                "platform_rules_status": "INTERNAL_PREVIEW",
+                "total_normalized_points": total_points}
     if weights is None:
         return {"status": "INFEASIBLE", "reason_codes": ["CONCENTRATION_CAPACITY_BELOW_TOTAL"],
-                "allocations": None, "excluded": excluded}
-    if min_positive_alphas is not None and len(weights) < min_positive_alphas:
-        return {"status": "INFEASIBLE", "reason_codes": ["MINIMUM_POSITIVE_ALPHA_COUNT_UNMET"],
                 "allocations": None, "excluded": excluded}
     points, reason = _integerize(
         weights, families, total_points=total_points,
@@ -606,6 +612,7 @@ def preview_osmosis_allocation(
         drawdown_matrix=drawdown_correlations, total_points=total_points,
         max_alpha_share=max_alpha_share, max_family_share=max_family_share,
         min_positive_alphas=min_positive_alphas, platform_rules=platform_rules,
+        min_correlation_observations=min_correlation_observations,
     )
     result.update({
         "scope": dict(scope), "excluded": excluded,
@@ -662,7 +669,7 @@ def preview_osmosis_allocation(
                     volatility_tilt_max=volatility_tilt_max,
                     platform_rules=platform_rules, _windowed=True,
                 )
-                if window_plan.get("status") != "READY":
+                if window_plan.get("status") != "INTERNAL_PREVIEW":
                     continue
                 window_weights = {
                     key: value / total_points for key, value in window_plan["points"].items()
@@ -718,6 +725,9 @@ def compare_osmosis_allocation_plans(
         "max_family_share": options.get("max_family_share", DEFAULT_MAX_FAMILY_SHARE),
         "min_positive_alphas": options.get("min_positive_alphas"),
         "platform_rules": options.get("platform_rules"),
+        "min_correlation_observations": options.get(
+            "min_correlation_observations", DEFAULT_MIN_CORRELATION_OBSERVATIONS,
+        ),
     }
     equal_raw = {item["alpha_id"]: 1.0 for item in accepted}
     quality_raw = {
@@ -737,7 +747,8 @@ def compare_osmosis_allocation_plans(
     }
     return {
         "status": "AVAILABLE" if all(
-            plan.get("status") in {"READY", "UNKNOWN"} for plan in plans.values()
+            plan.get("status") in {"INTERNAL_PREVIEW", "UNKNOWN"}
+            for plan in plans.values()
         ) else "PARTIAL",
         "scope": dict(scope), "plans": plans, "excluded": excluded,
         "comparison_note": "Historical in-sample diagnostics are not out-of-sample evidence.",

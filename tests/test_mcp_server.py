@@ -28,13 +28,36 @@ class ReadOnlyMCPServerTests(unittest.IsolatedAsyncioTestCase):
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
         self.assertFalse(core_names & {
             "evaluate_submitted_alpha", "evaluate_submitted_alphas",
+            "build_aqaf_calibration",
             "preview_osmosis_allocation", "compare_osmosis_allocation_plans",
         })
         for name in (
             "evaluate_submitted_alpha", "evaluate_submitted_alphas",
+            "build_aqaf_calibration",
             "preview_osmosis_allocation", "compare_osmosis_allocation_plans",
         ):
             self.assertTrue(tools[name].annotations.read_only_hint)
+
+    async def test_calibration_builder_calls_only_the_local_facade(self):
+        builder = Mock(return_value={"status": "UNKNOWN", "reason_code": "CALIBRATION_INPUT_INVALID"})
+        api = SimpleNamespace(build_aqaf_calibration=builder)
+        server = build_server(api=api, client=object(), profile="full")
+        arguments = {
+            "reference_rows": [], "candidate_alpha_id": "synthetic-alpha",
+            "scope": {"region": "USA", "universe": "TOP3000", "delay": 1},
+            "minimum_reference_count": 20, "scale_floors": {}, "units": {},
+            "frozen_at": "2026-10-11T00:00:00Z", "reference_id": "synthetic-v1",
+            "source": "synthetic-fixture", "version": "AQAF-CAL-1",
+            "pnl_unit": "SYNTHETIC_UNITS", "turnover_budget_unit": "fraction",
+            "turnover_budgets": {"GENERAL": .3, "HIGH_TURNOVER": .5, "LOW_TURNOVER": .15},
+        }
+        async with Client(server) as client:
+            result = await client.call_tool("build_aqaf_calibration", arguments)
+        self.assertEqual(result.structured_content["access_mode"], "READ_ONLY")
+        builder.assert_called_once_with(
+            arguments["reference_rows"],
+            **{key: value for key, value in arguments.items() if key != "reference_rows"},
+        )
 
     async def test_full_profile_aqaf_tool_calls_read_only_facade_with_bounded_input(self):
         from unittest.mock import Mock

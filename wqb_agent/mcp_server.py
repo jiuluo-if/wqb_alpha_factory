@@ -454,6 +454,43 @@ def build_server(*, api=research_api, client=None, config=None, state_dir=None, 
                 return False
             return valid_payload(value, max_bytes=4 * 1024 * 1024)
 
+        @server.tool(annotations=local_read)
+        def build_aqaf_calibration(
+            reference_rows: list[dict[str, Any]], candidate_alpha_id: str,
+            scope: dict[str, Any], minimum_reference_count: int,
+            scale_floors: dict[str, float], units: dict[str, str],
+            frozen_at: str, reference_id: str, source: str, version: str,
+            pnl_unit: str, turnover_budget_unit: str,
+            turnover_budgets: dict[str, float],
+        ) -> dict[str, Any]:
+            """[PURE][FULL] Freeze an offline leave-one-candidate-out calibration."""
+            if (
+                not isinstance(reference_rows, list) or len(reference_rows) > 1000
+                or not valid_payload({"rows": reference_rows}, max_bytes=4 * 1024 * 1024)
+                or not isinstance(candidate_alpha_id, str)
+                or len(candidate_alpha_id) > 128
+                or not isinstance(scope, dict) or not valid_payload(scope)
+                or isinstance(minimum_reference_count, bool)
+                or not isinstance(minimum_reference_count, int)
+                or not isinstance(scale_floors, dict) or not valid_payload(scale_floors)
+                or not isinstance(units, dict) or not valid_payload(units)
+                or not isinstance(turnover_budgets, dict)
+                or not valid_payload(turnover_budgets)
+                or any(not isinstance(value, str) or len(value) > 128 for value in (
+                    frozen_at, reference_id, source, version, pnl_unit,
+                    turnover_budget_unit,
+                ))
+            ):
+                return _invalid_result(owner="research_api.build_aqaf_calibration")
+            return wrap(lambda: api.build_aqaf_calibration(
+                reference_rows, candidate_alpha_id=candidate_alpha_id,
+                scope=scope, minimum_reference_count=minimum_reference_count,
+                scale_floors=scale_floors, units=units, frozen_at=frozen_at,
+                reference_id=reference_id, source=source, version=version,
+                pnl_unit=pnl_unit, turnover_budget_unit=turnover_budget_unit,
+                turnover_budgets=turnover_budgets,
+            ), owner="research_api.build_aqaf_calibration")
+
         @server.tool(annotations=remote_read)
         def evaluate_submitted_alpha(
             alpha_id: str, calibration: dict[str, Any],

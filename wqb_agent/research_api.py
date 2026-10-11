@@ -37,6 +37,7 @@ from .alpha_grouping import (
     find_remote_similar,
     group_remote_evidence,
 )
+from .alpha_quality import build_calibration as _build_aqaf_calibration
 from .alpha_quality import evaluate_quality
 from .alpha_semantics import derive_field_semantic_traits
 from .alpha_templates import (
@@ -1308,18 +1309,19 @@ def get_pending_executions(*, state_dir=None, config=None):
 
 
 def resume_execution(fingerprint, *, client=None, config=None,
-                     state_dir=None):
+                     state_dir=None, poll_timeout_sec=None):
     return _simulation_gateway(
-        client=client, config=config, state_dir=state_dir
+        client=client, config=config, state_dir=state_dir,
+        poll_timeout_sec=poll_timeout_sec,
     ).resume_execution(fingerprint)
 
 
 def reconcile_execution(fingerprint, *, client=None, config=None,
-                        state_dir=None):
+                        state_dir=None, poll_timeout_sec=None):
     """Read-only recovery of one guarded execution; never submits again."""
     return resume_execution(
         fingerprint, client=client, config=config,
-        state_dir=state_dir,
+        state_dir=state_dir, poll_timeout_sec=poll_timeout_sec,
     )
 
 
@@ -1388,16 +1390,27 @@ def _submission_fact(alpha):
 
 
 def _failed_alpha_checks(metrics):
-    checks = metrics.get("checks") if isinstance(metrics, Mapping) else None
+    if not isinstance(metrics, Mapping) or "checks" not in metrics:
+        return ["BRAIN_CHECK_STATUS_UNKNOWN"]
+    checks = metrics.get("checks")
     if not isinstance(checks, list):
-        return []
+        return ["BRAIN_CHECK_STATUS_UNKNOWN"]
+    if not checks:
+        return ["BRAIN_CHECK_STATUS_UNKNOWN"]
     failed = []
     for item in checks:
         if not isinstance(item, Mapping):
+            failed.append("BRAIN_CHECK_STATUS_UNKNOWN")
             continue
-        result = str(item.get("status", item.get("result", ""))).strip().upper()
-        if result in {"FAIL", "FAILED", "ERROR"}:
+        states = {
+            str(item.get(key) or "").strip().upper()
+            for key in ("status", "result") if item.get(key) is not None
+        }
+        if item.get("pass") is False or states & {"FAIL", "FAILED", "ERROR"}:
             failed.append("BRAIN_CHECK_FAILED")
+        elif (item.get("pass") is not True
+              and not states & {"PASS", "PASSED", "SUCCESS", "SUCCEEDED"}):
+            failed.append("BRAIN_CHECK_STATUS_UNKNOWN")
     return sorted(set(failed))
 
 
@@ -1416,16 +1429,31 @@ def _unknown_aqaf_result(alpha_id, reason, *, source="UNKNOWN", fetched_at=None)
     }
 
 
+def build_aqaf_calibration(
+    reference_rows, *, candidate_alpha_id, scope, minimum_reference_count,
+    scale_floors, units, frozen_at, reference_id, source, version, pnl_unit,
+    turnover_budget_unit, turnover_budgets,
+):
+    """Freeze one offline, leave-one-candidate-out AQAF reference artifact."""
+    return _build_aqaf_calibration(
+        reference_rows, candidate_alpha_id=candidate_alpha_id, scope=scope,
+        minimum_reference_count=minimum_reference_count,
+        scale_floors=scale_floors, units=units, frozen_at=frozen_at,
+        reference_id=reference_id, source=source, version=version,
+        pnl_unit=pnl_unit, turnover_budget_unit=turnover_budget_unit,
+        turnover_budgets=turnover_budgets,
+    )
+
+
 def _evaluate_submitted_alpha_snapshot(
     alpha_id, *, client, calibration, metric_units, expected_trading_dates,
     expected_trading_dates_source, pnl_unit, pnl_unit_source, as_of,
     type_label, type_source,
 ):
-    evidence = _evidence_provider(client=client).get_alpha_evidence(
-        alpha_id, live=True, depth="full",
-    )
-    fetched_at = evidence.get("fetched_at") if isinstance(evidence, Mapping) else None
-    alpha = evidence.get("alpha") if isinstance(evidence, Mapping) else None
+    provider = _evidence_provider(client=client)
+    summary = provider.get_alpha_evidence(alpha_id, live=True, depth="summary")
+    fetched_at = summary.get("fetched_at") if isinstance(summary, Mapping) else None
+    alpha = summary.get("alpha") if isinstance(summary, Mapping) else None
     submission_status, submitted_at = _submission_fact(alpha)
     if submission_status != "SUBMITTED":
         return {
@@ -1435,6 +1463,9 @@ def _evaluate_submitted_alpha_snapshot(
             ),
             "evidence_status": "UNAVAILABLE",
         }, None
+    evidence = provider.get_alpha_evidence(
+        alpha_id, live=True, depth="full", alpha_detail=alpha,
+    )
     scope = _aqaf_scope(alpha)
     detail = alpha.get("is") if isinstance(alpha, Mapping) else None
     detail = detail if isinstance(detail, Mapping) else {}
@@ -1484,12 +1515,13 @@ def _evaluate_submitted_alpha_snapshot(
     failed_checks = _failed_alpha_checks(detail)
     calculated_alerts = sorted(set(calculated["risk_alerts"]) | set(failed_checks))
     quality = dict(calculated["quality"])
-    if failed_checks and quality.get("grade") != "U":
-        quality["grade"] = "D"
-        quality["risk_grade_cap"] = "D"
+    if failed_checks:
+        quality["grade"] = "U"
+        quality["status"] = "UNKNOWN"
+        quality["risk_grade_cap"] = "U"
     record = {
         "alpha_id": str(alpha_id), "source": "BRAIN_LIVE",
-        "status": "AVAILABLE" if calculated["quality"]["status"] == "AVAILABLE" else "UNKNOWN",
+        "status": "AVAILABLE" if quality["status"] == "AVAILABLE" else "UNKNOWN",
         "submission_status": submission_status, "submitted_at": submitted_at,
         "scope": scope,
         "reason_code": (
@@ -1521,7 +1553,7 @@ def _evaluate_submitted_alpha_snapshot(
         "scope": scope, "quality": quality,
         "disqualifying_risks": failed_checks,
         "pnl": {
-            "rows": pnl.get("pnl") if isinstance(pnl, Mapping) else None,
+            "rows": pnl,
             "unit": pnl_unit_value if pnl_unit_source_value else None,
             "expected_dates": expected_dates,
         },
@@ -2088,6 +2120,7 @@ def research_tool_manifest(profile="core"):
         {"name": "get_alpha_recordsets", "mode": "READ_ONLY", "owner": "BRAIN"},
         {"name": "evaluate_submitted_alpha", "mode": "READ_ONLY", "owner": "AQAF"},
         {"name": "evaluate_submitted_alphas", "mode": "READ_ONLY", "owner": "AQAF"},
+        {"name": "build_aqaf_calibration", "mode": "PURE", "owner": "AQAF"},
         {"name": "preview_osmosis_allocation", "mode": "READ_ONLY", "owner": "AQAF"},
         {"name": "compare_osmosis_allocation_plans", "mode": "READ_ONLY", "owner": "AQAF"},
         {"name": "get_activity_diversity", "mode": "READ_ONLY", "owner": "BRAIN"},
@@ -2130,6 +2163,7 @@ __all__ = [
     "get_alpha_prod_correlation",
     "get_alpha_recordsets",
     "evaluate_submitted_alpha", "evaluate_submitted_alphas",
+    "build_aqaf_calibration",
     "preview_osmosis_allocation", "compare_osmosis_allocation_plans",
     "compare_alphas", "refresh_remote_alphas", "list_remote_alphas",
     "get_activity_diversity",
