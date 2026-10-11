@@ -7,6 +7,8 @@ change its own score scale.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime
@@ -66,7 +68,7 @@ _DIRECTIONS = {
 }
 MAX_PNL_OBSERVATIONS = 10_000
 MAX_CALIBRATION_REFERENCE_ROWS = 1_000
-CALIBRATION_ARTIFACT_SCHEMA = "AQAF_CALIBRATION_1"
+CALIBRATION_ARTIFACT_SCHEMA = "AQAF_CALIBRATION_2"
 
 
 def _number(value: Any) -> float | None:
@@ -233,13 +235,10 @@ def _stability(
     pnl_dates = {row["date"] for row in pnl["rows"]}
     yearly: list[tuple[int, float, float]] = []
     for row in rows:
-        year = row.get("year")
-        try:
-            if isinstance(year, bool):
-                continue
-            year = int(year)
-        except (TypeError, ValueError, OverflowError):
+        year_value = _number(row.get("year"))
+        if year_value is None or not year_value.is_integer():
             continue
+        year = int(year_value)
         if year < 1900 or year > as_of.year:
             continue
         returns = _number(row.get("returns"))
@@ -339,10 +338,10 @@ def pnl_drawdown_strength(
     try:
         expected = []
         for item in expected_dates:
-            value = str(item)
-            if len(value) != 10:
+            calendar_value = str(item)
+            if len(calendar_value) != 10:
                 raise ValueError("calendar day must be YYYY-MM-DD")
-            expected.append(date.fromisoformat(value).isoformat())
+            expected.append(date.fromisoformat(calendar_value).isoformat())
     except ValueError:
         return {"status": "UNAVAILABLE", "reason_code": "TRADING_CALENDAR_INVALID"}
     if len(dates) != len(set(dates)):
@@ -439,9 +438,14 @@ def evaluate_quality(
         and dict(calibration["scope"]) == scope
         and calibration.get("exclusion_policy") == "LEAVE_CANDIDATE_OUT"
         and str(calibration.get("excluded_alpha_id") or "") == alpha_id
+        and isinstance(calibration.get("artifact_digest"), str)
+        and calibration.get("artifact_digest") == _calibration_digest(calibration)
     )
     if not compatible:
         calibration = None
+    calibration_values: Mapping[str, Any] = (
+        calibration if compatible and isinstance(calibration, Mapping) else {}
+    )
 
     metrics = metrics if isinstance(metrics, Mapping) else {}
     metric_units = metric_units if isinstance(metric_units, Mapping) else {}
@@ -499,7 +503,7 @@ def evaluate_quality(
     drawdown = pnl_drawdown_strength(
         pnl_rows, expected_dates=expected_trading_dates,
         pnl_unit=pnl_unit,
-        expected_unit=(calibration.get("pnl_unit") if compatible else None),
+        expected_unit=(calibration_values.get("pnl_unit") if compatible else None),
     )
     for name in ("mdd_strength", "cdar_strength"):
         value = drawdown.get(name)
@@ -537,10 +541,10 @@ def evaluate_quality(
     # budget and penalty scale for each possible turnover class.
     if compatible and turnover is not None:
         blend = resolved.get("blend_weights") or {resolved.get("label"): 1.0}
-        budgets = calibration.get("turnover_budgets")
+        budgets = calibration_values.get("turnover_budgets")
         budget = None
         if (isinstance(budgets, Mapping)
-                and str(calibration.get("turnover_budget_unit") or "") == raw_units["turnover"]
+                and str(calibration_values.get("turnover_budget_unit") or "") == raw_units["turnover"]
                 and all(
                     share <= 1e-12 or _number(budgets.get(kind)) is not None
                     for kind, share in blend.items()
@@ -627,7 +631,7 @@ def evaluate_quality(
             "q_mid": q_mid, "q_low": q_low, "q_high": q_high,
             "coverage": coverage, "grade": grade,
             "status": "AVAILABLE" if compatible else "UNKNOWN",
-            "config_version": calibration.get("version") if compatible else None,
+            "config_version": calibration_values.get("version") if compatible else None,
         },
         "risk_alerts": sorted(set(alerts)),
         "economic_diagnostics": sorted(set(economic_diagnostics)),
@@ -646,6 +650,20 @@ def _safe_calibration_version(value: Any) -> bool:
         version and len(version) <= 64 and version.isascii()
         and all(char.isalnum() or char in "._-" for char in version)
     )
+
+
+def _calibration_digest(artifact: Mapping[str, Any]) -> str | None:
+    """Return a reproducible integrity digest for a frozen artifact payload."""
+    payload = {key: value for key, value in artifact.items()
+               if key != "artifact_digest"}
+    try:
+        encoded = json.dumps(
+            payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"),
+            allow_nan=False,
+        ).encode("ascii")
+    except (TypeError, ValueError):
+        return None
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def build_calibration(
@@ -752,4 +770,8 @@ def build_calibration(
         "turnover_budgets": budgets,
         "audit": {"method": "MEDIAN_MAD", "input_ids_retained": False},
     }
+    digest = _calibration_digest(artifact)
+    if digest is None:
+        return {"status": "UNKNOWN", "reason_code": "CALIBRATION_ARTIFACT_NOT_SERIALIZABLE"}
+    artifact["artifact_digest"] = digest
     return artifact

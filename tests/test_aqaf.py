@@ -8,6 +8,7 @@ from wqb_agent.alpha_quality import (
     CALIBRATION_ARTIFACT_SCHEMA,
     METRIC_WEIGHTS,
     TYPE_WEIGHTS,
+    _calibration_digest,
     _correlation_value,
     build_calibration,
     evaluate_quality,
@@ -49,7 +50,7 @@ def _calibration(alpha_id="synthetic-a"):
         "yearly_sharpe": (1.0, 0.5, 0.1, "ratio"),
         "recent_sharpe_change": (0.0, 0.5, 0.1, "ratio"),
     }
-    return {
+    artifact = {
         "status": "AVAILABLE",
         "schema": CALIBRATION_ARTIFACT_SCHEMA,
         "version": "AQAF-TEST-1",
@@ -73,6 +74,8 @@ def _calibration(alpha_id="synthetic-a"):
             "LOW_TURNOVER": 0.15,
         },
     }
+    artifact["artifact_digest"] = _calibration_digest(artifact)
+    return artifact
 
 
 class AlphaQualityTests(unittest.TestCase):
@@ -230,8 +233,22 @@ class AlphaQualityTests(unittest.TestCase):
         self.assertEqual(first["status"], "AVAILABLE")
         self.assertEqual(first["reference_count"], 20)
         self.assertEqual(first["excluded_alpha_id"], "candidate")
+        self.assertRegex(first["artifact_digest"], r"^[0-9a-f]{64}$")
         self.assertNotIn("reference-0", str(first))
         self.assertEqual(first["metric_references"]["sharpe"]["median"], 9.5)
+
+    def test_mutated_frozen_calibration_artifact_fails_closed(self):
+        calibration = _calibration()
+        calibration["metric_references"]["sharpe"]["median"] += 0.25
+        result = evaluate_quality(
+            alpha_id="synthetic-a",
+            alpha_scope={"region": "USA", "universe": "TOP3000", "delay": 1},
+            metrics={"sharpe": 1.2}, yearly_data=None, pnl_rows=None,
+            pnl_unit=None, expected_trading_dates=None, self_correlation=None,
+            calibration=calibration, as_of=date(2025, 6, 1),
+        )
+        self.assertEqual(result["quality"]["status"], "UNKNOWN")
+        self.assertEqual(result["quality"]["grade"], "U")
 
     def test_calibration_for_another_candidate_does_not_score_this_candidate(self):
         result = evaluate_quality(
