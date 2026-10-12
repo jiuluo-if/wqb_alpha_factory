@@ -17,6 +17,8 @@ from . import research_api
 
 MAX_RESULT_BYTES = 48 * 1024
 MAX_LIST_ITEMS = 20
+MAX_TEMPLATE_METADATA_ITEMS = 64
+MAX_OPERATOR_REFERENCE_ITEMS = 128
 MAX_STRING_CHARS = 8 * 1024
 MAX_RECORDSETS = 2
 MAX_AQAF_MCP_ALPHA_IDS = 20
@@ -712,7 +714,10 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
             active_client = WQBClient()
         return active_client
 
-    def read_facade(name, *args, allow_expression=False, **kwargs):
+    def read_facade(
+        name, *args, allow_expression=False,
+        list_item_limit=MAX_LIST_ITEMS, **kwargs,
+    ):
         try:
             payload = getattr(api, name)(
                 *args, client=resolve_client(), config=config, **kwargs,
@@ -721,7 +726,11 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
             return _failed_result(exc, owner=f"research_api.{name}")
         if not isinstance(payload, Mapping):
             payload = {"source": "UNKNOWN", "status": "UNKNOWN", "result": payload}
-        return _envelope(payload, owner=f"research_api.{name}", allow_expression=allow_expression)
+        return _envelope(
+            payload, owner=f"research_api.{name}",
+            allow_expression=allow_expression,
+            list_item_limit=list_item_limit,
+        )
 
     def write_facade(name, specs, **options):
         count = len(specs)
@@ -837,7 +846,7 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
             "complete": offset + len(page) >= len(rows),
             "next_offset": None if offset + len(page) >= len(rows) else offset + len(page),
             "templates": summaries,
-        }, owner=owner, list_item_limit=limit)
+        }, owner=owner, list_item_limit=MAX_TEMPLATE_METADATA_ITEMS)
 
     @server.tool(annotations=remote_read)
     def generate_probes(
@@ -885,7 +894,10 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
     @server.tool(annotations=remote_read)
     def get_operator_reference() -> dict[str, Any]:
         """[READ_ONLY] Read current live operator capability and syntax facts."""
-        return read_facade("get_operator_reference")
+        return read_facade(
+            "get_operator_reference",
+            list_item_limit=MAX_OPERATOR_REFERENCE_ITEMS,
+        )
 
     @server.tool(annotations=remote_read)
     def validate_simulation_spec(spec: dict[str, Any]) -> dict[str, Any]:
