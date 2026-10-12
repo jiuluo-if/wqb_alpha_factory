@@ -515,10 +515,21 @@ class AlphaFactory:
                 symmetric = True
                 assignment_reason = "put/call implied volatility pair is symmetric for ratio testing"
             elif relationship_type == "numerator_denominator":
-                if not (
-                    traits[0].get("concept") == "earnings"
-                    and traits[1].get("concept") == "fundamental"
-                ):
+                concepts = [item.get("concept") for item in traits]
+                dataset_scope = [cls._profile_dataset(profile) for profile in profiles]
+                field_types = [str(profile.get("type") or "").upper() for profile in profiles]
+                ordinary_ratio = concepts == ["earnings", "fundamental"]
+                ordered_asset_ratio = (
+                    concepts == ["earnings", "asset_base"]
+                    and dataset_scope[0]
+                    and dataset_scope[0] == dataset_scope[1]
+                    and field_types == ["MATRIX", "MATRIX"]
+                    and all(
+                        cls._profile_category(profile) == "fundamental"
+                        for profile in profiles
+                    )
+                )
+                if not (ordinary_ratio or ordered_asset_ratio):
                     return result(
                         "REJECT", -35, labels, relationship_type,
                         reasons=("ratio direction is only proven for earnings over assets",),

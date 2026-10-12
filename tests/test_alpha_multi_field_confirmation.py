@@ -166,6 +166,34 @@ class MultiFieldConfirmationTests(unittest.TestCase):
         self.assertEqual(decision["relationship_type"], "equity_asset_base")
         self.assertEqual(decision["frequency_compatibility"]["status"], "REVIEW")
 
+    def test_admits_ordered_operating_profit_to_asset_ratio(self):
+        operating_profit = _field(
+            "operating_profit",
+            "Operating profit for the trailing 12 months",
+            dataset="fundamental_fixture",
+            category="fundamental",
+            field_type="MATRIX",
+            frequency="monthly",
+        )
+        assets = _field(
+            "assets",
+            "Total assets for the trailing 12 months",
+            dataset="fundamental_fixture",
+            category="fundamental",
+            field_type="MATRIX",
+            frequency="monthly",
+        )
+        decision = AlphaFactory._relationship_gate(
+            [operating_profit, assets], _template("DIRECTIONAL_RATIO")
+        )
+        reversed_decision = AlphaFactory._relationship_gate(
+            [assets, operating_profit], _template("DIRECTIONAL_RATIO")
+        )
+
+        self.assertEqual(decision["admission"], "ALLOW")
+        self.assertEqual(decision["relationship_type"], "numerator_denominator")
+        self.assertEqual(reversed_decision["admission"], "REJECT")
+
     def test_admits_shared_dataset_cashflow_to_debt_ratio_with_unknown_cadence(self):
         decision = AlphaFactory._relationship_gate(
             [
