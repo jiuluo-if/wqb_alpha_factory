@@ -72,7 +72,7 @@ def frequency_bucket(value: object) -> str:
     )
     if any(marker in text for marker in ("intraday", "minute", "hour")):
         return "intraday"
-    if any(marker in text for marker in ("daily", "day")):
+    if any(marker in text for marker in ("daily", "per day", "every day", "each day")):
         return "daily"
     if any(marker in text for marker in ("weekly", "week")):
         return "weekly"

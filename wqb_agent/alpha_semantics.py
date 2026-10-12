@@ -45,7 +45,13 @@ _SEMANTIC_CONCEPT_RULES = (
     ),
     (
         "event_novelty",
-        ("news novelty", "story novelty", "event novelty"),
+        (
+            "news novelty",
+            "story novelty",
+            "event novelty",
+            "event similarity days",
+            "days since a similar event",
+        ),
     ),
     (
         "market_beta",
