@@ -334,6 +334,82 @@ class MultiFieldConfirmationTests(unittest.TestCase):
 
         self.assertEqual(decision["admission"], "REJECT")
 
+    def test_admits_same_dataset_ordered_market_beta_correlation_spread(self):
+        decision = AlphaFactory._relationship_gate(
+            [
+                _field(
+                    "market_beta",
+                    "Rolling beta value over the last 30 calendar days",
+                    dataset="model_fixture",
+                    category="model",
+                    field_type="MATRIX",
+                ),
+                _field(
+                    "market_correlation",
+                    "Correlation coefficient of daily returns over the last 30 calendar days",
+                    dataset="model_fixture",
+                    category="model",
+                    field_type="MATRIX",
+                ),
+            ],
+            _template("COMPARABLE_SPREAD"),
+        )
+
+        self.assertEqual(decision["admission"], "ALLOW")
+        self.assertEqual(decision["relationship_type"], "beta_correlation")
+        self.assertFalse(decision["symmetric"])
+
+    def test_market_beta_correlation_spread_rejects_wrong_order_or_dataset(self):
+        beta = _field(
+            "market_beta",
+            "Rolling beta value over the last 30 calendar days",
+            dataset="model_fixture",
+            category="model",
+            field_type="MATRIX",
+        )
+        correlation = _field(
+            "market_correlation",
+            "Correlation coefficient of daily returns over the last 30 calendar days",
+            dataset="model_fixture",
+            category="model",
+            field_type="MATRIX",
+        )
+        reversed_decision = AlphaFactory._relationship_gate(
+            [correlation, beta], _template("COMPARABLE_SPREAD")
+        )
+        cross_dataset = AlphaFactory._relationship_gate(
+            [beta, {**correlation, "dataset": "other_model_fixture"}],
+            _template("COMPARABLE_SPREAD"),
+        )
+
+        self.assertEqual(reversed_decision["admission"], "REJECT")
+        self.assertEqual(cross_dataset["admission"], "REJECT")
+
+    def test_market_beta_correlation_spread_keeps_unknown_cadence_at_review(self):
+        decision = AlphaFactory._relationship_gate(
+            [
+                _field(
+                    "market_beta",
+                    "Rolling beta value",
+                    dataset="model_fixture",
+                    category="model",
+                    field_type="MATRIX",
+                    frequency=None,
+                ),
+                _field(
+                    "market_correlation",
+                    "Correlation coefficient",
+                    dataset="model_fixture",
+                    category="model",
+                    field_type="MATRIX",
+                    frequency=None,
+                ),
+            ],
+            _template("COMPARABLE_SPREAD"),
+        )
+
+        self.assertEqual(decision["admission"], "REVIEW")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -48,6 +48,14 @@ _SEMANTIC_CONCEPT_RULES = (
         ("news novelty", "story novelty", "event novelty"),
     ),
     (
+        "market_beta",
+        ("market beta", "rolling beta value", "beta of the stock"),
+    ),
+    (
+        "market_correlation",
+        ("market correlation", "correlation coefficient", "rolling correlation"),
+    ),
+    (
         "operating_cashflow",
         (
             "operating activities - net cash flow",
@@ -361,6 +369,8 @@ def derive_field_semantic_traits(
         "profitability_measure": "operating_profitability",
         "asset_efficiency": "asset_utilization",
         "social_attention": "social_attention_volume",
+        "market_beta": "market_sensitivity",
+        "market_correlation": "market_co_movement",
         "liquidity": "market_participation",
         "sentiment": "attention_or_belief",
         "valuation": "relative_value",
@@ -404,6 +414,8 @@ def derive_field_semantic_traits(
         tags.add("asset_scale")
     if concept == "operating_cashflow":
         tags.add("earnings")
+    if concept in {"market_beta", "market_correlation"}:
+        tags.add("market_sensitivity")
     if concept in {"fundamental", "earnings", "valuation"}:
         tags.add("fundamental_scale")
     if any(

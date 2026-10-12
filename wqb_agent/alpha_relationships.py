@@ -24,6 +24,8 @@ def relationship_labels(
         labels.add("sentiment_attention_scale")
     if concepts == {"profitability_measure", "asset_efficiency"}:
         labels.add("profitability_efficiency")
+    if concepts == {"market_beta", "market_correlation"}:
+        labels.add("beta_correlation")
     if {left_concept, right_concept} == {"event_novelty", "sentiment"}:
         labels.add("novelty_weighted_sentiment")
     if left_concept == right_concept and left_concept != "unknown":
@@ -140,6 +142,7 @@ def relationship_type(labels: set[str]) -> str:
         "realized_implied_volatility",
         "sentiment_attention_scale",
         "profitability_efficiency",
+        "beta_correlation",
         "revision_dispersion",
         "numerator_denominator",
         "same_economic_concept",

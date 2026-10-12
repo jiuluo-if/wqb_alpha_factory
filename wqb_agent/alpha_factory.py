@@ -457,32 +457,45 @@ class AlphaFactory:
                 reasons=("frequency incompatibility blocks this relationship",),
             )
         if relationship_contract == "COMPARABLE_SPREAD":
-            if relationship_type == "profitability_efficiency":
+            if relationship_type in {"profitability_efficiency", "beta_correlation"}:
+                expected_concepts = {
+                    "profitability_efficiency": (
+                        "profitability_measure", "asset_efficiency"
+                    ),
+                    "beta_correlation": ("market_beta", "market_correlation"),
+                }[relationship_type]
+                expected_categories = {
+                    "profitability_efficiency": {"fundamental", "earnings"},
+                    "beta_correlation": {"model"},
+                }[relationship_type]
                 datasets = [cls._profile_dataset(profile) for profile in profiles]
                 categories = [cls._profile_category(profile) for profile in profiles]
                 field_types = [str(profile.get("type") or "").upper() for profile in profiles]
                 if not (
-                    [item.get("concept") for item in traits]
-                    == ["profitability_measure", "asset_efficiency"]
+                    [item.get("concept") for item in traits] == list(expected_concepts)
                     and datasets[0]
                     and datasets[0] == datasets[1]
                     and categories[0] == categories[1]
-                    and categories[0] in {"fundamental", "earnings"}
+                    and categories[0] in expected_categories
                     and field_types == ["MATRIX", "MATRIX"]
                 ):
                     return result(
                         "REJECT", -35, labels, relationship_type,
-                        reasons=("profitability-efficiency spread requires ordered MATRIX fields from one dataset",),
+                        reasons=("specialized spread requires ordered MATRIX roles from one live dataset/category",),
                     )
                 assignment_reason = (
                     "profitability is the primary measure and asset efficiency is its same-source comparator"
+                    if relationship_type == "profitability_efficiency"
+                    else "market beta is the primary exposure and market correlation is its same-window comparator"
                 )
                 preferred = {
-                    "p": "profitability_measure",
-                    "s": "asset_efficiency",
+                    "p": expected_concepts[0], "s": expected_concepts[1]
                 }
                 symmetric = False
-                frequency_scope_alignment = set(frequency["buckets"]) == {"unknown"}
+                frequency_scope_alignment = (
+                    relationship_type == "profitability_efficiency"
+                    and set(frequency["buckets"]) == {"unknown"}
+                )
             else:
                 if relationship_type == "same_economic_concept":
                     if traits[0].get("measurement") != traits[1].get("measurement"):
