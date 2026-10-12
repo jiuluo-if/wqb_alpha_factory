@@ -1837,6 +1837,7 @@ class TestSimulationGateway(unittest.TestCase):
 
     def test_incomplete_remote_history_scan_fails_closed_before_post(self):
         from wqb_agent.client import WQBQueryTooBroadError
+        from wqb_agent.failures import ResearchReasonError
 
         class IncompleteHistoryClient(ShardedRemoteHistoryGatewayClient):
             def iter_user_alpha_history_shards(self, **_kwargs):
@@ -1844,10 +1845,32 @@ class TestSimulationGateway(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             client = IncompleteHistoryClient()
-            with self.assertRaisesRegex(WQBQueryTooBroadError, "incomplete"):
+            with self.assertRaises(ResearchReasonError) as caught:
                 SimulationGateway(client, state_dir=tmp).simulate(
                     SimulationSpec("rank(close)", {"delay": 1})
                 )
+            self.assertEqual(
+                caught.exception.reason_code, "REMOTE_DUPLICATE_SCAN_FAILED"
+            )
+            self.assertEqual(client.submissions, [])
+
+    def test_remote_history_reader_failure_has_safe_stage_reason_before_post(self):
+        from wqb_agent.failures import ResearchReasonError
+
+        class FailedHistoryClient(ShardedRemoteHistoryGatewayClient):
+            def iter_user_alpha_history_shards(self, **_kwargs):
+                raise RuntimeError("private cookie=secret")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FailedHistoryClient()
+            with self.assertRaises(ResearchReasonError) as caught:
+                SimulationGateway(client, state_dir=tmp).simulate(
+                    SimulationSpec("rank(close)", {"delay": 1})
+                )
+            self.assertEqual(
+                caught.exception.reason_code, "REMOTE_DUPLICATE_SCAN_FAILED"
+            )
+            self.assertNotIn("secret", str(caught.exception))
             self.assertEqual(client.submissions, [])
 
     def test_field_validation_fails_closed_when_reader_is_missing(self):

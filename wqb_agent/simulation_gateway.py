@@ -919,19 +919,27 @@ class SimulationGateway:
         scan_started = time.monotonic()
         rows_scanned = 0
         shard_reader = getattr(self.client, "iter_user_alpha_history_shards", None)
-        if callable(shard_reader):
-            rows, scan_lookback_days = self._recent_history_rows(shard_reader)
-        else:
-            reader = getattr(self.client, "get_all_user_alphas", None)
-            if not callable(reader):
-                raise ResearchReasonError(
-                    "REMOTE_DUPLICATE_CAPABILITY_UNAVAILABLE",
-                    "CAPABILITY_UNAVAILABLE",
-                )
-            # Compatibility path remains bounded. QueryTooBroad and transport
-            # failures propagate; an incomplete scan is never treated as clear.
-            rows = reader(max_results=1000)
-            scan_lookback_days = None
+        try:
+            if callable(shard_reader):
+                rows, scan_lookback_days = self._recent_history_rows(shard_reader)
+            else:
+                reader = getattr(self.client, "get_all_user_alphas", None)
+                if not callable(reader):
+                    raise ResearchReasonError(
+                        "REMOTE_DUPLICATE_CAPABILITY_UNAVAILABLE",
+                        "CAPABILITY_UNAVAILABLE",
+                    )
+                # Compatibility path remains bounded. An incomplete scan is
+                # never treated as clear.
+                rows = reader(max_results=1000)
+                scan_lookback_days = None
+        except ResearchReasonError:
+            raise
+        except Exception as exc:
+            raise ResearchReasonError(
+                "Remote duplicate history scan failed",
+                "REMOTE_DUPLICATE_SCAN_FAILED",
+            ) from exc
         try:
             iterator = iter(rows)
         except TypeError as exc:
@@ -941,7 +949,16 @@ class SimulationGateway:
             ) from exc
 
         matches = {}
-        for row in iterator:
+        while True:
+            try:
+                row = next(iterator)
+            except StopIteration:
+                break
+            except Exception as exc:
+                raise ResearchReasonError(
+                    "Remote duplicate history scan failed",
+                    "REMOTE_DUPLICATE_SCAN_FAILED",
+                ) from exc
             rows_scanned += 1
             if not isinstance(row, Mapping):
                 continue
