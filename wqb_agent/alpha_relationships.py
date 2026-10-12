@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 
 
@@ -59,6 +60,16 @@ def relationship_labels(
 
 def frequency_bucket(value: object) -> str:
     text = str(value or "").lower()
+    # A historical/lookback window describes the observation horizon, not how
+    # often the source field is updated (for example, news linked within the
+    # last 24 hours).
+    text = re.sub(
+        r"\b(?:within|over|during|for|in)\s+(?:the\s+)?"
+        r"(?:last|past|previous|preceding)\s+\d+(?:\.\d+)?\s+"
+        r"(?:minutes?|hours?|days?|weeks?|months?|years?)\b",
+        " ",
+        text,
+    )
     if any(marker in text for marker in ("intraday", "minute", "hour")):
         return "intraday"
     if any(marker in text for marker in ("daily", "day")):
