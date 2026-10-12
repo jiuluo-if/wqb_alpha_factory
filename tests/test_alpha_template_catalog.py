@@ -61,11 +61,12 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
         spec, = factory.generate(
             {"template_ids": ["synthetic-ra"]},
             [{"id": "field_a", "dataset": "dataset_a"}], count=1,
-            settings={"region": "USA", "delay": 1},
+            settings={"region": "USA", "universe": "TOP3000", "delay": 1},
         )
 
         self.assertEqual(spec.simulation_type, "REGION_AGNOSTIC")
         self.assertEqual(spec.settings["region"], "ALL")
+        self.assertEqual(spec.settings["universe"], "LARGE")
         self.assertEqual(spec.fields, ("field_a",))
         self.assertEqual(template.catalog_entry()["simulation_type"], "REGION_AGNOSTIC")
 

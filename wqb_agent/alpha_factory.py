@@ -218,6 +218,7 @@ class AlphaFactory:
             effective_settings = dict(settings or item.get("settings") or {})
             if simulation_type == "REGION_AGNOSTIC":
                 effective_settings["region"] = "ALL"
+                effective_settings["universe"] = "LARGE"
             specs.append(SimulationSpec(
                 expression=item["expression"],
                 settings=effective_settings,
