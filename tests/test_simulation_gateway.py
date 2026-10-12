@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 
 from wqb_agent import research_api
 from wqb_agent.client import (
+    WQBNotFoundError,
     WQBRateLimitError,
     WQBRemoteSimulationError,
     WQBSimulationError,
@@ -38,6 +39,7 @@ class FakeGatewayClient:
         self.quota_unknown = quota_unknown
         self.quota_exhausted = quota_exhausted
         self.submissions = []
+        self.poll_progress_timeout = None
 
     def get_simulation_quota_observation(self):
         if self.quota_unknown:
@@ -69,6 +71,7 @@ class FakeGatewayClient:
 
     def poll_progress(self, progress_url, **kwargs):
         self.assert_progress_url = progress_url
+        self.poll_progress_timeout = kwargs.get("timeout_sec")
         return "alpha-1"
 
     def get_alpha(self, alpha_id):
@@ -331,6 +334,149 @@ class TestWriteReadiness(unittest.TestCase):
         self.assertEqual(result["blocked_count"], 0)
         self.assertEqual(result["active_multi_parent_count"], 1)
         self.assertEqual(result["effective_max_concurrent_multi"], 7)
+
+    def test_research_batch_status_admits_region_agnostic_single_candidates(self):
+        class RegionAwareClient(FakeGatewayClient):
+            def get_authentication_status(self):
+                return {"authenticated": True, "permissions": ["REGION_AGNOSTIC"]}
+
+            def get_simulation_capability(self):
+                return {
+                    "status": "AVAILABLE", "capability_status": "AVAILABLE",
+                    "simulation_type_choices": ["REGULAR", "REGION_AGNOSTIC"],
+                    "settings": {}, "required_fields": [], "required_settings": [],
+                }
+
+            def get_field_capability(self, field_sources, *, scope=None):
+                fields = [field for selected in field_sources.values() for field in selected]
+                return {
+                    "valid": True, "fields": fields,
+                    "source": "BRAIN_LIVE_ONLY",
+                    "field_types": {field: "MATRIX" for field in fields},
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = RegionAwareClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            for index in range(MULTI_MAX_CONCURRENCY):
+                gateway.guard.register(
+                    f"unrelated-parent-{index}", status="SUBMIT_UNKNOWN",
+                    kind=ExecutionGuard.MULTI_PARENT, simulation_count=10,
+                )
+            ready = SimulationSpec(
+                "rank(field_ready)",
+                {"region": "ALL", "universe": "MINVOL1M", "delay": 1},
+                fields=("field_ready",),
+                field_datasets={"field_ready": "dataset_a"},
+                proposal_id="ra-ready",
+                simulation_type="REGION_AGNOSTIC",
+            )
+            unknown = SimulationSpec(
+                "rank(field_unknown)",
+                {"region": "ALL", "universe": "MINVOL1M", "delay": 1},
+                fields=("field_unknown",),
+                field_datasets={"field_unknown": "dataset_a"},
+                proposal_id="ra-unknown",
+                simulation_type="REGION_AGNOSTIC",
+            )
+            gateway.guard.register(
+                gateway.execution_fingerprint(unknown),
+                status="SUBMIT_UNKNOWN", kind=ExecutionGuard.SINGLE,
+            )
+
+            result = gateway.research_batch_status([ready])
+            guarded_result = gateway.research_batch_status([unknown])
+            entries = gateway.guard.entries()
+
+        self.assertEqual(result["write_readiness"], "READY")
+        self.assertEqual(result["eligible_count"], 1)
+        self.assertEqual(result["blocked_count"], 0)
+        self.assertEqual(
+            result["proposal_admissions"],
+            [{"proposal_id": "ra-ready", "status": "READY"}],
+        )
+        self.assertEqual(guarded_result["eligible_count"], 0)
+        self.assertEqual(guarded_result["proposal_admissions"][0]["status"], "SUBMIT_UNKNOWN")
+        self.assertEqual(len(client.submissions), 0)
+        self.assertEqual(len(entries), MULTI_MAX_CONCURRENCY + 1)
+
+    def test_region_agnostic_permission_failure_blocks_each_candidate(self):
+        class MissingRegionPermissionClient(FakeGatewayClient):
+            def get_simulation_capability(self):
+                return {
+                    "status": "AVAILABLE", "capability_status": "AVAILABLE",
+                    "simulation_type_choices": ["REGULAR", "REGION_AGNOSTIC"],
+                    "settings": {}, "required_fields": [], "required_settings": [],
+                }
+
+            def get_field_capability(self, field_sources, *, scope=None):
+                fields = [field for selected in field_sources.values() for field in selected]
+                return {
+                    "valid": True, "fields": fields,
+                    "source": "BRAIN_LIVE_ONLY",
+                    "field_types": {field: "MATRIX" for field in fields},
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = MissingRegionPermissionClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            spec = SimulationSpec(
+                "rank(field_a)",
+                {"region": "ALL", "universe": "MINVOL1M", "delay": 1},
+                fields=("field_a",), field_datasets={"field_a": "dataset_a"},
+                proposal_id="ra-no-permission",
+                simulation_type="REGION_AGNOSTIC",
+            )
+
+            result = gateway.research_batch_status([spec])
+
+        self.assertEqual(result["write_readiness"], "BLOCKED_BY_REMOTE_STATE")
+        self.assertEqual(result["eligible_count"], 0)
+        self.assertEqual(result["blocked_count"], 1)
+        self.assertEqual(result["proposal_admissions"][0]["status"], "BLOCKED")
+        self.assertEqual(
+            result["proposal_admissions"][0]["reason_code"],
+            "REGION_AGNOSTIC_PERMISSION_UNAVAILABLE",
+        )
+
+    def test_unknown_permission_list_does_not_mark_region_agnostic_ready(self):
+        class UnknownPermissionClient(FakeGatewayClient):
+            def get_authentication_status(self):
+                return {"authenticated": True}
+
+            def get_simulation_capability(self):
+                return {
+                    "status": "AVAILABLE", "capability_status": "AVAILABLE",
+                    "simulation_type_choices": ["REGULAR", "REGION_AGNOSTIC"],
+                    "settings": {}, "required_fields": [], "required_settings": [],
+                }
+
+            def get_field_capability(self, field_sources, *, scope=None):
+                fields = [field for selected in field_sources.values() for field in selected]
+                return {
+                    "valid": True, "fields": fields,
+                    "source": "BRAIN_LIVE_ONLY",
+                    "field_types": {field: "MATRIX" for field in fields},
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = SimulationGateway(
+                UnknownPermissionClient(), state_dir=tmp,
+            ).research_batch_status([SimulationSpec(
+                "rank(field_a)",
+                {"region": "ALL", "universe": "MINVOL1M", "delay": 1},
+                fields=("field_a",), field_datasets={"field_a": "dataset_a"},
+                proposal_id="ra-permission-unknown",
+                simulation_type="REGION_AGNOSTIC",
+            )])
+
+        self.assertEqual(result["write_readiness"], "UNKNOWN")
+        self.assertEqual(result["eligible_count"], 0)
+        self.assertEqual(result["proposal_admissions"][0]["status"], "BLOCKED")
+        self.assertEqual(
+            result["proposal_admissions"][0]["reason_code"],
+            "REGION_AGNOSTIC_PERMISSION_UNKNOWN",
+        )
 
     def test_multi_batch_continues_disjoint_children_without_reposting_unknown_child(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -930,6 +1076,7 @@ class MultiGatewayClient(FakeGatewayClient):
         self.max_active_multi = 0
         self._multi_sizes = {}
         self._overlap_event = None
+        self.multi_poll_timeout = None
 
     def submit_multi_simulation(self, payloads, **kwargs):
         with self._active_lock:
@@ -953,6 +1100,7 @@ class MultiGatewayClient(FakeGatewayClient):
                 self._active_multi -= 1
 
     def poll_multi_progress(self, progress_url, **kwargs):
+        self.multi_poll_timeout = kwargs.get("timeout_sec")
         return [
             f"multi-alpha-{progress_url}-{index}"
             for index in range(self._multi_sizes.get(progress_url, 2))
@@ -1928,13 +2076,41 @@ class TestSimulationGateway(unittest.TestCase):
             fingerprint = guard.fingerprint(spec.expression, spec.settings)
             guard.register(fingerprint, progress_url="progress-known", status="RUNNING")
             client = FakeGatewayClient()
-            gateway = SimulationGateway(client, state_dir=tmp)
+            gateway = SimulationGateway(client, state_dir=tmp, poll_timeout_sec=37)
 
             result = gateway.resume_execution(fingerprint)
 
             self.assertEqual(result["status"], "DONE")
             self.assertEqual(client.submissions, [])
-            self.assertEqual(client.assert_progress_url, "progress-known")
+        self.assertEqual(client.assert_progress_url, "progress-known")
+        self.assertEqual(client.poll_progress_timeout, 37)
+
+    def test_missing_progress_url_becomes_submit_unknown_without_removal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = ExecutionGuard(tmp)
+            fingerprint = "missing-progress-fingerprint"
+            guard.register(
+                fingerprint, progress_url="expired-progress", status="RUNNING",
+            )
+            client = FakeGatewayClient()
+
+            def missing_progress(*_args, **_kwargs):
+                raise WQBNotFoundError(
+                    "progress not found with status 404", status_code=404,
+                )
+
+            client.poll_progress = missing_progress
+            gateway = SimulationGateway(client, state_dir=tmp)
+
+            result = gateway.resume_execution(fingerprint)
+            entry = gateway.guard.find(fingerprint)
+
+        self.assertEqual(result["status"], "SUBMIT_UNKNOWN")
+        self.assertEqual(result["fingerprint"], fingerprint)
+        self.assertIn("404", result["error"])
+        self.assertEqual(entry["status"], "SUBMIT_UNKNOWN")
+        self.assertEqual(entry["progress_url"], "expired-progress")
+        self.assertEqual(client.submissions, [])
 
     def test_known_multi_progress_url_recovers_children_without_repost(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1942,7 +2118,7 @@ class TestSimulationGateway(unittest.TestCase):
             fingerprint = "multi-fingerprint"
             guard.register(fingerprint, progress_url="multi-progress-known", status="SUBMIT_UNKNOWN")
             client = MultiGatewayClient()
-            gateway = SimulationGateway(client, state_dir=tmp)
+            gateway = SimulationGateway(client, state_dir=tmp, poll_timeout_sec=41)
 
             result = gateway.resume_execution(fingerprint)
 
@@ -1953,6 +2129,7 @@ class TestSimulationGateway(unittest.TestCase):
             ])
             self.assertEqual(client.multi_submissions, [])
             self.assertEqual(gateway.guard.entries(), [])
+            self.assertEqual(client.multi_poll_timeout, 41)
 
     def test_known_multi_error_url_is_terminal_and_clears_guard(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -16,6 +16,7 @@ from .client import (
     REGION_AGNOSTIC_SIMULATION_TYPE,
     REGULAR_SIMULATION_TYPE,
     SUPPORTED_SIMULATION_REQUEST_TYPES,
+    WQBNotFoundError,
     WQBSimulationError,
 )
 from .expression import (
@@ -214,6 +215,7 @@ def classify_batch_write_admission(
     client_available=True,
     requested_max_concurrent_multi=MULTI_DEFAULT_CONCURRENCY,
     requested_child_batch_size=MULTI_DEFAULT_CHILD_BATCH_SIZE,
+    reserve_multi_capacity=True,
 ):
     """Classify one candidate batch while quarantining exact unresolved writes.
 
@@ -268,8 +270,9 @@ def classify_batch_write_admission(
     available_multi_slots = max(
         0, MULTI_MAX_CONCURRENCY - active_multi_parent_count
     )
-    effective_concurrency = min(
-        requested_max_concurrent_multi, available_multi_slots
+    effective_concurrency = (
+        min(requested_max_concurrent_multi, available_multi_slots)
+        if reserve_multi_capacity else None
     )
     seen = set()
     eligible_count = 0
@@ -285,7 +288,7 @@ def classify_batch_write_admission(
     if platform["write_readiness"] == "READY":
         if not state_known:
             blockers.append("EXECUTION_STATE_UNKNOWN")
-        elif effective_concurrency == 0:
+        elif reserve_multi_capacity and effective_concurrency == 0:
             blockers.append("MULTI_PARENT_CAPACITY_RESERVED")
         elif eligible_count == 0:
             blockers.append("NO_ELIGIBLE_CANDIDATES")
@@ -295,8 +298,10 @@ def classify_batch_write_admission(
     elif any(code in blockers for code in (
         "OFFICIAL_QUOTA_EXHAUSTED", "AUTHENTICATION_UNAVAILABLE",
         "SIMULATION_CAPABILITY_UNAVAILABLE", "OPERATOR_CAPABILITY_UNAVAILABLE",
-        "MULTI_PARENT_CAPACITY_RESERVED", "NO_ELIGIBLE_CANDIDATES",
-    )):
+        "NO_ELIGIBLE_CANDIDATES",
+    )) or (
+        reserve_multi_capacity and "MULTI_PARENT_CAPACITY_RESERVED" in blockers
+    ):
         readiness = "BLOCKED_BY_REMOTE_STATE"
     elif not client_available or any(code.endswith("UNKNOWN") for code in blockers):
         readiness = "WAITING_FOR_CAPABILITY"
@@ -315,15 +320,15 @@ def classify_batch_write_admission(
         ),
         "requested_max_concurrent_multi": requested_max_concurrent_multi,
         "effective_max_concurrent_multi": (
-            effective_concurrency if state_known else None
+            effective_concurrency if state_known and reserve_multi_capacity else None
         ),
         "available_multi_parent_slots": (
-            available_multi_slots if state_known else None
+            available_multi_slots if state_known and reserve_multi_capacity else None
         ),
         "children_per_multi_parent": requested_child_batch_size,
         "upper_bound_children_in_active_window": (
             effective_concurrency * requested_child_batch_size
-            if state_known else None
+            if state_known and reserve_multi_capacity else None
         ),
     }
 
@@ -1358,37 +1363,50 @@ class SimulationGateway:
         self, specs, *, child_batch_size=MULTI_DEFAULT_CHILD_BATCH_SIZE,
         max_concurrent_multi=MULTI_DEFAULT_CONCURRENCY,
     ):
-        """Return candidate-scoped, read-only admission for a Multi batch.
+        """Return candidate-scoped, read-only admission for supported batches.
 
         The global status can remain BLOCKED while an unrelated execution is
         unresolved. This report admits only candidates that do not reuse any
-        guarded fingerprint and reserves one parent slot for each unresolved
-        Multi parent. The writer repeats all checks before registering writes.
+        guarded fingerprint. REGULAR candidates use Multi capacity; homogeneous
+        REGION_AGNOSTIC candidates use the Single write path and do not reserve
+        Multi parent slots. The writer repeats all checks before registering writes.
         """
         normalized = [
             item if isinstance(item, SimulationSpec)
             else SimulationSpec(**dict(item))
             for item in (specs or ())
         ]
-        if len(normalized) < MULTI_MIN_CHILDREN:
+        if not normalized:
+            raise ValueError("research batch requires at least one candidate")
+        if len(normalized) > MULTI_MAX_CANDIDATES_PER_CALL:
+            raise ValueError(
+                f"research batch accepts at most {MULTI_MAX_CANDIDATES_PER_CALL} candidates"
+            )
+        simulation_types = {_spec_simulation_type(spec) for spec in normalized}
+        region_agnostic_batch = simulation_types == {REGION_AGNOSTIC_SIMULATION_TYPE}
+        if simulation_types not in (
+            {REGULAR_SIMULATION_TYPE}, {REGION_AGNOSTIC_SIMULATION_TYPE},
+        ):
+            raise ValueError(
+                "research batch must contain one supported simulation type"
+            )
+        if not region_agnostic_batch and len(normalized) < MULTI_MIN_CHILDREN:
             raise ValueError(
                 f"Multi batch requires at least {MULTI_MIN_CHILDREN} candidates"
             )
-        if isinstance(child_batch_size, bool) or not isinstance(child_batch_size, int):
-            raise TypeError("child_batch_size must be an integer")
-        if not MULTI_MIN_CHILDREN <= child_batch_size <= MULTI_MAX_CHILDREN:
-            raise ValueError(
-                f"child_batch_size must be between {MULTI_MIN_CHILDREN} and {MULTI_MAX_CHILDREN}"
-            )
-        if (isinstance(max_concurrent_multi, bool)
-                or not isinstance(max_concurrent_multi, int)
-                or not 1 <= max_concurrent_multi <= MULTI_MAX_CONCURRENCY):
-            raise ValueError(
-                f"max_concurrent_multi must be between 1 and {MULTI_MAX_CONCURRENCY}"
-            )
-        for spec in normalized:
-            if _spec_simulation_type(spec) != REGULAR_SIMULATION_TYPE:
-                raise ValueError("Multi-Simulation only accepts REGULAR children")
+        if not region_agnostic_batch:
+            if isinstance(child_batch_size, bool) or not isinstance(child_batch_size, int):
+                raise TypeError("child_batch_size must be an integer")
+            if not MULTI_MIN_CHILDREN <= child_batch_size <= MULTI_MAX_CHILDREN:
+                raise ValueError(
+                    f"child_batch_size must be between 2 and {MULTI_MAX_CHILDREN}"
+                )
+            if (isinstance(max_concurrent_multi, bool)
+                    or not isinstance(max_concurrent_multi, int)
+                    or not 1 <= max_concurrent_multi <= MULTI_MAX_CONCURRENCY):
+                raise ValueError(
+                    f"max_concurrent_multi must be between 1 and {MULTI_MAX_CONCURRENCY}"
+                )
 
         authentication_reader = getattr(self.client, "get_authentication_status", None)
         try:
@@ -1491,24 +1509,64 @@ class SimulationGateway:
             client_available=True,
             requested_max_concurrent_multi=max_concurrent_multi,
             requested_child_batch_size=child_batch_size,
+            reserve_multi_capacity=not region_agnostic_batch,
         )
-        permissions = {
-            str(item).upper()
-            for item in (authentication or {}).get("permissions", ())
-        }
-        if "MULTI_SIMULATION" not in permissions:
+        required_permission = (
+            "REGION_AGNOSTIC" if region_agnostic_batch else "MULTI_SIMULATION"
+        )
+        permission_blocker = None
+        if authentication is None:
+            permission_blocker = "AUTHENTICATION_UNKNOWN"
+            admission["write_readiness"] = "UNKNOWN"
+        elif not isinstance(authentication, Mapping) or authentication.get("authenticated") is not True:
+            permission_blocker = "AUTHENTICATION_UNAVAILABLE"
             admission["write_readiness"] = "BLOCKED_BY_REMOTE_STATE"
-            if "MULTI_SIMULATION_PERMISSION_UNAVAILABLE" not in admission["write_blockers"]:
-                admission["write_blockers"].append("MULTI_SIMULATION_PERMISSION_UNAVAILABLE")
+        else:
+            raw_permissions = authentication.get("permissions")
+            if not isinstance(raw_permissions, (list, tuple, set)):
+                permission_blocker = f"{required_permission}_PERMISSION_UNKNOWN"
+                admission["write_readiness"] = "UNKNOWN"
+            else:
+                permissions = {str(item).upper() for item in raw_permissions}
+                if required_permission not in permissions:
+                    permission_blocker = f"{required_permission}_PERMISSION_UNAVAILABLE"
+                    admission["write_readiness"] = "BLOCKED_BY_REMOTE_STATE"
+        if permission_blocker:
+            if permission_blocker not in admission["write_blockers"]:
+                admission["write_blockers"].append(permission_blocker)
+            for proposal in proposal_admissions:
+                if proposal["status"] == "READY":
+                    proposal["status"] = "BLOCKED"
+                    proposal["reason_code"] = permission_blocker
+        eligible_count = sum(
+            proposal["status"] == "READY" for proposal in proposal_admissions
+        )
         admission.update({
             "source": "SimulationGateway", "status": "AVAILABLE",
             "evidence_status": "AVAILABLE",
+            "admission_mode": (
+                "REGION_AGNOSTIC_SINGLE" if region_agnostic_batch
+                else "REGULAR_MULTI"
+            ),
+            "simulation_type": (
+                REGION_AGNOSTIC_SIMULATION_TYPE if region_agnostic_batch
+                else REGULAR_SIMULATION_TYPE
+            ),
             "candidate_count": len(normalized),
-            "eligible_count": len(candidate_fingerprints),
-            "blocked_count": len(normalized) - len(candidate_fingerprints),
+            "eligible_count": eligible_count,
+            "blocked_count": len(normalized) - eligible_count,
             "proposal_admissions": proposal_admissions,
             "remote_duplicate_scan": "DEFERRED_TO_WRITE_PREFLIGHT",
         })
+        if region_agnostic_batch:
+            admission.update({
+                "active_multi_parent_count": None,
+                "requested_max_concurrent_multi": None,
+                "effective_max_concurrent_multi": None,
+                "available_multi_parent_slots": None,
+                "children_per_multi_parent": None,
+                "upper_bound_children_in_active_window": None,
+            })
         return admission
 
     def simulate(self, spec):
@@ -2145,6 +2203,17 @@ class SimulationGateway:
                           "progress_url": progress_url, "alpha_id": alpha_ids,
                           "evidence": payload}
         except Exception as exc:
+            if isinstance(exc, WQBNotFoundError):
+                # An expired/missing progress URL cannot establish whether the
+                # original write produced an Alpha. Keep the fingerprint and
+                # URL quarantined, but stop claiming the remote job is running.
+                self.guard.update(fingerprint, status="SUBMIT_UNKNOWN")
+                return {
+                    "status": "SUBMIT_UNKNOWN",
+                    "fingerprint": str(fingerprint),
+                    "error": str(exc),
+                    "progress_url": progress_url,
+                }
             if not remote_terminal_error and is_multi:
                 diagnostic = getattr(exc, "diagnostic", None)
                 remote_status = (

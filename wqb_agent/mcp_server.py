@@ -23,6 +23,9 @@ MAX_AQAF_MCP_ALPHA_IDS = 20
 MAX_SIMULATION_BATCH = 50
 MAX_MULTI_BATCH = research_api.MULTI_MAX_CANDIDATES_PER_CALL
 SUPPORTED_DATA_REGIONS = research_api.SUPPORTED_DATA_REGIONS
+# Keep one 60-second snapshot plus this poll budget within the 300-second
+# MCP call limit so a timed-out transport cannot leave the owner lock occupied.
+RECONCILE_POLL_TIMEOUT_SEC = 180
 RESEARCH_WRITE_OPT_IN = "ALPHA_FACTORY_ENABLE_SIMULATION_WRITES"
 _SECRET_PARTS = ("password", "credential", "token", "secret", "authorization", "cookie", "api_key", "apikey")
 _SPEC_KEYS = frozenset({"expression", "settings", "fields", "field_datasets", "proposal_id", "note", "template_id", "simulation_type"})
@@ -763,14 +766,14 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
 
     @server.tool(annotations=remote_read)
     def research_batch_status(specs: list[dict[str, Any]]) -> dict[str, Any]:
-        """[READ_ONLY] Check each candidate and the Gateway's current Multi window.
+        """[READ_ONLY] Check candidate admission before a Simulation write.
 
-        The result includes READY proposal counts, available parent slots,
-        children per parent, and the upper-bound children in the active window.
-        It reports no research-size minimum and does not reserve or dispatch.
+        REGULAR batches report Multi parent capacity; homogeneous
+        REGION_AGNOSTIC candidates use the Single path and do not reserve Multi
+        slots. This read does not reserve capacity or dispatch a Simulation.
         """
         parsed = parse_specs(
-            specs, minimum=research_api.MULTI_MIN_CHILDREN,
+            specs, minimum=1,
             maximum=MAX_MULTI_BATCH,
             require_proposal_ids=True,
         )
@@ -988,7 +991,21 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
     @server.tool(annotations=remote_read)
     def reconcile_execution(fingerprint: str) -> dict[str, Any]:
         """[READ_ONLY] Reconcile one existing guard; never submit again."""
-        return read_facade("reconcile_execution", fingerprint, state_dir=state_dir)
+        try:
+            current = api.get_simulation_config(config=config)
+            runtime = current.get("runtime") or {}
+            configured_timeout = runtime.get("poll_timeout_sec", RECONCILE_POLL_TIMEOUT_SEC)
+            if not _finite_number(configured_timeout) or configured_timeout < 1:
+                raise ValueError("invalid reconcile poll timeout")
+            poll_timeout = min(
+                float(configured_timeout), RECONCILE_POLL_TIMEOUT_SEC,
+            )
+        except Exception as exc:
+            return _failed_result(exc, owner="research_api.reconcile_execution")
+        return read_facade(
+            "reconcile_execution", fingerprint, state_dir=state_dir,
+            poll_timeout_sec=poll_timeout,
+        )
 
     @server.tool(annotations=local_read)
     def get_pending_executions() -> dict[str, Any]:

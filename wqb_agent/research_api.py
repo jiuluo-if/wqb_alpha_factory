@@ -851,7 +851,8 @@ def delete_template(template_id, *, catalog_path=None):
     return {"template_id": str(template_id), "status": "DELETED", "source": "PRIVATE_CATALOG"}
 
 
-def _simulation_gateway(*, client=None, config=None, state_dir=None):
+def _simulation_gateway(*, client=None, config=None, state_dir=None,
+                       poll_timeout_sec=None):
     """Build the Remote-First gateway without constructing the research Agent."""
     if client is None:
         from .client import WQBClient
@@ -861,6 +862,19 @@ def _simulation_gateway(*, client=None, config=None, state_dir=None):
     runtime = typed.runtime
     max_concurrent = runtime.max_concurrent_sims
     poll_timeout = runtime.poll_timeout_sec
+    if poll_timeout_sec is not None:
+        if (isinstance(poll_timeout_sec, bool)
+                or not isinstance(poll_timeout_sec, (int, float))):
+            raise ValueError("poll_timeout_sec must be a finite number >= 1")
+        try:
+            timeout_override = float(poll_timeout_sec)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                "poll_timeout_sec must be a finite number >= 1"
+            ) from exc
+        if not math.isfinite(timeout_override) or timeout_override < 1:
+            raise ValueError("poll_timeout_sec must be a finite number >= 1")
+        poll_timeout = min(poll_timeout, timeout_override)
     return SimulationGateway(
         client, state_dir=directory, max_concurrent=max_concurrent,
         poll_timeout_sec=poll_timeout,
@@ -940,10 +954,12 @@ def research_batch_status(
     child_batch_size=MULTI_DEFAULT_CHILD_BATCH_SIZE,
     max_concurrent_multi=MULTI_DEFAULT_CONCURRENCY,
 ):
-    """Read candidate-scoped admission without relaxing global readiness.
+    """Read candidate-scoped admission without relaxing Gateway checks.
 
-    The Gateway checks exact fingerprints, live write capabilities, and
-    unresolved parent capacity. It does not mutate guards or submit writes.
+    REGULAR batches check exact fingerprints, live write capabilities, and
+    unresolved Multi parent capacity. REGION_AGNOSTIC batches use the Single
+    path and do not reserve Multi slots. This read never mutates guards or
+    submits writes.
     """
     return _simulation_gateway(
         client=client, config=config, state_dir=state_dir
@@ -1310,18 +1326,19 @@ def get_pending_executions(*, state_dir=None, config=None):
 
 
 def resume_execution(fingerprint, *, client=None, config=None,
-                     state_dir=None):
+                     state_dir=None, poll_timeout_sec=None):
     return _simulation_gateway(
-        client=client, config=config, state_dir=state_dir
+        client=client, config=config, state_dir=state_dir,
+        poll_timeout_sec=poll_timeout_sec,
     ).resume_execution(fingerprint)
 
 
 def reconcile_execution(fingerprint, *, client=None, config=None,
-                        state_dir=None):
+                        state_dir=None, poll_timeout_sec=None):
     """Read-only recovery of one guarded execution; never submits again."""
     return resume_execution(
         fingerprint, client=client, config=config,
-        state_dir=state_dir,
+        state_dir=state_dir, poll_timeout_sec=poll_timeout_sec,
     )
 
 

@@ -412,6 +412,9 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             ],
             "get_alpha_evidence": lambda *_, **__: {"source": "LIVE", "alpha": {}},
             "get_alpha_prod_correlation": lambda *_, **__: {"source": "LIVE", "status": "AVAILABLE", "records": []},
+            "get_simulation_config": lambda **_: {
+                "settings": {}, "runtime": {"poll_timeout_sec": 1500},
+            },
             "reconcile_execution": lambda fingerprint, **_: {"status": "SUBMIT_UNKNOWN", "fingerprint": fingerprint},
             "get_pending_executions": lambda **_: {"entries": []},
         }
@@ -723,6 +726,38 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.structured_content["data"]["available_multi_parent_slots"], 7)
         self.assertEqual(result.structured_content["data"]["upper_bound_children_in_active_window"], 70)
         self.assertEqual(result.structured_content["owner"], "research_api.research_batch_status")
+
+    async def test_research_batch_status_accepts_one_region_agnostic_candidate(self):
+        admission = Mock(return_value={
+            "source": "SimulationGateway", "status": "AVAILABLE",
+            "write_readiness": "READY", "candidate_count": 1,
+            "eligible_count": 1, "blocked_count": 0,
+            "proposal_admissions": [
+                {"proposal_id": "ra-one", "status": "READY"},
+            ],
+        })
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(
+                api=self.api(research_batch_status=admission), client=object(),
+                state_dir="synthetic-state",
+            )
+        async with Client(server) as client:
+            result = await client.call_tool("research_batch_status", {"specs": [
+                {
+                    "expression": "rank(field_a)",
+                    "settings": {"region": "ALL", "delay": 1},
+                    "fields": ["field_a"],
+                    "field_datasets": {"field_a": "dataset_a"},
+                    "proposal_id": "ra-one",
+                    "template_id": "ra_conservative_asset_growth",
+                    "simulation_type": "REGION_AGNOSTIC",
+                },
+            ]})
+
+        self.assertEqual(result.structured_content["data"]["eligible_count"], 1)
+        args, _kwargs = admission.call_args
+        self.assertEqual(len(args[0]), 1)
+        self.assertEqual(args[0][0].simulation_type, "REGION_AGNOSTIC")
 
     async def test_research_mode_exposes_existing_pending_details_as_local_read_only(self):
         calls = []
@@ -1254,6 +1289,29 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(returned), 64)
         self.assertEqual(returned, fingerprint)
         self.assertEqual(reconcile.call_args.args[0], fingerprint)
+
+    async def test_reconcile_timeout_is_bounded_below_mcp_call_timeout(self):
+        for configured, expected in ((1500, 180), (90, 90)):
+            with self.subTest(configured=configured):
+                reconcile = Mock(return_value={"status": "RUNNING"})
+                api = self.api(
+                    get_simulation_config=lambda **_: {
+                        "settings": {"neutralization": "INDUSTRY"},
+                        "runtime": {"poll_timeout_sec": configured},
+                    },
+                    reconcile_execution=reconcile,
+                )
+                with patch.dict(os.environ, {self.ENV: "1"}):
+                    server = mcp_server.build_research_server(
+                        api=api, client=object(), state_dir="synthetic-state",
+                    )
+                async with Client(server) as client:
+                    await client.call_tool("reconcile_execution", {
+                        "fingerprint": "synthetic-fingerprint",
+                    })
+                self.assertEqual(
+                    reconcile.call_args.kwargs["poll_timeout_sec"], expected
+                )
 
     async def test_alpha_summary_duplicate_is_not_in_research_inventory(self):
         api = self.api()
