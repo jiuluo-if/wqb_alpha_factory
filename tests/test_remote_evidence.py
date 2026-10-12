@@ -73,6 +73,21 @@ class TestRemoteEvidence(unittest.TestCase):
         self.assertEqual(direct["rows"], expected)
         self.assertEqual(recordset["rows"], expected)
 
+    def test_daily_pnl_decoder_accepts_brain_list_schema_properties(self):
+        recordset = decode_daily_pnl({
+            "schema": {"name": "pnl", "properties": [
+                {"name": "date", "title": "Date", "type": "date"},
+                {"name": "pnl", "title": "PnL", "type": "amount"},
+            ]},
+            "records": [["2026-01-02", 1.25]],
+        })
+
+        self.assertEqual(recordset["status"], "AVAILABLE")
+        self.assertEqual(
+            recordset["rows"],
+            [{"date": "2026-01-02", "pnl": 1.25}],
+        )
+
     def test_daily_pnl_decoder_rejects_missing_invalid_and_duplicate_data(self):
         self.assertEqual(decode_daily_pnl(None)["status"], "PENDING_DATA")
         self.assertEqual(

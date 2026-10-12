@@ -25,9 +25,16 @@ def decode_recordset(payload):
     schema = payload.get("schema")
     properties = schema.get("properties") if isinstance(schema, Mapping) else None
     records = payload.get("records")
-    if not isinstance(properties, Mapping) or not isinstance(records, list):
+    if isinstance(properties, Mapping):
+        columns = [str(name) for name in properties]
+    elif (isinstance(properties, list)
+          and all(isinstance(item, Mapping) and isinstance(item.get("name"), str)
+                  and item["name"].strip() for item in properties)):
+        columns = [item["name"].strip() for item in properties]
+    else:
         return {"status": "UNAVAILABLE", "columns": [], "rows": []}
-    columns = [str(name) for name in properties]
+    if not isinstance(records, list):
+        return {"status": "UNAVAILABLE", "columns": [], "rows": []}
     rows = []
     for record in records:
         if isinstance(record, Mapping):

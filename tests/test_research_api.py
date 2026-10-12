@@ -373,13 +373,21 @@ class TestResearchApi(unittest.TestCase):
 
         client = mock.Mock()
         client.get_pnl.return_value = {"records": [1]}
-        client.get_correlation.return_value = {"is": {"correlation": 0.2}}
+        client.get_correlation.return_value = {
+            "schema": {"name": "prodCorrelation", "properties": [
+                {"name": "min"}, {"name": "max"}, {"name": "alphas"},
+            ]},
+            "records": [[0.6, 0.7, 2]], "min": -0.2, "max": 0.65,
+        }
         client.get_alpha.return_value = {"id": "a1", "is": {"sharpe": 1.2}}
         self.assertEqual(get_alpha_metrics("a1", client=client), {"sharpe": 1.2})
         client.get_alpha.assert_called_once_with("a1")
         self.assertEqual(get_alpha_pnl("a1", client=client), {"records": [1]})
-        self.assertEqual(get_alpha_prod_correlation("a1", client=client),
-                         {"is": {"correlation": 0.2}})
+        prod = get_alpha_prod_correlation("a1", client=client)
+        self.assertEqual(prod["source"], "BRAIN_LIVE")
+        self.assertEqual(prod["status"], "AVAILABLE")
+        self.assertEqual(prod["evidence_status"], "AVAILABLE")
+        self.assertEqual(prod["records"], [[0.6, 0.7, 2]])
         client.get_pnl.assert_called_once_with("a1")
         client.get_correlation.assert_called_once_with("a1", kind="prod")
         client.get_aggregates.assert_not_called()

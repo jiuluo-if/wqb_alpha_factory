@@ -22,6 +22,7 @@ DO NOT USE FOR:
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import tomllib
@@ -1827,9 +1828,43 @@ def get_alpha_self_correlation(alpha_id, *, client=None, config=None):
 
 def get_alpha_prod_correlation(alpha_id, *, client=None, config=None):
     """Read PROD correlation only when the Agent requests a finalist check."""
-    return RemoteAlphaEvidenceProvider(
+    payload = RemoteAlphaEvidenceProvider(
         _remote_client(client=client)
     ).get_alpha_prod_correlation(str(alpha_id).strip())
+    if not isinstance(payload, Mapping):
+        return payload
+
+    schema = payload.get("schema")
+    properties = schema.get("properties") if isinstance(schema, Mapping) else None
+    property_names = {
+        item.get("name") for item in properties or ()
+        if isinstance(item, Mapping)
+    }
+    records = payload.get("records")
+    if (
+        isinstance(schema, Mapping)
+        and schema.get("name") == "prodCorrelation"
+        and {"min", "max", "alphas"}.issubset(property_names)
+        and isinstance(records, list)
+        and all(isinstance(row, (list, tuple)) and len(row) >= 3 for row in records)
+        and all(
+            isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(float(value))
+            for row in records for value in row[:2]
+        )
+        and all(
+            isinstance(row[2], int) and not isinstance(row[2], bool) and row[2] >= 0
+            for row in records
+        )
+    ):
+        result = dict(payload)
+        result.update({
+            "source": "BRAIN_LIVE",
+            "status": "AVAILABLE",
+            "evidence_status": "AVAILABLE",
+        })
+        return result
+    return payload
 
 
 def get_alpha_recordsets(alpha_id, names, *, client=None, config=None):
