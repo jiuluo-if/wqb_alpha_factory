@@ -17,21 +17,19 @@ class OperatingIncomeRelationshipTests(unittest.TestCase):
         })
         self.assertEqual(result["concept"], "market_price")
 
-    def test_quarterly_operating_income_is_ordered_with_total_assets(self):
+    def test_same_dataset_ratio_allows_unknown_field_frequency(self):
         income = {
-            "id": "quarterly_operating_income",
-            "description": "Quarterly Operating Income",
+            "id": "operating_income_field",
+            "description": "Operating Income",
             "dataset": "fundamental_fixture",
             "type": "MATRIX",
-            "frequency": "quarterly",
             "category": {"id": "fundamental"},
         }
         assets = {
-            "id": "quarterly_total_assets",
-            "description": "Quarterly Total Assets",
+            "id": "total_assets_field",
+            "description": "Total Assets",
             "dataset": "fundamental_fixture",
             "type": "MATRIX",
-            "frequency": "quarterly",
             "category": {"id": "fundamental"},
         }
         template = AlphaTemplate(
@@ -40,10 +38,10 @@ class OperatingIncomeRelationshipTests(unittest.TestCase):
             expression="rank(divide({p}, {s}))",
             required_slots=("p", "s"),
             role="PROBE_ALPHA",
-            economic_mechanism="quarterly operating income scaled by assets",
+            economic_mechanism="same-source operating income scaled by assets",
             field_relationship="operating income relative to total assets",
             direction_reason="fixture",
-            expected_horizon="quarterly",
+            expected_horizon="medium-term",
             falsification="fixture",
             relationship_contract="DIRECTIONAL_RATIO",
             semantic_contract="RELATIONAL_PRIMARY",

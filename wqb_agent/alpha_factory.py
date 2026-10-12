@@ -537,6 +537,8 @@ class AlphaFactory:
                 preferred = {"p": "numerator", "s": "denominator"}
                 symmetric = False
                 assignment_reason = "earnings is the numerator and assets is the scale denominator"
+                if ordered_asset_ratio:
+                    frequency_scope_alignment = set(frequency["buckets"]) == {"unknown"}
             elif relationship_type in {
                 "equity_asset_base", "cashflow_debt_coverage",
                 "realized_implied_volatility", "sentiment_attention_scale",
