@@ -90,7 +90,7 @@ _SEMANTIC_CONCEPT_RULES = (
     ),
     (
         "sentiment",
-        ("sentiment", "social", "news", "recommendation", "bullish", "bearish"),
+        ("sentiment", "social", "recommendation", "bullish", "bearish"),
     ),
     (
         "valuation",
@@ -107,7 +107,10 @@ _SEMANTIC_CONCEPT_RULES = (
     ),
     (
         "earnings",
-        ("earnings", "eps", "revenue", "sales", "profit", "cash flow", "fscore"),
+        (
+            "earnings", "eps", "revenue", "sales", "profit", "cash flow",
+            "fscore", "operating income",
+        ),
     ),
     (
         "fundamental",
@@ -418,7 +421,7 @@ def derive_field_semantic_traits(
         tags.update(("equity", "asset_scale"))
     if concept in {"asset_base", "debt_balance"}:
         tags.add("asset_scale")
-    if concept == "operating_cashflow":
+    if concept in {"operating_cashflow", "earnings"}:
         tags.add("earnings")
     if concept in {"market_beta", "market_correlation"}:
         tags.add("market_sensitivity")
