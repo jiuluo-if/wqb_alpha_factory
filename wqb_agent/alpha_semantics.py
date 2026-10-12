@@ -10,6 +10,12 @@ _SEMANTIC_CONCEPT_RULES = (
     ("data_quality", ("missing", "null", "nan", "quality", "coverage", "stale")),
     ("analyst_revision", ("revision", "revised", "estimate change", "forecast change")),
     ("option_relative", ("put call", "put-call", "putcall", "iv skew")),
+    ("realized_volatility", ("realized volatility", "historical volatility")),
+    ("implied_volatility", ("implied volatility", "implied vol")),
+    (
+        "asset_efficiency",
+        ("asset turnover", "asset efficiency", "asset utilization"),
+    ),
     (
         "liquidity",
         (
@@ -40,6 +46,33 @@ _SEMANTIC_CONCEPT_RULES = (
     (
         "event_novelty",
         ("news novelty", "story novelty", "event novelty"),
+    ),
+    (
+        "operating_cashflow",
+        (
+            "operating activities - net cash flow",
+            "operating cash flow",
+            "cashflow op",
+        ),
+    ),
+    (
+        "equity_capital",
+        ("common equity", "shareholders equity", "stockholders equity", "equity"),
+    ),
+    ("asset_base", ("assets - total", "total assets", "asset base", "assets")),
+    ("debt_balance", ("total debt", "debt")),
+    (
+        "profitability_measure",
+        ("gross margin", "gross profitability", "profitability measure"),
+    ),
+    (
+        "social_attention",
+        (
+            "sentiment volume",
+            "relative sentiment volume",
+            "volume of social media sentiment",
+            "social attention volume",
+        ),
     ),
     (
         "sentiment",
@@ -178,6 +211,15 @@ def derive_field_semantic_traits(
         concept = "event_novelty"
         concept_hits = ["news category + explicit novelty field metadata"]
         direct_concept_hits = ["novelty"]
+    if (
+        category == "socialmedia"
+        and concept == "sentiment"
+        and not direct_concept_hits
+        and _has(direct_text, "buzz")
+    ):
+        concept = "social_attention"
+        concept_hits = ["social media category + explicit buzz field metadata"]
+        direct_concept_hits = ["buzz"]
     if concept == "unknown":
         concept = {
             "analyst": "analyst",
@@ -232,11 +274,16 @@ def derive_field_semantic_traits(
         "analyst_dispersion",
         "event_count",
         "event_novelty",
+        "social_attention",
         "sentiment",
     }
     slow_signal = (
         frequency_slow
-        or concept in {"fundamental", "earnings", "valuation"}
+        or concept in {
+            "fundamental", "earnings", "valuation", "operating_cashflow",
+            "equity_capital", "asset_base", "debt_balance",
+            "profitability_measure", "asset_efficiency",
+        }
         and not frequency_fast
     )
     coverage = normalize_coverage(profile)
@@ -250,6 +297,8 @@ def derive_field_semantic_traits(
     elif measurement in {"change", "dispersion"} or concept in {
         "market_price",
         "volatility",
+        "realized_volatility",
+        "implied_volatility",
         "liquidity",
     }:
         behavior = "signed"
@@ -274,6 +323,12 @@ def derive_field_semantic_traits(
         "volatility",
         "event_count",
         "event_novelty",
+        "operating_cashflow",
+        "equity_capital",
+        "asset_base",
+        "debt_balance",
+        "realized_volatility",
+        "implied_volatility",
         "fundamental",
         "earnings",
         "data_quality",
@@ -295,8 +350,17 @@ def derive_field_semantic_traits(
         "option_relative": "relative_option_position",
         "option": "option_measurement",
         "volatility": "risk_exposure",
+        "realized_volatility": "realized_risk",
+        "implied_volatility": "option_implied_risk",
         "event_count": "attention_events",
         "event_novelty": "information_novelty",
+        "operating_cashflow": "operating_cash_generation",
+        "equity_capital": "shareholder_capital",
+        "asset_base": "balance_sheet_scale",
+        "debt_balance": "financial_obligation",
+        "profitability_measure": "operating_profitability",
+        "asset_efficiency": "asset_utilization",
+        "social_attention": "social_attention_volume",
         "liquidity": "market_participation",
         "sentiment": "attention_or_belief",
         "valuation": "relative_value",
@@ -330,6 +394,16 @@ def derive_field_semantic_traits(
         tags.add("dispersion")
     if concept == "event_count":
         tags.add("event_count")
+    if concept == "social_attention":
+        tags.update(("attention", "volume"))
+    if concept in {"realized_volatility", "implied_volatility"}:
+        tags.add("volatility")
+    if concept == "equity_capital":
+        tags.update(("equity", "asset_scale"))
+    if concept in {"asset_base", "debt_balance"}:
+        tags.add("asset_scale")
+    if concept == "operating_cashflow":
+        tags.add("earnings")
     if concept in {"fundamental", "earnings", "valuation"}:
         tags.add("fundamental_scale")
     if any(

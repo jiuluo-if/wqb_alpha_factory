@@ -260,6 +260,13 @@ class AlphaFactory:
         value = profile.get("dataset") if isinstance(profile, dict) else None
         return str(value) if value is not None else None
 
+    @staticmethod
+    def _profile_category(profile):
+        value = profile.get("category") if isinstance(profile, dict) else None
+        if isinstance(value, dict):
+            value = value.get("id") or value.get("name")
+        return str(value or "").strip().lower() or None
+
     @classmethod
     def _profile_key(cls, profile):
         if not isinstance(profile, dict):
@@ -450,18 +457,45 @@ class AlphaFactory:
                 reasons=("frequency incompatibility blocks this relationship",),
             )
         if relationship_contract == "COMPARABLE_SPREAD":
-            if relationship_type == "same_economic_concept":
-                if traits[0].get("measurement") != traits[1].get("measurement"):
+            if relationship_type == "profitability_efficiency":
+                datasets = [cls._profile_dataset(profile) for profile in profiles]
+                categories = [cls._profile_category(profile) for profile in profiles]
+                field_types = [str(profile.get("type") or "").upper() for profile in profiles]
+                if not (
+                    [item.get("concept") for item in traits]
+                    == ["profitability_measure", "asset_efficiency"]
+                    and datasets[0]
+                    and datasets[0] == datasets[1]
+                    and categories[0] == categories[1]
+                    and categories[0] in {"fundamental", "earnings"}
+                    and field_types == ["MATRIX", "MATRIX"]
+                ):
+                    return result(
+                        "REJECT", -35, labels, relationship_type,
+                        reasons=("profitability-efficiency spread requires ordered MATRIX fields from one dataset",),
+                    )
+                assignment_reason = (
+                    "profitability is the primary measure and asset efficiency is its same-source comparator"
+                )
+                preferred = {
+                    "p": "profitability_measure",
+                    "s": "asset_efficiency",
+                }
+                symmetric = False
+                frequency_scope_alignment = set(frequency["buckets"]) == {"unknown"}
+            else:
+                if relationship_type == "same_economic_concept":
+                    if traits[0].get("measurement") != traits[1].get("measurement"):
+                        return result(
+                            "REJECT", -30, labels, relationship_type,
+                            reasons=("same concept has incompatible level/change measurements",),
+                        )
+                allowed = {"same_economic_concept", "option_pair", "revision_dispersion"}
+                if relationship_type not in allowed:
                     return result(
                         "REJECT", -30, labels, relationship_type,
-                        reasons=("same concept has incompatible level/change measurements",),
+                        reasons=("spread requires comparable quantities or an explicit differential",),
                     )
-            allowed = {"same_economic_concept", "option_pair", "revision_dispersion"}
-            if relationship_type not in allowed:
-                return result(
-                    "REJECT", -30, labels, relationship_type,
-                    reasons=("spread requires comparable quantities or an explicit differential",),
-                )
         elif relationship_contract == "DIRECTIONAL_RATIO":
             if relationship_type == "option_pair":
                 preferred = {"p": "EITHER", "s": "EITHER"}
@@ -479,33 +513,103 @@ class AlphaFactory:
                 preferred = {"p": "numerator", "s": "denominator"}
                 symmetric = False
                 assignment_reason = "earnings is the numerator and assets is the scale denominator"
+            elif relationship_type in {
+                "equity_asset_base", "cashflow_debt_coverage",
+                "realized_implied_volatility", "sentiment_attention_scale",
+            }:
+                expected = {
+                    "equity_asset_base": (
+                        "equity_capital", "asset_base", {"MATRIX"}, {"fundamental"}
+                    ),
+                    "cashflow_debt_coverage": (
+                        "operating_cashflow", "debt_balance", {"MATRIX"},
+                        {"fundamental", "earnings"},
+                    ),
+                    "realized_implied_volatility": (
+                        "realized_volatility", "implied_volatility", {"MATRIX"},
+                        {"option"},
+                    ),
+                    "sentiment_attention_scale": (
+                        "sentiment", "social_attention", {"MATRIX", "VECTOR"},
+                        {"socialmedia"},
+                    ),
+                }[relationship_type]
+                datasets = [cls._profile_dataset(profile) for profile in profiles]
+                categories = [cls._profile_category(profile) for profile in profiles]
+                field_types = [str(profile.get("type") or "").upper() for profile in profiles]
+                if not (
+                    [item.get("concept") for item in traits] == list(expected[:2])
+                    and datasets[0]
+                    and datasets[0] == datasets[1]
+                    and categories[0] == categories[1]
+                    and categories[0] in expected[3]
+                    and all(item in expected[2] for item in field_types)
+                    and (
+                        relationship_type != "sentiment_attention_scale"
+                        or field_types[0] == field_types[1]
+                    )
+                ):
+                    return result(
+                        "REJECT", -35, labels, relationship_type,
+                        reasons=("specialized ratio requires ordered same-dataset field roles and types",),
+                    )
+                preferred = {"p": "numerator", "s": "denominator"}
+                symmetric = False
+                assignment_reason = (
+                    "the declared primary measure is the numerator and its same-source scale is the denominator"
+                )
+                frequency_scope_alignment = set(frequency["buckets"]) == {"unknown"}
             else:
                 return result(
                     "REJECT", -30, labels, relationship_type,
                     reasons=("ratio requires a directional numerator/denominator or put/call pair",),
                 )
         elif relationship_contract == "MULTI_FIELD_CONFIRMATION":
-            datasets = [cls._profile_dataset(profile) for profile in profiles]
-            field_types = [str(profile.get("type") or "").upper() for profile in profiles]
-            if relationship_type != "novelty_weighted_sentiment":
+            if len(profiles) != 2:
                 return result(
                     "REJECT", -30, labels, relationship_type,
-                    reasons=("two-field confirmation requires explicit event novelty and sentiment",),
+                    reasons=("the two-field confirmation path requires exactly two profiles",),
+                )
+            datasets = [cls._profile_dataset(profile) for profile in profiles]
+            categories = [cls._profile_category(profile) for profile in profiles]
+            field_types = [str(profile.get("type") or "").upper() for profile in profiles]
+            if relationship_type == "novelty_weighted_sentiment":
+                valid_types = (
+                    field_types == ["VECTOR", "VECTOR"]
+                    and categories == ["news", "news"]
+                )
+                confirmation_mechanism = "event_novelty_sentiment"
+                assignment_reason = (
+                    "same-dataset event novelty and sentiment are jointly required by the confirmation contract"
+                )
+            elif relationship_type == "profitability_efficiency":
+                valid_types = (
+                    field_types == ["MATRIX", "MATRIX"]
+                    and categories[0] == categories[1]
+                    and categories[0] in {"fundamental", "earnings"}
+                )
+                confirmation_mechanism = "profitability_efficiency"
+                assignment_reason = (
+                    "same-dataset profitability and asset efficiency jointly confirm the fundamental state"
+                )
+            else:
+                valid_types = False
+                confirmation_mechanism = None
+            if confirmation_mechanism is None:
+                return result(
+                    "REJECT", -30, labels, relationship_type,
+                    reasons=("two-field confirmation requires one explicitly supported semantic pair",),
                 )
             if not datasets[0] or datasets[0] != datasets[1]:
                 return result(
                     "REJECT", -30, labels, relationship_type,
                     reasons=("two-field confirmation requires fields from the same declared dataset",),
                 )
-            if field_types != ["VECTOR", "VECTOR"]:
+            if not valid_types:
                 return result(
                     "REJECT", -30, labels, relationship_type,
-                    reasons=("event novelty and sentiment confirmation requires two VECTOR fields",),
+                    reasons=("the selected confirmation mechanism requires its declared field types",),
                 )
-            confirmation_mechanism = "event_novelty_sentiment"
-            assignment_reason = (
-                "same-dataset event novelty and sentiment are jointly required by the confirmation contract"
-            )
             frequency_scope_alignment = set(frequency["buckets"]) == {"unknown"}
         elif relationship_contract == "CO_MOVEMENT":
             allowed = {
@@ -544,13 +648,13 @@ class AlphaFactory:
             )
         return result(
             "ALLOW", 60, labels, relationship_type,
-            symmetric=True,
-            preferred={"p": "EITHER", "s": "EITHER"},
-            assignment_reason="relationship is symmetric under this template contract",
+            symmetric=symmetric,
+            preferred=preferred,
+            assignment_reason=assignment_reason,
             evidence_strength="HIGH" if relationship_type in {"option_pair", "revision_dispersion"} else "MEDIUM",
             confirmation_mechanism=confirmation_mechanism,
             reasons=(
-                "same BRAIN dataset and VECTOR types establish field scope; cadence metadata is unavailable",
+                "same BRAIN dataset and compatible field types establish pair scope; cadence metadata is unavailable",
             ) if frequency_scope_alignment else ("template-specific relationship contract passed",),
             include_frequency_reasons=not frequency_scope_alignment,
         )

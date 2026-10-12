@@ -7,7 +7,7 @@ from wqb_agent.alpha_semantics import derive_field_semantic_traits
 from wqb_agent.alpha_templates.model import AlphaTemplate
 
 
-def _template():
+def _template(relationship_contract="MULTI_FIELD_CONFIRMATION"):
     return AlphaTemplate(
         "synthetic-confirmation",
         family="synthetic",
@@ -15,7 +15,7 @@ def _template():
         required_slots=("p", "s"),
         role="PROBE_ALPHA",
         semantic_contract="RELATIONAL_PRIMARY",
-        relationship_contract="MULTI_FIELD_CONFIRMATION",
+        relationship_contract=relationship_contract,
         field_roles=("sentiment", "event novelty"),
         economic_mechanism="synthetic joint news confirmation",
         field_relationship="sentiment conditioned on news novelty",
@@ -25,14 +25,22 @@ def _template():
     )
 
 
-def _field(name, description, *, dataset="news_fixture", field_type="VECTOR"):
+def _field(
+    name,
+    description,
+    *,
+    dataset="news_fixture",
+    field_type="VECTOR",
+    category="news",
+    frequency="daily",
+):
     return {
         "id": name,
         "description": description,
         "dataset": dataset,
         "type": field_type,
-        "frequency": "daily",
-        "category": {"id": "news", "name": "News"},
+        "frequency": frequency,
+        "category": {"id": category, "name": category.title()},
         "semantic_status": "KNOWN",
     }
 
@@ -110,6 +118,221 @@ class MultiFieldConfirmationTests(unittest.TestCase):
         decision = AlphaFactory._relationship_gate(fields, _template())
 
         self.assertEqual(decision["admission"], "REVIEW")
+
+    def test_admits_shared_dataset_social_sentiment_scaled_by_attention(self):
+        decision = AlphaFactory._relationship_gate(
+            [
+                _field(
+                    "social_sentiment",
+                    "Daily social sentiment score",
+                    category="socialmedia",
+                    field_type="MATRIX",
+                ),
+                _field(
+                    "social_buzz",
+                    "Daily relative sentiment volume",
+                    category="socialmedia",
+                    field_type="MATRIX",
+                ),
+            ],
+            _template("DIRECTIONAL_RATIO"),
+        )
+
+        self.assertEqual(decision["admission"], "ALLOW")
+        self.assertEqual(decision["relationship_type"], "sentiment_attention_scale")
+
+    def test_admits_shared_dataset_equity_to_asset_ratio_with_unknown_cadence(self):
+        decision = AlphaFactory._relationship_gate(
+            [
+                _field(
+                    "equity",
+                    "Common equity",
+                    category="fundamental",
+                    field_type="MATRIX",
+                    frequency=None,
+                ),
+                _field(
+                    "assets",
+                    "Assets - Total",
+                    category="fundamental",
+                    field_type="MATRIX",
+                    frequency=None,
+                ),
+            ],
+            _template("DIRECTIONAL_RATIO"),
+        )
+
+        self.assertEqual(decision["admission"], "ALLOW")
+        self.assertEqual(decision["relationship_type"], "equity_asset_base")
+        self.assertEqual(decision["frequency_compatibility"]["status"], "REVIEW")
+
+    def test_admits_shared_dataset_cashflow_to_debt_ratio_with_unknown_cadence(self):
+        decision = AlphaFactory._relationship_gate(
+            [
+                _field(
+                    "cashflow_op",
+                    "Operating Activities - Net Cash Flow",
+                    category="fundamental",
+                    field_type="MATRIX",
+                    frequency=None,
+                ),
+                _field(
+                    "debt",
+                    "Debt",
+                    category="fundamental",
+                    field_type="MATRIX",
+                    frequency=None,
+                ),
+            ],
+            _template("DIRECTIONAL_RATIO"),
+        )
+
+        self.assertEqual(decision["admission"], "ALLOW")
+        self.assertEqual(decision["relationship_type"], "cashflow_debt_coverage")
+
+    def test_admits_same_dataset_historical_to_implied_volatility_ratio(self):
+        realized = _field(
+            "historical_volatility",
+            "Historical volatility over trailing 60 days",
+            dataset="option_fixture",
+            category="option",
+            field_type="MATRIX",
+        )
+        realized_traits = derive_field_semantic_traits(realized)
+        self.assertEqual(realized_traits["concept"], "realized_volatility")
+        self.assertEqual(realized_traits["behavior"], "signed")
+        decision = AlphaFactory._relationship_gate(
+            [
+                realized,
+                _field(
+                    "implied_volatility",
+                    "Implied volatility for call options 60 days to expiry",
+                    dataset="option_fixture",
+                    category="option",
+                    field_type="MATRIX",
+                ),
+            ],
+            _template("DIRECTIONAL_RATIO"),
+        )
+
+        self.assertEqual(decision["admission"], "ALLOW")
+        self.assertEqual(decision["relationship_type"], "realized_implied_volatility")
+
+    def test_admits_same_dataset_profitability_and_asset_efficiency_pair(self):
+        fields = [
+            _field(
+                "gross_margin",
+                "Gross margin over the trailing 12 months",
+                category="fundamental",
+                field_type="MATRIX",
+            ),
+            _field(
+                "asset_turnover",
+                "Asset turnover over the trailing 12 months",
+                category="fundamental",
+                field_type="MATRIX",
+            ),
+        ]
+
+        for contract in ("COMPARABLE_SPREAD", "MULTI_FIELD_CONFIRMATION"):
+            with self.subTest(contract=contract):
+                decision = AlphaFactory._relationship_gate(fields, _template(contract))
+                self.assertEqual(decision["admission"], "ALLOW")
+                self.assertEqual(decision["relationship_type"], "profitability_efficiency")
+                if contract == "COMPARABLE_SPREAD":
+                    self.assertFalse(decision["symmetric"])
+                    self.assertEqual(
+                        decision["preferred_slot_assignment"],
+                        {"p": "profitability_measure", "s": "asset_efficiency"},
+                    )
+
+    def test_specific_ratio_contracts_reject_reversed_slots_and_cross_dataset_fields(self):
+        reversed_fields = [
+            _field(
+                "assets",
+                "Assets - Total",
+                category="fundamental",
+                field_type="MATRIX",
+                frequency=None,
+            ),
+            _field(
+                "equity",
+                "Common equity",
+                category="fundamental",
+                field_type="MATRIX",
+                frequency=None,
+            ),
+        ]
+        reversed_decision = AlphaFactory._relationship_gate(
+            reversed_fields, _template("DIRECTIONAL_RATIO")
+        )
+        cross_dataset_fields = [
+            _field(
+                "equity",
+                "Common equity",
+                category="fundamental",
+                field_type="MATRIX",
+                frequency=None,
+            ),
+            _field(
+                "assets",
+                "Assets - Total",
+                dataset="other_fundamental",
+                category="fundamental",
+                field_type="MATRIX",
+                frequency=None,
+            ),
+        ]
+        cross_dataset_decision = AlphaFactory._relationship_gate(
+            cross_dataset_fields, _template("DIRECTIONAL_RATIO")
+        )
+
+        self.assertEqual(reversed_decision["admission"], "REJECT")
+        self.assertEqual(cross_dataset_decision["admission"], "REJECT")
+
+    def test_social_attention_ratio_rejects_mixed_field_types(self):
+        decision = AlphaFactory._relationship_gate(
+            [
+                _field(
+                    "social_sentiment",
+                    "Daily social sentiment score",
+                    category="socialmedia",
+                    field_type="MATRIX",
+                ),
+                _field(
+                    "social_buzz",
+                    "Daily relative sentiment volume",
+                    category="socialmedia",
+                    field_type="VECTOR",
+                ),
+            ],
+            _template("DIRECTIONAL_RATIO"),
+        )
+
+        self.assertEqual(decision["admission"], "REJECT")
+
+    def test_specialized_relationships_reject_profiles_outside_their_live_category(self):
+        decision = AlphaFactory._relationship_gate(
+            [
+                _field(
+                    "equity",
+                    "Common equity",
+                    category="news",
+                    field_type="MATRIX",
+                    frequency=None,
+                ),
+                _field(
+                    "assets",
+                    "Assets - Total",
+                    category="news",
+                    field_type="MATRIX",
+                    frequency=None,
+                ),
+            ],
+            _template("DIRECTIONAL_RATIO"),
+        )
+
+        self.assertEqual(decision["admission"], "REJECT")
 
 
 if __name__ == "__main__":

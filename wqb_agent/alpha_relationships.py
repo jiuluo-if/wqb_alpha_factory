@@ -13,6 +13,17 @@ def relationship_labels(
     left_concept = left.get("concept")
     right_concept = right.get("concept")
     labels = set()
+    concepts = {left_concept, right_concept}
+    if concepts == {"equity_capital", "asset_base"}:
+        labels.add("equity_asset_base")
+    if concepts == {"operating_cashflow", "debt_balance"}:
+        labels.add("cashflow_debt_coverage")
+    if concepts == {"realized_volatility", "implied_volatility"}:
+        labels.add("realized_implied_volatility")
+    if concepts == {"sentiment", "social_attention"}:
+        labels.add("sentiment_attention_scale")
+    if concepts == {"profitability_measure", "asset_efficiency"}:
+        labels.add("profitability_efficiency")
     if {left_concept, right_concept} == {"event_novelty", "sentiment"}:
         labels.add("novelty_weighted_sentiment")
     if left_concept == right_concept and left_concept != "unknown":
@@ -124,6 +135,11 @@ def relationship_type(labels: set[str]) -> str:
     for label in (
         "option_pair",
         "novelty_weighted_sentiment",
+        "equity_asset_base",
+        "cashflow_debt_coverage",
+        "realized_implied_volatility",
+        "sentiment_attention_scale",
+        "profitability_efficiency",
         "revision_dispersion",
         "numerator_denominator",
         "same_economic_concept",
