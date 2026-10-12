@@ -327,7 +327,7 @@ class TestResearchApi(unittest.TestCase):
 
     def test_core_manifest_is_a_small_startup_surface(self):
         core = research_api.research_tool_manifest()
-        self.assertEqual(len(core), 15)
+        self.assertEqual(len(core), 16)
         self.assertEqual(core[0]["name"], "research_status")
 
     def test_generated_probe_api_requires_agent_selected_raw_inputs(self):
