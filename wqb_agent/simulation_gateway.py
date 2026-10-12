@@ -2137,7 +2137,12 @@ class SimulationGateway:
                 self.client.poll_multi_progress if is_multi
                 else self.client.poll_progress
             )
-            alpha_ids = poller(progress_url)
+            # Recovery shares the configured polling budget with live dispatch.
+            # Passing it explicitly keeps long-running reads within the
+            # transport's bounded reconcile window.
+            alpha_ids = poller(
+                progress_url, timeout_sec=self.simulator.poll_timeout_sec
+            )
             if is_multi:
                 if isinstance(alpha_ids, Mapping):
                     children = alpha_ids.get("children")
