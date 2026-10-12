@@ -13,6 +13,8 @@ def relationship_labels(
     left_concept = left.get("concept")
     right_concept = right.get("concept")
     labels = set()
+    if {left_concept, right_concept} == {"event_novelty", "sentiment"}:
+        labels.add("novelty_weighted_sentiment")
     if left_concept == right_concept and left_concept != "unknown":
         labels.add("same_economic_concept")
     if {left_concept, right_concept} == {"market_price", "liquidity"}:
@@ -121,6 +123,7 @@ def frequency_compatibility(
 def relationship_type(labels: set[str]) -> str:
     for label in (
         "option_pair",
+        "novelty_weighted_sentiment",
         "revision_dispersion",
         "numerator_denominator",
         "same_economic_concept",

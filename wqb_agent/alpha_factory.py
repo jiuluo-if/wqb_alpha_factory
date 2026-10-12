@@ -361,8 +361,10 @@ class AlphaFactory:
         def result(admission, score, labels, relationship_type="unknown",
                    *, symmetric=False, preferred=None, assignment_reason="",
                    evidence_strength="LOW", confirmation_mechanism=None,
-                   reasons=()):
-            all_reasons = list(reasons) + list(frequency["reasons"])
+                   reasons=(), include_frequency_reasons=True):
+            all_reasons = list(reasons)
+            if include_frequency_reasons:
+                all_reasons.extend(frequency["reasons"])
             return {
                 "admission": admission,
                 "score": score,
@@ -440,6 +442,8 @@ class AlphaFactory:
         preferred = {"p": "EITHER", "s": "EITHER"}
         symmetric = True
         assignment_reason = "relationship is symmetric under this template contract"
+        confirmation_mechanism = None
+        frequency_scope_alignment = False
         if frequency["status"] == "INCOMPATIBLE":
             return result(
                 "REJECT", -40, labels, relationship_type,
@@ -480,6 +484,29 @@ class AlphaFactory:
                     "REJECT", -30, labels, relationship_type,
                     reasons=("ratio requires a directional numerator/denominator or put/call pair",),
                 )
+        elif relationship_contract == "MULTI_FIELD_CONFIRMATION":
+            datasets = [cls._profile_dataset(profile) for profile in profiles]
+            field_types = [str(profile.get("type") or "").upper() for profile in profiles]
+            if relationship_type != "novelty_weighted_sentiment":
+                return result(
+                    "REJECT", -30, labels, relationship_type,
+                    reasons=("two-field confirmation requires explicit event novelty and sentiment",),
+                )
+            if not datasets[0] or datasets[0] != datasets[1]:
+                return result(
+                    "REJECT", -30, labels, relationship_type,
+                    reasons=("two-field confirmation requires fields from the same declared dataset",),
+                )
+            if field_types != ["VECTOR", "VECTOR"]:
+                return result(
+                    "REJECT", -30, labels, relationship_type,
+                    reasons=("event novelty and sentiment confirmation requires two VECTOR fields",),
+                )
+            confirmation_mechanism = "event_novelty_sentiment"
+            assignment_reason = (
+                "same-dataset event novelty and sentiment are jointly required by the confirmation contract"
+            )
+            frequency_scope_alignment = set(frequency["buckets"]) == {"unknown"}
         elif relationship_contract == "CO_MOVEMENT":
             allowed = {
                 "same_economic_concept", "option_pair", "revision_dispersion",
@@ -496,12 +523,13 @@ class AlphaFactory:
                 reasons=("no relationship contract is defined for this template family",),
             )
 
-        if frequency["status"] == "REVIEW":
+        if frequency["status"] == "REVIEW" and not frequency_scope_alignment:
             return result(
                 "REVIEW", 20, labels, relationship_type,
                 symmetric=symmetric,
                 preferred=preferred,
                 assignment_reason=assignment_reason,
+                confirmation_mechanism=confirmation_mechanism,
                 reasons=("frequency compatibility is REVIEW; auto Factory cannot use it",),
             )
         if relationship_contract == "DIRECTIONAL_RATIO":
@@ -520,7 +548,11 @@ class AlphaFactory:
             preferred={"p": "EITHER", "s": "EITHER"},
             assignment_reason="relationship is symmetric under this template contract",
             evidence_strength="HIGH" if relationship_type in {"option_pair", "revision_dispersion"} else "MEDIUM",
-            reasons=("template-specific relationship contract passed",),
+            confirmation_mechanism=confirmation_mechanism,
+            reasons=(
+                "same BRAIN dataset and VECTOR types establish field scope; cadence metadata is unavailable",
+            ) if frequency_scope_alignment else ("template-specific relationship contract passed",),
+            include_frequency_reasons=not frequency_scope_alignment,
         )
 
 

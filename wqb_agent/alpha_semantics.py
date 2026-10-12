@@ -38,6 +38,10 @@ _SEMANTIC_CONCEPT_RULES = (
         ),
     ),
     (
+        "event_novelty",
+        ("news novelty", "story novelty", "event novelty"),
+    ),
+    (
         "sentiment",
         ("sentiment", "social", "news", "recommendation", "bullish", "bearish"),
     ),
@@ -151,7 +155,10 @@ def derive_field_semantic_traits(
         }
     text = _profile_text(profile)
     direct_text = _profile_text(profile, include_dataset=False)
-    category = str(profile.get("category") or "").lower()
+    category_value = profile.get("category")
+    if isinstance(category_value, Mapping):
+        category_value = category_value.get("id") or category_value.get("name")
+    category = str(category_value or "").lower()
     frequency = _frequency_text(profile)
     concept = "unknown"
     concept_hits = []
@@ -163,6 +170,14 @@ def derive_field_semantic_traits(
             concept_hits = hits
             direct_concept_hits = [word for word in keywords if _has(direct_text, word)]
             break
+    if (
+        category == "news"
+        and not direct_concept_hits
+        and _has(direct_text, "novelty")
+    ):
+        concept = "event_novelty"
+        concept_hits = ["news category + explicit novelty field metadata"]
+        direct_concept_hits = ["novelty"]
     if concept == "unknown":
         concept = {
             "analyst": "analyst",
@@ -216,6 +231,7 @@ def derive_field_semantic_traits(
         "analyst_revision",
         "analyst_dispersion",
         "event_count",
+        "event_novelty",
         "sentiment",
     }
     slow_signal = (
@@ -257,6 +273,7 @@ def derive_field_semantic_traits(
     elif concept in {
         "volatility",
         "event_count",
+        "event_novelty",
         "fundamental",
         "earnings",
         "data_quality",
@@ -279,6 +296,7 @@ def derive_field_semantic_traits(
         "option": "option_measurement",
         "volatility": "risk_exposure",
         "event_count": "attention_events",
+        "event_novelty": "information_novelty",
         "liquidity": "market_participation",
         "sentiment": "attention_or_belief",
         "valuation": "relative_value",
