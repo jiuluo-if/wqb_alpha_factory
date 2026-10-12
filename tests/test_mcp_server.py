@@ -411,6 +411,9 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                 for i, spec in enumerate(specs)
             ],
             "get_alpha_evidence": lambda *_, **__: {"source": "LIVE", "alpha": {}},
+            "get_alpha_recordsets": lambda *_, **__: {
+                "source": "LIVE", "status": "AVAILABLE", "recordsets": {},
+            },
             "get_alpha_prod_correlation": lambda *_, **__: {"source": "LIVE", "status": "AVAILABLE", "records": []},
             "get_simulation_config": lambda **_: {
                 "settings": {}, "runtime": {"poll_timeout_sec": 1500},
@@ -441,11 +444,12 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             "research_status", "research_batch_status", "list_datasets", "list_datafields",
             "get_operator_reference", "validate_simulation_spec",
             "simulate_batch", "simulate_multi_batch", "get_alpha_evidence",
+            "get_alpha_recordsets",
             "reconcile_execution", "get_alpha_prod_correlation",
             "get_pending_executions", "list_templates", "generate_probes",
             "compare_alphas",
         })
-        self.assertEqual(len(by_name), 15)
+        self.assertEqual(len(by_name), 16)
         self.assertEqual(
             set(by_name),
             {row["name"] for row in mcp_server.research_api.research_tool_manifest(profile="core")},
@@ -454,6 +458,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(by_name["simulate_multi_batch"].annotations.read_only_hint)
         self.assertTrue(by_name["research_status"].annotations.read_only_hint)
         self.assertTrue(by_name["research_batch_status"].annotations.read_only_hint)
+        self.assertTrue(by_name["get_alpha_recordsets"].annotations.read_only_hint)
         for tool in listed.tools:
             self.assertNotIn("state_dir", tool.input_schema.get("properties", {}))
         self.assertNotIn("alpha_submission", by_name)
@@ -617,6 +622,70 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("get_alpha_self_correlation", tools)
         self.assertEqual(evidence.call_args.kwargs["depth"], "full")
         self.assertEqual(result.structured_content["data"]["self_correlation"]["max"], 0.08)
+
+    async def test_get_alpha_recordsets_reads_pnl_without_full_evidence(self):
+        recordsets = Mock(return_value={
+            "source": "LIVE", "status": "AVAILABLE",
+            "recordsets": {
+                "pnl": {
+                    "status": "AVAILABLE", "columns": ["date", "pnl"],
+                    "rows": [{"date": "2026-10-09", "pnl": 0.01}],
+                },
+            },
+        })
+        evidence = Mock(side_effect=AssertionError("full evidence must not be called"))
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(
+                api=self.api(
+                    get_alpha_recordsets=recordsets,
+                    get_alpha_evidence=evidence,
+                ),
+                client=object(),
+            )
+        async with Client(server) as client:
+            tool = next(item for item in (await client.list_tools()).tools
+                        if item.name == "get_alpha_recordsets")
+            result = await client.call_tool("get_alpha_recordsets", {
+                "alpha_id": "alpha-a", "names": ["pnl"],
+            })
+
+        self.assertTrue(tool.annotations.read_only_hint)
+        recordsets.assert_called_once()
+        self.assertEqual(recordsets.call_args.args[:2], ("alpha-a", ["pnl"]))
+        evidence.assert_not_called()
+        self.assertEqual(
+            result.structured_content["data"]["recordsets"]["pnl"]["rows"],
+            [{"date": "2026-10-09", "pnl": 0.01}],
+        )
+
+    async def test_get_alpha_recordsets_rejects_invalid_names_before_facade_call(self):
+        recordsets = Mock(return_value={"source": "LIVE"})
+        with patch.dict(os.environ, {self.ENV: "1"}):
+            server = mcp_server.build_research_server(
+                api=self.api(get_alpha_recordsets=recordsets), client=object(),
+            )
+        async with Client(server) as client:
+            results = [
+                await client.call_tool("get_alpha_recordsets", {
+                    "alpha_id": "alpha-a", "names": [],
+                }),
+                await client.call_tool("get_alpha_recordsets", {
+                    "alpha_id": "alpha-a", "names": ["pnl", "is", "coverage"],
+                }),
+                await client.call_tool("get_alpha_recordsets", {
+                    "alpha_id": "alpha-a", "names": ["pnl", "pnl"],
+                }),
+                await client.call_tool("get_alpha_recordsets", {
+                    "alpha_id": "alpha-a", "names": ["self_correlation"],
+                }),
+                await client.call_tool("get_alpha_recordsets", {
+                    "alpha_id": "alpha-a", "names": ["coverage"],
+                }),
+            ]
+
+        self.assertTrue(all(x.structured_content["error"] == "INVALID_ARGUMENT"
+                            for x in results))
+        recordsets.assert_not_called()
 
     async def test_compare_alphas_returns_bounded_pairwise_live_pnl_evidence(self):
         class PnlOnlyClient:
@@ -990,7 +1059,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         async with Client(parameters) as client:
             listed = await client.list_tools()
         names = {tool.name for tool in listed.tools}
-        self.assertEqual(len(names), 15)
+        self.assertEqual(len(names), 16)
         self.assertTrue({"research_status", "simulate_batch", "simulate_multi_batch"} <= names)
 
     async def test_alpha_expression_is_available_only_through_requested_evidence(self):

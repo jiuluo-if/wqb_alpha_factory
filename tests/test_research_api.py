@@ -103,6 +103,7 @@ class TestResearchApi(unittest.TestCase):
             "research_status", "research_batch_status", "list_datasets", "list_datafields",
             "get_operator_reference", "validate_simulation_spec",
             "simulate_batch", "simulate_multi_batch", "get_alpha_evidence",
+            "get_alpha_recordsets",
             "reconcile_execution", "get_alpha_prod_correlation",
             "get_pending_executions", "list_templates", "generate_probes",
             "compare_alphas",

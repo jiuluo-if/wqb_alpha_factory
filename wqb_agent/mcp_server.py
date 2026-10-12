@@ -951,6 +951,32 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
         )
 
     @server.tool(annotations=remote_read)
+    def get_alpha_recordsets(alpha_id: str, names: list[str]) -> dict[str, Any]:
+        """[READ_ONLY] Read an Alpha's official PnL recordset without full evidence.
+
+        This research surface allows only the daily PnL recordset. It does not
+        request aggregates, self-correlation, or other full-evidence sections.
+        """
+        if (
+            not isinstance(alpha_id, str) or not alpha_id.strip()
+            or len(alpha_id.strip()) > 128
+            or not isinstance(names, list) or len(names) != 1
+            or any(
+                not isinstance(name, str) or not name.strip() or len(name.strip()) > 128
+                for name in names
+            )
+        ):
+            return _invalid_result(owner="research_api.get_alpha_recordsets")
+        selected = [name.strip() for name in names]
+        if selected[0].casefold() != "pnl":
+            return _invalid_result(owner="research_api.get_alpha_recordsets")
+        selected[0] = "pnl"
+        return read_facade(
+            "get_alpha_recordsets", alpha_id.strip(), selected,
+            list_item_limit=MAX_LIST_ITEMS,
+        )
+
+    @server.tool(annotations=remote_read)
     def compare_alphas(
         alpha_ids: list[str], max_concurrent: int = 4, max_pairs: int = 20,
     ) -> dict[str, Any]:

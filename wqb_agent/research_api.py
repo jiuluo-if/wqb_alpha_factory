@@ -2119,6 +2119,7 @@ _AGENT_CORE_TOOL_NAMES = frozenset({
     "list_templates", "generate_probes",
     "get_operator_reference", "validate_simulation_spec",
     "simulate_batch", "simulate_multi_batch", "get_alpha_evidence",
+    "get_alpha_recordsets",
     "reconcile_execution", "get_alpha_prod_correlation",
     "get_pending_executions", "compare_alphas",
 })
