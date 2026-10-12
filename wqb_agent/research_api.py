@@ -913,11 +913,17 @@ def simulate_single(spec, *, client=None, config=None, state_dir=None):
     return simulate(spec, client=client, config=config, state_dir=state_dir)
 
 
-def simulate_batch(specs, *, client=None, config=None, state_dir=None):
+def simulate_batch(
+    specs, *, client=None, config=None, state_dir=None,
+    poll_timeout_sec=None,
+):
     """Execute Single Simulations through the ten-worker window by default."""
-    gateway = _simulation_gateway(
-        client=client, config=config, state_dir=state_dir
-    )
+    gateway_options = {
+        "client": client, "config": config, "state_dir": state_dir,
+    }
+    if poll_timeout_sec is not None:
+        gateway_options["poll_timeout_sec"] = poll_timeout_sec
+    gateway = _simulation_gateway(**gateway_options)
     return gateway.simulate_batch(specs)
 
 
@@ -925,6 +931,7 @@ def simulate_multi_batch(
     specs, *, client=None, config=None, state_dir=None,
     child_batch_size=MULTI_DEFAULT_CHILD_BATCH_SIZE,
     max_concurrent_multi=MULTI_DEFAULT_CONCURRENCY,
+    poll_timeout_sec=None,
 ):
     """Execute meaningful candidates through bounded Multi-Simulation parents.
 
@@ -939,9 +946,12 @@ def simulate_multi_batch(
         raise ValueError(
             f"Multi batch accepts at most {MULTI_MAX_CANDIDATES_PER_CALL} candidates per call"
         )
-    gateway = _simulation_gateway(
-        client=client, config=config, state_dir=state_dir
-    )
+    gateway_options = {
+        "client": client, "config": config, "state_dir": state_dir,
+    }
+    if poll_timeout_sec is not None:
+        gateway_options["poll_timeout_sec"] = poll_timeout_sec
+    gateway = _simulation_gateway(**gateway_options)
     return gateway.simulate_multi_batch(
         normalized_specs,
         child_batch_size=child_batch_size,

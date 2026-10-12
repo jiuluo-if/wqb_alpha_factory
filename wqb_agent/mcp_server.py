@@ -25,8 +25,9 @@ MAX_AQAF_MCP_ALPHA_IDS = 20
 MAX_SIMULATION_BATCH = 50
 MAX_MULTI_BATCH = research_api.MULTI_MAX_CANDIDATES_PER_CALL
 SUPPORTED_DATA_REGIONS = research_api.SUPPORTED_DATA_REGIONS
-# Keep one 60-second snapshot plus this poll budget within the 300-second
-# MCP call limit so a timed-out transport cannot leave the owner lock occupied.
+# Keep simulation and reconcile polling below the 300-second MCP call limit.
+# A poll timeout with a known progress URL remains recoverable through the same
+# Gateway task; it must return control before the transport kills the call.
 RECONCILE_POLL_TIMEOUT_SEC = 180
 RESEARCH_WRITE_OPT_IN = "ALPHA_FACTORY_ENABLE_SIMULATION_WRITES"
 _SECRET_PARTS = ("password", "credential", "token", "secret", "authorization", "cookie", "api_key", "apikey")
@@ -913,7 +914,10 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
         parsed = parse_specs(specs, minimum=1, maximum=MAX_SIMULATION_BATCH, require_proposal_ids=True)
         if parsed is None:
             return _invalid_result(owner="research_api.simulate_batch", access_mode="SIMULATION_WRITE", remote_write=True)
-        return write_facade("simulate_batch", parsed)
+        return write_facade(
+            "simulate_batch", parsed,
+            poll_timeout_sec=RECONCILE_POLL_TIMEOUT_SEC,
+        )
 
     @server.tool(annotations=simulation_write)
     def simulate_multi_batch(specs: list[dict[str, Any]]) -> dict[str, Any]:
@@ -929,7 +933,10 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
         )
         if parsed is None:
             return _invalid_result(owner="research_api.simulate_multi_batch", access_mode="SIMULATION_WRITE", remote_write=True)
-        return write_facade("simulate_multi_batch", parsed)
+        return write_facade(
+            "simulate_multi_batch", parsed,
+            poll_timeout_sec=RECONCILE_POLL_TIMEOUT_SEC,
+        )
 
     @server.tool(annotations=remote_read)
     def get_alpha_evidence(
