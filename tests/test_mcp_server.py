@@ -1329,6 +1329,23 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("template_id", envelope["results"][0])
         self.assertFalse(envelope["truncated"])
 
+    def test_write_projection_keeps_safe_remote_failure_diagnostics(self):
+        envelope = mcp_server._write_result_envelope([{
+            "proposal_id": "proposal-1",
+            "status": "FAILED",
+            "reason_code": "INVALID_SPEC",
+            "fingerprint": "a" * 64,
+            "field_validation": "LIVE_VERIFIED",
+            "failure_kind": "SYNTAX",
+            "http_status_code": 400,
+            "error": "private expression or server message",
+        }], expected_count=1)
+
+        self.assertEqual(envelope["results"][0]["failure_kind"], "SYNTAX")
+        self.assertEqual(envelope["results"][0]["http_status_code"], 400)
+        self.assertNotIn("error", envelope["results"][0])
+        self.assertFalse(envelope["truncated"])
+
     def test_malformed_result_keeps_candidate_slot_and_marks_truncated(self):
         envelope = mcp_server._write_result_envelope([None], expected_count=1)
         self.assertEqual(envelope["result_count"], 1)

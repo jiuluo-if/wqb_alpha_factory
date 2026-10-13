@@ -2708,6 +2708,30 @@ class SimulationWriteContractTests(unittest.TestCase):
         _expression, _settings, kwargs = client.submissions[0]
         self.assertEqual(kwargs.get("alpha_type"), "REGULAR")
 
+    def test_failed_write_preserves_safe_remote_rejection_diagnostics(self):
+        item = type("WriteResult", (), {})()
+        item.proposal_id = "proposal-diagnostic"
+        item.note = None
+        item.template_id = "existing-template"
+        item.fields = ("field_one", "field_two")
+        item.field_validation = "LIVE_VERIFIED"
+        item.status = "FAILED"
+        item.alpha_id = None
+        item.progress_url = None
+        item.evidence = None
+        item.error = (
+            "WQBRejectedError: submit simulation failed with status "
+            "400: invalid expression"
+        )
+        item.failure_kind = None
+        item.remote_status = None
+
+        result = SimulationGateway._result(item, "a" * 64)
+
+        self.assertEqual(result["reason_code"], "INVALID_SPEC")
+        self.assertEqual(result["failure_kind"], "SYNTAX")
+        self.assertEqual(result["http_status_code"], 400)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -34,8 +34,11 @@ _SECRET_PARTS = ("password", "credential", "token", "secret", "authorization", "
 _SPEC_KEYS = frozenset({"expression", "settings", "fields", "field_datasets", "proposal_id", "note", "template_id", "simulation_type"})
 _WRITE_RESULT_KEYS = (
     "proposal_id", "status", "reason_code", "fingerprint", "alpha_id",
-    "field_validation",
+    "field_validation", "failure_kind",
 )
+_WRITE_FAILURE_KINDS = frozenset({
+    "SYNTAX", "DATA", "INFRA", "AUTH", "RATE_LIMIT", "TIMEOUT",
+})
 _TEMPLATE_INVENTORY_KEYS = (
     "template_id", "version", "kind", "family", "role", "economic",
     "economic_mechanism", "direction_reason",
@@ -647,6 +650,28 @@ def _write_result_envelope(results, *, expected_count: int) -> dict[str, Any]:
             projected.append({"status": "UNKNOWN"})
             continue
         row = {key: item[key] for key in _WRITE_RESULT_KEYS if isinstance(item.get(key), str)}
+        if row.get("failure_kind") not in _WRITE_FAILURE_KINDS:
+            row.pop("failure_kind", None)
+        remote_status = item.get("remote_status")
+        if (
+            isinstance(remote_status, int)
+            and not isinstance(remote_status, bool)
+            and 100 <= remote_status <= 599
+        ):
+            row["remote_status"] = remote_status
+        elif (
+            isinstance(remote_status, str)
+            and 0 < len(remote_status.strip()) <= 32
+            and remote_status.strip().replace("_", "").isalnum()
+        ):
+            row["remote_status"] = remote_status.strip()
+        http_status_code = item.get("http_status_code")
+        if (
+            isinstance(http_status_code, int)
+            and not isinstance(http_status_code, bool)
+            and 100 <= http_status_code <= 599
+        ):
+            row["http_status_code"] = http_status_code
         row.setdefault("status", "UNKNOWN")
         clipped |= (
             not row.get("proposal_id") or not row.get("fingerprint")

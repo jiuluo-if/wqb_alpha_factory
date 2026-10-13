@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import threading
 import time
 from collections.abc import Mapping
@@ -25,7 +26,11 @@ from .expression import (
     submission_fingerprint,
     unaggregated_vector_fields,
 )
-from .failures import ResearchReasonError, reason_code_for_failure
+from .failures import (
+    ResearchReasonError,
+    classify_error,
+    reason_code_for_failure,
+)
 from .locking import single_instance_scope
 from .simulator import Simulator
 
@@ -2305,14 +2310,49 @@ class SimulationGateway:
             template_id=getattr(item, "template_id", None),
             fields=getattr(item, "fields", ()),
         )
+        error = getattr(item, "error", None)
+        diagnostic = getattr(item, "diagnostic", None)
+        remote_status = getattr(item, "remote_status", None)
+        http_status_code = getattr(item, "http_status_code", None)
+        failure_kind = getattr(item, "failure_kind", None)
+        if isinstance(diagnostic, Mapping):
+            if failure_kind is None:
+                failure_kind = diagnostic.get("failure_kind")
+            if http_status_code is None:
+                http_status_code = diagnostic.get("http_status_code")
+        if (
+            isinstance(http_status_code, bool)
+            or not isinstance(http_status_code, int)
+            or not 100 <= http_status_code <= 599
+        ):
+            http_status_code = (
+                remote_status
+                if isinstance(remote_status, int)
+                and not isinstance(remote_status, bool)
+                and 100 <= remote_status <= 599
+                else None
+            )
+        if http_status_code is None and isinstance(error, str):
+            match = re.search(
+                r"\bstatus(?:_code)?\s*[=:]?\s*(\d{3})\b",
+                error,
+                re.IGNORECASE,
+            )
+            if match:
+                parsed_status = int(match.group(1))
+                if 100 <= parsed_status <= 599:
+                    http_status_code = parsed_status
+        if failure_kind is None and isinstance(error, str):
+            failure_kind = classify_error(error, status_code=http_status_code)
         return cls._labelled_result(
             spec, item.status, fingerprint,
             alpha_id=getattr(item, "alpha_id", None),
             progress_url=getattr(item, "progress_url", None),
             evidence=getattr(item, "evidence", None),
-            error=getattr(item, "error", None),
-            failure_kind=getattr(item, "failure_kind", None),
-            remote_status=getattr(item, "remote_status", None),
+            error=error,
+            failure_kind=failure_kind,
+            remote_status=remote_status,
+            http_status_code=http_status_code,
             diagnostic=getattr(item, "diagnostic", None),
             field_validation=getattr(item, "field_validation", None) or (
                 cls._field_validation_label(item)
