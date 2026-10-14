@@ -7,6 +7,7 @@ Covers what the git_selfbqr comparison contributed:
 - classify_experiment recognizes the new exception names
 """
 
+import inspect
 import json
 import os
 import sys
@@ -20,6 +21,7 @@ import requests
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from wqb_agent.client import (
+    DEFAULT_SUBMIT_SPACING_SEC,
     WQBAuthError,
     WQBClient,
     WQBNotFoundError,
@@ -1258,6 +1260,25 @@ class TestClassifiedExceptions(unittest.TestCase):
         ), "INVALID_SPEC")
 
 class TestSharedRateLimitGate(unittest.TestCase):
+    def test_default_submit_spacing_matches_measured_safe_cadence(self):
+        """8 parents at 15 s were loss-free; 10 s lost 30 of 80 children."""
+        self.assertEqual(DEFAULT_SUBMIT_SPACING_SEC, 15.0)
+        default = inspect.signature(WQBClient.__init__).parameters[
+            "submit_spacing_sec"
+        ].default
+        self.assertEqual(default, DEFAULT_SUBMIT_SPACING_SEC)
+
+    def test_submit_gate_uses_client_spacing(self):
+        c = make_client()
+        c.submit_spacing_sec = 2.5
+        with mock.patch("wqb_agent.client.time.sleep") as sleep, \
+             mock.patch.object(c, "_wait_rate_limit_gate", return_value=True):
+            c._wait_submission_slot()
+            c._wait_submission_slot()
+        slept = [call.args[0] for call in sleep.call_args_list]
+        self.assertTrue(slept, "second POST must wait for the spacing window")
+        self.assertAlmostEqual(slept[-1], 2.5, delta=0.5)
+
     def test_read_only_budget_clamps_http_timeout(self):
         c = make_client()
         session = mock.Mock()

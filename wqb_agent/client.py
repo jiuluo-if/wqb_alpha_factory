@@ -71,6 +71,14 @@ SUPPORTED_SIMULATION_REQUEST_TYPES = frozenset(
     {REGULAR_SIMULATION_TYPE, REGION_AGNOSTIC_SIMULATION_TYPE}
 )
 
+# Measured-safe cadence between Simulation POSTs.  A live Multi ladder on this
+# account (2026-10-14) lost 30 of 80 children to HTTP 429 -> SUBMIT_UNKNOWN at a
+# 10 s spacing, while 8 parents at 15 s returned 78 DONE / 0 unknown (589
+# simulations/hour).  A 429 that aborts an ambiguous write permanently retires
+# that Simulation because exact-once forbids re-POST, so the default stays at
+# the measured-safe cadence instead of the theoretical maximum.
+DEFAULT_SUBMIT_SPACING_SEC = 15.0
+
 # Status codes that indicate a permanent, non-retryable rejection.
 FAIL_FAST_STATUSES = (400, 403, 404, 422)
 ALPHA_COLOR_VALUES = frozenset({"BLUE", "GREEN", "PURPLE", "RED", "YELLOW"})
@@ -259,7 +267,7 @@ class WQBClient:
         delay=1,
         universe="TOP3000",
         max_retries=5,
-        submit_spacing_sec=2.0,
+        submit_spacing_sec=DEFAULT_SUBMIT_SPACING_SEC,
     ):
         self.base_url = base_url.rstrip("/")
         explicit_username = username is not None
@@ -541,7 +549,9 @@ class WQBClient:
         if not hasattr(self, "_submit_lock"):
             self._submit_lock = threading.Lock()
             self._next_submit_at = 0.0
-            self.submit_spacing_sec = getattr(self, "submit_spacing_sec", 2.0)
+            self.submit_spacing_sec = getattr(
+                self, "submit_spacing_sec", DEFAULT_SUBMIT_SPACING_SEC
+            )
         self._wait_rate_limit_gate()
         with self._submit_lock:
             remaining = self._next_submit_at - time.monotonic()
