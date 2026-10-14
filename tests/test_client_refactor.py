@@ -1261,8 +1261,8 @@ class TestClassifiedExceptions(unittest.TestCase):
 
 class TestSharedRateLimitGate(unittest.TestCase):
     def test_default_submit_spacing_matches_measured_safe_cadence(self):
-        """8 parents at 15 s were loss-free; 10 s lost 30 of 80 children."""
-        self.assertEqual(DEFAULT_SUBMIT_SPACING_SEC, 15.0)
+        """20 s kept 8 parents loss-free; 15 s lost a child in a real wave."""
+        self.assertEqual(DEFAULT_SUBMIT_SPACING_SEC, 20.0)
         default = inspect.signature(WQBClient.__init__).parameters[
             "submit_spacing_sec"
         ].default

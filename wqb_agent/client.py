@@ -71,13 +71,15 @@ SUPPORTED_SIMULATION_REQUEST_TYPES = frozenset(
     {REGULAR_SIMULATION_TYPE, REGION_AGNOSTIC_SIMULATION_TYPE}
 )
 
-# Measured-safe cadence between Simulation POSTs.  A live Multi ladder on this
-# account (2026-10-14) lost 30 of 80 children to HTTP 429 -> SUBMIT_UNKNOWN at a
-# 10 s spacing, while 8 parents at 15 s returned 78 DONE / 0 unknown (589
-# simulations/hour).  A 429 that aborts an ambiguous write permanently retires
-# that Simulation because exact-once forbids re-POST, so the default stays at
-# the measured-safe cadence instead of the theoretical maximum.
-DEFAULT_SUBMIT_SPACING_SEC = 15.0
+# Measured-safe cadence between Simulation POSTs.  A live concurrency ladder on
+# this account (USA/TOP3000/d1, 8 parents x 10 children per wave, 2026-10-14)
+# measured: 10 s -> 30 of 80 children lost to HTTP 429; 15 s -> one loss in 80
+# during a real research wave; 18 s and 20 s -> 0 losses in 80 each.  A 429 that
+# aborts an ambiguous write permanently retires that Simulation because
+# exact-once forbids re-POST, while wall-clock throughput is queue-bound rather
+# than spacing-bound, so the default keeps the measured margin instead of the
+# fastest spacing that merely happened to work once.
+DEFAULT_SUBMIT_SPACING_SEC = 20.0
 
 # Status codes that indicate a permanent, non-retryable rejection.
 FAIL_FAST_STATUSES = (400, 403, 404, 422)
