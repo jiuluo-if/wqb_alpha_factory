@@ -47,6 +47,13 @@ MULTI_MAX_CANDIDATES_PER_CALL = 100
 MULTI_DEFAULT_CHILD_BATCH_SIZE = 10
 MULTI_DEFAULT_CONCURRENCY = 8
 MULTI_MAX_CONCURRENCY = 8
+# An unresolved MULTI parent keeps reserving one of the MULTI_MAX_CONCURRENCY
+# slots while it may still be running remotely.  A Multi parent that stays
+# ambiguous longer than this window cannot still be alive (its children finish
+# in minutes, and the poll timeout is 30 minutes), so it stops consuming
+# capacity; its exact-once record is untouched, so a later write carrying the
+# same fingerprint is still refused.
+MULTI_UNKNOWN_SLOT_HOLD_SEC = 3600.0
 # These are the child scopes observed in BRAIN REGION_AGNOSTIC outputs.  The
 # aggregate ALL scope is not a field-catalog scope, so verify each child scope.
 REGION_AGNOSTIC_CHILD_REGIONS = ("USA", "EUR", "ASI", "GLB")
@@ -208,6 +215,32 @@ def classify_write_readiness(
     return {"write_readiness": readiness, "write_blockers": blockers}
 
 
+def multi_parent_holds_slot(row, *, now=None):
+    """Return True while a guard row should keep reserving a Multi parent slot.
+
+    ``SUBMITTING``/``RUNNING`` always hold a slot.  A ``SUBMIT_UNKNOWN`` parent
+    holds one only inside ``MULTI_UNKNOWN_SLOT_HOLD_SEC``; its exact-once record
+    stays in the guard either way, so capacity accounting never re-allows the
+    same write.  A row without a usable timestamp fails closed and keeps its
+    slot.
+    """
+
+    if not isinstance(row, Mapping):
+        return True
+    if row.get("kind") != ExecutionGuard.MULTI_PARENT:
+        return False
+    status = row.get("status")
+    if status not in ExecutionGuard.STATUSES:
+        return False
+    if status != "SUBMIT_UNKNOWN":
+        return True
+    updated_at = row.get("updated_at")
+    if isinstance(updated_at, bool) or not isinstance(updated_at, (int, float)):
+        return True
+    reference = time.time() if now is None else now
+    return (reference - float(updated_at)) < MULTI_UNKNOWN_SLOT_HOLD_SEC
+
+
 def classify_batch_write_admission(
     *,
     candidate_fingerprints,
@@ -268,9 +301,7 @@ def classify_batch_write_admission(
     pending = rows or []
     guarded = {row["execution_fingerprint"] for row in pending}
     active_multi_parent_count = sum(
-        row.get("kind") == ExecutionGuard.MULTI_PARENT
-        and row.get("status") in ExecutionGuard.STATUSES
-        for row in pending
+        1 for row in pending if multi_parent_holds_slot(row)
     )
     available_multi_slots = max(
         0, MULTI_MAX_CONCURRENCY - active_multi_parent_count
@@ -1847,9 +1878,7 @@ class SimulationGateway:
             return self._attach_scan_evidence(results, remote_duplicates)
 
         active_multi_parents = sum(
-            row.get("kind") == ExecutionGuard.MULTI_PARENT
-            and row.get("status") in ExecutionGuard.STATUSES
-            for row in self.guard.entries()
+            1 for row in self.guard.entries() if multi_parent_holds_slot(row)
         )
         available_multi_slots = max(
             0, MULTI_MAX_CONCURRENCY - active_multi_parents
