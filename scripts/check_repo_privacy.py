@@ -1,9 +1,12 @@
 """Research-data privacy guard for this public repository.
 
-``git ls-files`` is the source of truth, so a local-only directory such as
-``research_data/`` never blocks the check even though it holds raw exports. The
-guard targets research-data privacy (machine-specific paths and private research
-artifacts); it complements, and does not replace, credential hygiene.
+``git ls-files`` is the source of truth, extended with untracked-but-not-ignored
+files: a brand-new file is invisible to ``git ls-files`` alone, so a local run
+would pass while CI fails on the very commit that adds it.  An ignored local
+directory such as ``research_data/`` never blocks the check even though it holds
+raw exports. The guard targets research-data privacy (machine-specific paths and
+private research artifacts); it complements, and does not replace, credential
+hygiene.
 
 Tracked text is scanned by streaming it line by line, so a large tracked file
 cannot bypass the scan.  Binaries are detected from their leading bytes and
@@ -137,8 +140,14 @@ def repo_root(start: Path | None = None) -> Path:
 
 
 def tracked_files(root: Path) -> list[str]:
+    """Return every file the guard must scan: tracked, plus new unignored files.
+
+    Scanning the untracked-but-not-ignored set as well keeps the local gate and
+    CI on the same file list, so a newly added file cannot pass locally and fail
+    after the commit.  Ignored local trees stay out of scope.
+    """
     result = subprocess.run(
-        ["git", "ls-files", "-z"],
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
         cwd=str(root),
         capture_output=True,
         text=True,

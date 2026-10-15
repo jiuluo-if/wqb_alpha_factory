@@ -8,6 +8,7 @@ itself never contains a literal private path.
 
 import importlib.util
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -62,6 +63,17 @@ class TestRepositoryPrivacyGuard(unittest.TestCase):
             [item.as_dict() for item in findings],
             [],
             "tracked files must not expose machine paths or private research artifacts",
+        )
+
+    def test_untracked_new_file_is_scanned_so_local_gate_matches_ci(self):
+        name = f"privacy_probe_untracked_{os.getpid()}.txt"
+        probe = ROOT / name
+        self.addCleanup(probe.unlink, missing_ok=True)
+        probe.write_text("clean synthetic line\n", encoding="utf-8")
+        self.assertIn(
+            name,
+            GUARD.tracked_files(ROOT),
+            "a new untracked file must be scanned locally, exactly as CI would",
         )
 
     def test_default_root_matches_explicit_root_from_arbitrary_cwd(self):
