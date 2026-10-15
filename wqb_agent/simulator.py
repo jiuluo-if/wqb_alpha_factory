@@ -24,6 +24,7 @@ Safety semantics (rolling bounded executor window):
   local error does not prove the POST never happened.
 """
 
+import inspect
 import time
 from collections import deque
 from collections.abc import Mapping
@@ -65,6 +66,32 @@ class Simulator:
         if isinstance(path, list) and (not path or path[-1] != status):
             path.append(status)
             del path[:-cls.STATUS_PATH_LIMIT]
+
+    @staticmethod
+    def _submit_with_compatibility(method, *args, **kwargs):
+        """Drop the optional idempotency keyword only for known legacy APIs.
+
+        Inspecting before the call avoids interpreting a TypeError raised by
+        the method body as proof that the request was never sent.
+        """
+        try:
+            parameters = inspect.signature(method).parameters.values()
+        except (TypeError, ValueError):
+            parameters = None
+        accepts_keyword = parameters is None or any(
+            (
+                parameter.name == "idempotency_key"
+                and parameter.kind in {
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    inspect.Parameter.KEYWORD_ONLY,
+                }
+            )
+            or parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters or ()
+        )
+        if not accepts_keyword:
+            kwargs.pop("idempotency_key", None)
+        return method(*args, **kwargs)
 
     @staticmethod
     def _safe_error(batch, exc):
@@ -239,27 +266,13 @@ class Simulator:
                             getattr(experiment, "simulation_type", "REGULAR")
                             or "REGULAR"
                         )
-                        try:
-                            experiment.progress_url = self.client.submit_simulation(
-                                experiment.expression,
-                                experiment.settings,
-                                alpha_type=alpha_type,
-                                idempotency_key=experiment.submission_fingerprint,
-                            )
-                        except TypeError as exc:
-                            # Test doubles and pre-fingerprint clients keep the
-                            # safe caller-side checkpoint semantics.
-                            if "idempotency_key" not in str(exc):
-                                raise
-                            if alpha_type != "REGULAR":
-                                experiment.progress_url = self.client.submit_simulation(
-                                    experiment.expression, experiment.settings,
-                                    alpha_type=alpha_type,
-                                )
-                            else:
-                                experiment.progress_url = self.client.submit_simulation(
-                                    experiment.expression, experiment.settings
-                                )
+                        experiment.progress_url = self._submit_with_compatibility(
+                            self.client.submit_simulation,
+                            experiment.expression,
+                            experiment.settings,
+                            alpha_type=alpha_type,
+                            idempotency_key=experiment.submission_fingerprint,
+                        )
                         experiment.status = "RUNNING"
                         persist()
                         break
@@ -433,15 +446,11 @@ class Simulator:
                     }
                     for child in batch.children
                 ]
-                try:
-                    batch.progress_url = self.client.submit_multi_simulation(
-                        payloads,
-                        idempotency_key=batch.submission_fingerprint,
-                    )
-                except TypeError as exc:
-                    if "idempotency_key" not in str(exc):
-                        raise
-                    batch.progress_url = self.client.submit_multi_simulation(payloads)
+                batch.progress_url = self._submit_with_compatibility(
+                    self.client.submit_multi_simulation,
+                    payloads,
+                    idempotency_key=batch.submission_fingerprint,
+                )
                 self._transition(batch, "RUNNING")
                 persist()
 

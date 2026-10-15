@@ -1632,6 +1632,65 @@ class TestSimulationGateway(unittest.TestCase):
             )
             self.assertEqual(resumed.client.multi_submissions, [])
 
+    def test_single_internal_type_error_does_not_retry_simulation_post(self):
+        class TypeErrorAfterSinglePostClient(FakeGatewayClient):
+            def __init__(self):
+                super().__init__()
+                self.submit_calls = 0
+
+            def submit_simulation(
+                self, expression, settings, alpha_type="REGULAR", idempotency_key=None,
+            ):
+                self.submit_calls += 1
+                raise TypeError("response decode failed for idempotency_key after POST")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = TypeErrorAfterSinglePostClient()
+            results = SimulationGateway(client, state_dir=tmp).simulate_batch([
+                SimulationSpec("rank(field_a)", {"delay": 1}),
+            ])
+
+        self.assertEqual(results[0]["status"], "SUBMIT_UNKNOWN")
+        self.assertEqual(client.submit_calls, 1)
+
+    def test_single_legacy_client_without_idempotency_keyword_remains_supported(self):
+        class LegacySingleClient(FakeGatewayClient):
+            def submit_simulation(self, expression, settings, alpha_type="REGULAR"):
+                self.submissions.append((expression, settings, {"alpha_type": alpha_type}))
+                return "legacy-progress"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = LegacySingleClient()
+            results = SimulationGateway(client, state_dir=tmp).simulate_batch([
+                SimulationSpec("rank(field_a)", {"delay": 1}),
+            ])
+
+        self.assertEqual(results[0]["status"], "DONE")
+        self.assertEqual(len(client.submissions), 1)
+
+    def test_multi_internal_type_error_does_not_retry_simulation_post(self):
+        class TypeErrorAfterMultiPostClient(MultiGatewayClient):
+            def __init__(self):
+                super().__init__()
+                self.submit_calls = 0
+
+            def submit_multi_simulation(self, payloads, idempotency_key=None):
+                self.submit_calls += 1
+                raise TypeError("response decode failed for idempotency_key after POST")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = TypeErrorAfterMultiPostClient()
+            results = SimulationGateway(client, state_dir=tmp).simulate_multi_batch([
+                SimulationSpec("rank(field_a)", {"delay": 1}),
+                SimulationSpec("rank(field_b)", {"delay": 1}),
+            ])
+
+        self.assertEqual(
+            [item["status"] for item in results],
+            ["SUBMIT_UNKNOWN", "SUBMIT_UNKNOWN"],
+        )
+        self.assertEqual(client.submit_calls, 1)
+
     def test_batch_marks_unsubmitted_tail_without_creating_unknown_guard(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = FakeGatewayClient(unknown=True)
