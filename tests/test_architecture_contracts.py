@@ -33,7 +33,7 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         self.assertEqual(skill_dirs, ["skill-authoring", "wqb-research"])
 
         self.assertEqual(research_api.RESEARCH_CONTRACT_VERSION, "2026-09-29")
-        self.assertEqual(len(research_api.research_tool_manifest(profile="core")), 16)
+        self.assertEqual(len(research_api.research_tool_manifest(profile="core")), 15)
         skill_path = skill_root / "wqb-research" / "SKILL.md"
         text = skill_path.read_text(encoding="utf-8")
         self.assertIn(
@@ -166,8 +166,8 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
 
         for phrase in (
             "PROBE", "OPTIMIZE", "soft probe budget", "TARGET_MET",
-            "BRAIN_SUBMITTABLE", "low self-correlation", "pairwise",
-            "compare_alphas", "NUMERIC_THRESHOLD = UNKNOWN",
+            "BRAIN_SUBMITTABLE", "low self-correlation",
+            "field descriptions", "AlphaTemplate", "定性近似",
         ):
             self.assertIn(phrase, combined)
         for obsolete in (
