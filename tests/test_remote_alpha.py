@@ -694,7 +694,9 @@ class TestRemoteColors(unittest.TestCase):
         result = sync_remote_colors(
             plan,
             get_alpha=lambda _alpha_id: {
-                "regular": "rank(close)", "color": "BLUE",
+                "regular": "rank(close)",
+                "alpha": {"regular": "scale(close)"},
+                "color": "BLUE",
             },
             set_alpha_color=lambda *args, **kwargs: patched.append((args, kwargs))
             or {"color": "GREEN"},
@@ -764,6 +766,21 @@ class TestRemoteColors(unittest.TestCase):
         )
         self.assertEqual(identity_changed[0]["action"], "STALE_PLAN")
         self.assertEqual(identity_patches, [])
+
+        for remote in (None, {"regular": 42, "color": "BLUE"}):
+            with self.subTest(remote=remote):
+                patched = []
+                result = sync_remote_colors(
+                    plan,
+                    get_alpha=lambda _alpha_id: remote,
+                    set_alpha_color=lambda *args, **kwargs: patched.append(
+                        (args, kwargs)
+                    ),
+                    overwrite=True,
+                )
+
+                self.assertEqual(result[0]["action"], "STALE_PLAN")
+                self.assertEqual(patched, [])
 
     @critical_contract("remote_color.stale_plan_no_patch")
     def test_one_stale_entry_does_not_patch_another_reviewed_alpha(self):

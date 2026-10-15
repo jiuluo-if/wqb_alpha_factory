@@ -6,6 +6,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest import mock
 
+from tests.test_targeted_ci import critical_contract
 from wqb_agent import research_api
 from wqb_agent.alpha_grouping import variant_family_fingerprint
 from wqb_agent.config import normalize_config
@@ -1311,6 +1312,22 @@ class TestResearchApi(unittest.TestCase):
         self.assertEqual(result["fields"], rows)
         self.assertEqual([call[1]["offset"] for call in calls], [0, 2, 4])
 
+    @critical_contract("discovery.duplicate_field_page_not_complete")
+    def test_list_all_datafields_rejects_duplicate_ids_across_pages(self):
+        pages = {
+            0: ([{"id": "field-a"}, {"id": "field-b"}], 3),
+            2: ([{"id": "field-b"}], 3),
+        }
+        client = SimpleNamespace(
+            instrument_type="EQUITY", region="USA", universe="TOP3000", delay=1,
+            get_datafields=lambda _dataset, **kwargs: pages[kwargs["offset"]],
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "PAGINATION_INCOMPLETE"):
+            list_all_datafields(
+                "dataset-a", client=client, page_limit=2, region="USA",
+            )
+
     def test_list_all_datafields_uses_configured_page_cap(self):
         client = SimpleNamespace(
             get_datafields=lambda _dataset_id, **_kwargs: ([{"id": "f1"}], 2),
@@ -1379,6 +1396,47 @@ class TestResearchApi(unittest.TestCase):
             "universe": "TOP700", "delay": 0,
         }])
 
+    @critical_contract("discovery.dataset_metadata_conflicts_keep_region_source")
+    def test_list_datasets_does_not_use_first_region_metadata_as_global(self):
+        rows = {
+            "USA": [{"id": "dataset-a", "name": "A", "alphaCount": 10}],
+            "EUR": [{"id": "dataset-a", "name": "A", "alphaCount": 99}],
+            "ASI": [], "GLB": [],
+        }
+        client = SimpleNamespace(
+            instrument_type="EQUITY", region="USA", universe="TOP3000", delay=1,
+            get_datasets=lambda *, scope: rows[scope["region"]],
+        )
+
+        dataset = list_datasets(client=client)["datasets"][0]
+
+        self.assertIsNone(dataset["alphaCount"])
+        self.assertEqual(dataset["available_regions"], ["USA", "EUR"])
+        self.assertEqual(
+            dataset["region_metadata_conflicts"]["alphaCount"],
+            {"USA": {"present": True, "value": 10},
+             "EUR": {"present": True, "value": 99}},
+        )
+
+    def test_list_datasets_does_not_turn_missing_reader_result_into_empty_success(self):
+        client = SimpleNamespace(
+            instrument_type="EQUITY", region="USA", universe="TOP3000", delay=1,
+            get_datasets=lambda **_kwargs: None,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "DATASET_RESPONSE_INVALID"):
+            list_datasets(client=client, region="USA")
+
+    def test_list_datasets_rejects_invalid_records_instead_of_dropping_them(self):
+        for rows in ([None], [{"name": "missing-id"}], [{"id": "a", "dataset_id": "b"}]):
+            with self.subTest(rows=rows):
+                client = SimpleNamespace(
+                    instrument_type="EQUITY", region="USA", universe="TOP3000", delay=1,
+                    get_datasets=lambda **_kwargs: rows,
+                )
+                with self.assertRaisesRegex(RuntimeError, "DATASET_RESPONSE_INVALID"):
+                    list_datasets(client=client, region="USA")
+
     def test_list_datafields_all_merges_region_availability(self):
         calls = []
 
@@ -1411,6 +1469,65 @@ class TestResearchApi(unittest.TestCase):
                 {"id": "field_b", "type": "MATRIX", "available_regions": ["ASI"]},
             ],
         )
+
+    @critical_contract("discovery.field_type_conflicts_keep_region_source")
+    def test_all_region_field_type_conflict_is_unknown_with_region_evidence(self):
+        rows = {
+            "USA": ([{"id": "field-a", "type": "MATRIX"}], 1),
+            "EUR": ([{"id": "field-a", "type": "VECTOR"}], 1),
+            "ASI": ([], 0), "GLB": ([], 0),
+        }
+        client = SimpleNamespace(
+            instrument_type="EQUITY", region="USA", universe="TOP3000", delay=1,
+            get_datafields=lambda _dataset, **kwargs: rows[kwargs["scope"]["region"]],
+        )
+
+        for reader in (
+            lambda: list_datafields("dataset-a", client=client, limit=4),
+            lambda: list_all_datafields("dataset-a", client=client, page_limit=1),
+        ):
+            with self.subTest(reader=reader):
+                field = reader()["fields"][0]
+                self.assertIsNone(field["type"])
+                self.assertEqual(
+                    field["region_metadata_conflicts"]["type"],
+                    {"USA": {"present": True, "value": "MATRIX"},
+                     "EUR": {"present": True, "value": "VECTOR"}},
+                )
+
+    def test_list_datafields_rejects_rows_without_field_identity(self):
+        client = SimpleNamespace(
+            instrument_type="EQUITY", region="USA", universe="TOP3000", delay=1,
+            get_datafields=lambda _dataset, **_kwargs: ([{"type": "MATRIX"}], 1),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "DATAFIELD_RESPONSE_INVALID"):
+            list_datafields("dataset-a", client=client, limit=1, region="USA")
+
+    @critical_contract("discovery.duplicate_field_in_page_rejected")
+    def test_list_datafields_rejects_duplicate_ids_within_one_region_page(self):
+        client = SimpleNamespace(
+            instrument_type="EQUITY", region="USA", universe="TOP3000", delay=1,
+            get_datafields=lambda _dataset, **_kwargs: ([
+                {"id": "field-a", "type": "MATRIX"},
+                {"id": "field-a", "type": "VECTOR"},
+            ], 2),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "DATAFIELD_RESPONSE_INVALID"):
+            list_datafields("dataset-a", client=client, limit=2, region="USA")
+
+    def test_list_datafields_rejects_non_integer_bounds(self):
+        client = SimpleNamespace(
+            instrument_type="EQUITY", region="USA", universe="TOP3000", delay=1,
+            get_datafields=lambda _dataset, **_kwargs: ([], 0),
+        )
+        for kwargs in (
+            {"limit": True}, {"limit": 1.5},
+            {"offset": True}, {"offset": 1.5},
+        ):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                list_datafields("dataset-a", client=client, region="USA", **kwargs)
 
     def test_list_datafields_supports_gbr_regular_region(self):
         calls = []

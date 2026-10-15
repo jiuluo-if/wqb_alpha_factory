@@ -190,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
         "run_id": run_id,
         "cases": rows,
         "A_B_RESULTS": {
-            "CURRENT_FULL_vs_CURRENT_SUMMARY": _comparison(rows, "CS1_CURRENT_FULL", "CS2_CURRENT_SUMMARY", "pending payload progressive disclosure under current prompt"),
+            "LEGACY_EXTRA_vs_CURRENT_SUMMARY": _comparison(rows, "CS1_LEGACY_EXTRA_FIELDS", "CS2_CURRENT_SUMMARY", "legacy extra fields versus canonical current summary"),
             "CURRENT_SUMMARY_vs_CANDIDATE_SUMMARY": _comparison(rows, "CS2_CURRENT_SUMMARY", "CS3_CANDIDATE_SUMMARY", "current prompt versus candidate inline contract under summary status"),
         },
         "SKILL_LOADING": {

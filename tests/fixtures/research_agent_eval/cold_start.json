@@ -3,8 +3,8 @@
   "synthetic_only": true,
   "cases": [
     {
-      "id": "CS1_CURRENT_FULL",
-      "title": "Current prompt/current status with full pending rows",
+      "id": "CS1_LEGACY_EXTRA_FIELDS",
+      "title": "Current readiness overrides legacy expanded pending fields",
       "CONTEXT_FILES": [
         "AGENTS.md",
         "prompts/AGENTS.md",
@@ -16,7 +16,7 @@
       "USEFUL_ACTION_TOOLS": [
         "list_datafields"
       ],
-      "INPUT": "继续当前 ACTIVE Research goal。先读取当前 research status；若写入被阻塞，仍执行一项有用的安全只读动作：从 datasets/datafields 确认 synthetic field 的 dataset provenance。不要执行 Simulation 或 metadata write。Quota 若未知就保持 UNKNOWN。",
+      "INPUT": "继续当前 ACTIVE Research goal。先读取当前 research status；若写入被阻塞，仍执行一项有用的安全只读动作：从 datasets/datafields 确认 synthetic field 的 dataset provenance。该 synthetic 响应还带有不属于当前 schema 的 legacy pending rows；只按 write_readiness 判断写入，不调用 pending detail 工具。不要执行 Simulation 或 metadata write。Quota 若未知就保持 UNKNOWN。",
       "AVAILABLE_TOOLS": [
         "research_status",
         "list_datasets",
@@ -32,10 +32,12 @@
       ],
       "CURRENT_EVIDENCE": {
         "research_status": {
-          "source": "SYNTHETIC_REPLAY_OF_CURRENT_API",
+          "source": "SYNTHETIC_LEGACY_EXTRA_FIELDS",
           "status": "AVAILABLE",
           "evidence_status": "AVAILABLE",
-          "research_contract_version": "2026-09-26",
+          "research_contract_version": "2026-09-29",
+          "write_readiness": "BLOCKED_BY_REMOTE_STATE",
+          "write_blockers": ["UNRESOLVED_EXECUTIONS", "SUBMIT_UNKNOWN_PRESENT"],
           "capability": {
             "source": "SYNTHETIC_REPLAY",
             "status": "AVAILABLE"
@@ -171,7 +173,7 @@
           "source": "SYNTHETIC_CANDIDATE_CONTRACT",
           "status": "AVAILABLE",
           "evidence_status": "AVAILABLE",
-          "research_contract_version": "2026-09-26",
+          "research_contract_version": "2026-09-29",
           "write_readiness": "BLOCKED_BY_REMOTE_STATE",
           "write_blockers": [
             "UNRESOLVED_EXECUTIONS",
@@ -305,7 +307,7 @@
           "source": "SYNTHETIC_CANDIDATE_CONTRACT",
           "status": "AVAILABLE",
           "evidence_status": "AVAILABLE",
-          "research_contract_version": "2026-09-26",
+          "research_contract_version": "2026-09-29",
           "write_readiness": "BLOCKED_BY_REMOTE_STATE",
           "write_blockers": [
             "UNRESOLVED_EXECUTIONS",
@@ -425,7 +427,8 @@
         "research_status": {
           "source": "SYNTHETIC_CANDIDATE_CONTRACT",
           "status": "AVAILABLE",
-          "research_contract_version": "2026-09-26",
+          "evidence_status": "AVAILABLE",
+          "research_contract_version": "2026-09-29",
           "write_readiness": "BLOCKED_BY_REMOTE_STATE",
           "write_blockers": [
             "UNRESOLVED_EXECUTIONS",
@@ -478,11 +481,17 @@
         ],
         "expected_write_count": 0,
         "required_payload_values": {
-          "pending_kinds": [
-            "SUBMIT_UNKNOWN",
-            "RUNNING",
-            "MULTI_CHILD"
-          ]
+          "pending_kinds": {
+            "status_counts": {
+              "SUBMIT_UNKNOWN": 1,
+              "RUNNING": 2
+            },
+            "kind_counts": {
+              "SINGLE": 1,
+              "MULTI_PARENT": 1,
+              "MULTI_CHILD": 1
+            }
+          }
         },
         "expected_tool_order": [
           "research_status",
@@ -527,15 +536,30 @@
           "source": "SYNTHETIC_CANDIDATE_CONTRACT",
           "status": "AVAILABLE",
           "evidence_status": "AVAILABLE",
-          "research_contract_version": "2026-09-26",
+          "research_contract_version": "2026-09-29",
           "write_readiness": "READY",
           "write_blockers": [],
           "capability": {
             "status": "AVAILABLE"
           },
           "quota": {
-            "status": "LIVE_VERIFIED",
-            "remaining": 50
+            "source": "BRAIN_SIMULATION_HEADERS",
+            "status": "LIVE",
+            "freshness": "LIVE",
+            "evidence_status": "AVAILABLE",
+            "official": {
+              "source": "BRAIN_SIMULATION_HEADERS",
+              "status": "AVAILABLE",
+              "evidence_status": "AVAILABLE",
+              "limit": 100,
+              "remaining": 50,
+              "reset": 1
+            },
+            "estimate": {
+              "source": "ESTIMATE_REMOTE_ALPHA_REPOSITORY+EXECUTION_GUARD",
+              "evidence_status": "APPROXIMATE",
+              "approximate": true
+            }
           },
           "pending_execution_count": 0,
           "pending_simulation_count": 0,
@@ -607,11 +631,29 @@
         "research_status": {
           "source": "SYNTHETIC_REPLAY",
           "status": "AVAILABLE",
-          "research_contract_version": "2026-09-26",
+          "evidence_status": "AVAILABLE",
+          "research_contract_version": "2026-09-29",
+          "write_readiness": "READY",
+          "write_blockers": [],
           "pending_execution_count": 0,
           "quota": {
-            "status": "LIVE_VERIFIED",
-            "remaining": 50
+            "source": "BRAIN_SIMULATION_HEADERS",
+            "status": "LIVE",
+            "freshness": "LIVE",
+            "evidence_status": "AVAILABLE",
+            "official": {
+              "source": "BRAIN_SIMULATION_HEADERS",
+              "status": "AVAILABLE",
+              "evidence_status": "AVAILABLE",
+              "limit": 100,
+              "remaining": 50,
+              "reset": 1
+            },
+            "estimate": {
+              "source": "ESTIMATE_REMOTE_ALPHA_REPOSITORY+EXECUTION_GUARD",
+              "evidence_status": "APPROXIMATE",
+              "approximate": true
+            }
           }
         }
       },
@@ -626,7 +668,7 @@
         },
         "max_total_tool_calls": 3,
         "expected_final_values": [
-          "NO_WRITE"
+          "READY"
         ],
         "expected_write_count": 0,
         "expected_reference_reads": {
@@ -671,21 +713,57 @@
           {
             "source": "SYNTHETIC_REPLAY",
             "status": "AVAILABLE",
-            "research_contract_version": "2026-09-26",
+            "evidence_status": "AVAILABLE",
+            "research_contract_version": "2026-09-29",
+            "write_readiness": "READY",
+            "write_blockers": [],
             "pending_execution_count": 0,
             "quota": {
-              "status": "LIVE_VERIFIED",
-              "remaining": 50
+              "source": "BRAIN_SIMULATION_HEADERS",
+              "status": "LIVE",
+              "freshness": "LIVE",
+              "evidence_status": "AVAILABLE",
+              "official": {
+                "source": "BRAIN_SIMULATION_HEADERS",
+                "status": "AVAILABLE",
+                "evidence_status": "AVAILABLE",
+                "limit": 100,
+                "remaining": 50,
+                "reset": 1
+              },
+              "estimate": {
+                "source": "ESTIMATE_REMOTE_ALPHA_REPOSITORY+EXECUTION_GUARD",
+                "evidence_status": "APPROXIMATE",
+                "approximate": true
+              }
             }
           },
           {
             "source": "SYNTHETIC_REPLAY",
             "status": "AVAILABLE",
+            "evidence_status": "AVAILABLE",
             "research_contract_version": "2026-09-25",
+            "write_readiness": "READY",
+            "write_blockers": [],
             "pending_execution_count": 0,
             "quota": {
-              "status": "LIVE_VERIFIED",
-              "remaining": 50
+              "source": "BRAIN_SIMULATION_HEADERS",
+              "status": "LIVE",
+              "freshness": "LIVE",
+              "evidence_status": "AVAILABLE",
+              "official": {
+                "source": "BRAIN_SIMULATION_HEADERS",
+                "status": "AVAILABLE",
+                "evidence_status": "AVAILABLE",
+                "limit": 100,
+                "remaining": 50,
+                "reset": 1
+              },
+              "estimate": {
+                "source": "ESTIMATE_REMOTE_ALPHA_REPOSITORY+EXECUTION_GUARD",
+                "evidence_status": "APPROXIMATE",
+                "approximate": true
+              }
             }
           }
         ]

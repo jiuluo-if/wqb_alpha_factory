@@ -57,6 +57,7 @@ Agent 使用 `list_datasets()`、`list_datafields()` 和有页数上限的
 使用所选 BRAIN dataset 的 live `data_fields` 页面，保留 ID 与 dataset provenance；
 静态字段表、缓存或字段名猜测都不能替代 live response。没有 dataset provenance、
 能力 reader 缺失或分页未完整时保持 `CAPABILITY_UNAVAILABLE`，不提交 Simulation。
+底层 capability reader 可进一步区分 `FIELD_NOT_FOUND`、`PAGINATION_INCOMPLETE` 与 `UNVERIFIED`；Gateway 对这些未通过的候选仍返回不可写的能力结果，不把它们升级为 READY。
 平台 `alphaCount` 是一个字段元数据，不是字段优先级或经济价值排序信号。
 
 字段校验的页预算按已观测的最大 dataset 设定（1748 个 datafield 约 35 页，默认预算 40 页），因此位于平台分页顺序靠后的真实字段仍可被验证；预算耗尽时保持 fail closed，不会把"没找到"当成"字段不存在"。每个 Simulation 结果都带 `field_validation`：`LIVE_VERIFIED` 表示声明的字段已按 live dataset 校验，`UNVERIFIED` 表示表达式含字段但没有任何 capability read 覆盖它，`NOT_REQUESTED` 表示表达式不含字段。未声明 `fields` 的提交不会显示为已验证。

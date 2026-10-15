@@ -280,6 +280,17 @@ class TestBoundedAlphaHistoryShards(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "lookback_days"):
                 list(client.iter_user_alpha_history_shards(lookback_days=value))
 
+    def test_history_shard_count_and_wall_clock_budget_have_hard_ceilings(self):
+        client = make_client()
+        client.get_all_user_alphas = mock.Mock(return_value=[])
+        for kwargs in (
+            {"max_shards": 257},
+            {"time_budget_sec": None},
+            {"time_budget_sec": 91},
+        ):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                list(client.iter_user_alpha_history_shards(**kwargs))
+
 
 class TestLiveFieldCapability(unittest.TestCase):
     def test_selected_field_is_verified_from_its_live_dataset(self):
@@ -288,7 +299,10 @@ class TestLiveFieldCapability(unittest.TestCase):
 
         def get_datafields(dataset_id, **kwargs):
             calls.append((dataset_id, kwargs))
-            return ([{"id": "field_a", "dataset": {"id": dataset_id}}], 1)
+            return ([{
+                "id": "field_a", "type": "MATRIX",
+                "dataset": {"id": dataset_id},
+            }], 1)
 
         client.get_datafields = get_datafields
         capability = client.get_field_capability(
@@ -302,6 +316,42 @@ class TestLiveFieldCapability(unittest.TestCase):
         self.assertEqual(capability["source"], "BRAIN_LIVE_ONLY")
         self.assertEqual(calls[0][0], "dataset_a")
 
+    @critical_contract("discovery.field_type_unknown_not_verified")
+    def test_field_presence_without_type_is_not_full_live_verification(self):
+        client = make_client()
+        client.get_datafields = lambda dataset_id, **kwargs: ([{
+            "id": "field_a", "dataset": {"id": dataset_id},
+        }], 1)
+
+        capability = client.get_field_capability(
+            {"dataset_a": ["field_a"]},
+            scope={"instrumentType": "EQUITY", "region": "USA",
+                   "delay": 1, "universe": "TOP3000"},
+        )
+
+        self.assertFalse(capability["valid"])
+        self.assertEqual(capability["fields"], ["field_a"])
+        self.assertEqual(capability["unverified_types"], ["field_a"])
+        self.assertEqual(capability["reason_code"], "UNVERIFIED")
+
+    @critical_contract("discovery.field_type_conflict_not_verified")
+    def test_conflicting_live_types_are_not_resolved_by_last_row(self):
+        client = make_client()
+        client.get_datafields = lambda dataset_id, **kwargs: ([
+            {"id": "field_a", "type": "VECTOR", "dataset": {"id": dataset_id}},
+            {"id": "field_a", "type": "MATRIX", "dataset": {"id": dataset_id}},
+        ], 2)
+
+        capability = client.get_field_capability(
+            {"dataset_a": ["field_a"]},
+            scope={"instrumentType": "EQUITY", "region": "USA",
+                   "delay": 1, "universe": "TOP3000"},
+        )
+
+        self.assertFalse(capability["valid"])
+        self.assertEqual(capability["field_type_conflicts"], ["field_a"])
+        self.assertNotIn("field_a", capability["field_types"])
+
     def test_unknown_field_is_not_live_verified(self):
         client = make_client()
         client.get_datafields = lambda dataset_id, **kwargs: ([{"id": "other_field"}], 1)
@@ -314,7 +364,7 @@ class TestLiveFieldCapability(unittest.TestCase):
 
         self.assertFalse(capability["valid"])
         self.assertEqual(capability["missing"], ["field_a"])
-        self.assertEqual(capability["reason_code"], "CAPABILITY_UNAVAILABLE")
+        self.assertEqual(capability["reason_code"], "FIELD_NOT_FOUND")
 
     def test_field_late_in_a_large_dataset_is_still_verified(self):
         client = make_client()
@@ -325,7 +375,10 @@ class TestLiveFieldCapability(unittest.TestCase):
             offset = kwargs["offset"]
             pages.append(offset)
             return ([
-                {"id": f"field_{index}", "dataset": {"id": dataset_id}}
+                {
+                    "id": f"field_{index}", "type": "MATRIX",
+                    "dataset": {"id": dataset_id},
+                }
                 for index in range(offset, min(offset + 50, total))
             ], total)
 
@@ -357,8 +410,30 @@ class TestLiveFieldCapability(unittest.TestCase):
         )
 
         self.assertFalse(capability["valid"])
-        self.assertEqual(capability["reason_code"], "CAPABILITY_UNAVAILABLE")
+        self.assertEqual(capability["reason_code"], "PAGINATION_INCOMPLETE")
+        self.assertEqual(capability["pagination_incomplete"], ["field_missing"])
         self.assertEqual(calls, [0, 1])
+
+    @critical_contract("discovery.field_lookup_incomplete_not_not_found")
+    def test_field_lookup_keeps_duplicate_page_and_count_change_inconclusive(self):
+        for pages in (
+            [([{"id": "field_a", "type": "MATRIX"},
+               {"id": "field_a", "type": "VECTOR"}], 2)],
+            [([{"id": "other_a", "type": "MATRIX"}], 2),
+             ([{"id": "other_b", "type": "MATRIX"}], 3)],
+        ):
+            with self.subTest(pages=pages):
+                client = make_client()
+                client.get_datafields = mock.Mock(side_effect=pages)
+                capability = client.get_field_capability(
+                    {"dataset_a": ["field_a"]},
+                    scope={"instrumentType": "EQUITY", "region": "USA",
+                           "delay": 1, "universe": "TOP3000"},
+                )
+
+                self.assertFalse(capability["valid"])
+                self.assertEqual(capability["reason_code"], "PAGINATION_INCOMPLETE")
+                self.assertEqual(capability["pagination_incomplete"], ["field_a"])
 
 
 class TestPollProgressRejectsErrorStatus(unittest.TestCase):
@@ -1017,6 +1092,90 @@ class TestOfficialReadOnlyClientAdapters(unittest.TestCase):
         self.assertEqual(request.call_args.kwargs["params"]["region"], "EUR")
         self.assertEqual(request.call_args.kwargs["params"]["universe"], "TOPDIV3000")
 
+    @critical_contract("discovery.datasets_malformed_envelope_rejected")
+    def test_dataset_discovery_rejects_malformed_success_envelopes(self):
+        c = make_client()
+        c.instrument_type = "EQUITY"
+        c.region = "USA"
+        c.delay = 1
+        c.universe = "TOP3000"
+        for payload in ({"unexpected": []}, {"results": None}, {"results": {}}):
+            with self.subTest(payload=payload), mock.patch.object(
+                c, "_request", return_value=FakeResponse(payload=payload),
+            ):
+                with self.assertRaisesRegex(WQBSimulationError, "data-sets"):
+                    c.get_datasets(scope={"region": "USA"})
+
+    def test_dataset_and_datafield_discovery_reject_malformed_json(self):
+        c = make_client()
+        c.instrument_type = "EQUITY"
+        c.region = "USA"
+        c.delay = 1
+        c.universe = "TOP3000"
+        for reader, args in (
+            (c.get_datasets, ()),
+            (c.get_datafields, ("dataset-a",)),
+        ):
+            response = mock.Mock()
+            response.json.side_effect = ValueError("invalid JSON")
+            with self.subTest(reader=reader), mock.patch.object(
+                c, "_request", return_value=response,
+            ), self.assertRaisesRegex(WQBSimulationError, "malformed JSON"):
+                reader(*args)
+
+    @critical_contract("discovery.datafields_malformed_envelope_rejected")
+    def test_datafield_discovery_rejects_malformed_success_envelopes(self):
+        c = make_client()
+        c.instrument_type = "EQUITY"
+        c.region = "USA"
+        c.delay = 1
+        c.universe = "TOP3000"
+        payloads = (
+            {"results": []},
+            {"results": None, "count": 0},
+            {"results": [], "count": True},
+            {"results": [], "count": -1},
+            {"results": {}, "count": 1},
+        )
+        for payload in payloads:
+            with self.subTest(payload=payload), mock.patch.object(
+                c, "_request", return_value=FakeResponse(payload=payload),
+            ):
+                with self.assertRaisesRegex(WQBSimulationError, "data-fields"):
+                    c.get_datafields("dataset-a", limit=1, offset=0)
+
+    def test_datafield_discovery_rejects_invalid_page_bounds_before_request(self):
+        for kwargs in (
+            {"limit": 0}, {"limit": 51}, {"limit": True}, {"limit": 1.5},
+            {"offset": -1}, {"offset": True}, {"offset": 1.5},
+        ):
+            with self.subTest(kwargs=kwargs):
+                c = make_client()
+                c.instrument_type = "EQUITY"
+                c.region = "USA"
+                c.delay = 1
+                c.universe = "TOP3000"
+                c._request = mock.Mock(return_value=FakeResponse(payload={
+                    "results": [], "count": 0,
+                }))
+                with self.assertRaises(ValueError):
+                    c.get_datafields("dataset-a", **kwargs)
+                c._request.assert_not_called()
+
+    def test_user_alpha_page_rejects_invalid_limit_and_offset_before_request(self):
+        for kwargs in (
+            {"limit": 0}, {"limit": 101}, {"limit": True},
+            {"offset": -1}, {"offset": True},
+        ):
+            with self.subTest(kwargs=kwargs):
+                c = make_client()
+                c._request = mock.Mock(return_value=FakeResponse(payload={
+                    "count": 0, "next": None, "results": [],
+                }))
+                with self.assertRaises(ValueError):
+                    c.get_user_alphas(**kwargs)
+                c._request.assert_not_called()
+
     def test_multi_submission_rejects_non_regular_child_before_post(self):
         c = make_client()
         c._wait_submission_slot = mock.Mock()
@@ -1256,6 +1415,51 @@ class TestPublicReadAdapters(unittest.TestCase):
         }):
             with self.assertRaises(WQBQueryTooBroadError):
                 c.get_all_user_alphas(limit=100, max_results=1000)
+
+    def test_get_all_user_alphas_rejects_page_budget_above_hard_ceiling(self):
+        c = make_client()
+        c.get_user_alphas = mock.Mock(return_value={
+            "count": 0, "next": None, "results": [],
+        })
+
+        with self.assertRaisesRegex(ValueError, "max_pages"):
+            c.get_all_user_alphas(max_pages=1001)
+        c.get_user_alphas.assert_not_called()
+
+    def test_get_all_user_alphas_rejects_invalid_pagination_bounds(self):
+        for kwargs in (
+            {"limit": 0}, {"limit": 101}, {"limit": 1.5},
+            {"max_pages": 0}, {"max_pages": 1.5},
+            {"max_results": 0}, {"max_results": 1.5},
+            {"max_results": True},
+        ):
+            with self.subTest(kwargs=kwargs):
+                c = make_client()
+                c.get_user_alphas = mock.Mock()
+                with self.assertRaises(ValueError):
+                    c.get_all_user_alphas(**kwargs)
+                c.get_user_alphas.assert_not_called()
+
+    @critical_contract("alpha_history.boolean_count_rejected")
+    def test_get_user_alphas_rejects_boolean_count(self):
+        c = make_client()
+        c._local.session = FakeSession([FakeResponse(200, payload={
+            "count": True, "next": None, "results": [{"id": "alpha-a"}],
+        })])
+
+        with self.assertRaisesRegex(WQBSimulationError, "count"):
+            c.get_user_alphas()
+
+    @critical_contract("alpha_history.count_change_fails_closed")
+    def test_get_all_user_alphas_rejects_count_change_between_pages(self):
+        c = make_client()
+        c.get_user_alphas = mock.Mock(side_effect=[
+            {"count": 2, "next": "page-2", "results": [{"id": "alpha-a"}]},
+            {"count": 3, "next": None, "results": [{"id": "alpha-b"}]},
+        ])
+
+        with self.assertRaisesRegex(WQBSimulationError, "count changed"):
+            c.get_all_user_alphas(limit=1)
 
 
 class TestAlphaRecordset(unittest.TestCase):

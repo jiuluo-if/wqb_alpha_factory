@@ -96,6 +96,7 @@ DIRECT_TESTS = {
         "tests/test_alpha_operating_income_relationship.py",
     ),
     "wqb_agent/alpha_feed_cache.py": ("tests/test_remote_alpha.py",),
+    "wqb_agent/local_templates.py": ("tests/test_local_templates.py",),
     "wqb_agent/alpha_templates/model.py": ("tests/test_alpha_template_catalog.py",),
     "wqb_agent/alpha_templates/loader.py": (
         "tests/test_alpha_template_catalog.py",

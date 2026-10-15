@@ -64,6 +64,7 @@ frontmatter 中 `metadata.wqb_alpha_factory_research_contract` 是本文件编�
 - 本地变体保持字段、算子与表达式拓扑不变；拓扑变化是带独立假设的 `NEW_PROBE`。
 - 失败归因到假设、字段、算子、horizon、实现、相关性或稳健性。没有新证据不得重跑已明确失败的形态。
 - 候选应覆盖能区分机制解释的数据集/字段、关系与有经济理由的算子 realization，并控制 selection pressure、冗余与多重检验；wave budget 由当前有价值的候选、研究不确定性与 live admission 决定，不为数量凑样本。
+- 解释字段信号前核对信息可用时点是否早于决策时点；时间对齐、字段修订或样本边界证据缺失时，将 point-in-time/leakage 风险保留为 `UNKNOWN`，不从字段名或回测结果推断无泄漏。区分开发样本与未参与调参的验证证据，并把过拟合/选择偏差作为待检验风险，不添加无依据的统计阈值。
 - Cold start 先读 `research_status()`。若全局被已有 guard 标为 `BLOCKED_BY_REMOTE_STATE`，绝不重发、删除或绕过原请求；取得具体候选后调用 READ_ONLY `research_batch_status(specs)`。按 proposal admission 排除精确冲突的候选，继续本批可执行候选；不把一个 unknown 扩大成全体候选停摆。若批次状态也不是 `READY`，处理返回的能力/quota/capacity 原因或只跳过受影响分支，再继续不受影响的数据发现、表达式设计与证据整理。
 - 多候选 batch 使用当前 `research_batch_status` 的 eligible/capacity evidence；Gateway 在写前重查全部事实，隔离精确冲突项并继续其余 READY 候选。传输容量与 unresolved guard 处理由 Gateway 管理，不把安全 blocker 扩大成研究数量门槛；未决写入绝不清除或重发。
 - Regular parent 晋升到 Region-Agnostic 时，使用 `REGION_AGNOSTIC` 与 `region=ALL` 的 live Simulation scope，并保留真实字段→dataset provenance。Gateway 会分别按 USA/EUR/ASI/GLB 查询 field catalog；表达式的所有字段须在至少两个相同子地区可用且 VECTOR 类型检查通过。`validate_simulation_spec()` 只证明请求形状，不能替代 Gateway 的 live field/write preflight。

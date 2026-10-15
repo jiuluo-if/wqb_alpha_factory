@@ -907,6 +907,43 @@ class TestWriteReadiness(unittest.TestCase):
         self.assertEqual(result["reason_code"], "RA_FIELD_COVERAGE_UNAVAILABLE")
         self.assertEqual(client.submissions, [])
 
+    @critical_contract("simulation.ra_field_type_unverified_blocks")
+    def test_region_agnostic_does_not_count_unknown_field_types_as_usable_regions(self):
+        class UnknownTypeRegionClient(FakeGatewayClient):
+            def get_authentication_status(self):
+                return {"authenticated": True, "permissions": ["REGION_AGNOSTIC"]}
+
+            def get_simulation_capability(self):
+                return {
+                    "status": "AVAILABLE", "capability_status": "AVAILABLE",
+                    "simulation_type_choices": ["REGULAR", "REGION_AGNOSTIC"],
+                    "settings": {}, "required_fields": [], "required_settings": [],
+                }
+
+            def get_field_capability(self, field_sources, *, scope=None):
+                fields = [field for selected in field_sources.values() for field in selected]
+                return {
+                    "valid": False, "fields": fields, "missing": [],
+                    "unverified_types": fields, "field_types": {},
+                    "source": "BRAIN_LIVE_ONLY",
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = UnknownTypeRegionClient()
+            result = SimulationGateway(client, state_dir=tmp).simulate(
+                SimulationSpec(
+                    "rank(field_a)",
+                    {"region": "ALL", "universe": "MINVOL1M", "delay": 1},
+                    fields=("field_a",),
+                    field_datasets={"field_a": "dataset_a"},
+                    simulation_type="REGION_AGNOSTIC",
+                )
+            )
+
+        self.assertEqual(result["status"], "NOT_DISPATCHED")
+        self.assertEqual(result["reason_code"], "RA_FIELD_COVERAGE_UNAVAILABLE")
+        self.assertEqual(client.submissions, [])
+
     def test_region_agnostic_fields_must_coexist_in_two_regions(self):
         class SplitRegionClient(FakeGatewayClient):
             def get_authentication_status(self):

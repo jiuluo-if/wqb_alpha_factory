@@ -66,6 +66,17 @@ REQUIRED_CRITICAL_CONTRACTS = frozenset({
     "remote_color.patch_color_only",
     "remote_color.partial_failure_not_success",
     "ci.python_version_and_full_discovery_gate",
+    "discovery.datasets_malformed_envelope_rejected",
+    "discovery.datafields_malformed_envelope_rejected",
+    "discovery.dataset_metadata_conflicts_keep_region_source",
+    "discovery.field_type_conflicts_keep_region_source",
+    "discovery.field_type_unknown_not_verified",
+    "discovery.field_type_conflict_not_verified",
+    "discovery.field_lookup_incomplete_not_not_found",
+    "discovery.duplicate_field_page_not_complete",
+    "discovery.duplicate_field_in_page_rejected",
+    "alpha_history.boolean_count_rejected",
+    "alpha_history.count_change_fails_closed",
     "factory.no_template_identity_dispatch",
     "semantic.declared_vs_legacy_status",
     "semantic.evaluator_contracts_distinct",
@@ -81,6 +92,7 @@ REQUIRED_CRITICAL_CONTRACTS = frozenset({
     "simulation.corrupt_guard_blocks_post",
     "simulation.multi_parent_state_is_atomic",
     "simulation.unresolved_parent_holds_capacity",
+    "simulation.ra_field_type_unverified_blocks",
 })
 
 

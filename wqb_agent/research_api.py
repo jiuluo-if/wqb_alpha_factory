@@ -57,6 +57,12 @@ from .expression import (
     operator_occurrence_signature,
 )
 from .failures import reason_code_for_failure
+from .local_templates import (
+    MAX_LOCAL_COUNT,
+    MAX_LOCAL_FIELDS,
+    MAX_LOCAL_TEMPLATES,
+    normalize_local_request,
+)
 from .operator_reference import (
     load_operator_syntax_reference,
     load_packaged_operator_syntax_reference,
@@ -86,9 +92,11 @@ from .simulation_gateway import (
     classify_write_readiness,
 )
 
-MAX_PROBE_FIELDS = 100
-MAX_PROBE_TEMPLATES = 100
-MAX_PROBE_COUNT = 100
+# Local template reading/construction owns these bounds; the facade keeps the
+# historical names so existing callers and tests keep working.
+MAX_PROBE_FIELDS = MAX_LOCAL_FIELDS
+MAX_PROBE_TEMPLATES = MAX_LOCAL_TEMPLATES
+MAX_PROBE_COUNT = MAX_LOCAL_COUNT
 # The research contract version is the compatibility handshake between the
 # single research Skill and this runtime.  A Skill that declares a different
 # ``metadata.wqb_alpha_factory_research_contract`` is stale and must be re-read, not reused.
@@ -133,6 +141,26 @@ _DATA_DISCOVERY_REGIONS = ("USA", "EUR", "ASI", "GLB")
 SUPPORTED_DATA_REGIONS = frozenset((*_DATA_DISCOVERY_REGIONS, "GBR"))
 
 
+def _project_regional_metadata(regional_rows, *, identity_keys):
+    first_region = next(iter(regional_rows))
+    result = dict(regional_rows[first_region])
+    result["available_regions"] = list(regional_rows)
+    keys = set().union(*(row.keys() for row in regional_rows.values()))
+    conflicts = {}
+    for key in keys - set(identity_keys) - {"available_regions", "region_metadata_conflicts"}:
+        values = [row.get(key) for row in regional_rows.values()]
+        if (any(key not in row for row in regional_rows.values())
+                or any(value != values[0] for value in values[1:])):
+            result[key] = None
+            conflicts[key] = {
+                region: {"present": key in row, "value": row.get(key)}
+                for region, row in regional_rows.items()
+            }
+    if conflicts:
+        result["region_metadata_conflicts"] = conflicts
+    return result
+
+
 def _client_scope(client, region=None):
     scope = {
         "instrumentType": getattr(client, "instrument_type", "EQUITY"),
@@ -153,25 +181,38 @@ def list_datasets(*, client=None, config=None, region="ALL"):
     if not callable(reader):
         raise RuntimeError("LIVE_DATASET_CAPABILITY_REQUIRED")
     regions = _DATA_DISCOVERY_REGIONS if normalized_region == "ALL" else (normalized_region,)
-    merged: dict[str, dict[str, Any]] = {}
+    regional_rows_by_id: dict[str, dict[str, dict[str, Any]]] = {}
     for selected_region in regions:
-        rows = reader(scope=_client_scope(client, selected_region)) or ()
+        rows = reader(scope=_client_scope(client, selected_region))
+        if not isinstance(rows, (list, tuple)):
+            raise RuntimeError("LIVE_DATASET_RESPONSE_INVALID")
+        seen_ids = set()
         for row in rows:
             if not isinstance(row, Mapping):
-                continue
-            identity = str(row.get("id") or row.get("dataset_id") or "").strip()
+                raise RuntimeError("LIVE_DATASET_RESPONSE_INVALID")
+            raw_id = row.get("id")
+            dataset_id = row.get("dataset_id")
+            if raw_id is not None and dataset_id is not None and str(raw_id).casefold() != str(dataset_id).casefold():
+                raise RuntimeError("LIVE_DATASET_RESPONSE_INVALID: conflicting dataset IDs")
+            identity = str(raw_id or dataset_id or "").strip()
             if not identity:
-                continue
-            entry = merged.setdefault(identity, {**dict(row), "available_regions": []})
-            if selected_region not in entry["available_regions"]:
-                entry["available_regions"].append(selected_region)
+                raise RuntimeError("LIVE_DATASET_RESPONSE_INVALID: dataset ID missing")
+            if identity.casefold() in seen_ids:
+                raise RuntimeError("LIVE_DATASET_RESPONSE_INVALID: duplicate dataset ID")
+            seen_ids.add(identity.casefold())
+            regional_rows_by_id.setdefault(identity, {})[selected_region] = dict(row)
     return {
         "source": "LIVE",
         "status": "AVAILABLE",
         "evidence_status": "AVAILABLE",
         "scope": _client_scope(client, normalized_region),
         "regions_searched": list(regions),
-        "datasets": list(merged.values()),
+        "datasets": [
+            _project_regional_metadata(
+                regional_rows, identity_keys={"id", "dataset_id"},
+            )
+            for regional_rows in regional_rows_by_id.values()
+        ],
     }
 
 
@@ -189,11 +230,12 @@ def list_datafields(
         raise ValueError("dataset_id must be non-empty")
     typed = _normalized_config(config)
     default_limit = typed.runtime.pagination_limit
-    try:
-        page_limit = default_limit if limit is None else int(limit)
-        page_offset = int(offset)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError("limit and offset must be integers") from exc
+    if (isinstance(offset, bool) or not isinstance(offset, int)
+            or (limit is not None
+                and (isinstance(limit, bool) or not isinstance(limit, int)))):
+        raise ValueError("limit and offset must be integers")
+    page_limit = default_limit if limit is None else limit
+    page_offset = offset
     if page_limit < 1 or page_limit > 50:
         raise ValueError("limit must be between 1 and 50")
     if page_offset < 0:
@@ -210,7 +252,7 @@ def list_datafields(
     reader = getattr(client, "get_datafields", None)
     if not callable(reader):
         raise RuntimeError("LIVE_DATAFIELD_CAPABILITY_REQUIRED")
-    merged: dict[str, dict[str, Any]] = {}
+    regional_rows_by_id: dict[str, dict[str, dict[str, Any]]] = {}
     region_count = 0
     regional_fields: dict[str, list[str]] = {}
     region_limit = (
@@ -229,21 +271,28 @@ def list_datafields(
             field_type=field_type,
             scope=_client_scope(client, selected_region),
         )
-        region_count += int(count or 0)
+        if (not isinstance(fields, (list, tuple))
+                or isinstance(count, bool) or not isinstance(count, int) or count < 0):
+            raise RuntimeError("LIVE_DATAFIELD_RESPONSE_INVALID")
+        region_count += count
         regional_fields[selected_region] = []
+        seen_region_ids = set()
         for field in fields or ():
             if not isinstance(field, Mapping):
-                continue
-            identity = str(field.get("id") or field.get("field_id") or "").strip()
+                raise RuntimeError("LIVE_DATAFIELD_RESPONSE_INVALID")
+            raw_id = field.get("id")
+            field_id = field.get("field_id")
+            if raw_id is not None and field_id is not None and str(raw_id).casefold() != str(field_id).casefold():
+                raise RuntimeError("LIVE_DATAFIELD_RESPONSE_INVALID: conflicting field IDs")
+            identity = str(raw_id or field_id or "").strip()
             if not identity:
-                continue
+                raise RuntimeError("LIVE_DATAFIELD_RESPONSE_INVALID: field ID missing")
+            folded_identity = identity.casefold()
+            if folded_identity in seen_region_ids:
+                raise RuntimeError("LIVE_DATAFIELD_RESPONSE_INVALID: duplicate field ID in page")
+            seen_region_ids.add(folded_identity)
             regional_fields[selected_region].append(identity)
-            if normalized_region != "ALL":
-                merged[identity] = dict(field)
-                continue
-            entry = merged.setdefault(identity, {**dict(field), "available_regions": []})
-            if selected_region not in entry["available_regions"]:
-                entry["available_regions"].append(selected_region)
+            regional_rows_by_id.setdefault(identity, {})[selected_region] = dict(field)
     if normalized_region == "ALL":
         ordered_ids = []
         seen_ids = set()
@@ -254,9 +303,15 @@ def list_datafields(
                 if index < len(ids) and ids[index] not in seen_ids:
                     seen_ids.add(ids[index])
                     ordered_ids.append(ids[index])
-        fields = [merged[identity] for identity in ordered_ids[:page_limit]]
+        fields = [
+            _project_regional_metadata(
+                regional_rows_by_id[identity],
+                identity_keys={"id", "field_id"},
+            )
+            for identity in ordered_ids[:page_limit]
+        ]
     else:
-        fields = list(merged.values())
+        fields = [dict(field) for field in fields]
     return {
         "source": "LIVE",
         "scope": _client_scope(client, normalized_region),
@@ -306,25 +361,29 @@ def list_all_datafields(
             )
             for child_region in _DATA_DISCOVERY_REGIONS
         ]
-        merged: dict[str, dict[str, Any]] = {}
+        regional_rows_by_id: dict[str, dict[str, dict[str, Any]]] = {}
         for child_region, result in zip(_DATA_DISCOVERY_REGIONS, regional):
             for field in result["fields"]:
                 identity = str(field.get("id") or field.get("field_id") or "")
                 if not identity:
-                    continue
-                entry = merged.setdefault(identity, {**field, "available_regions": []})
-                if child_region not in entry["available_regions"]:
-                    entry["available_regions"].append(child_region)
-        fields = list(merged.values())
+                    raise RuntimeError("LIVE_DATAFIELD_RESPONSE_INVALID: field ID missing")
+                regional_rows_by_id.setdefault(identity, {})[child_region] = dict(field)
+        fields = [
+            _project_regional_metadata(
+                regional_rows, identity_keys={"id", "field_id"},
+            )
+            for regional_rows in regional_rows_by_id.values()
+        ]
         first = regional[0] if regional else {}
+        complete = all(bool(result.get("complete")) for result in regional)
         return {
             "source": "LIVE", "scope": _client_scope(client, "ALL"),
             "regions_searched": list(_DATA_DISCOVERY_REGIONS),
             "dataset_id": str(dataset_id).strip(), "field_type": field_type,
             "limit": first.get("limit", page_limit), "offset": 0,
-            "count": len(fields), "count_exact": True,
+            "count": len(fields), "count_exact": complete,
             "pages": sum(int(result.get("pages", 0)) for result in regional),
-            "complete": all(bool(result.get("complete")) for result in regional),
+            "complete": complete,
             "fields": fields,
         }
     first = list_datafields(
@@ -337,6 +396,10 @@ def list_all_datafields(
         region=normalized_region,
     )
     fields = list(first["fields"])
+    seen_ids = {
+        str(field.get("id") or field.get("field_id") or "").casefold()
+        for field in fields
+    }
     total = first["count"]
     pages = 1
     offset = len(fields)
@@ -355,6 +418,17 @@ def list_all_datafields(
         chunk = list(page["fields"])
         if not chunk or page["count"] != total:
             raise RuntimeError("LIVE_DATAFIELD_PAGINATION_INCOMPLETE")
+        chunk_ids = [
+            str(field.get("id") or field.get("field_id") or "").casefold()
+            for field in chunk
+        ]
+        if (any(not identity for identity in chunk_ids)
+                or len(chunk_ids) != len(set(chunk_ids))
+                or seen_ids.intersection(chunk_ids)):
+            raise RuntimeError(
+                "LIVE_DATAFIELD_PAGINATION_INCOMPLETE: duplicate field ID across pages"
+            )
+        seen_ids.update(chunk_ids)
         fields.extend(chunk)
         offset += len(chunk)
         pages += 1
@@ -368,51 +442,16 @@ def list_all_datafields(
 
 def generate_probes(*, template_ids, count, fields, dataset_id=None,
                     client=None, config=None):
-    """Render only Agent-selected BRAIN fields and templates into specs."""
-    if not isinstance(fields, (list, tuple)) or not fields:
-        raise ValueError("fields must be a non-empty Agent-selected list")
-    if len(fields) > MAX_PROBE_FIELDS:
-        raise ValueError(f"fields cannot exceed {MAX_PROBE_FIELDS} entries")
-    if isinstance(template_ids, str):
-        template_ids = [template_ids]
-    if not isinstance(template_ids, (list, tuple)) or not template_ids or any(
-        not isinstance(item, str) or not item.strip() for item in template_ids
-    ):
-        raise ValueError("template_ids must be a non-empty explicit list")
-    template_ids = [item.strip() for item in template_ids]
-    if len(template_ids) > MAX_PROBE_TEMPLATES:
-        raise ValueError(
-            f"template_ids cannot exceed {MAX_PROBE_TEMPLATES} entries"
-        )
-    if len(set(template_ids)) != len(template_ids):
-        raise ValueError("template_ids must not contain duplicates")
-    try:
-        target = int(count)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError("count must be an explicit integer") from exc
-    if isinstance(count, bool) or str(target) != str(count).strip():
-        raise ValueError("count must be an explicit integer")
-    if not 0 <= target <= MAX_PROBE_COUNT:
-        raise ValueError(f"count must be between 0 and {MAX_PROBE_COUNT}")
+    """Render only Agent-selected BRAIN fields and templates into specs.
 
-    selected_fields = []
-    for item in fields:
-        if isinstance(item, Mapping):
-            field = dict(item)
-            field_id = field.get("id") or field.get("field_id")
-            dataset = field.get("dataset_id") or field.get("dataset")
-            if isinstance(dataset, Mapping):
-                dataset = dataset.get("id") or dataset.get("name")
-            dataset = dataset or dataset_id
-        else:
-            field_id = item
-            dataset = dataset_id
-            field = {"id": field_id}
-        if field_id is None or dataset is None or not str(dataset).strip():
-            raise ValueError("each selected field requires a BRAIN dataset id")
-        field["id"] = str(field_id).strip()
-        field["dataset"] = str(dataset).strip()
-        selected_fields.append(field)
+    Request validation and field normalization are owned by the standalone
+    local template API (:mod:`wqb_agent.local_templates`); live operator
+    capability stays here and the Simulation write chain is untouched.
+    """
+    template_ids, target, selected_fields = normalize_local_request(
+        template_ids=template_ids, count=count, fields=fields,
+        dataset_id=dataset_id,
+    )
     if target == 0:
         return []
     if client is None:

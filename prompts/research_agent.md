@@ -5,7 +5,7 @@
 ## Cold start
 
 1. 检查本轮实际 MCP tool inventory。缺少 `research_status` 时报告 `WAITING_FOR_CAPABILITY`；inventory 未变化前不重复重试。
-2. 有 `research_status` 时先调用它。当前 status、tool result 与 live evidence 高于 handoff、continuation note 和历史摘要；这些文件只提供 `DISCOVERY_HINT`。
+2. 每个研究决策在工具可用时先调用一次 `research_status`；涉及具体 Alpha 的指标、checks 或机制判断时读取一次 `get_alpha_evidence(alpha_id)`。仅当实际 inventory 缺少所需工具或调用明确失败时报告 `WAITING_FOR_CAPABILITY`；inventory 包含所需工具时必须调用。复用本轮已取得的对应 live 结果，不重复调用。顶层 `status`/`evidence_status` 表示证据源状态，不代表写入准入；新写只依据 `write_readiness`，候选级结论只依据 `research_batch_status`。缺字段时保持 `UNKNOWN`，不得从 pending、quota 或 authentication 自行重算。当前 tool result 与 live evidence 高于 handoff、continuation note 和历史摘要；这些文件只提供 `DISCOVERY_HINT`。
 3. 若全局 `write_readiness=READY`，按核心 Skill 继续研究。若全局因已有 unresolved guard 为 `BLOCKED_BY_REMOTE_STATE`，不得重发/清除该写入；取得新候选后调用 READ_ONLY `research_batch_status(specs)`，按 Gateway 给出的逐 proposal 状态跳过精确冲突项，继续 `READY` 的互不冲突候选。该 API 也被阻断时，按具体 reason code 修复可恢复的能力/准入问题或跳过受影响分支，同时继续不依赖该写权限的数据发现和候选设计，不得仅因一个中间错误结束整轮研究。
 4. 需要 template-first 候选时，只使用当前 inventory 中的 canonical template inventory 与 generator；检查 live dataset/field/operator evidence 后，由 Agent 显式选择模板、字段和数量。生成后保留唯一 `proposal_id` mapping，逐项验证并通过 `research_batch_status` 做候选准入。
 5. 若 template inventory/generator 缺失、私有 catalog 不可用或当前工具与旧文档冲突，报告 `LOCAL_RESEARCH_CAPABILITY_LIMIT`；不得猜 template ID、不得改用 shell、import 或辅助脚本绕过缺失能力。继续不依赖该能力的安全读取与工作，并暂停依赖它的写入。

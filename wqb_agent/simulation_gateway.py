@@ -1346,6 +1346,13 @@ class SimulationGateway:
             capabilities[group_key] = {
                 "fields": available,
                 "field_types": dict(capability.get("field_types") or {}),
+                "unverified_types": {
+                    str(item).casefold()
+                    for item in (
+                        list(capability.get("unverified_types") or ())
+                        + list(capability.get("field_type_conflicts") or ())
+                    )
+                },
             }
         executable = []
         for index, spec, _fingerprint in validated:
@@ -1358,7 +1365,12 @@ class SimulationGateway:
                     for region, group_keys in spec_field_regions[index].items():
                         groups = [capabilities[key] for key in group_keys]
                         available = set().union(*(entry["fields"] for entry in groups))
+                        unverified_types = set().union(*(
+                            entry["unverified_types"] for entry in groups
+                        ))
                         if not required_fields <= available:
+                            continue
+                        if required_fields & unverified_types:
                             continue
                         region_types = {}
                         for entry in groups:

@@ -91,6 +91,7 @@ MAX_FIELD_CAPABILITY_PAGES = 100
 # platform's page order.
 DEFAULT_FIELD_CAPABILITY_PAGES = 40
 MAX_ALPHA_HISTORY_SHARDS = 256
+MAX_ALPHA_HISTORY_PAGES = 1000
 # Wall-clock ceiling for enumerating the account's Alpha history. The shard walk
 # is bounded by request count alone, so a slow platform can otherwise stall a
 # submission indefinitely; this bound turns that into a QueryTooBroad error the
@@ -778,7 +779,19 @@ class WQBClient:
             },
             context="GET /data-sets",
         )
-        return resp.json().get("results", [])
+        try:
+            payload = resp.json()
+        except (TypeError, ValueError) as exc:
+            raise WQBSimulationError(
+                "GET /data-sets returned malformed JSON."
+            ) from exc
+        if not isinstance(payload, Mapping) or not isinstance(
+            payload.get("results"), list
+        ):
+            raise WQBSimulationError(
+                "GET /data-sets returned a malformed response."
+            )
+        return payload["results"]
 
     def get_operator_capability(self):
         """Read the current account's operators through the sole GET path."""
@@ -987,11 +1000,13 @@ class WQBClient:
         date_submitted_after=None, date_submitted_before=None,
     ):
         """Read one bounded page of the authenticated user's Alpha library."""
-        try:
-            page_limit = max(1, min(100, int(limit)))
-            page_offset = max(0, int(offset))
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Alpha page limit/offset 必须是整数") from exc
+        if (isinstance(limit, bool) or not isinstance(limit, int)
+                or not 1 <= limit <= 100
+                or isinstance(offset, bool) or not isinstance(offset, int)
+                or offset < 0):
+            raise ValueError("Alpha page limit/offset 必须是 valid integers")
+        page_limit = limit
+        page_offset = offset
         params: dict[str, object] = {"limit": page_limit, "offset": page_offset}
         if status is not None:
             if not isinstance(status, str) or not status.strip():
@@ -1014,10 +1029,27 @@ class WQBClient:
             params=params,
             context="GET /users/self/alphas",
         )
-        payload = resp.json()
+        try:
+            payload = resp.json()
+        except (TypeError, ValueError) as exc:
+            raise WQBSimulationError(
+                "GET /users/self/alphas returned malformed JSON."
+            ) from exc
         if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
             raise WQBSimulationError(
                 "GET /users/self/alphas returned an invalid paginated payload."
+            )
+        count = payload.get("count")
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise WQBSimulationError(
+                "GET /users/self/alphas returned an invalid count."
+            )
+        next_page = payload.get("next")
+        if next_page is not None and (
+            not isinstance(next_page, str) or not next_page.strip()
+        ):
+            raise WQBSimulationError(
+                "GET /users/self/alphas returned an invalid next-page value."
             )
         return payload
 
@@ -1031,12 +1063,21 @@ class WQBClient:
         The endpoint is paginated and the caller still gets a hard page cap so
         a malformed ``next``/``count`` response cannot create an endless loop.
         """
-        try:
-            page_limit = max(1, min(100, int(limit)))
-            page_cap = max(1, int(max_pages))
-            result_cap = max(1, int(max_results))
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Alpha pagination limit/max_pages 必须是整数") from exc
+        if (isinstance(limit, bool) or not isinstance(limit, int)
+                or not 1 <= limit <= 100
+                or isinstance(max_pages, bool) or not isinstance(max_pages, int)
+                or isinstance(max_results, bool) or not isinstance(max_results, int)
+                or max_results < 1):
+            raise ValueError(
+                "Alpha pagination limits must be integers within their valid ranges"
+            )
+        page_limit = limit
+        page_cap = max_pages
+        result_cap = max_results
+        if not 1 <= page_cap <= MAX_ALPHA_HISTORY_PAGES:
+            raise ValueError(
+                f"max_pages must be between 1 and {MAX_ALPHA_HISTORY_PAGES}"
+            )
         rows = []
         seen_ids = set()
         offset = 0
@@ -1049,12 +1090,21 @@ class WQBClient:
                 date_submitted_after=date_submitted_after,
                 date_submitted_before=date_submitted_before,
             )
-            if expected_count is None and isinstance(page.get("count"), int):
-                expected_count = max(0, page["count"])
-                if expected_count > result_cap:
-                    raise WQBQueryTooBroadError(
-                        "GET /users/self/alphas query window exceeds the result cap."
-                    )
+            page_count = page.get("count")
+            if isinstance(page_count, bool) or not isinstance(page_count, int) or page_count < 0:
+                raise WQBSimulationError(
+                    "GET /users/self/alphas returned an invalid count."
+                )
+            if expected_count is None:
+                expected_count = page_count
+            elif page_count != expected_count:
+                raise WQBSimulationError(
+                    "GET /users/self/alphas count changed during pagination."
+                )
+            if expected_count > result_cap:
+                raise WQBQueryTooBroadError(
+                    "GET /users/self/alphas query window exceeds the result cap."
+                )
             page_rows = page.get("results") or []
             for row in page_rows:
                 if not isinstance(row, dict):
@@ -1064,7 +1114,15 @@ class WQBClient:
                     continue
                 seen_ids.add(str(identity))
                 rows.append(row)
-            if expected_count is not None and len(rows) >= expected_count:
+            if len(rows) > expected_count:
+                raise WQBSimulationError(
+                    "GET /users/self/alphas returned more unique rows than count."
+                )
+            if len(rows) == expected_count:
+                if page.get("next") is not None:
+                    raise WQBSimulationError(
+                        "GET /users/self/alphas count and next page disagree."
+                    )
                 return rows
             if not page_rows or page.get("next") is None:
                 if expected_count is not None and len(rows) < expected_count:
@@ -1088,6 +1146,11 @@ class WQBClient:
         它们。传 ``field_type=None`` 时不加过滤（保持向后兼容：默认与
         旧行为一致）。
         """
+        if (isinstance(limit, bool) or not isinstance(limit, int)
+                or not 1 <= limit <= 50
+                or isinstance(offset, bool) or not isinstance(offset, int)
+                or offset < 0):
+            raise ValueError("Datafield page limit/offset must be valid integers")
         scope = scope if isinstance(scope, Mapping) else {}
         params = {
             "instrumentType": scope.get("instrumentType", self.instrument_type),
@@ -1106,8 +1169,23 @@ class WQBClient:
             params=params,
             context=f"GET datafields {dataset_id}",
         )
-        payload = resp.json()
-        return payload.get("results", []), payload.get("count", 0)
+        try:
+            payload = resp.json()
+        except (TypeError, ValueError) as exc:
+            raise WQBSimulationError(
+                "GET /data-fields returned malformed JSON."
+            ) from exc
+        if (
+            not isinstance(payload, Mapping)
+            or not isinstance(payload.get("results"), list)
+            or isinstance(payload.get("count"), bool)
+            or not isinstance(payload.get("count"), int)
+            or payload["count"] < 0
+        ):
+            raise WQBSimulationError(
+                "GET /data-fields returned a malformed response."
+            )
+        return payload["results"], payload["count"]
 
     def get_field_capability(
         self, field_ids_by_dataset, *, scope=None,
@@ -1148,8 +1226,13 @@ class WQBClient:
         verified: set[str] = set()
         field_types: dict[str, str] = {}
         missing: set[str] = set()
+        unverified_types: set[str] = set()
+        field_type_conflicts: set[str] = set()
+        pagination_incomplete: set[str] = set()
         for dataset_id, requested_ids in requested.items():
+            requested_by_fold = {item.casefold(): item for item in requested_ids}
             found: set[str] = set()
+            seen_page_ids: set[str] = set()
             offset = 0
             expected_count = None
             for _page_index in range(max_pages):
@@ -1158,47 +1241,111 @@ class WQBClient:
                     scope=normalized_scope,
                 )
                 if isinstance(count, bool) or not isinstance(count, int) or count < 0:
-                    missing.update(requested_ids - found)
+                    pagination_incomplete.update(
+                        item for item in requested_ids if item.casefold() not in found
+                    )
                     break
                 if expected_count is None:
                     expected_count = count
                 elif count != expected_count:
-                    missing.update(requested_ids - found)
+                    pagination_incomplete.update(
+                        item for item in requested_ids if item.casefold() not in found
+                    )
                     break
-                page_rows = [row for row in (rows or ()) if isinstance(row, Mapping)]
+                if not isinstance(rows, list) or any(
+                    not isinstance(row, Mapping) for row in rows
+                ) or len(rows) > 50 or offset + len(rows) > expected_count:
+                    pagination_incomplete.update(
+                        item for item in requested_ids if item.casefold() not in found
+                    )
+                    break
+                page_rows = rows
+                malformed_page = False
                 for row in page_rows:
                     if row.get("id") is None or not str(row["id"]).strip():
-                        continue
+                        malformed_page = True
+                        break
                     returned_dataset = row.get("dataset")
                     if isinstance(returned_dataset, Mapping):
                         returned_dataset = (returned_dataset.get("id")
                                             or returned_dataset.get("name"))
                     if (returned_dataset is not None
                             and str(returned_dataset).casefold() != dataset_id.casefold()):
-                        continue
+                        malformed_page = True
+                        break
                     field_id = str(row["id"]).strip()
-                    found.add(field_id)
+                    folded_id = field_id.casefold()
+                    if folded_id in seen_page_ids:
+                        malformed_page = True
+                        duplicate_requested = requested_by_fold.get(folded_id)
+                        if duplicate_requested is not None:
+                            pagination_incomplete.add(duplicate_requested)
+                    else:
+                        seen_page_ids.add(folded_id)
+                    requested_id = requested_by_fold.get(folded_id)
+                    if requested_id is None:
+                        continue
+                    found.add(folded_id)
                     row_type = row.get("type")
                     if isinstance(row_type, str) and row_type.strip():
-                        field_types[field_id.casefold()] = row_type.strip().upper()
-                if requested_ids <= found:
+                        normalized_type = row_type.strip().upper()
+                        if normalized_type in {"UNKNOWN", "UNAVAILABLE", "NONE"}:
+                            unverified_types.add(requested_id)
+                            field_types.pop(folded_id, None)
+                        elif requested_id in unverified_types:
+                            continue
+                        elif (folded_id in field_types
+                              and field_types[folded_id] != normalized_type):
+                            field_types.pop(folded_id, None)
+                            field_type_conflicts.add(requested_id)
+                            unverified_types.add(requested_id)
+                        elif requested_id not in field_type_conflicts:
+                            field_types[folded_id] = normalized_type
+                    else:
+                        unverified_types.add(requested_id)
+                        field_types.pop(folded_id, None)
+                if malformed_page:
+                    pagination_incomplete.update(
+                        item for item in requested_ids if item.casefold() not in found
+                    )
+                    break
+                if {item.casefold() for item in requested_ids} <= found:
                     verified.update(requested_ids)
                     break
                 if not page_rows:
-                    missing.update(requested_ids - found)
+                    remaining = {
+                        item for item in requested_ids if item.casefold() not in found
+                    }
+                    if offset < expected_count:
+                        pagination_incomplete.update(remaining)
+                    else:
+                        missing.update(remaining)
                     break
                 offset += len(page_rows)
                 if offset >= expected_count:
-                    missing.update(requested_ids - found)
+                    missing.update(
+                        item for item in requested_ids if item.casefold() not in found
+                    )
                     break
             else:
-                missing.update(requested_ids - found)
+                pagination_incomplete.update(
+                    item for item in requested_ids if item.casefold() not in found
+                )
 
         return {
-            "valid": not missing and verified == {
-                item for field_ids in requested.values() for item in field_ids
-            },
-            "status": "LIVE_VERIFIED" if not missing else "UNAVAILABLE",
+            "valid": (
+                not missing and not pagination_incomplete and not unverified_types
+                and not field_type_conflicts
+                and verified == {
+                    item for field_ids in requested.values() for item in field_ids
+                }
+            ),
+            "status": (
+                "LIVE_VERIFIED"
+                if not missing and not pagination_incomplete
+                and not unverified_types and not field_type_conflicts
+                else "UNAVAILABLE"
+            ),
             "source": "BRAIN_LIVE_ONLY",
             "fields": sorted(verified),
             "field_types": {
@@ -1207,7 +1354,15 @@ class WQBClient:
                 if field_id.casefold() in field_types
             },
             "missing": sorted(missing),
-            "reason_code": None if not missing else "CAPABILITY_UNAVAILABLE",
+            "pagination_incomplete": sorted(pagination_incomplete),
+            "unverified_types": sorted(unverified_types),
+            "field_type_conflicts": sorted(field_type_conflicts),
+            "reason_code": (
+                "PAGINATION_INCOMPLETE" if pagination_incomplete else
+                "FIELD_NOT_FOUND" if missing else
+                "UNVERIFIED" if unverified_types or field_type_conflicts else
+                None
+            ),
         }
 
     def iter_user_alpha_history_shards(
@@ -1234,18 +1389,24 @@ class WQBClient:
         """
         if isinstance(result_cap, bool) or not isinstance(result_cap, int) or result_cap < 1:
             raise ValueError("result_cap must be a positive integer")
-        if isinstance(max_shards, bool) or not isinstance(max_shards, int) or max_shards < 1:
-            raise ValueError("max_shards must be a positive integer")
+        if (isinstance(max_shards, bool) or not isinstance(max_shards, int)
+                or not 1 <= max_shards <= MAX_ALPHA_HISTORY_SHARDS):
+            raise ValueError(
+                f"max_shards must be between 1 and {MAX_ALPHA_HISTORY_SHARDS}"
+            )
         if isinstance(min_window_sec, bool) or not isinstance(min_window_sec, int) or min_window_sec < 1:
             raise ValueError("min_window_sec must be a positive integer")
-        if (time_budget_sec is not None
-                and (isinstance(time_budget_sec, bool)
-                     or not isinstance(time_budget_sec, (int, float))
-                     or time_budget_sec <= 0)):
-            raise ValueError("time_budget_sec must be a positive number or None")
+        if (isinstance(time_budget_sec, bool)
+                or not isinstance(time_budget_sec, (int, float))
+                or not math.isfinite(float(time_budget_sec))
+                or not 0 < time_budget_sec <= MAX_ALPHA_HISTORY_SECONDS):
+            raise ValueError(
+                f"time_budget_sec must be between 0 and {MAX_ALPHA_HISTORY_SECONDS}"
+            )
         if (lookback_days is not None
                 and (isinstance(lookback_days, bool)
                      or not isinstance(lookback_days, (int, float))
+                     or not math.isfinite(float(lookback_days))
                      or lookback_days <= 0)):
             raise ValueError("lookback_days must be a positive number or None")
 
