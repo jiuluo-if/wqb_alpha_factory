@@ -151,6 +151,22 @@ class TestRemoteDiagnostics(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("EXECUTION_GUARD_STATUS_INVALID", result["errors"])
 
+    def test_doctor_reports_unavailable_guard_without_crashing(self):
+        with tempfile.TemporaryDirectory() as state_dir:
+            path = os.path.join(state_dir, "execution_guard.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write('{"entries": [')
+
+            result = run_doctor(self.config(state_dir), offline=True)
+
+        self.assertTrue(result["config_valid"])
+        self.assertIsNone(result["execution_guard"]["active_count"])
+        self.assertIn(
+            "EXECUTION_GUARD_UNAVAILABLE",
+            {row["code"] for row in result["diagnostics"]},
+        )
+        self.assertFalse(result["network_write"])
+
     def test_audit_does_not_delete_valid_non_default_retention_cache(self):
         with tempfile.TemporaryDirectory() as state_dir:
             cache_path = os.path.join(state_dir, ".alpha_feed_cache", "remote.json")

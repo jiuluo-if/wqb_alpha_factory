@@ -204,6 +204,18 @@ class TestResearchApi(unittest.TestCase):
                     "operators": ["rank"],
                 }
 
+            def get_field_capability(self, field_ids_by_dataset, *, scope=None):
+                fields = sorted({
+                    field_id
+                    for field_ids in field_ids_by_dataset.values()
+                    for field_id in field_ids
+                })
+                return {
+                    "valid": True, "status": "LIVE_VERIFIED",
+                    "source": "BRAIN_LIVE_ONLY", "fields": fields,
+                    "field_types": {field_id: "MATRIX" for field_id in fields},
+                }
+
             def get_simulation_quota_observation(self):
                 return {"status": "UNKNOWN", "source": "BRAIN_SIMULATION_HEADERS"}
 
@@ -218,7 +230,10 @@ class TestResearchApi(unittest.TestCase):
                 kind=ExecutionGuard.MULTI_PARENT, simulation_count=10,
             )
             unknown = SimulationSpec(
-                "rank(field_unknown)", {"region": "GLB", "universe": "MINVOL1M", "delay": 1}
+                "rank(field_unknown)",
+                {"region": "GLB", "universe": "MINVOL1M", "delay": 1},
+                fields=("field_unknown",),
+                field_datasets={"field_unknown": "synthetic-dataset"},
             )
             gateway.guard.register(
                 gateway.execution_fingerprint(unknown), status="SUBMIT_UNKNOWN",
@@ -227,8 +242,20 @@ class TestResearchApi(unittest.TestCase):
             )
             specs = [
                 unknown,
-                SimulationSpec("rank(field_a)", {"region": "GLB", "universe": "MINVOL1M", "delay": 1}, proposal_id="new-a"),
-                SimulationSpec("rank(field_b)", {"region": "GLB", "universe": "MINVOL1M", "delay": 1}, proposal_id="new-b"),
+                SimulationSpec(
+                    "rank(field_a)",
+                    {"region": "GLB", "universe": "MINVOL1M", "delay": 1},
+                    fields=("field_a",),
+                    field_datasets={"field_a": "synthetic-dataset"},
+                    proposal_id="new-a",
+                ),
+                SimulationSpec(
+                    "rank(field_b)",
+                    {"region": "GLB", "universe": "MINVOL1M", "delay": 1},
+                    fields=("field_b",),
+                    field_datasets={"field_b": "synthetic-dataset"},
+                    proposal_id="new-b",
+                ),
             ]
 
             global_status = research_api.research_status(client=client, state_dir=tmp)
@@ -1137,6 +1164,23 @@ class TestResearchApi(unittest.TestCase):
         gateway.simulate_multi_batch.assert_called_once_with(
             specs, child_batch_size=10, max_concurrent_multi=8,
         )
+
+    def test_reconcile_execution_forwards_optional_poll_timeout_to_gateway(self):
+        with mock.patch("wqb_agent.research_api._simulation_gateway") as factory:
+            gateway = factory.return_value
+            gateway.resume_execution.return_value = {"status": "RUNNING"}
+
+            result = research_api.reconcile_execution(
+                "fingerprint", client="client", config="config",
+                state_dir="state", poll_timeout_sec=37,
+            )
+
+        self.assertEqual(result, {"status": "RUNNING"})
+        factory.assert_called_once_with(
+            client="client", config="config", state_dir="state",
+            poll_timeout_sec=37,
+        )
+        gateway.resume_execution.assert_called_once_with("fingerprint")
 
     def test_probe_and_optimize_specs_can_share_one_batch_via_existing_note_mapping(self):
         specs = [

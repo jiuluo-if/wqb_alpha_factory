@@ -42,6 +42,15 @@ def audit_execution_surface(state_dir):
     findings = [
         {"code": code, "source": "execution_guard"} for code in errors
     ]
+    try:
+        guard_rows = guard.entries()
+    except Exception:
+        guard_rows = None
+        errors.append("EXECUTION_GUARD_UNAVAILABLE")
+        findings.append({
+            "code": "EXECUTION_GUARD_UNAVAILABLE",
+            "source": "execution_guard",
+        })
     return {
         "ok": not errors,
         "errors": list(dict.fromkeys(errors)),
@@ -50,8 +59,11 @@ def audit_execution_surface(state_dir):
         "findings": findings,
         "execution_guard": {
             "path": guard.path,
-            "active_count": len(guard.entries()),
-            "statuses": [row.get("status") for row in guard.entries()],
+            "active_count": len(guard_rows) if guard_rows is not None else None,
+            "statuses": (
+                [row.get("status") for row in guard_rows]
+                if guard_rows is not None else []
+            ),
         },
         "cache": {"path": cache.path, **cache.freshness_snapshot()},
         "network_write": False,

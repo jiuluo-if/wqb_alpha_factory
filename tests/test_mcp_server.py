@@ -821,6 +821,18 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                     "operators": ["rank"],
                 }
 
+            def get_field_capability(self, field_ids_by_dataset, *, scope=None):
+                fields = sorted({
+                    field_id
+                    for field_ids in field_ids_by_dataset.values()
+                    for field_id in field_ids
+                })
+                return {
+                    "valid": True, "status": "LIVE_VERIFIED",
+                    "source": "BRAIN_LIVE_ONLY", "fields": fields,
+                    "field_types": {field_id: "MATRIX" for field_id in fields},
+                }
+
             def get_all_user_alphas(self, **_kwargs):
                 raise AssertionError("research_status must not refresh remote Alpha history")
 
@@ -831,7 +843,9 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as state_dir, patch.dict(os.environ, {self.ENV: "1"}):
             synthetic_client = SyntheticClient()
             guarded_spec = mcp_server.research_api.SimulationSpec(
-                "rank(close)", {}, proposal_id="synthetic-1",
+                "rank(close)", {}, fields=("close",),
+                field_datasets={"close": "synthetic-dataset"},
+                proposal_id="synthetic-1",
             )
             gateway = mcp_server.research_api._simulation_gateway(
                 client=synthetic_client, state_dir=state_dir,
@@ -849,7 +863,10 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                 status = await client.call_tool("research_status", {})
                 details = await client.call_tool("get_pending_executions", {})
                 blocked = await client.call_tool("simulate_batch", {"specs": [{
-                    "expression": "rank(close)", "settings": {}, "proposal_id": "synthetic-1",
+                    "expression": "rank(close)", "settings": {},
+                    "fields": ["close"],
+                    "field_datasets": {"close": "synthetic-dataset"},
+                    "proposal_id": "synthetic-1",
                 }]})
 
         status_data = status.structured_content["data"]
@@ -1275,11 +1292,20 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             "field_validation": "LIVE_VERIFIED",
             "failure_kind": "SYNTAX",
             "http_status_code": 400,
-            "error": "private expression or server message",
-        }], expected_count=1)
+            "error": (
+                "Simulation rejected: invalid expression rank(field_one) "
+                "https://example.invalid/private-detail"
+            ),
+        }], expected_count=1, expressions_by_proposal={
+            "proposal-1": "rank(field_one)",
+        })
 
         self.assertEqual(envelope["results"][0]["failure_kind"], "SYNTAX")
         self.assertEqual(envelope["results"][0]["http_status_code"], 400)
+        detail = envelope["results"][0]["failure_detail"]
+        self.assertIn("invalid expression", detail)
+        self.assertNotIn("rank(field_one)", detail)
+        self.assertNotIn("https://", detail)
         self.assertNotIn("error", envelope["results"][0])
         self.assertFalse(envelope["truncated"])
 

@@ -6,6 +6,19 @@ from wqb_agent.alpha_templates.model import AlphaTemplate
 
 
 class OperatingIncomeRelationshipTests(unittest.TestCase):
+    def test_normalized_tweet_volume_is_an_attention_measure(self):
+        result = derive_field_semantic_traits({
+            "id": "tweet_volume",
+            "description": "Normalized tweet volume",
+            "dataset": "socialmedia8",
+            "category": {"id": "socialmedia"},
+            "type": "MATRIX",
+        })
+        self.assertEqual(result["concept"], "social_attention")
+        self.assertEqual(result["semantic_admission"], "ALLOW")
+        self.assertIn("attention", result["tags"])
+        self.assertIn("volume", result["tags"])
+
     def test_news_source_text_does_not_override_a_return_measure(self):
         result = derive_field_semantic_traits({
             "id": "market_impact_score",

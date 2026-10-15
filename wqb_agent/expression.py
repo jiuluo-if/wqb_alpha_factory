@@ -83,9 +83,13 @@ def expression_field_identifiers(analysis):
     """Return identifiers which are not known operators or syntax helpers."""
     if not isinstance(analysis, ExpressionAnalysis):
         return ()
+    operators = {value.casefold() for value in analysis.operators}
     return tuple(
         identifier for identifier in analysis.identifiers
-        if identifier.lower() not in _NON_FIELD_IDENTIFIERS
+        if (
+            identifier.casefold() not in _NON_FIELD_IDENTIFIERS
+            and identifier.casefold() not in operators
+        )
     )
 
 

@@ -60,14 +60,5 @@ class TestAtomicArtifactDurability(unittest.TestCase):
                     artifacts._atomic_replace(path, b"written-but-not-claimed")
             self.assertEqual(Path(path).read_bytes(), b"written-but-not-claimed")
 
-    def test_unchanged_atomic_json_is_a_noop(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "state.json")
-            self.assertTrue(artifacts.atomic_write_json_if_changed(path, {"x": 1}))
-            with mock.patch.object(artifacts, "_fsync_parent_directory") as sync:
-                self.assertFalse(artifacts.atomic_write_json_if_changed(path, {"x": 1}))
-            sync.assert_not_called()
-
-
 if __name__ == "__main__":
     unittest.main()

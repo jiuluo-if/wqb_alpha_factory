@@ -4,11 +4,15 @@ import json
 import pathlib
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
 import main as main_entry
+from tests.test_targeted_ci import critical_contract
 from wqb_agent.cli import CLICommand, parse_cli
+from wqb_agent.config import normalize_config
+from wqb_agent.smoke import run_readonly_smoke
 
 
 class TestCanonicalCliGrammar(unittest.TestCase):
@@ -80,10 +84,16 @@ class TestCliRuntimeSafety(unittest.TestCase):
 
     def test_local_diagnostics_do_not_construct_client(self):
         for action in ("doctor", "audit"):
-            with self.subTest(action=action), patch(
-                    "wqb_agent.WQBClient", side_effect=AssertionError("client constructed")):
-                with contextlib.redirect_stdout(io.StringIO()):
-                    main_entry.main(["--config", "config.example.json", "diagnostics", action])
+            with self.subTest(action=action), tempfile.TemporaryDirectory() as state_dir:
+                with patch(
+                    "wqb_agent.WQBClient",
+                    side_effect=AssertionError("client constructed"),
+                ):
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        main_entry.main([
+                            "--config", "config.example.json",
+                            "--state-dir", state_dir, "diagnostics", action,
+                        ])
 
     def test_dataset_list_returns_raw_rows_without_selection_or_lock(self):
         with patch("main.acquire_single_instance_lock") as acquire, \
@@ -144,6 +154,64 @@ class TestCliSubprocessIntegration(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertTrue(json.loads(result.stdout)["config_valid"])
         self.assertEqual(result.stderr, "")
+
+    def test_diagnostics_doctor_exits_nonzero_when_guard_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as state_dir:
+            guard_path = pathlib.Path(state_dir) / "execution_guard.json"
+            guard_path.write_text('{"entries": [', encoding="utf-8")
+
+            result = self.run_cli(
+                "--state-dir", state_dir, "diagnostics", "doctor",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "EXECUTION_GUARD_UNAVAILABLE",
+            {row["code"] for row in payload["diagnostics"]},
+        )
+
+
+class ReadOnlyClient:
+    def __init__(self):
+        self.calls = []
+
+    def get_datasets(self):
+        self.calls.append("datasets")
+        return [{"id": "fallback"}]
+
+    def get_datafields(self, dataset_id, limit=50, offset=0, field_type=None):
+        self.calls.append(("fields", dataset_id))
+        return [{"id": "close"}], 1
+
+
+class TestReadOnlySmoke(unittest.TestCase):
+    @critical_contract("smoke.read_only_methods_only")
+    def test_smoke_uses_only_read_methods(self):
+        client = ReadOnlyClient()
+        result = run_readonly_smoke(
+            client,
+            normalize_config({"simulation": {}, "runtime": {"smoke_dataset": "pv1"}}),
+        )
+        self.assertEqual(result["datasets"]["status"], "PASS")
+        self.assertEqual(result["fields"]["status"], "PASS")
+        self.assertEqual(client.calls, ["datasets", ("fields", "pv1")])
+
+    @critical_contract("smoke.unavailable_read_capability_degrades")
+    def test_smoke_degrades_without_read_capability(self):
+        result = run_readonly_smoke(
+            object(), normalize_config({"simulation": {}, "runtime": {}})
+        )
+        self.assertEqual(result["datasets"]["status"], "UNAVAILABLE")
+        self.assertEqual(result["fields"]["status"], "UNAVAILABLE")
+
+    @critical_contract("smoke.raw_config_rejected")
+    def test_smoke_rejects_raw_config_input(self):
+        client = ReadOnlyClient()
+        with self.assertRaises(TypeError):
+            run_readonly_smoke(client, {"runtime": {}})
+        self.assertEqual(client.calls, [])
+
 
 
 if __name__ == "__main__":

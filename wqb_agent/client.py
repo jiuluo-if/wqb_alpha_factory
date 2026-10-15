@@ -406,15 +406,42 @@ class WQBClient:
         transport_attempt = 0
         rate_limit_start = time.monotonic()
         while True:
-            remaining = self._read_only_budget_remaining("Authentication")
-            if remaining is None:
-                self._wait_rate_limit_gate()
-            elif not self._wait_rate_limit_gate(max_wait=remaining):
-                raise WQBTimeoutError(
-                    "Authentication exceeded the bounded read-only status budget while waiting for Retry-After."
+            auth_remaining = max(
+                0.0, 1800.0 - (time.monotonic() - rate_limit_start)
+            )
+            if auth_remaining <= 0:
+                raise WQBRateLimitError(
+                    "Authentication rate-limit budget exhausted while waiting.",
+                    status_code=429,
                 )
             remaining = self._read_only_budget_remaining("Authentication")
-            timeout = 30 if remaining is None else max(0.001, min(30.0, remaining))
+            wait_budget = (
+                auth_remaining if remaining is None
+                else min(auth_remaining, remaining)
+            )
+            if not self._wait_rate_limit_gate(max_wait=wait_budget):
+                if remaining is not None and remaining <= auth_remaining:
+                    raise WQBTimeoutError(
+                        "Authentication exceeded the bounded read-only status budget while waiting for Retry-After."
+                    )
+                raise WQBRateLimitError(
+                    "Authentication rate-limit budget exhausted while waiting for Retry-After.",
+                    status_code=429,
+                )
+            auth_remaining = max(
+                0.0, 1800.0 - (time.monotonic() - rate_limit_start)
+            )
+            if auth_remaining <= 0:
+                raise WQBRateLimitError(
+                    "Authentication rate-limit budget exhausted before request.",
+                    status_code=429,
+                )
+            remaining = self._read_only_budget_remaining("Authentication")
+            request_budget = (
+                auth_remaining if remaining is None
+                else min(auth_remaining, remaining)
+            )
+            timeout = max(0.001, min(30.0, request_budget))
             try:
                 resp = self._session().post(
                     f"{self.base_url}/authentication",
@@ -455,6 +482,13 @@ class WQBClient:
                         "server continued returning 429.", status_code=429,
                     )
                 self._register_rate_limit(resp)
+                if (remaining is None
+                        and self._retry_after_seconds(resp)
+                        >= 1800 - (time.monotonic() - rate_limit_start)):
+                    raise WQBRateLimitError(
+                        "Authentication Retry-After exceeds the bounded "
+                        "rate-limit budget.", status_code=429,
+                    )
                 if remaining is not None and self._retry_after_seconds(resp) >= remaining:
                     time.sleep(max(0.0, remaining))
                     raise WQBTimeoutError(
@@ -799,12 +833,20 @@ class WQBClient:
             pass
         try:
             remaining = self._read_only_budget_remaining("GET /authentication")
+            wait_budget = 30.0 if remaining is None else min(30.0, remaining)
+            if not self._wait_rate_limit_gate(max_wait=wait_budget):
+                raise WQBTimeoutError(
+                    "GET /authentication exceeded the bounded status budget waiting for Retry-After."
+                )
+            remaining = self._read_only_budget_remaining("GET /authentication")
             timeout = 30 if remaining is None else max(0.001, min(30.0, remaining))
             resp = self._session().request(
                 "GET", f"{self.base_url}/authentication", timeout=timeout
             )
         except requests.exceptions.RequestException as exc:
             raise WQBSimulationError(f"GET /authentication failed: {exc}") from exc
+        if resp.status_code == 429:
+            self._register_rate_limit(resp)
         if resp.status_code == 401:
             self._set_authenticated(False)
             challenge = str(resp.headers.get("WWW-Authenticate", "")).lower()
@@ -1403,9 +1445,9 @@ class WQBClient:
             if resp.status_code == 429:
                 remaining = max(0.0, timeout_sec - (time.monotonic() - start))
                 retry_delay = self._retry_after_seconds(resp)
+                self._register_rate_limit(resp)
                 if remaining <= 0 or retry_delay > remaining:
                     raise WQBTimeoutError("Simulation polling timed out.", status_code=429)
-                self._register_rate_limit(resp)
                 continue
             if resp.status_code in FAIL_FAST_STATUSES:
                 raise self._classified_exception(
@@ -1474,10 +1516,14 @@ class WQBClient:
                     status_code, snapshot.get("text", ""), "poll_multi_progress"
                 )
             if status_code is not None and status_code >= 500:
-                raise WQBSimulationError(
-                    "Known Multi-Simulation parent returned a server error while reading.",
-                    status_code=status_code,
-                )
+                remaining = max(0.0, timeout_sec - (time.monotonic() - start))
+                if remaining <= 0:
+                    raise WQBTimeoutError(
+                        "Multi-Simulation polling timed out after a server error.",
+                        status_code=status_code,
+                    )
+                time.sleep(min(self._backoff(0), remaining))
+                continue
             payload = snapshot.get("payload")
             if not isinstance(payload, dict):
                 raise WQBSimulationError(
@@ -1615,9 +1661,26 @@ class WQBClient:
                     progress_url, timeout=max(0.001, min(60.0, remaining))
                 )
             except requests.exceptions.Timeout as exc:
-                raise WQBTimeoutError("Progress snapshot request timed out.") from exc
+                remaining = max(0.0, timeout - (time.monotonic() - start))
+                if remaining <= 0:
+                    raise WQBTimeoutError(
+                        "Progress snapshot request timed out."
+                    ) from exc
+                time.sleep(min(self._backoff(0), remaining))
+                continue
             except requests.exceptions.RequestException as exc:
-                raise WQBSimulationError("Progress snapshot request failed.") from exc
+                remaining = max(0.0, timeout - (time.monotonic() - start))
+                if remaining <= 0:
+                    raise WQBSimulationError(
+                        "Progress snapshot request failed."
+                    ) from exc
+                time.sleep(min(self._backoff(0), remaining))
+                continue
+            if resp.status_code == 429:
+                # This adapter returns one raw snapshot rather than retrying
+                # it. Still publish Retry-After to the client-wide gate so a
+                # caller's next read (or another worker) cannot bypass it.
+                self._register_rate_limit(resp)
             if resp.status_code != 401:
                 break
             auth_attempts += 1

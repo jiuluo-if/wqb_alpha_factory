@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import sys
 from collections.abc import Mapping
 from typing import Any
@@ -39,6 +40,12 @@ _WRITE_RESULT_KEYS = (
 _WRITE_FAILURE_KINDS = frozenset({
     "SYNTAX", "DATA", "INFRA", "AUTH", "RATE_LIMIT", "TIMEOUT",
 })
+_WRITE_SECRET_VALUE_RE = re.compile(
+    r"(?i)\b(password|credential|token|secret|authorization|cookie|api[_-]?key)"
+    r"(\s*[:=]\s*)[^\s,;]+"
+)
+_WRITE_URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
+MAX_WRITE_FAILURE_DETAIL_CHARS = 160
 _TEMPLATE_INVENTORY_KEYS = (
     "template_id", "version", "kind", "family", "role", "economic",
     "economic_mechanism", "direction_reason",
@@ -231,6 +238,22 @@ def _invalid_result(
         result["status"] = "NOT_DISPATCHED"
         result["reason_code"] = failure_code
     return result
+
+
+def _safe_write_failure_detail(error: Any, *, expression: str | None = None) -> tuple[str | None, bool]:
+    """Expose a short rejection clue without echoing a private Alpha or secret."""
+    if not isinstance(error, str) or not error.strip():
+        return None, False
+    detail = error.strip()
+    if isinstance(expression, str) and expression:
+        detail = detail.replace(expression, "<expression>")
+    detail = _WRITE_SECRET_VALUE_RE.sub(r"\1\2[REDACTED]", detail)
+    detail = _WRITE_URL_RE.sub("<url>", detail)
+    detail = " ".join(detail.split())
+    truncated = len(detail) > MAX_WRITE_FAILURE_DETAIL_CHARS
+    if truncated:
+        detail = detail[:MAX_WRITE_FAILURE_DETAIL_CHARS - 3] + "..."
+    return detail, truncated
 
 
 def _pending_guard_payload(api, *, state_dir, config):
@@ -637,7 +660,10 @@ def build_server(*, api=research_api, client=None, config=None, state_dir=None, 
     return server
 
 
-def _write_result_envelope(results, *, expected_count: int) -> dict[str, Any]:
+def _write_result_envelope(
+    results, *, expected_count: int,
+    expressions_by_proposal: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
     """Return required proposal attribution and follow-up identities only."""
     malformed = not isinstance(results, (list, tuple))
     results = [] if malformed else list(results)
@@ -672,6 +698,19 @@ def _write_result_envelope(results, *, expected_count: int) -> dict[str, Any]:
             and 100 <= http_status_code <= 599
         ):
             row["http_status_code"] = http_status_code
+        if item.get("status") == "FAILED":
+            proposal_id = item.get("proposal_id")
+            expression = (
+                expressions_by_proposal.get(proposal_id)
+                if isinstance(expressions_by_proposal, Mapping)
+                and isinstance(proposal_id, str) else None
+            )
+            detail, detail_truncated = _safe_write_failure_detail(
+                item.get("error"), expression=expression,
+            )
+            if detail:
+                row["failure_detail"] = detail
+            clipped |= detail_truncated
         row.setdefault("status", "UNKNOWN")
         clipped |= (
             not row.get("proposal_id") or not row.get("fingerprint")
@@ -760,6 +799,12 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
 
     def write_facade(name, specs, **options):
         count = len(specs)
+        expressions_by_proposal = {
+            spec.proposal_id: spec.expression
+            for spec in specs
+            if isinstance(getattr(spec, "proposal_id", None), str)
+            and isinstance(getattr(spec, "expression", None), str)
+        }
         try:
             results = getattr(api, name)(
                 specs, client=resolve_client(), config=config, state_dir=state_dir,
@@ -772,7 +817,10 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
             result = _write_result_envelope([{"status": "UNAVAILABLE"}] * count, expected_count=count)
             result.update(status="UNAVAILABLE", reason_code=code[:64], error="REMOTE_WRITE_FAILED")
             return result
-        return _write_result_envelope(results, expected_count=count)
+        return _write_result_envelope(
+            results, expected_count=count,
+            expressions_by_proposal=expressions_by_proposal,
+        )
 
     def parse_specs(specs, *, minimum, maximum, require_proposal_ids=False):
         if not isinstance(specs, list) or not minimum <= len(specs) <= maximum:

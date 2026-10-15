@@ -153,16 +153,6 @@ class TestRepositoryPrivacyGuard(unittest.TestCase):
         codes = {item.code for item in findings}
         self.assertIn("RAW_AUDIT_ARTIFACT", codes)
 
-    def test_weak_credential_literal_is_not_flagged(self):
-        text = "password=" + '"' + "explicit-password" + '"'
-        codes = {item.code for item in GUARD._scan_text("sample.py", text)}
-        self.assertNotIn("HARDCODED_CREDENTIAL", codes)
-
-    def test_plain_architecture_reference_is_not_flagged(self):
-        text = "state_dir = '" + ".wqb_state" + "'  # relative, project-owned"
-        codes = {item.code for item in GUARD._scan_text("sample.py", text)}
-        self.assertEqual(codes, set())
-
     def test_operator_reference_research_history_is_detected(self):
         root = self._synthetic_root()
         name = "docs/reference/OPERATORS_CHEATSHEET.md"

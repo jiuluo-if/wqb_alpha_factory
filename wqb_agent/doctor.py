@@ -7,7 +7,10 @@ import os
 from .alpha_feed_cache import RemoteAlphaCache
 from .config import normalize_config
 from .diagnostics import DiagnosticEvent
-from .simulation_gateway import ExecutionGuard
+from .simulation_gateway import (
+    ExecutionGuard,
+    _ExecutionGuardStateUnavailable,
+)
 
 
 def run_doctor(raw_config, *, offline=True):
@@ -23,13 +26,22 @@ def run_doctor(raw_config, *, offline=True):
         cache_path,
         retention_days=parsed.remote_cache.retention_days,
     )
-    entries = guard.entries()
     diagnostics = []
+    try:
+        entries = guard.entries()
+    except _ExecutionGuardStateUnavailable:
+        entries = None
+        diagnostics.append(DiagnosticEvent(
+            "EXECUTION_GUARD_UNAVAILABLE", "ERROR", "execution_guard",
+            message="Guard state cannot be safely interpreted; writes remain blocked",
+        ).as_dict())
     if not os.path.isdir(state_dir) or not os.access(state_dir, os.W_OK):
         diagnostics.append(DiagnosticEvent(
             "STATE_DIR_NOT_WRITABLE", "ERROR", "execution_guard", message=state_dir
         ).as_dict())
-    if any(row.get("status") == "SUBMIT_UNKNOWN" for row in entries):
+    if entries is not None and any(
+        row.get("status") == "SUBMIT_UNKNOWN" for row in entries
+    ):
         diagnostics.append(DiagnosticEvent(
             "SUBMIT_UNKNOWN_REQUIRES_RECONCILIATION", "WARN", "execution_guard",
             message="只读对账已知 progress URL；不得自动重发 POST",
@@ -41,11 +53,15 @@ def run_doctor(raw_config, *, offline=True):
         "state_dir_writable": os.path.isdir(state_dir) and os.access(state_dir, os.W_OK),
         "execution_guard": {
             "path": guard.path,
-            "active_count": len(entries),
-            "submit_unknown_count": sum(
-                row.get("status") == "SUBMIT_UNKNOWN" for row in entries
+            "active_count": len(entries) if entries is not None else None,
+            "submit_unknown_count": (
+                sum(row.get("status") == "SUBMIT_UNKNOWN" for row in entries)
+                if entries is not None else None
             ),
-            "statuses": [row.get("status") for row in entries],
+            "statuses": (
+                [row.get("status") for row in entries]
+                if entries is not None else []
+            ),
         },
         "cache": {"path": cache.path, **cache.freshness_snapshot()},
         "diagnostics": diagnostics,

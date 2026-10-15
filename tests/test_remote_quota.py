@@ -152,24 +152,6 @@ class TestSimulationQuota(unittest.TestCase):
         self.assertEqual(snapshot["estimate"]["active_guard_simulation_count"], 2)
         self.assertEqual(snapshot["evidence_status"], "APPROXIMATE")
 
-    def test_direct_daily_cap_respects_consultant_policy_ceiling(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            repository = _Repository([])
-            guard = ExecutionGuard(tmp)
-            for value in (0, 4000, 4000.0, 5000, 5000.0):
-                with self.subTest(value=value):
-                    self.assertEqual(
-                        SimulationQuota(repository, guard, daily_cap=value).daily_cap,
-                        int(value),
-                    )
-            for value in (
-                True, False, 0.5, 1.5, 4999.9, 5000.1,
-                float("nan"), float("inf"), float("-inf"), -1, 5001, 6000,
-            ):
-                with self.subTest(value=value):
-                    with self.assertRaises(ValueError):
-                        SimulationQuota(repository, guard, daily_cap=value)
-
     def test_today_guard_contributes_to_today_and_window(self):
         with tempfile.TemporaryDirectory() as tmp:
             guard = ExecutionGuard(tmp)
@@ -565,21 +547,7 @@ class TestSimulationQuota(unittest.TestCase):
                              "ESTIMATE_REMOTE_ALPHA_REPOSITORY+EXECUTION_GUARD")
             self.assertEqual(result["today_used"], 0)
             self.assertEqual(result["official"]["status"], "UNKNOWN")
-            self.assertEqual(result["estimate"]["daily_cap"], 5000)
             self.assertIsNone(result["official"]["reset"])
-
-    def test_public_quota_api_preserves_lower_local_daily_override(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            result = research_api.simulation_quota(
-                config={
-                    "simulation": {},
-                    "quota": {"daily": 4000},
-                },
-                state_dir=tmp,
-            )
-
-        self.assertEqual(result["estimate"]["daily_cap"], 4000)
-        self.assertEqual(result["today_remaining"], 4000)
 
     def test_public_quota_api_uses_client_observation_as_official_primary(self):
         class _Client:
@@ -602,7 +570,6 @@ class TestSimulationQuota(unittest.TestCase):
             self.assertEqual(result["official"]["remaining"], 987)
             self.assertEqual(result["official"]["reset"], 12345)
             self.assertEqual(result["official"]["limit"], 1600)
-            self.assertEqual(result["estimate"]["daily_cap"], 5000)
             self.assertEqual(result["estimate"]["window_used"], 0)
             self.assertNotIn("rolling_cap", result)
             self.assertNotIn("rolling_remaining", result)

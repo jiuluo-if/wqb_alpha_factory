@@ -135,6 +135,8 @@ class TestProtocolTruth(unittest.TestCase):
     def test_retry_after_accepts_seconds_and_invalid_fails_closed(self):
         self.assertEqual(retry_after_seconds({"Retry-After": "2"}), 2.0)
         self.assertEqual(retry_after_seconds({"Retry-After": "bad"}), 5.0)
+        self.assertEqual(retry_after_seconds({}), 5.0)
+        self.assertEqual(retry_after_seconds({"Retry-After": "NaN"}), 5.0)
         self.assertGreaterEqual(retry_after_seconds({"Retry-After": "-3"}), 1.0)
 
     def test_probe_response_can_verify_live_shape_without_calling_transport(self):
@@ -213,6 +215,12 @@ class TestProtocolTruth(unittest.TestCase):
         partial = simulation_rate_limit_from_headers({"X-Ratelimit-Remaining": "987"})
         self.assertEqual(partial["status"], "PARTIAL")
         self.assertEqual(partial["remaining"], 987)
+        generic = simulation_rate_limit_from_headers({
+            "RateLimit-Limit": "1600",
+            "RateLimit-Remaining": "987",
+            "RateLimit-Reset": "12345",
+        })
+        self.assertEqual(generic["status"], "UNKNOWN")
         unknown = simulation_rate_limit_from_headers({})
         self.assertEqual(unknown["status"], "UNKNOWN")
         self.assertIsNone(unknown["limit"])

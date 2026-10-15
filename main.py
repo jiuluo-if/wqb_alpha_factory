@@ -70,7 +70,13 @@ def main(argv=None):
 
     if command_key == ("diagnostics", "doctor"):
         from wqb_agent.doctor import run_doctor
-        print(json.dumps(run_doctor(typed_config, offline=True), ensure_ascii=False, indent=2))
+        result = run_doctor(typed_config, offline=True)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if any(
+            row.get("severity") == "ERROR"
+            for row in result.get("diagnostics", ())
+        ):
+            sys.exit(2)
         return
     if command_key == ("diagnostics", "audit"):
         from wqb_agent.audit import audit_execution_surface

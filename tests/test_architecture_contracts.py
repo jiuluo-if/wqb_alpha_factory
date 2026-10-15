@@ -1,5 +1,6 @@
 import ast
 import inspect
+import json
 import pathlib
 import unittest
 
@@ -132,25 +133,32 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         self.assertIn('research_tool_manifest(profile="core")', text)
         self.assertIn("tools/list", text)
         self.assertIn("get_pending_executions", text)
+        self.assertIn("get_alpha_evidence", text)
+        self.assertIn('depth="full"', text)
         self.assertIn("get_alpha_prod_correlation", text)
         self.assertIn("FINALIST_ONLY", text)
-        self.assertIn("distinct from BRAIN self-correlation and PROD correlation", text)
+        self.assertIn("self-correlation", text)
+        self.assertIn("PROD 复核", text)
+        self.assertIn("self/PROD 官方 checks", text)
 
     def test_template_first_and_local_data_lifecycle_have_canonical_routes(self):
         prompt = (ROOT / "prompts" / "research_agent.md").read_text(encoding="utf-8")
         skill = (ROOT / "skills" / "wqb-research" / "SKILL.md").read_text(encoding="utf-8")
+        mcp_reference = (ROOT / "docs" / "MCP_READ_ONLY.md").read_text(encoding="utf-8")
         policy = (ROOT / "docs" / "TMP_WORKSPACE_POLICY.md").read_text(encoding="utf-8")
         scripts = (ROOT / "scripts" / "README.md").read_text(encoding="utf-8")
-        combined = "\n".join((prompt, skill))
+        combined = "\n".join((prompt, skill, mcp_reference))
 
         for phrase in (
             "list_templates", "generate_probes", "proposal_id",
-            "不得改用 shell", "private catalog",
+            "private catalog",
         ):
             self.assertIn(phrase, combined)
+        self.assertIn("不要改用 shell 脚本", mcp_reference)
         for phrase in (
-            "SHORT_TERM", "LONG_TERM_LOCAL", "captured_or_verified_at", "supersedes",
-            "REVIEW_REQUIRED", "ON_USE", "WAVE_BOUNDARY", "OWNER_CHANGE",
+            "CURRENT", "FOUNDATIONAL", "SUPERSEDED", "TIME_UNKNOWN",
+            "captured_or_verified_at", "supersedes", "REVIEW_REQUIRED",
+            "ON_USE", "WAVE_BOUNDARY", "OWNER_CHANGE",
         ):
             self.assertIn(phrase, policy)
         self.assertIn("run_research_agent_eval.py", scripts)
@@ -212,9 +220,10 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
             "TASK_TARGET:", "DIRECT_VERIFICATION:", "CONSTRAINTS:",
             "CURRENT_BLOCKER:", "NEXT_USEFUL_ACTION:",
             "RUNTIME_EVIDENCE", "CHANGE", "DIRECT_VERIFICATION:",
-            "RESEARCH_IMPACT", "REMAINING_BLOCKER", "STALE_RUN_EVIDENCE",
-            "运行每条新命令前先问", "读取最少的 artifact/runtime evidence",
-            "不能单独构成 blocker", "TMP_WORKSPACE_POLICY.md",
+            "RESEARCH_IMPACT", "REMAINING_BLOCKER", "PARTIAL_OBSERVATION",
+            "WAITING_FOR_RUNTIME_EVIDENCE", "运行新命令前先判断",
+            "只读取必要的原始资料与运行证据", "不能单独构成阻塞",
+            "TMP_WORKSPACE_POLICY.md",
         ):
             self.assertIn(name, prompt)
         self.assertIn("mtime 只帮助判断是否值得重新读取", agents)
@@ -238,7 +247,7 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
         self.assertNotIn("活跃 live research wave", prompt)
         self.assertIn("进入 `TOOL_OPTIMIZATION` 后停止所有 live Simulation POST", agents)
         self.assertIn("离线/fake-client tests", agents)
-        self.assertIn("fresh `research_status`", combined)
+        self.assertIn("重新获取最新的 `research_status` 响应", tool_phase)
         self.assertNotIn("不修改仓库代码", prompt)
         self.assertNotIn("永不改核心代码", skill)
         self.assertNotIn("Maintenance Agent（architecture", prompt_index)
@@ -255,12 +264,19 @@ class RemoteFirstArchitectureTests(unittest.TestCase):
             "evidence_retrieval_pending_count", "repeated_manual_workaround_count",
         ):
             self.assertIn(field, combined)
-        self.assertIn("pending_execution_count > 0", combined)
-        self.assertIn("handoff readiness 必须为 `BLOCKED_BY_REMOTE_STATE`", combined)
-        self.assertIn("只记录有限、稳定且脱敏的代码", combined)
-        self.assertIn("不记录自由文本", combined)
-        self.assertIn("不得写入 Alpha ID、field ID、expression", combined)
-        self.assertIn("不新增 database、telemetry、watcher 或 scheduler", combined)
+        handoff_json = tmp_policy.split("```json\n", 1)[1].split("\n```", 1)[0]
+        handoff_schema = json.loads(handoff_json)
+        self.assertIsNone(handoff_schema["pending_execution_count"])
+        self.assertEqual(handoff_schema["readiness"], "UNKNOWN")
+        self.assertIn(
+            "有未解决 execution 或 `SUBMIT_UNKNOWN` 时必须记为 `BLOCKED_BY_REMOTE_STATE`",
+            tmp_policy,
+        )
+        self.assertIn("只保留有限且脱敏的 reason code", tmp_policy)
+        self.assertIn("自由文本诊断", tmp_policy)
+        self.assertIn("Alpha/field ID、表达式", tmp_policy)
+        self.assertIn("不得创建研究生命周期", agents)
+        self.assertIn("scheduler", agents)
         self.assertIn("TMP_WORKSPACE_POLICY.md", prompt)
         self.assertNotIn("status_counts", prompt)
 

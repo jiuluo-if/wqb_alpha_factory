@@ -15,9 +15,21 @@ ROOT = Path(__file__).resolve().parents[1]
 
 COMMON_CONTRACT_TESTS = (
     "tests/test_simulation_gateway.py",
+    "tests/test_architecture_contracts.py",
+    "tests/test_targeted_ci.py",
 )
 
 DIRECT_TESTS = {
+    "AGENTS.md": COMMON_CONTRACT_TESTS,
+    "docs/TESTING.md": (
+        "tests/test_architecture_contracts.py",
+        "tests/test_targeted_ci.py",
+    ),
+    ".github/workflows/ci.yml": (
+        "tests/test_architecture_contracts.py",
+        "tests/test_targeted_ci.py",
+    ),
+    "constraints/ci-py311.txt": ("tests/test_targeted_ci.py",),
     "main.py": ("tests/test_cli.py",),
     "scripts/run_targeted_tests.py": ("tests/test_targeted_ci.py",),
     "scripts/check_repo_privacy.py": ("tests/test_repo_privacy.py",),
@@ -33,13 +45,20 @@ DIRECT_TESTS = {
     ),
     "wqb_agent/protocol.py": ("tests/test_protocol_truth.py",),
     "wqb_agent/query_errors.py": ("tests/test_client_refactor.py",),
-    "wqb_agent/alpha_semantics.py": ("tests/test_alpha_semantics.py",),
+    "wqb_agent/alpha_semantics.py": (
+        "tests/test_alpha_semantics.py",
+        "tests/test_live_field_semantic_precedence.py",
+        "tests/test_alpha_operating_income_relationship.py",
+        "tests/test_event_lookback_frequency.py",
+    ),
+    "wqb_agent/AGENTS.md": COMMON_CONTRACT_TESTS,
+    "wqb_agent/alpha_relationships.py": (
+        "tests/test_alpha_semantics.py",
+        "tests/test_event_lookback_frequency.py",
+        "tests/test_alpha_operating_income_relationship.py",
+    ),
     "wqb_agent/alpha_quality.py": ("tests/test_aqaf.py",),
     "wqb_agent/osmosis_allocation.py": ("tests/test_aqaf.py",),
-    "wqb_agent/alpha_relationships.py": ("tests/test_alpha_relationships.py",),
-    "tests/test_architecture_contracts.py": (
-        "tests/test_architecture_contracts.py",
-    ),
     "tests/test_research_agent_eval.py": ("tests/test_research_agent_eval.py",),
     "tests/fixtures/research_agent_eval/cases.json": (
         "tests/test_research_agent_eval.py",
@@ -53,7 +72,6 @@ DIRECT_TESTS = {
     "wqb_agent/field_metadata.py": ("tests/test_research_api.py",),
     "wqb_agent/__init__.py": (
         "tests/test_research_api.py",
-        "tests/test_aqaf.py",
     ),
     "wqb_agent/reference/__init__.py": (
         "tests/test_research_api.py",
@@ -73,25 +91,24 @@ DIRECT_TESTS = {
     "wqb_agent/operator_reference.py": ("tests/test_protocol_truth.py",),
     "wqb_agent/alpha_factory.py": (
         "tests/test_research_api.py",
+        "tests/test_alpha_semantics.py",
+        "tests/test_alpha_multi_field_confirmation.py",
+        "tests/test_alpha_operating_income_relationship.py",
     ),
-    "wqb_agent/alpha_feed_cache.py": ("tests/test_alpha_feed_cache.py",),
+    "wqb_agent/alpha_feed_cache.py": ("tests/test_remote_alpha.py",),
     "wqb_agent/alpha_templates/model.py": ("tests/test_alpha_template_catalog.py",),
     "wqb_agent/alpha_templates/loader.py": (
         "tests/test_alpha_template_catalog.py",
-        "tests/test_private_template_contract.py",
     ),
     "wqb_agent/alpha_templates/validation.py": (
         "tests/test_alpha_template_catalog.py",
-        "tests/test_private_template_contract.py",
     ),
     "wqb_agent/alpha_templates/registry.py": (
         "tests/test_alpha_template_catalog.py",
-        "tests/test_private_template_contract.py",
     ),
     "wqb_agent/alpha_templates/__init__.py": ("tests/test_alpha_template_catalog.py",),
     "wqb_agent/alpha_templates/catalog/builtin.toml": (
         "tests/test_alpha_template_catalog.py",
-        "tests/test_private_template_contract.py",
     ),
     "wqb_agent/alpha_templates/AGENTS.md": ("tests/test_alpha_template_catalog.py",),
     "wqb_agent/locking.py": (
@@ -100,10 +117,16 @@ DIRECT_TESTS = {
     "wqb_agent/research_api.py": (
         "tests/test_research_api.py",
         "tests/test_alpha_grouping.py",
+        "tests/test_remote_alpha.py",
+        "tests/test_research_correlation_contract.py",
         "tests/test_aqaf.py",
-        "tests/test_remote_colors.py",
+        "tests/test_mcp_poll_budget.py",
     ),
-    "wqb_agent/mcp_server.py": ("tests/test_mcp_server.py",),
+    "wqb_agent/mcp_server.py": (
+        "tests/test_mcp_server.py",
+        "tests/test_mcp_poll_budget.py",
+        "tests/test_mcp_research_inventory_projection.py",
+    ),
     "wqb_agent/remote_quota.py": ("tests/test_remote_quota.py",),
     "wqb_agent/credentials.py": (
         "tests/test_credentials.py",
@@ -114,15 +137,19 @@ DIRECT_TESTS = {
     "wqb_agent/evidence_status.py": ("tests/test_protocol_truth.py",),
     "wqb_agent/failures.py": ("tests/test_client_refactor.py",),
     "wqb_agent/expression.py": ("tests/test_expression.py",),
-    "wqb_agent/remote_evidence.py": ("tests/test_remote_evidence.py",),
-    "wqb_agent/simulation_gateway.py": ("tests/test_simulation_gateway.py",),
-    "wqb_agent/remote_alpha_repository.py": ("tests/test_remote_alpha_repository.py",),
-    "wqb_agent/alpha_grouping.py": ("tests/test_alpha_grouping.py",),
-    "wqb_agent/remote_colors.py": ("tests/test_remote_colors.py",),
-    "wqb_agent/smoke.py": ("tests/test_smoke.py",),
-    "tests/test_semantic_contract_admission.py": (
-        "tests/test_semantic_contract_admission.py",
+    "wqb_agent/remote_evidence.py": (
+        "tests/test_remote_evidence.py",
+        "tests/test_aqaf.py",
+        "tests/test_research_correlation_contract.py",
     ),
+    "wqb_agent/simulation_gateway.py": (
+        "tests/test_simulation_gateway.py",
+        "tests/test_multi_parent_capacity.py",
+    ),
+    "wqb_agent/remote_alpha_repository.py": ("tests/test_remote_alpha.py",),
+    "wqb_agent/remote_colors.py": ("tests/test_remote_alpha.py",),
+    "wqb_agent/alpha_grouping.py": ("tests/test_alpha_grouping.py",),
+    "wqb_agent/smoke.py": ("tests/test_cli.py",),
 }
 
 FRONTEND_CONFIG_FILES = {
@@ -133,7 +160,7 @@ FRONTEND_CONFIG_FILES = {
 
 FRONTEND_CONFIG_TESTS = (
     "tests/test_remote_diagnostics.py",
-    "tests/test_dependency_constraints.py",
+    "tests/test_targeted_ci.py",
 )
 
 NON_CODE_PREFIXES = (
@@ -150,25 +177,48 @@ class TargetSelectionError(RuntimeError):
 
 def _active_production_files() -> set[str]:
     """Return source boundaries that must participate in explicit routing."""
-    candidates = [ROOT / "main.py", *sorted((ROOT / "scripts").glob("*.py"))]
-    candidates.extend(sorted((ROOT / "wqb_agent").glob("*.py")))
+    candidates = [ROOT / "main.py"]
+    candidates.extend(sorted((ROOT / "scripts").rglob("*.py")))
+    candidates.extend(sorted((ROOT / "wqb_agent").rglob("*.py")))
     return {
         path.relative_to(ROOT).as_posix()
         for path in candidates
-        if path.is_file() and path.name != "__init__.py"
+        if path.is_file()
     }
+
+
+def _unittest_test_files(tests_root: Path) -> set[str]:
+    """Return test modules unittest discovery can import from this root."""
+    tests_root = Path(tests_root)
+    discovered = set()
+    for path in tests_root.rglob("test_*.py"):
+        parent = path.parent
+        importable = True
+        while parent != tests_root:
+            if not (parent / "__init__.py").is_file():
+                importable = False
+                break
+            parent = parent.parent
+        if importable:
+            discovered.add(path.relative_to(tests_root).as_posix())
+    return discovered
 
 
 def mapping_inventory() -> dict[str, object]:
     """Build a small, deterministic graph audit for the routing contract."""
-    actual_tests = {
+    tests_root = ROOT / "tests"
+    all_test_files = {
         path.relative_to(ROOT).as_posix()
-        for path in (ROOT / "tests").glob("test_*.py")
+        for path in tests_root.rglob("test_*.py")
         if path.is_file()
+    }
+    actual_tests = {
+        "tests/" + relative_path
+        for relative_path in _unittest_test_files(tests_root)
     }
     mapped_tests = {
         test for tests in DIRECT_TESTS.values() for test in tests
-    } | set(FRONTEND_CONFIG_TESTS)
+    } | set(FRONTEND_CONFIG_TESTS) | set(COMMON_CONTRACT_TESTS)
     stale_mapping_keys = {
         key for key in DIRECT_TESTS
         if not (ROOT / key).is_file()
@@ -182,6 +232,7 @@ def mapping_inventory() -> dict[str, object]:
         "unmapped_production_files": production - mapped_production,
         "mapped_missing_tests": mapped_tests - actual_tests,
         "unreachable_tests": actual_tests - mapped_tests,
+        "undiscoverable_tests": all_test_files - actual_tests,
         "duplicate_keys": duplicate_keys,
         "stale_mapping_keys": stale_mapping_keys,
         "mapping_entries": len(DIRECT_TESTS),
@@ -191,6 +242,12 @@ def mapping_inventory() -> dict[str, object]:
 def validate_mapping_integrity() -> dict[str, object]:
     """Fail closed on stale routes or active code without a route."""
     inventory = mapping_inventory()
+    undiscoverable = sorted(inventory["undiscoverable_tests"])
+    if undiscoverable:
+        raise TargetSelectionError(
+            "Test file(s) cannot be imported by unittest discover: "
+            + ", ".join(undiscoverable)
+        )
     if inventory["duplicate_keys"]:
         raise TargetSelectionError("DIRECT_TESTS contains duplicate normalized keys")
     stale = sorted(inventory["stale_mapping_keys"])
@@ -207,11 +264,20 @@ def validate_mapping_integrity() -> dict[str, object]:
             "Active production file(s) have no explicit targeted-test route: "
             + ", ".join(unmapped)
         )
+    unreachable = sorted(inventory["unreachable_tests"])
+    if unreachable:
+        raise TargetSelectionError(
+            "Active test file(s) have no explicit production or common-contract route: "
+            + ", ".join(unreachable)
+        )
     return inventory
 
 
 def _normalize(path: str) -> str:
-    return path.replace("\\", "/").lstrip("./")
+    normalized = path.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized.lstrip("/")
 
 
 def _existing(paths: set[str]) -> tuple[str, ...]:
@@ -228,6 +294,8 @@ def select_tests(changed_files: list[str]) -> tuple[str, ...]:
     validate_mapping_integrity()
     selected: set[str] = set()
     unmapped: list[str] = []
+    production_change = False
+    production_files = _active_production_files()
 
     for raw_path in changed_files:
         path = _normalize(raw_path)
@@ -241,6 +309,7 @@ def select_tests(changed_files: list[str]) -> tuple[str, ...]:
             continue
         if path in DIRECT_TESTS:
             selected.update(DIRECT_TESTS[path])
+            production_change = production_change or path in production_files
             continue
         if path in FRONTEND_CONFIG_FILES:
             selected.update(FRONTEND_CONFIG_TESTS)
@@ -268,6 +337,8 @@ def select_tests(changed_files: list[str]) -> tuple[str, ...]:
             + ", ".join(sorted(unmapped))
             + ". Add the file to DIRECT_TESTS; full-suite fallback is forbidden."
         )
+    if production_change:
+        selected.update(COMMON_CONTRACT_TESTS)
     return _existing(selected)
 
 

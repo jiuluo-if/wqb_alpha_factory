@@ -7,7 +7,6 @@ from collections.abc import Mapping
 from .field_metadata import normalize_coverage
 
 _SEMANTIC_CONCEPT_RULES = (
-    ("data_quality", ("missing", "null", "nan", "quality", "coverage", "stale")),
     ("analyst_revision", ("revision", "revised", "estimate change", "forecast change")),
     ("option_relative", ("put call", "put-call", "putcall", "iv skew")),
     ("realized_volatility", ("realized volatility", "historical volatility")),
@@ -66,6 +65,8 @@ _SEMANTIC_CONCEPT_RULES = (
         (
             "operating activities - net cash flow",
             "operating cash flow",
+            "cash flow from operating activities",
+            "cash provided by operating activities",
             "cashflow op",
         ),
     ),
@@ -82,6 +83,8 @@ _SEMANTIC_CONCEPT_RULES = (
     (
         "social_attention",
         (
+            "normalized tweet volume",
+            "tweet volume",
             "sentiment volume",
             "relative sentiment volume",
             "volume of social media sentiment",
@@ -92,6 +95,7 @@ _SEMANTIC_CONCEPT_RULES = (
         "sentiment",
         ("sentiment", "social", "recommendation", "bullish", "bearish"),
     ),
+    ("data_quality", ("missing", "null", "nan", "quality", "coverage", "stale")),
     (
         "valuation",
         (

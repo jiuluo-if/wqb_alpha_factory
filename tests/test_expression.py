@@ -4,6 +4,7 @@ from wqb_agent.alpha_grouping import structural_fingerprint
 from wqb_agent.expression import (
     ExpressionAnalysis,
     analyze_expression,
+    expression_field_identifiers,
     expression_identity_keys,
     operator_occurrence_count,
     operator_occurrence_signature,
@@ -14,6 +15,11 @@ from wqb_agent.expression import (
 
 
 class TestExpressionAnalysis(unittest.TestCase):
+    def test_expression_field_identifiers_excludes_custom_operator_names(self):
+        analysis = analyze_expression("custom_rank(field_x)")
+
+        self.assertEqual(expression_field_identifiers(analysis), ("field_x",))
+
     def test_operator_occurrence_count_preserves_repeated_calls(self):
         expression = "rank(subtract(ts_zscore(x, 22), ts_zscore(y, 22)))"
         self.assertEqual(operator_occurrence_count(expression), 4)

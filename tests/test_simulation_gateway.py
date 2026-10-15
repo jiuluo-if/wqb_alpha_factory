@@ -1,3 +1,5 @@
+import ast
+import builtins
 import inspect
 import json
 import multiprocessing
@@ -7,8 +9,12 @@ import threading
 import time
 import unittest
 from datetime import UTC, datetime
+from pathlib import Path
+from unittest.mock import patch
 
+from tests.test_targeted_ci import critical_contract
 from wqb_agent import research_api
+from wqb_agent import simulation_gateway as simulation_gateway_module
 from wqb_agent.client import (
     WQBNotFoundError,
     WQBRateLimitError,
@@ -17,6 +23,7 @@ from wqb_agent.client import (
     WQBSubmitUnknownError,
     WQBTimeoutError,
 )
+from wqb_agent.expression import analyze_expression, expression_field_identifiers
 from wqb_agent.locking import OwnerBusyError
 from wqb_agent.remote_evidence import RemoteAlphaEvidenceProvider
 from wqb_agent.remote_quota import SimulationQuota
@@ -28,9 +35,26 @@ from wqb_agent.simulation_gateway import (
     MULTI_MIN_CHILDREN,
     ExecutionGuard,
     SimulationGateway,
-    SimulationSpec,
     classify_write_readiness,
+    multi_parent_holds_slot,
 )
+from wqb_agent.simulation_gateway import (
+    SimulationSpec as _SimulationSpec,
+)
+
+
+def SimulationSpec(*args, **kwargs):
+    """Give ordinary Gateway tests explicit synthetic field provenance."""
+    if "fields" not in kwargs and len(args) < 3:
+        expression = args[0] if args else kwargs.get("expression", "")
+        identifiers = expression_field_identifiers(analyze_expression(expression))
+        if identifiers:
+            kwargs["fields"] = identifiers
+            datasets = dict(kwargs.get("field_datasets") or {})
+            for field_id in identifiers:
+                datasets.setdefault(field_id, "synthetic-dataset")
+            kwargs["field_datasets"] = datasets
+    return _SimulationSpec(*args, **kwargs)
 
 
 class FakeGatewayClient:
@@ -61,6 +85,18 @@ class FakeGatewayClient:
         return {
             "valid": True, "status": "AVAILABLE", "source": "BRAIN_LIVE_ONLY",
             "operators": ["rank"],
+        }
+
+    def get_field_capability(self, field_ids_by_dataset, *, scope=None):
+        fields = sorted({
+            str(field_id)
+            for field_ids in field_ids_by_dataset.values()
+            for field_id in field_ids
+        })
+        return {
+            "valid": True, "status": "LIVE_VERIFIED", "source": "BRAIN_LIVE_ONLY",
+            "fields": fields,
+            "field_types": {field_id: "MATRIX" for field_id in fields},
         }
 
     def submit_simulation(self, expression, settings, **kwargs):
@@ -1632,6 +1668,333 @@ class TestSimulationGateway(unittest.TestCase):
             )
             self.assertEqual(resumed.client.multi_submissions, [])
 
+    @critical_contract("simulation.corrupt_guard_blocks_post")
+    def test_corrupt_execution_guard_blocks_readiness_and_preserves_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guard_path = os.path.join(tmp, "execution_guard.json")
+            original = b'{"entries": ['
+            with open(guard_path, "wb") as handle:
+                handle.write(original)
+
+            client = MultiGatewayClient()
+            specs = [
+                SimulationSpec("rank(field_a)", {"delay": 1}),
+                SimulationSpec("rank(field_b)", {"delay": 1}),
+            ]
+            global_status = research_api.research_status(
+                client=client, state_dir=tmp,
+            )
+            gateway = SimulationGateway(client, state_dir=tmp)
+            candidate_status = gateway.research_batch_status(specs)
+            with self.assertRaisesRegex(
+                RuntimeError, "EXECUTION_GUARD_STATE_UNAVAILABLE"
+            ):
+                gateway.simulate_multi_batch(specs)
+
+            with open(guard_path, "rb") as handle:
+                after = handle.read()
+
+        self.assertEqual(global_status["write_readiness"], "UNKNOWN")
+        self.assertIn("EXECUTION_STATE_UNKNOWN", global_status["write_blockers"])
+        self.assertEqual(candidate_status["write_readiness"], "UNKNOWN")
+        self.assertEqual(client.multi_submissions, [])
+        self.assertEqual(after, original)
+
+    def test_malformed_guard_schemas_fail_closed_without_rewriting(self):
+        malformed_payloads = (
+            b"[]",
+            b'{"schema_version": 2, "entries": []}',
+            b'{"schema_version": 1}',
+            b'{"entries": {}}',
+            b'{"entries": [{}]}',
+            b'{"entries": [{"execution_fingerprint": "fp"}]}',
+            b'{"entries": [{"execution_fingerprint": "fp", '
+            b'"status": "SUBMIT_UNKNOWN", "kind": "UNKNOWN_KIND"}]}',
+            b'{"entries": [{"execution_fingerprint": "fp", '
+            b'"status": "SUBMIT_UNKNOWN"}, {"execution_fingerprint": "fp", '
+            b'"status": "RUNNING"}]}',
+            b'{"entries": [{"execution_fingerprint": "child", '
+            b'"status": "SUBMIT_UNKNOWN", "kind": "MULTI_CHILD", '
+            b'"parent_fingerprint": "missing-parent"}]}',
+        )
+        for original in malformed_payloads:
+            with self.subTest(payload=original), tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "execution_guard.json")
+                with open(path, "wb") as handle:
+                    handle.write(original)
+
+                client = MultiGatewayClient()
+                gateway = SimulationGateway(client, state_dir=tmp)
+                status = research_api.research_status(client=client, state_dir=tmp)
+                with self.assertRaisesRegex(
+                    RuntimeError, "EXECUTION_GUARD_STATE_UNAVAILABLE"
+                ):
+                    gateway.simulate_multi_batch([
+                        SimulationSpec("rank(field_a)", {"delay": 1}),
+                        SimulationSpec("rank(field_b)", {"delay": 1}),
+                    ])
+
+                with open(path, "rb") as handle:
+                    after = handle.read()
+
+                self.assertEqual(status["write_readiness"], "UNKNOWN")
+                self.assertIsNone(status["pending_execution_count"])
+                self.assertEqual(after, original)
+                self.assertEqual(client.multi_submissions, [])
+
+    def test_guard_io_permission_error_blocks_write_without_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = ExecutionGuard(tmp)
+            guard.register("existing")
+            path = os.path.abspath(os.path.join(tmp, "execution_guard.json"))
+            with builtins.open(path, "rb") as handle:
+                original = handle.read()
+
+            real_open = builtins.open
+
+            def deny_guard_open(file, *args, **kwargs):
+                if os.path.abspath(os.fspath(file)) == path:
+                    raise PermissionError("synthetic guard permission failure")
+                return real_open(file, *args, **kwargs)
+
+            client = MultiGatewayClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            with patch("builtins.open", side_effect=deny_guard_open):
+                with self.assertRaisesRegex(
+                    RuntimeError, "EXECUTION_GUARD_STATE_UNAVAILABLE"
+                ):
+                    gateway.simulate_multi_batch([
+                        SimulationSpec("rank(field_a)", {"delay": 1}),
+                        SimulationSpec("rank(field_b)", {"delay": 1}),
+                    ])
+
+            with builtins.open(path, "rb") as handle:
+                after = handle.read()
+
+        self.assertEqual(after, original)
+        self.assertEqual(client.multi_submissions, [])
+
+    def test_guard_atomic_write_failure_preserves_prior_valid_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = ExecutionGuard(tmp)
+            guard.register("existing")
+            path = os.path.join(tmp, "execution_guard.json")
+            with open(path, "rb") as handle:
+                original = handle.read()
+
+            with patch.object(
+                simulation_gateway_module,
+                "atomic_write_json_if_changed",
+                side_effect=OSError("synthetic atomic write failure"),
+            ):
+                with self.assertRaisesRegex(OSError, "synthetic atomic write failure"):
+                    guard.register("new")
+
+            with open(path, "rb") as handle:
+                after = handle.read()
+            rows = guard.entries()
+
+        self.assertEqual(after, original)
+        self.assertEqual(
+            [row["execution_fingerprint"] for row in rows],
+            ["existing"],
+        )
+
+    @critical_contract("simulation.multi_parent_state_is_atomic")
+    def test_multi_guard_status_update_failure_never_splits_parent_and_children(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = ExecutionGuard(tmp)
+            guard.register(
+                "parent", status="SUBMITTING",
+                kind=ExecutionGuard.MULTI_PARENT, simulation_count=2,
+            )
+            guard.register(
+                "child-a", status="SUBMITTING",
+                kind=ExecutionGuard.MULTI_CHILD, parent_fingerprint="parent",
+            )
+            guard.register(
+                "child-b", status="SUBMITTING",
+                kind=ExecutionGuard.MULTI_CHILD, parent_fingerprint="parent",
+            )
+
+            with patch.object(
+                simulation_gateway_module,
+                "atomic_write_json_if_changed",
+                side_effect=OSError("synthetic pre-replace failure"),
+            ):
+                with self.assertRaisesRegex(OSError, "pre-replace failure"):
+                    guard.update_batch("parent", status="RUNNING")
+
+            rows = guard.entries()
+            self.assertEqual({row["status"] for row in rows}, {"SUBMITTING"})
+
+            real_write = simulation_gateway_module.atomic_write_json_if_changed
+
+            def replace_then_fail(path, payload, **kwargs):
+                result = real_write(path, payload, **kwargs)
+                raise OSError("synthetic post-replace failure")
+
+            with patch.object(
+                simulation_gateway_module,
+                "atomic_write_json_if_changed",
+                side_effect=replace_then_fail,
+            ):
+                with self.assertRaisesRegex(OSError, "post-replace failure"):
+                    guard.update_batch(
+                        "parent", status="RUNNING", progress_url="multi-progress",
+                    )
+
+            rows = guard.entries()
+
+        self.assertEqual({row["status"] for row in rows}, {"RUNNING"})
+        self.assertEqual(
+            next(row for row in rows if row["kind"] == ExecutionGuard.MULTI_PARENT)[
+                "progress_url"
+            ],
+            "multi-progress",
+        )
+        self.assertTrue(all(
+            row.get("progress_url") is None
+            for row in rows if row["kind"] == ExecutionGuard.MULTI_CHILD
+        ))
+
+    def test_partial_multi_guard_registration_failure_cleans_pre_post_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = MultiGatewayClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            real_write = simulation_gateway_module.atomic_write_json_if_changed
+            write_count = 0
+
+            def replace_then_fail_on_first_child(path, payload, **kwargs):
+                nonlocal write_count
+                write_count += 1
+                result = real_write(path, payload, **kwargs)
+                if write_count == 2:
+                    raise OSError("synthetic post-replace failure")
+                return result
+
+            with patch.object(
+                simulation_gateway_module,
+                "atomic_write_json_if_changed",
+                side_effect=replace_then_fail_on_first_child,
+            ):
+                with self.assertRaisesRegex(OSError, "synthetic post-replace failure"):
+                    gateway.simulate_multi_batch([
+                        SimulationSpec("rank(field_a)", {"delay": 1}),
+                        SimulationSpec("rank(field_b)", {"delay": 1}),
+                    ])
+
+            rows = gateway.guard.entries()
+
+        self.assertEqual(rows, [])
+        self.assertEqual(client.multi_submissions, [])
+
+    def test_multi_child_guard_status_follows_parent_write_state(self):
+        class InspectingMultiClient(MultiGatewayClient):
+            def poll_multi_progress(self, progress_url, **kwargs):
+                self.guard_at_poll = ExecutionGuard(
+                    self.state_dir, reconcile=False,
+                ).entries()
+                return super().poll_multi_progress(progress_url, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = InspectingMultiClient()
+            client.state_dir = tmp
+            results = SimulationGateway(client, state_dir=tmp).simulate_multi_batch([
+                SimulationSpec("rank(field_a)", {"delay": 1}),
+                SimulationSpec("rank(field_b)", {"delay": 1}),
+            ])
+            statuses = {
+                (row["kind"], row["status"]) for row in client.guard_at_poll
+            }
+
+        self.assertEqual([item["status"] for item in results], ["DONE", "DONE"])
+        self.assertEqual(statuses, {
+            ("MULTI_PARENT", "RUNNING"),
+            ("MULTI_CHILD", "RUNNING"),
+        })
+
+    def test_ambiguous_multi_parent_propagates_unknown_to_children(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            gateway = SimulationGateway(UnknownMultiGatewayClient(), state_dir=tmp)
+            results = gateway.simulate_multi_batch([
+                SimulationSpec("rank(field_a)", {"delay": 1}),
+                SimulationSpec("rank(field_b)", {"delay": 1}),
+            ])
+            statuses = {
+                (row["kind"], row["status"]) for row in gateway.guard.entries()
+            }
+
+        self.assertEqual(
+            [item["status"] for item in results],
+            ["SUBMIT_UNKNOWN", "SUBMIT_UNKNOWN"],
+        )
+        self.assertEqual(statuses, {
+            ("MULTI_PARENT", "SUBMIT_UNKNOWN"),
+            ("MULTI_CHILD", "SUBMIT_UNKNOWN"),
+        })
+
+    @critical_contract("simulation.unresolved_parent_holds_capacity")
+    def test_unresolved_multi_parent_slot_does_not_expire_by_timestamp(self):
+        now = time.time()
+        for timestamp in (now - 86400, float("nan"), float("inf"), float("-inf")):
+            with self.subTest(timestamp=timestamp):
+                self.assertTrue(multi_parent_holds_slot({
+                    "kind": ExecutionGuard.MULTI_PARENT,
+                    "status": "SUBMIT_UNKNOWN",
+                    "updated_at": timestamp,
+                }))
+
+    def test_candidate_without_field_provenance_is_blocked_before_multi_post(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = MultiGatewayClient()
+            gateway = SimulationGateway(client, state_dir=tmp)
+            specs = [
+                SimulationSpec("rank(field_a)", {"delay": 1}, fields=()),
+                SimulationSpec("rank(field_b)", {"delay": 1}, fields=()),
+            ]
+
+            admission = gateway.research_batch_status(specs)
+            results = gateway.simulate_multi_batch(specs)
+
+        self.assertNotEqual(admission["write_readiness"], "READY")
+        self.assertEqual(client.multi_submissions, [])
+        self.assertEqual([item["status"] for item in results], [
+            "NOT_DISPATCHED", "NOT_DISPATCHED",
+        ])
+
+    def test_missing_field_provenance_does_not_block_independent_single_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeGatewayClient()
+            results = SimulationGateway(client, state_dir=tmp).simulate_batch([
+                SimulationSpec("rank(field_a)", {"delay": 1}, fields=()),
+                SimulationSpec("rank(field_b)", {"delay": 1}),
+            ])
+
+        self.assertEqual(
+            [item["status"] for item in results], ["NOT_DISPATCHED", "DONE"]
+        )
+        self.assertEqual(results[0]["reason_code"], "CAPABILITY_UNAVAILABLE")
+        self.assertEqual(len(client.submissions), 1)
+        self.assertEqual(client.submissions[0][0], "rank(field_b)")
+
+    def test_missing_dataset_provenance_does_not_block_independent_single_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeGatewayClient()
+            results = SimulationGateway(client, state_dir=tmp).simulate_batch([
+                SimulationSpec(
+                    "rank(field_a)", {"delay": 1}, fields=("field_a",),
+                ),
+                SimulationSpec("rank(field_b)", {"delay": 1}),
+            ])
+
+        self.assertEqual(
+            [item["status"] for item in results], ["NOT_DISPATCHED", "DONE"]
+        )
+        self.assertEqual(results[0]["reason_code"], "CAPABILITY_UNAVAILABLE")
+        self.assertEqual(len(client.submissions), 1)
+        self.assertEqual(client.submissions[0][0], "rank(field_b)")
+
     def test_single_internal_type_error_does_not_retry_simulation_post(self):
         class TypeErrorAfterSinglePostClient(FakeGatewayClient):
             def __init__(self):
@@ -1732,18 +2095,22 @@ class TestSimulationGateway(unittest.TestCase):
 
             self.assertEqual(history_client.history_calls, 1)
 
-    def test_batch_rejects_missing_capability_without_registering_prior_items(self):
+    def test_batch_isolates_candidate_with_unavailable_operator(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = CapabilityGatewayClient()
             gateway = SimulationGateway(client, state_dir=tmp, max_concurrent=2)
 
-            with self.assertRaisesRegex(ValueError, "OPERATOR_CAPABILITY_UNAVAILABLE"):
-                gateway.simulate_batch([
-                    SimulationSpec("rank(close)", {"delay": 1}),
-                    SimulationSpec("ts_mean(close, 5)", {"delay": 1}),
-                ])
+            results = gateway.simulate_batch([
+                SimulationSpec("rank(close)", {"delay": 1}),
+                SimulationSpec("ts_mean(close, 5)", {"delay": 1}),
+            ])
 
-            self.assertEqual(client.submissions, [])
+            self.assertEqual([row["status"] for row in results], [
+                "DONE", "NOT_DISPATCHED",
+            ])
+            self.assertEqual(results[1]["reason_code"], "CAPABILITY_UNAVAILABLE")
+            self.assertEqual(len(client.submissions), 1)
+            self.assertEqual(client.submissions[0][0], "rank(close)")
             self.assertEqual(gateway.guard.entries(), [])
 
     def test_batch_treats_none_capability_as_unavailable(self):
@@ -1762,7 +2129,11 @@ class TestSimulationGateway(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             client = FakeGatewayClient()
             result = research_api.simulate(
-                {"expression": "rank(close)", "settings": {"delay": 1}},
+                {
+                    "expression": "rank(close)", "settings": {"delay": 1},
+                    "fields": ("close",),
+                    "field_datasets": {"close": "synthetic-dataset"},
+                },
                 client=client, state_dir=tmp,
             )
             self.assertEqual(result["status"], "DONE")
@@ -1964,11 +2335,13 @@ class TestSimulationGateway(unittest.TestCase):
                 return {"valid": True, "source": "BRAIN_LIVE_ONLY", "fields": ["close"]}
 
             result = SimulationGateway(client, state_dir=tmp).simulate(
-                SimulationSpec("rank(close)", {"delay": 1})
+                SimulationSpec("rank(close)", {"delay": 1}, fields=())
             )
-            self.assertEqual(result["status"], "DONE")
+            self.assertEqual(result["status"], "NOT_DISPATCHED")
+            self.assertEqual(result["reason_code"], "CAPABILITY_UNAVAILABLE")
             self.assertEqual(result["field_validation"], "UNVERIFIED")
             self.assertEqual(requests, [])
+            self.assertEqual(client.submissions, [])
 
     def test_declared_fields_are_reported_live_verified(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2543,6 +2916,61 @@ class TestSimulationGateway(unittest.TestCase):
 class SimulationWriteContractTests(unittest.TestCase):
     """The production writer only admits the independently verified REGULAR schema."""
 
+    def test_simulation_write_path_and_state_import_boundaries(self):
+        package = Path(__file__).resolve().parents[1] / "wqb_agent"
+
+        def tree(name):
+            return ast.parse((package / name).read_text(encoding="utf-8"))
+
+        def has_relative_import(module_tree, module):
+            return any(
+                isinstance(node, ast.ImportFrom)
+                and node.level == 1
+                and node.module == module
+                for node in ast.walk(module_tree)
+            )
+
+        gateway_tree = tree("simulation_gateway.py")
+        simulator_tree = tree("simulator.py")
+        self.assertTrue(has_relative_import(gateway_tree, "simulator"))
+        self.assertTrue(has_relative_import(simulator_tree, "client"))
+
+        unauthorized_callers = []
+        for path in package.rglob("*.py"):
+            if path.name in {"simulator.py", "client.py"}:
+                continue
+            module_tree = ast.parse(path.read_text(encoding="utf-8"))
+            if any(
+                isinstance(node, ast.Call)
+                and (
+                    isinstance(node.func, ast.Name)
+                    and node.func.id == "submit_simulation"
+                    or isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "submit_simulation"
+                )
+                for node in ast.walk(module_tree)
+            ):
+                unauthorized_callers.append(path.relative_to(package).as_posix())
+        self.assertEqual(unauthorized_callers, [])
+
+        forbidden_modules = {"state", "trial_ledger", "memory", "optimizer_workflow"}
+        for filename in (
+            "simulation_gateway.py", "remote_alpha_repository.py", "remote_quota.py",
+        ):
+            module_tree = tree(filename)
+            imported = set()
+            for node in ast.walk(module_tree):
+                if isinstance(node, ast.ImportFrom):
+                    if node.module:
+                        imported.add(node.module.rsplit(".", 1)[-1])
+                    imported.update(alias.name.rsplit(".", 1)[-1] for alias in node.names)
+                elif isinstance(node, ast.Import):
+                    imported.update(alias.name.rsplit(".", 1)[-1] for alias in node.names)
+            self.assertTrue(
+                forbidden_modules.isdisjoint(imported),
+                f"{filename} imports retired state modules: {forbidden_modules & imported}",
+            )
+
     def test_simulation_type_defaults_to_regular(self):
         spec = SimulationSpec("rank(close)", {"delay": 1})
         self.assertEqual(spec.simulation_type, "REGULAR")
@@ -2630,7 +3058,8 @@ class SimulationWriteContractTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as state:
             spec = research_api.build_simulation_spec(
-                "rank(close)", settings=settings, client=client,
+                "rank(close)", settings=settings, fields=("close",),
+                field_datasets={"close": "synthetic-dataset"}, client=client,
                 simulation_type="REGION_AGNOSTIC",
             )
             result = SimulationGateway(client, state_dir=state).simulate(spec)
@@ -2657,7 +3086,8 @@ class SimulationWriteContractTests(unittest.TestCase):
 
     def test_public_regular_build_validate_fingerprint_and_simulate_chain(self):
         spec = research_api.build_simulation_spec(
-            "rank(close)", settings={"delay": 1}
+            "rank(close)", settings={"delay": 1}, fields=("close",),
+            field_datasets={"close": "synthetic-dataset"},
         )
         client = FakeGatewayClient()
         with tempfile.TemporaryDirectory() as state:

@@ -20,6 +20,7 @@ import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from tests.test_targeted_ci import critical_contract
 from wqb_agent.client import (
     DEFAULT_SUBMIT_SPACING_SEC,
     WQBAuthError,
@@ -175,6 +176,35 @@ class TestAlphaPathSegmentSafety(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     client.get_alpha(alpha_id)
                 client._request.assert_not_called()
+
+
+class TestAlphaColorPatchSafety(unittest.TestCase):
+    @critical_contract("remote_color.patch_color_only")
+    def test_set_alpha_color_patches_only_color_and_preserves_other_metadata(self):
+        c = make_client()
+        c._request = mock.Mock(return_value=FakeResponse(204))
+        c.get_alpha = mock.Mock(return_value={
+            "id": "synthetic-alpha",
+            "regular": "rank(close)",
+            "color": "GREEN",
+            "name": "preserved name",
+            "description": "preserved description",
+            "tags": ["preserved-tag"],
+        })
+
+        result = c.set_alpha_color("synthetic-alpha", "green", verify=True)
+
+        request = c._request.call_args
+        self.assertEqual(request.args[0], "PATCH")
+        self.assertEqual(request.kwargs["json"], {"color": "GREEN"})
+        self.assertEqual(
+            {"name", "description", "tags"} & set(request.kwargs["json"]),
+            set(),
+        )
+        self.assertEqual(result["name"], "preserved name")
+        self.assertEqual(result["description"], "preserved description")
+        self.assertEqual(result["tags"], ["preserved-tag"])
+        c.get_alpha.assert_called_once_with("synthetic-alpha")
 
 
 class TestBoundedAlphaHistoryShards(unittest.TestCase):
@@ -440,6 +470,22 @@ class TestPollProgressRejectsErrorStatus(unittest.TestCase):
              mock.patch.object(c, "_set_authenticated"):
             with self.assertRaises(WQBAuthError):
                 c.poll_progress("/simulations/abc", timeout_sec=60)
+
+    def test_poll_429_registers_shared_gate_even_when_retry_exceeds_deadline(self):
+        c = make_client()
+        c._local.session = FakeSession([
+            FakeResponse(429, headers={"Retry-After": "60"}),
+        ])
+        c._wait_rate_limit_gate = mock.Mock(return_value=True)
+        c._register_rate_limit = mock.Mock()
+        with mock.patch.object(
+            c, "_retry_after_seconds", return_value=60.0
+        ), mock.patch("wqb_agent.client.time.monotonic", side_effect=[
+            0.0, 0.0, 1.0,
+        ]):
+            with self.assertRaises(WQBTimeoutError):
+                c.poll_progress("/simulations/abc", timeout_sec=5)
+        c._register_rate_limit.assert_called_once()
 
 
 class TestOperatorCapabilityClient(unittest.TestCase):
@@ -1079,6 +1125,27 @@ class TestOfficialReadOnlyClientAdapters(unittest.TestCase):
 
 
 class TestPublicReadAdapters(unittest.TestCase):
+    def test_multi_poll_retries_transient_server_error_within_deadline(self):
+        c = make_client()
+        c._local.session = FakeSession([
+            FakeResponse(503, text="temporary unavailable"),
+            FakeResponse(200, payload={
+                "status": "COMPLETE",
+                "children": [{
+                    "id": "sim-1", "status": "COMPLETE", "alpha": "alpha-1",
+                }],
+            }),
+        ])
+
+        with mock.patch("wqb_agent.client.time.sleep") as sleep:
+            result = c.poll_multi_progress("/simulations/multi-1", timeout_sec=10)
+
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertEqual(result["children"][0]["alpha_id"], "alpha-1")
+        self.assertEqual(len(c._local.session.responses), 0)
+        self.assertEqual(sleep.call_count, 1)
+        self.assertLessEqual(sleep.call_args.args[0], 10)
+
     def test_progress_snapshot_returns_transport_neutral_payload(self):
         c = make_client()
         c._local.session = FakeSession([
@@ -1089,6 +1156,34 @@ class TestPublicReadAdapters(unittest.TestCase):
         self.assertEqual(snapshot["status_code"], 200)
         self.assertEqual(snapshot["payload"]["status"], "RUNNING")
         self.assertEqual(snapshot["retry_after_seconds"], 1.0)
+
+    def test_progress_snapshot_retries_connection_reset_within_deadline(self):
+        c = make_client()
+        session = mock.Mock()
+        session.get.side_effect = [
+            requests.exceptions.ConnectionError("connection reset"),
+            FakeResponse(200, payload={"status": "SIMULATING"}),
+        ]
+        c._local.session = session
+
+        with mock.patch("wqb_agent.client.time.sleep") as sleep:
+            snapshot = c.get_progress_snapshot("/simulations/s1", timeout=10)
+
+        self.assertEqual(snapshot["status_code"], 200)
+        self.assertEqual(session.get.call_count, 2)
+        self.assertEqual(sleep.call_count, 1)
+        self.assertLessEqual(sleep.call_args.args[0], 10)
+
+    def test_progress_snapshot_429_registers_the_shared_rate_limit_gate(self):
+        c = make_client()
+        c._local.session = FakeSession([
+            FakeResponse(429, headers={"Retry-After": "60"}, text="slow down"),
+        ])
+
+        snapshot = c.get_progress_snapshot("/simulations/s1")
+
+        self.assertEqual(snapshot["status_code"], 429)
+        self.assertGreater(c._rate_limit_until, time.monotonic())
 
     def test_get_user_alphas_reads_a_bounded_page(self):
         c = make_client()
@@ -1309,6 +1404,39 @@ class TestSharedRateLimitGate(unittest.TestCase):
         self.assertLessEqual(session.post.call_args.kwargs["timeout"], 0.25)
         self.assertLessEqual(sleep.call_args.args[0], 0.25)
 
+    def test_authentication_retry_after_longer_than_budget_fails_without_retry(self):
+        c = make_client()
+        c.username = "synthetic-user"
+        c.password = "synthetic-password"
+        session = mock.Mock()
+        session.post.side_effect = [
+            FakeResponse(429, headers={"Retry-After": "3600"}),
+            FakeResponse(201),
+        ]
+        c._local.session = session
+
+        with mock.patch.object(c, "_wait_rate_limit_gate", return_value=True), \
+             mock.patch.object(c, "_register_rate_limit"), \
+             self.assertRaises(WQBRateLimitError):
+            c._authenticate()
+
+        self.assertEqual(session.post.call_count, 1)
+
+    def test_authentication_wait_for_existing_gate_is_bounded(self):
+        c = make_client()
+        c.username = "synthetic-user"
+        c.password = "synthetic-password"
+        session = mock.Mock()
+        c._local.session = session
+        c._rate_limit_until = time.monotonic() + 3600
+
+        with mock.patch.object(c, "_wait_rate_limit_gate", return_value=False) as wait, \
+             self.assertRaises(WQBRateLimitError):
+            c._authenticate()
+
+        self.assertFalse(session.post.called)
+        self.assertLessEqual(wait.call_args.kwargs["max_wait"], 1800)
+
     def test_authentication_status_get_is_clamped_by_read_only_budget(self):
         c = make_client()
         session = mock.Mock()
@@ -1321,6 +1449,42 @@ class TestSharedRateLimitGate(unittest.TestCase):
         self.assertTrue(result["authenticated"])
         self.assertLessEqual(session.request.call_args.kwargs["timeout"], 0.25)
         self.assertGreater(session.request.call_args.kwargs["timeout"], 0)
+
+    def test_authentication_status_waits_for_shared_rate_limit_gate(self):
+        c = make_client()
+        session = mock.Mock()
+        session.request.return_value = FakeResponse(
+            200, payload={"status": "authenticated"}
+        )
+        c._local.session = session
+        with c.read_only_budget(0.25), \
+             mock.patch.object(c, "_wait_rate_limit_gate", return_value=False) as wait, \
+             self.assertRaises(WQBTimeoutError):
+            c.get_authentication_status()
+        self.assertFalse(session.request.called)
+        self.assertLessEqual(wait.call_args.kwargs["max_wait"], 0.25)
+
+    def test_authentication_status_gate_wait_is_bounded_without_outer_budget(self):
+        c = make_client()
+        session = mock.Mock()
+        session.request.return_value = FakeResponse(
+            200, payload={"status": "authenticated"}
+        )
+        c._local.session = session
+        with mock.patch.object(c, "_wait_rate_limit_gate", return_value=False) as wait, \
+             self.assertRaises(WQBTimeoutError):
+            c.get_authentication_status()
+        self.assertFalse(session.request.called)
+        self.assertLessEqual(wait.call_args.kwargs["max_wait"], 30)
+
+    def test_authentication_status_429_registers_the_shared_rate_limit_gate(self):
+        c = make_client()
+        c._local.session = FakeSession([
+            FakeResponse(429, headers={"Retry-After": "60"}, text="slow down"),
+        ])
+        with self.assertRaises(WQBRateLimitError):
+            c.get_authentication_status()
+        self.assertGreater(c._rate_limit_until, time.monotonic())
 
     def test_simulation_post_429_is_unknown_without_transport_retry(self):
         c = make_client()

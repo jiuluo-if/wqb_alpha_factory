@@ -47,13 +47,6 @@ MULTI_MAX_CANDIDATES_PER_CALL = 100
 MULTI_DEFAULT_CHILD_BATCH_SIZE = 10
 MULTI_DEFAULT_CONCURRENCY = 8
 MULTI_MAX_CONCURRENCY = 8
-# An unresolved MULTI parent keeps reserving one of the MULTI_MAX_CONCURRENCY
-# slots while it may still be running remotely.  A Multi parent that stays
-# ambiguous longer than this window cannot still be alive (its children finish
-# in minutes, and the poll timeout is 30 minutes), so it stops consuming
-# capacity; its exact-once record is untouched, so a later write carrying the
-# same fingerprint is still refused.
-MULTI_UNKNOWN_SLOT_HOLD_SEC = 3600.0
 # These are the child scopes observed in BRAIN REGION_AGNOSTIC outputs.  The
 # aggregate ALL scope is not a field-catalog scope, so verify each child scope.
 REGION_AGNOSTIC_CHILD_REGIONS = ("USA", "EUR", "ASI", "GLB")
@@ -215,30 +208,13 @@ def classify_write_readiness(
     return {"write_readiness": readiness, "write_blockers": blockers}
 
 
-def multi_parent_holds_slot(row, *, now=None):
-    """Return True while a guard row should keep reserving a Multi parent slot.
-
-    ``SUBMITTING``/``RUNNING`` always hold a slot.  A ``SUBMIT_UNKNOWN`` parent
-    holds one only inside ``MULTI_UNKNOWN_SLOT_HOLD_SEC``; its exact-once record
-    stays in the guard either way, so capacity accounting never re-allows the
-    same write.  A row without a usable timestamp fails closed and keeps its
-    slot.
-    """
-
+def multi_parent_holds_slot(row):
+    """Reserve one slot for every unresolved Multi parent until it is reconciled."""
     if not isinstance(row, Mapping):
         return True
     if row.get("kind") != ExecutionGuard.MULTI_PARENT:
         return False
-    status = row.get("status")
-    if status not in ExecutionGuard.STATUSES:
-        return False
-    if status != "SUBMIT_UNKNOWN":
-        return True
-    updated_at = row.get("updated_at")
-    if isinstance(updated_at, bool) or not isinstance(updated_at, (int, float)):
-        return True
-    reference = time.time() if now is None else now
-    return (reference - float(updated_at)) < MULTI_UNKNOWN_SLOT_HOLD_SEC
+    return row.get("status") in ExecutionGuard.STATUSES
 
 
 def classify_batch_write_admission(
@@ -440,6 +416,15 @@ class SimulationSpec:
         object.__setattr__(self, "proposal_id", proposal_id)
 
 
+class _ExecutionGuardStateUnavailable(RuntimeError):
+    """The durable guard cannot prove a complete, readable unresolved-write set."""
+
+    reason_code = "EXECUTION_GUARD_STATE_UNAVAILABLE"
+
+    def __init__(self):
+        super().__init__(self.reason_code)
+
+
 class ExecutionGuard:
     """Persist only unresolved remote-write identities."""
 
@@ -509,32 +494,70 @@ class ExecutionGuard:
             import json
             with open(self.path, encoding="utf-8") as handle:
                 payload = json.load(handle)
-        except (OSError, ValueError, TypeError):
-            payload = {}
-        rows = payload.get("entries", []) if isinstance(payload, dict) else []
+        except FileNotFoundError:
+            return []
+        except (OSError, ValueError, TypeError) as exc:
+            raise _ExecutionGuardStateUnavailable() from exc
+        if not isinstance(payload, dict):
+            raise _ExecutionGuardStateUnavailable()
+        version = payload.get("schema_version", 1)
+        if isinstance(version, bool) or version != 1:
+            raise _ExecutionGuardStateUnavailable()
+        rows = payload.get("entries")
+        if not isinstance(rows, list):
+            raise _ExecutionGuardStateUnavailable()
         normalized = []
+        seen = set()
         for row in rows:
-            if not isinstance(row, dict) or not row.get("execution_fingerprint"):
-                continue
-            if row.get("status") not in self.STATUSES:
-                continue
+            if not isinstance(row, dict):
+                raise _ExecutionGuardStateUnavailable()
+            fingerprint = row.get("execution_fingerprint")
+            status = row.get("status")
+            if (
+                not isinstance(fingerprint, str) or not fingerprint.strip()
+                or not isinstance(status, str) or status not in self.STATUSES
+            ):
+                raise _ExecutionGuardStateUnavailable()
+            if fingerprint in seen:
+                raise _ExecutionGuardStateUnavailable()
+            seen.add(fingerprint)
+            if "kind" in row:
+                kind = row.get("kind")
+                if not isinstance(kind, str) or kind.strip().upper() not in self.KINDS:
+                    raise _ExecutionGuardStateUnavailable()
+            else:
+                kind = self.SINGLE
+            parent_fingerprint = row.get("parent_fingerprint")
+            if kind.strip().upper() == self.MULTI_CHILD and (
+                not isinstance(parent_fingerprint, str) or not parent_fingerprint.strip()
+            ):
+                raise _ExecutionGuardStateUnavailable()
             item = {
-                "execution_fingerprint": str(row["execution_fingerprint"]),
-                "status": row["status"],
+                "execution_fingerprint": fingerprint,
+                "status": status,
                 "created_at": row.get("created_at"),
                 "updated_at": row.get("updated_at"),
                 "simulation_count": self._normalize_simulation_count(
                     row.get("simulation_count", 1)
                 ),
-                "kind": self._normalize_kind(row.get("kind")),
+                "kind": kind.strip().upper(),
             }
             if row.get("progress_url") is not None:
                 item["progress_url"] = str(row["progress_url"])
             if row.get("remote_alpha_id") is not None:
                 item["remote_alpha_id"] = str(row["remote_alpha_id"])
-            if row.get("parent_fingerprint") is not None:
-                item["parent_fingerprint"] = str(row["parent_fingerprint"])
+            if parent_fingerprint is not None:
+                item["parent_fingerprint"] = parent_fingerprint
             normalized.append(item)
+        by_fingerprint = {
+            row["execution_fingerprint"]: row for row in normalized
+        }
+        for row in normalized:
+            if row["kind"] != self.MULTI_CHILD:
+                continue
+            parent = by_fingerprint.get(row.get("parent_fingerprint"))
+            if parent is None or parent.get("kind") != self.MULTI_PARENT:
+                raise _ExecutionGuardStateUnavailable()
         return normalized
 
     def _write(self, rows):
@@ -594,6 +617,28 @@ class ExecutionGuard:
                     self._write(rows)
                     return True
         return False
+
+    def update_batch(self, fingerprint, *, status, progress_url=None):
+        """Atomically update one Multi parent and all of its child guard rows."""
+        if status not in self.STATUSES:
+            raise ValueError("invalid execution guard status")
+        with self._lock:
+            rows = self._read()
+            updated_at = time.time()
+            changed = False
+            for row in rows:
+                is_parent = row.get("execution_fingerprint") == fingerprint
+                is_child = row.get("parent_fingerprint") == fingerprint
+                if not is_parent and not is_child:
+                    continue
+                row["status"] = status
+                row["updated_at"] = updated_at
+                if is_parent and progress_url is not None:
+                    row["progress_url"] = progress_url
+                changed = True
+            if changed:
+                self._write(rows)
+            return changed
 
     def remove(self, fingerprint):
         with self._lock:
@@ -1202,6 +1247,23 @@ class SimulationGateway:
         spec_field_groups = {}
         spec_field_regions = {}
         for index, spec in enumerate(normalized):
+            expression_fields = {
+                field.casefold()
+                for field in expression_field_identifiers(
+                    analyze_expression(spec.expression)
+                )
+            }
+            declared_fields = {field.casefold() for field in spec.fields}
+            if expression_fields - declared_fields:
+                fingerprint = self.execution_fingerprint(spec)
+                blocked = self._labelled_result(
+                    spec, "NOT_DISPATCHED", fingerprint,
+                    error="FIELD_CAPABILITY_UNAVAILABLE: expression field provenance is missing",
+                    field_validation="UNVERIFIED",
+                )
+                blocked["reason_code"] = "CAPABILITY_UNAVAILABLE"
+                results[index] = blocked
+                continue
             self._validate_settings(spec, simulation_capability)
             fingerprint = self.execution_fingerprint(spec)
             self._validate_operator_capability(spec, operator_capability)
@@ -1636,12 +1698,21 @@ class SimulationGateway:
         The batch remains one guarded execution per spec; only dispatch and
         polling share the existing bounded worker pool.
         """
+        normalized_input = list(specs or ())
         defer_remote_scan = preflight is None
-        results, validated, remote_duplicates = (
-            preflight if preflight is not None else self._preflight_specs(
-                specs, allow_disjoint_pending=True, scan_remote_history=False
+        if preflight is not None:
+            results, validated, remote_duplicates = preflight
+        elif len(normalized_input) > 1:
+            results, validated, remote_duplicates = self._preflight_specs_isolated(
+                normalized_input,
+                scan_remote_history=False,
             )
-        )
+        else:
+            results, validated, remote_duplicates = self._preflight_specs(
+                normalized_input,
+                allow_disjoint_pending=True,
+                scan_remote_history=False,
+            )
         if not validated:
             return results
         prepared = []
@@ -1958,10 +2029,18 @@ class SimulationGateway:
                             parent=parent,
                         )
                     continue
-                if not self.guard.register(
-                    batch_fingerprint, simulation_count=len(children),
-                    kind=ExecutionGuard.MULTI_PARENT,
-                ):
+                try:
+                    parent_registered = self.guard.register(
+                        batch_fingerprint, simulation_count=len(children),
+                        kind=ExecutionGuard.MULTI_PARENT,
+                    )
+                except Exception:
+                    # No POST has started.  If an atomic replace completed but
+                    # its acknowledgement failed, discard this unsubmitted
+                    # parent record before propagating the storage failure.
+                    self.guard.remove_batch(batch_fingerprint)
+                    raise
+                if not parent_registered:
                     parent = self._parent_projection(
                         fingerprint=batch_fingerprint,
                         status="EXACT_DUPLICATE",
@@ -1982,19 +2061,25 @@ class SimulationGateway:
                 # reordered, split, subset or Single retry afterwards.  The
                 # parent row stays the quota-counted identity; child rows carry
                 # no independent Simulation count.
-                for index, spec, fingerprint in children:
-                    if not self.guard.register(
-                        fingerprint, simulation_count=1,
-                        kind=ExecutionGuard.MULTI_CHILD,
-                        parent_fingerprint=batch_fingerprint,
-                    ):
-                        results[index] = self._labelled_result(
-                            spec, "EXACT_DUPLICATE", fingerprint,
-                            batch_fingerprint=batch_fingerprint,
-                        )
-                        children = [
-                            row for row in children if row[2] != fingerprint
-                        ]
+                try:
+                    for index, spec, fingerprint in children:
+                        if not self.guard.register(
+                            fingerprint, simulation_count=1,
+                            kind=ExecutionGuard.MULTI_CHILD,
+                            parent_fingerprint=batch_fingerprint,
+                        ):
+                            results[index] = self._labelled_result(
+                                spec, "EXACT_DUPLICATE", fingerprint,
+                                batch_fingerprint=batch_fingerprint,
+                            )
+                            children = [
+                                row for row in children if row[2] != fingerprint
+                            ]
+                except Exception:
+                    # Every child registration is still before the parent
+                    # POST, so these provisional identities can be removed.
+                    self.guard.remove_batch(batch_fingerprint)
+                    raise
                 if not children:
                     self.guard.remove_batch(batch_fingerprint)
                     continue
@@ -2063,7 +2148,7 @@ class SimulationGateway:
                 else "SUBMIT_UNKNOWN" if batch.status == "UNKNOWN" else batch.status
             )
             if status in ExecutionGuard.STATUSES:
-                self.guard.update(
+                self.guard.update_batch(
                     batch.submission_fingerprint,
                     status=status,
                     progress_url=batch.progress_url,
@@ -2263,7 +2348,12 @@ class SimulationGateway:
                 # An expired/missing progress URL cannot establish whether the
                 # original write produced an Alpha. Keep the fingerprint and
                 # URL quarantined, but stop claiming the remote job is running.
-                self.guard.update(fingerprint, status="SUBMIT_UNKNOWN")
+                if row.get("kind") == ExecutionGuard.MULTI_PARENT:
+                    self.guard.update_batch(
+                        fingerprint, status="SUBMIT_UNKNOWN",
+                    )
+                else:
+                    self.guard.update(fingerprint, status="SUBMIT_UNKNOWN")
                 return {
                     "status": "SUBMIT_UNKNOWN",
                     "fingerprint": str(fingerprint),

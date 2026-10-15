@@ -10,7 +10,12 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
 
-from .alpha_grouping import group_remote_evidence, quality_state
+from .alpha_grouping import (
+    group_remote_evidence,
+    quality_state,
+    structural_fingerprint,
+    variant_family_fingerprint,
+)
 from .client import ALPHA_COLOR_VALUES
 
 MAX_ACTIVE_COLOR_GROUPS = 5
@@ -47,6 +52,14 @@ def _normalize_assignments(assignments):
 def _row_color(row):
     alpha = row.get("alpha") if isinstance(row.get("alpha"), Mapping) else {}
     return _normalize_color(alpha.get("color") or row.get("color"))
+
+
+def _live_expression(row):
+    if not isinstance(row, Mapping):
+        return None
+    alpha = row.get("alpha") if isinstance(row.get("alpha"), Mapping) else {}
+    expression = row.get("regular") or alpha.get("regular") or row.get("expression")
+    return expression if isinstance(expression, str) and expression.strip() else None
 
 
 def _plan_action(old_color, desired_color, *, overwrite):
@@ -131,6 +144,17 @@ def sync_remote_colors(plan, *, get_alpha: Callable, set_alpha_color: Callable,
         remote = get_alpha(alpha_id)
         current = _normalize_color(remote.get("color") if isinstance(remote, Mapping) else None)
         item["current_color"] = current
+        expression = _live_expression(remote)
+        if (
+            expression is None
+            or structural_fingerprint(expression)
+            != str(entry.get("structural_group_key") or "")
+            or variant_family_fingerprint(expression)
+            != str(entry.get("variant_family_key") or "")
+        ):
+            item["action"] = "STALE_PLAN"
+            result.append(item)
+            continue
         if current != expected:
             item["action"] = "STALE_PLAN"
             result.append(item)
