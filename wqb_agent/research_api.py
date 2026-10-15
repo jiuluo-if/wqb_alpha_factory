@@ -70,7 +70,7 @@ from .osmosis_allocation import (
 from .protocol import endpoint_truth
 from .remote_alpha_repository import RemoteAlphaRepository
 from .remote_colors import preview_remote_colors, sync_remote_colors
-from .remote_evidence import MAX_PAIRWISE_ALPHA_IDS, RemoteAlphaEvidenceProvider
+from .remote_evidence import RemoteAlphaEvidenceProvider
 from .remote_quota import SimulationQuota
 from .simulation_gateway import (
     MULTI_DEFAULT_CHILD_BATCH_SIZE,
@@ -1901,47 +1901,6 @@ def get_alpha_recordsets(alpha_id, names, *, client=None, config=None):
     )
 
 
-def compare_alphas(alpha_ids, *, client=None, config=None, depth="summary",
-                   max_concurrent=4, pairwise_pnl=False, max_pairs=20):
-    """Read Alpha evidence or compare live daily PnL with pairwise_pnl=True."""
-    ids = [str(item).strip() for item in (alpha_ids or ()) if str(item).strip()]
-    try:
-        concurrency = int(max_concurrent)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError("max_concurrent must be an integer") from exc
-    if isinstance(max_concurrent, bool) or not 1 <= concurrency <= 4:
-        raise ValueError("max_concurrent must be between 1 and 4")
-    if not ids:
-        if pairwise_pnl:
-            return _evidence_provider(client=client).compare_alphas(
-                [], depth=depth, max_concurrent=concurrency,
-                pairwise_pnl=True, max_pairs=max_pairs,
-            )
-        return {"source": "LIVE", "status": "AVAILABLE",
-                "evidence_status": "AVAILABLE", "depth": str(depth).upper(),
-                "alphas": []}
-    if pairwise_pnl:
-        if len(set(ids)) > MAX_PAIRWISE_ALPHA_IDS:
-            raise ValueError(
-                f"pairwise comparison accepts at most {MAX_PAIRWISE_ALPHA_IDS} Alpha IDs"
-            )
-        if any(len(alpha_id) > 128 for alpha_id in ids):
-            raise ValueError("pairwise Alpha IDs must be at most 128 characters")
-    provider = _evidence_provider(client=client)
-    if pairwise_pnl:
-        return provider.compare_alphas(
-            ids, depth=depth, max_concurrent=concurrency,
-            pairwise_pnl=True, max_pairs=max_pairs,
-        )
-    with ThreadPoolExecutor(max_workers=min(concurrency, len(ids))) as pool:
-        alphas = list(pool.map(
-            lambda item: provider.get_alpha_evidence(item, depth=depth), ids
-        ))
-    return {"source": "LIVE", "status": "AVAILABLE",
-            "evidence_status": "AVAILABLE", "depth": str(depth).upper(),
-            "alphas": alphas}
-
-
 def _remote_repository(*, client=None, config=None, state_dir=None,
                        require_client=True):
     if require_client or client is not None:
@@ -2131,7 +2090,7 @@ _AGENT_CORE_TOOL_NAMES = frozenset({
     "simulate_batch", "simulate_multi_batch", "get_alpha_evidence",
     "get_alpha_recordsets",
     "reconcile_execution", "get_alpha_prod_correlation",
-    "get_pending_executions", "compare_alphas",
+    "get_pending_executions",
 })
 
 
@@ -2186,7 +2145,6 @@ def research_tool_manifest(profile="core"):
         {"name": "preview_osmosis_allocation", "mode": "READ_ONLY", "owner": "AQAF"},
         {"name": "compare_osmosis_allocation_plans", "mode": "READ_ONLY", "owner": "AQAF"},
         {"name": "get_activity_diversity", "mode": "READ_ONLY", "owner": "BRAIN"},
-        {"name": "compare_alphas", "mode": "READ_ONLY", "owner": "RemoteAlphaEvidenceProvider"},
         {"name": "refresh_remote_alphas", "mode": "LOCAL_CACHE_WRITE", "local_write": True, "owner": "RemoteAlphaRepository"},
         {"name": "list_remote_alphas", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
         {"name": "get_remote_alpha", "mode": "READ_ONLY", "owner": "RemoteAlphaRepository"},
@@ -2227,7 +2185,7 @@ __all__ = [
     "evaluate_submitted_alpha", "evaluate_submitted_alphas",
     "build_aqaf_calibration",
     "preview_osmosis_allocation", "compare_osmosis_allocation_plans",
-    "compare_alphas", "refresh_remote_alphas", "list_remote_alphas",
+    "refresh_remote_alphas", "list_remote_alphas",
     "get_activity_diversity",
     "get_remote_alpha", "get_remote_alpha_evidence", "remote_cache_status",
     "purge_remote_cache", "simulation_quota", "group_alphas",

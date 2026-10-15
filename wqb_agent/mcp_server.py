@@ -1009,49 +1009,6 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
         )
 
     @server.tool(annotations=remote_read)
-    def compare_alphas(
-        alpha_ids: list[str], max_concurrent: int = 4, max_pairs: int = 20,
-    ) -> dict[str, Any]:
-        """[READ_ONLY] Compare explicit candidates using pairwise live daily-PnL correlation.
-
-        Returns strongest absolute pair correlations, overlap/sample evidence,
-        and per-Alpha maximums. This is distinct from Alpha self-correlation,
-        PROD correlation, and structural similarity. It sets no acceptance
-        threshold; absent or insufficient PnL overlap stays UNKNOWN.
-        """
-        if (not isinstance(alpha_ids, list) or len(alpha_ids) < 2
-                or len(alpha_ids) > research_api.MAX_PAIRWISE_ALPHA_IDS
-                or any(not isinstance(alpha_id, str) or not alpha_id.strip()
-                       or len(alpha_id.strip()) > 128 for alpha_id in alpha_ids)):
-            return _invalid_result(owner="research_api.compare_alphas")
-        normalized_ids = [alpha_id.strip() for alpha_id in alpha_ids]
-        if (len(set(normalized_ids)) != len(normalized_ids)
-                or isinstance(max_concurrent, bool)
-                or not isinstance(max_concurrent, int)
-                or not 1 <= max_concurrent <= 4
-                or isinstance(max_pairs, bool)
-                or not isinstance(max_pairs, int)
-                or not 1 <= max_pairs <= 20):
-            return _invalid_result(owner="research_api.compare_alphas")
-        try:
-            payload = api.compare_alphas(
-                normalized_ids, client=resolve_client(), config=config,
-                pairwise_pnl=True, max_concurrent=max_concurrent,
-                max_pairs=max_pairs,
-            )
-        except Exception as exc:
-            return _failed_result(exc, owner="research_api.compare_alphas")
-        if not isinstance(payload, Mapping):
-            return _invalid_result(
-                owner="research_api.compare_alphas",
-                failure_code="INVALID_CORRELATION_RESULT",
-            )
-        return _envelope(
-            payload, owner="research_api.compare_alphas",
-            list_item_limit=MAX_MULTI_BATCH,
-        )
-
-    @server.tool(annotations=remote_read)
     def get_alpha_prod_correlation(alpha_id: str) -> dict[str, Any]:
         """[READ_ONLY][FINALIST_ONLY] Read PROD correlation when explicitly requested for a finalist."""
         if not alpha_id or len(alpha_id) > 128:

@@ -20,7 +20,7 @@
 
 PROBE 是持续主线，寻找新机制、dataset、field、template 与合理关系；OPTIMIZE 只针对有实际支持证据的 family/candidate。两条 Agent lane 可在同一 wave 并行，用现有 `proposal_id`、`note` 与 template mapping 标注，不新增 schema。每个方向的 soft budget 由 live capacity、研究不确定性、可用数据广度和已有证据临时确定；它可调整，不是 API gate。低 self-correlation 且机制有支持时允许提前进入 OPTIMIZE，即使性能目标未全达成，也必须明确保留 `TARGET_NOT_MET`。
 
-区分 `TARGET_MET` 与 `BRAIN_SUBMITTABLE`，后者只依据当前 BRAIN checks；低 correlation 永不放宽 hard check。终选 candidate pool 用 full `get_alpha_evidence` 读取 self-correlation，并对最多 40 个候选调用 `compare_alphas` 取得对齐 daily-PnL 的 pairwise evidence。超出上限时依据 fresh individual evidence 先缩成 shortlist；低冗余结论只覆盖已比较 shortlist，不能外推到未比较候选。self-correlation、PROD correlation 和 candidate pairwise PnL correlation 是不同事实；没有 live 数值门槛时标 `NUMERIC_THRESHOLD = UNKNOWN`，按 overlap/sample 与相对冗余比较，不合成单一 score。高相关候选保留 evidence，但避免同时占据低冗余池；旧方向边际改进趋平且已有强、可提交、低相关候选时，降低其 soft Probe 预算并把主 Probe 转向新方向。
+区分 `TARGET_MET` 与 `BRAIN_SUBMITTABLE`，后者只依据当前 BRAIN 官方 checks；低相关的机制近似分组永不放宽 hard check。终选 candidate pool 用 BRAIN `get_alpha_evidence(depth="full")` 与官方 `PROD_CORRELATION` checks 核验 self/Prod 状态。候选之间只按 fresh field descriptions、AlphaTemplate mechanism、slot roles 和 field relationship 合同作定性近似分组；不得调用本地 PnL/Pearson 相关性工具，不得把相同家族成员包装成独立候选，也不得把近似分组写成数值相关性结论。`PENDING` 保持未决；未取得平台 `PASS` 不标 `BRAIN_SUBMITTABLE`。候选相关性证据缺失时保留 `UNKNOWN`，不合成单一 score。高冗余候选保留各自 evidence，但同一近似机制组原则上只选一个代表进入分散候选清单。
 
 在自然 wave 边界，需要跨会话恢复时，由 Research Agent 更新唯一 gitignored handoff；仅按 [`docs/TMP_WORKSPACE_POLICY.md`](../docs/TMP_WORKSPACE_POLICY.md) 的 compact schema 记录当前已观测摘要。handoff 仍是 hint，不能覆盖后续 fresh runtime evidence。
 

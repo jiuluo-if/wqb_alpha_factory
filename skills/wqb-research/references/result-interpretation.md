@@ -10,11 +10,11 @@
 
 Self-correlation 优先读取 `get_alpha_evidence(depth="full")` 的 live evidence。低 self-correlation、机制证据支持且没有明显失败的候选可以提前进入 Agent 的 OPTIMIZE lane，即使仍是 `TARGET_NOT_MET`；保留其真实状态，不把它描述为达标或可提交。缺少 live self-correlation evidence 时标 `UNKNOWN`，不得从旧报告补值。
 
-## Qualified pool and pairwise PnL correlation
+## 候选机制重叠与相关性证据
 
-只有分别达到 performance target 且当前 BRAIN-submittable 的候选才有资格进入 qualified Alpha pool。用 canonical `compare_alphas()` 对当前候选列表比较 BRAIN daily PnL 的 pairwise correlation；单次最多比较 40 个 Alpha，以保证完整 MCP evidence 能返回。若合格候选多于 40 个，可依据 fresh individual evidence 先组成不超过 40 个的 shortlist，但低冗余结论只覆盖实际比较的 shortlist，未比较的候选不得声称已与该池正交。每个 Alpha 只有在与所有 peer 的比较都已知时才有完整的 maximum/peer。若部分 pair 缺失，只报告最大已知相关 peer 并标 `PARTIAL`；完整 pool 低冗余仍为 `UNKNOWN`。这是本地对 live BRAIN PnL 做的确定性比较，不等同于 self-correlation、PROD correlation 或 structural similarity。
+候选间相关性不使用本地 PnL/Pearson 工具计算。先用 BRAIN live field descriptions 确认字段实际语义，再看每个 AlphaTemplate 的 economic mechanism、slot roles、field relationships 和 candidate mapping。字段/模板不同本身不证明经济机制独立；相同字段集合、相同作用关系和相同机制即使窗口或 settings 有变化，也归入同一个近似冗余组，除非有明确机制证据支持分开。机制分组是定性近似，只能用于筛选和排序，不能输出数值相关性、替代 BRAIN check 或宣称低相关已经实测。
 
-不设项目自有的固定 pairwise-correlation threshold。只有当前 BRAIN/platform 提供 owned threshold 时才应用；否则将 `NUMERIC_THRESHOLD = UNKNOWN`，依赖完整的 overlap/sample evidence、相对比较和候选分组。Pool 的低相关结论必须基于当前 pool 的 pairwise evidence；缺项或 overlap 不足时将 pool diversity 标为 `UNKNOWN`，不宣称已低冗余。高相关候选保留全部 evidence，但不要同时占据低冗余 qualified pool；在冗余候选间先比较 self-correlation，再比较 Sharpe、Fitness、Margin、Return 与 robustness。Correlation evidence 缺失或 overlap 不足时不能声称候选低相关。
+Self-correlation 与 PROD correlation 是不同的平台证据，必须读取 BRAIN 官方 Alpha evidence / checks。缺少数据或检查为 `PENDING` 时保留该状态；不能用字段/模板分组、旧本地读数、脚本或另一类 correlation 推断 `PASS`。只有当前 BRAIN checks/qualification evidence 全部支持时才能标 `BRAIN_SUBMITTABLE`。若官方检查仍 `PENDING`，候选不进入可提交清单，直到人工提交生命周期触发平台重新评估并产生新 evidence。
 
 批次比较优先使用 `get_alpha_evidence()` 的默认 summary：一次轻量 summary 读取就是一个 Alpha detail 请求，不得为每个候选扇出为 PnL、年度聚合与相关性调用。
 

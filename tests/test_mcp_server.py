@@ -447,9 +447,8 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             "get_alpha_recordsets",
             "reconcile_execution", "get_alpha_prod_correlation",
             "get_pending_executions", "list_templates", "generate_probes",
-            "compare_alphas",
         })
-        self.assertEqual(len(by_name), 16)
+        self.assertEqual(len(by_name), 15)
         self.assertEqual(
             set(by_name),
             {row["name"] for row in mcp_server.research_api.research_tool_manifest(profile="core")},
@@ -618,7 +617,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             })
 
         self.assertIn("depth", tools["get_alpha_evidence"].input_schema["properties"])
-        self.assertIn("compare_alphas", tools)
+        self.assertNotIn("compare_alphas", tools)
         self.assertNotIn("get_alpha_self_correlation", tools)
         self.assertEqual(evidence.call_args.kwargs["depth"], "full")
         self.assertEqual(result.structured_content["data"]["self_correlation"]["max"], 0.08)
@@ -686,66 +685,6 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(x.structured_content["error"] == "INVALID_ARGUMENT"
                             for x in results))
         recordsets.assert_not_called()
-
-    async def test_compare_alphas_returns_bounded_pairwise_live_pnl_evidence(self):
-        class PnlOnlyClient:
-            def get_pnl(self, alpha_id):
-                values = {
-                    "alpha-a": [("2024-01-01", 1), ("2024-01-02", 2), ("2024-01-03", 3)],
-                    "alpha-b": [("2024-01-01", 2), ("2024-01-02", 4), ("2024-01-03", 6)],
-                    "alpha-c": [("2024-01-03", 5)],
-                }
-                return {"pnl": [{"date": date, "value": value}
-                                 for date, value in values[alpha_id]]}
-
-        with patch.dict(os.environ, {self.ENV: "1"}):
-            server = mcp_server.build_research_server(
-                api=mcp_server.research_api, client=PnlOnlyClient(),
-            )
-        async with Client(server) as client:
-            tool = next(item for item in (await client.list_tools()).tools
-                        if item.name == "compare_alphas")
-            result = await client.call_tool("compare_alphas", {
-                "alpha_ids": ["alpha-a", "alpha-b", "alpha-c"],
-                "max_pairs": 2,
-            })
-
-        self.assertTrue(tool.annotations.read_only_hint)
-        self.assertIn("pairwise", tool.description.lower())
-        self.assertIn("self-correlation", tool.description.lower())
-        data = result.structured_content["data"]
-        self.assertEqual(data["method"], "PEARSON_DAILY_PNL")
-        self.assertEqual(data["available_pair_count"], 1)
-        self.assertEqual(data["unknown_pair_count"], 2)
-        self.assertEqual(data["strongest_pairs"][0]["overlap_count"], 3)
-        self.assertEqual(data["strongest_pairs"][0]["correlation"], 1.0)
-        self.assertLessEqual(len(data["strongest_pairs"]), 2)
-
-    async def test_compare_alphas_max_candidate_set_fits_mcp_result_budget(self):
-        class PnlOnlyClient:
-            def get_pnl(self, alpha_id):
-                index = int(alpha_id.split("-")[1])
-                month = "02" if index % 2 else "01"
-                return {"pnl": [
-                    {"date": f"2024-{month}-{day:02d}", "value": day * day}
-                    for day in range(1, 6)
-                ]}
-
-        with patch.dict(os.environ, {self.ENV: "1"}):
-            server = mcp_server.build_research_server(
-                api=mcp_server.research_api, client=PnlOnlyClient(),
-            )
-        async with Client(server) as client:
-            result = await client.call_tool("compare_alphas", {
-                "alpha_ids": [f"alpha-{index}" for index in range(40)],
-                "max_pairs": 20,
-            })
-
-        envelope = result.structured_content
-        self.assertFalse(envelope["truncated"])
-        self.assertIsNotNone(envelope["data"])
-        self.assertEqual(len(envelope["data"]["per_alpha_max"]), 40)
-        self.assertEqual(envelope["data"]["status"], "PARTIAL")
 
     async def test_probe_generation_live_read_error_keeps_live_source(self):
         generator = Mock(side_effect=RuntimeError("synthetic live capability failure"))
@@ -938,7 +877,6 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             "research_status", "list_datasets", "list_datafields",
             "get_operator_reference", "validate_simulation_spec",
             "get_alpha_evidence", "reconcile_execution", "get_alpha_prod_correlation",
-            "compare_alphas",
         }
         for name in remote_read_names:
             annotations = by_name[name].annotations
@@ -946,8 +884,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(annotations.open_world_hint, True, name)
 
         self.assertIn("FINALIST_ONLY", by_name["get_alpha_prod_correlation"].description)
-        self.assertIn("pairwise", by_name["compare_alphas"].description.lower())
-        self.assertIn("daily-pnl", by_name["compare_alphas"].description.lower())
+        self.assertNotIn("compare_alphas", by_name)
 
         for name in ("simulate_batch", "simulate_multi_batch"):
             annotations = by_name[name].annotations
@@ -1059,7 +996,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         async with Client(parameters) as client:
             listed = await client.list_tools()
         names = {tool.name for tool in listed.tools}
-        self.assertEqual(len(names), 16)
+        self.assertEqual(len(names), 15)
         self.assertTrue({"research_status", "simulate_batch", "simulate_multi_batch"} <= names)
 
     async def test_alpha_expression_is_available_only_through_requested_evidence(self):

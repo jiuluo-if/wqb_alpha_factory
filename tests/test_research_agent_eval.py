@@ -139,23 +139,33 @@ class ResearchAgentEvalTests(unittest.TestCase):
         self.assertEqual(result["status"], "PASS")
         self.assertEqual(result["simulated_write_count"], 0)
 
-    def test_high_pairwise_correlation_keeps_redundant_candidate_out_of_qualified_pool(self):
+    def test_shared_fields_and_template_mechanism_keep_redundant_candidate_out_of_pool(self):
         case = _case("K")
-        calls = [_event("research_status"), _event("compare_alphas", {
-            "alpha_ids": ["synthetic_alpha_a", "synthetic_alpha_b"],
-        })]
+        calls = [
+            _event("research_status"),
+            _event("list_datafields", {
+                "dataset_id": "synthetic_labor", "limit": 20,
+                "offset": 0, "field_type": None,
+            }),
+            _event("list_templates", {"offset": 0, "limit": 20}),
+        ]
         fake = [
             _fake_log("research_status", case_id="K", result=case["CURRENT_EVIDENCE"]["research_status"]),
-            _fake_log("compare_alphas", {
-                "alpha_ids": ["synthetic_alpha_a", "synthetic_alpha_b"],
-            }, case_id="K", result=case["CURRENT_EVIDENCE"]["pairwise_pnl"]),
+            _fake_log("list_datafields", {
+                "dataset_id": "synthetic_labor", "limit": 20,
+                "offset": 0, "field_type": None,
+            }, case_id="K",
+                      result={"source": "SYNTHETIC_EVAL_FIXTURE", "rows": case["CURRENT_EVIDENCE"]["datafields"]}),
+            _fake_log("list_templates", {"offset": 0, "limit": 20}, case_id="K",
+                      result={"source": "SYNTHETIC_EVAL_FIXTURE", "rows": case["CURRENT_EVIDENCE"]["templates"]}),
         ]
         selected = {
             "case_id": "K", "status": "READY",
-            "decision": "LOW_REDUNDANCY_POOL_SELECTED",
+            "decision": "MECHANISM_REDUNDANCY_APPROXIMATE",
             "qualified_pool": ["synthetic_alpha_a"],
             "retained_nonselected_evidence": ["synthetic_alpha_b"],
-            "numeric_threshold": "UNKNOWN",
+            "relatedness_method": "FIELD_DESCRIPTION_AND_ALPHA_TEMPLATE",
+            "relatedness_status": "APPROXIMATE",
         }
         trace = parse_codex_jsonl(_run_events(calls, selected))
         result = evaluate_case(case, trace=trace, fake_log=fake, exit_code=0)

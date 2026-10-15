@@ -52,7 +52,7 @@ frontmatter 中 `metadata.wqb_alpha_factory_research_contract` 是本文件编�
 - 每个方向的 `soft probe budget` 是该 wave 的 Agent work plan，由当前 live quota/capacity、数据/字段/模板宽度、研究不确定性与已有 BRAIN evidence 决定。新证据出现时可调整或开启 `EARLY OPTIMIZATION`；没有跨项目固定的批次或累计 Simulation 门槛。
 - 先准备所有当前有研究理由且 admission 为 READY 的候选，再按 Gateway/工具给出的当前容量提交。批次可以较小；单候选使用合法 Single path；Multi 由 Gateway 按兼容设置分组、限制并发并 refill capacity。不得为了填满 transport capacity 制造字段、operator、近义 template 或无意义 wrapper。
 - 若一个机制有支持证据、live self-correlation 较低且没有明显失败，Agent 可提前给它分配 OPTIMIZE lane，同时继续新的 PROBE；它仍可为 `TARGET_NOT_MET` 或 `BRAIN_SUBMITTABLE=false`。按[结果解释](references/result-interpretation.md#target-and-submission-are-separate)分别记录目标和 BRAIN 资格，Optimization 不放宽 hard checks。
-- 对终选集合使用 full Alpha evidence 取得 self-correlation；用当前 `compare_alphas()` inventory 对 qualified candidates 读取 pairwise daily-PnL correlation。按[结果解释](references/result-interpretation.md#qualified-pool-and-pairwise-pnl-correlation)判断冗余与 UNKNOWN；self / PROD / pairwise correlation 不互相替代。
+- 对终选集合使用 BRAIN full Alpha evidence 和官方检查读取 self-correlation；仅在需要时读取 BRAIN `PROD_CORRELATION` evidence 与 check。候选之间的冗余按 live field descriptions、字段在 AlphaTemplate slots 中的作用、关系契约和 economic mechanism 形成定性分组；这是机制相似性的近似判断，不是数值相关性测量或 BRAIN check。不得调用本地 pairwise/PnL 相关性计算器来决定候选独立性。详见[结果解释](references/result-interpretation.md#候选机制重叠与相关性证据)。
 
 - 从多个竞争假设起步。使用 BRAIN 原始 dataset/datafield 列表，并解释每个 Agent 选定字段。
 - 探索新字段、自定义分组、字段复合、新算子或新模板时，先读[批次设计](references/batch-design.md)中的 live discovery 与结构判据。

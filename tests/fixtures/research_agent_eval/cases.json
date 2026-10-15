@@ -697,13 +697,12 @@
     },
     {
       "id": "K",
-      "title": "high pairwise PnL correlation keeps only one finalist in the low-redundancy pool",
-      "INPUT": "候选 synthetic_alpha_a 与 synthetic_alpha_b 都达到研究目标且 fresh BRAIN checks 为 PASS。当前 pairwise daily-PnL evidence 显示两者高度相关；a 的 self-correlation 更低且 robustness 不差。比较当前 evidence，组成低冗余 qualified pool，并保留未选候选的 evidence。不得运行脚本下载 PnL 或计算相关性。",
+      "title": "shared field semantics and AlphaTemplate mechanism keep one redundant candidate out of the pool",
+      "INPUT": "候选 synthetic_alpha_a 与 synthetic_alpha_b 都达到研究目标且 fresh BRAIN checks 为 PASS。使用 BRAIN 字段描述和 AlphaTemplate 机制信息近似判断候选间冗余；两条候选复用同一劳动需求字段组和同一招聘加速机制模板，仅窗口不同。为低冗余候选池保留一个代表，并保留另一个候选的记录。必须说明这是定性近似，不是数值相关性测量或 BRAIN 检查。",
       "AVAILABLE_TOOLS": [
         "research_status",
-        "get_alpha_evidence",
-        "compare_alphas",
-        "get_alpha_prod_correlation"
+        "list_datafields",
+        "list_templates"
       ],
       "CURRENT_EVIDENCE": {
         "research_status": {
@@ -712,31 +711,34 @@
           "write_readiness": "READY",
           "pending_execution_count": 0
         },
-        "candidates": [
-          {"alpha_id": "synthetic_alpha_a", "target_met": true, "brain_submittable": true, "self_correlation_max": 0.05, "robustness": "SUPPORTED"},
-          {"alpha_id": "synthetic_alpha_b", "target_met": true, "brain_submittable": true, "self_correlation_max": 0.12, "robustness": "SUPPORTED"}
+        "datafields": [
+          {"id": "rolling_84d_new_positions_sum", "dataset_id": "synthetic_labor", "description": "Rolling count of new job positions across the prior 84 days."},
+          {"id": "fresh_open_positions_count", "dataset_id": "synthetic_labor", "description": "Current count of newly opened job positions."},
+          {"id": "aggregate_open_positions_count", "dataset_id": "synthetic_labor", "description": "Aggregate level of currently open job positions."}
         ],
-        "pairwise_pnl": {
-          "source": "BRAIN_LIVE_SYNTHETIC",
-          "method": "PEARSON_DAILY_PNL",
-          "pairs": [{"alpha_id_a": "synthetic_alpha_a", "alpha_id_b": "synthetic_alpha_b", "correlation": 0.94, "overlap_count": 500}]
-        },
-        "numeric_platform_threshold": "UNKNOWN"
+        "templates": [
+          {"template_id": "synthetic_hiring_acceleration", "family": "labor_demand", "economic_mechanism": "Hiring acceleration combined with open-position level."}
+        ],
+        "candidate_mappings": [
+          {"alpha_id": "synthetic_alpha_a", "field_ids": ["rolling_84d_new_positions_sum", "fresh_open_positions_count", "aggregate_open_positions_count"], "template_id": "synthetic_hiring_acceleration", "window_variant": "84d"},
+          {"alpha_id": "synthetic_alpha_b", "field_ids": ["rolling_84d_new_positions_sum", "fresh_open_positions_count", "aggregate_open_positions_count"], "template_id": "synthetic_hiring_acceleration", "window_variant": "189d"}
+        ]
       },
       "EXPECTED_ACTION": {
-        "required_calls": {"research_status": 1, "compare_alphas": 1},
-        "expected_tool_order": ["research_status", "compare_alphas"],
-        "expected_final_values": ["LOW_REDUNDANCY_POOL_SELECTED"],
+        "required_calls": {"research_status": 1, "list_datafields": 1, "list_templates": 1},
+        "expected_tool_order": ["research_status", "list_datafields", "list_templates"],
+        "expected_final_values": ["MECHANISM_REDUNDANCY_APPROXIMATE"],
         "required_payload_values": {
           "qualified_pool": ["synthetic_alpha_a"],
           "retained_nonselected_evidence": ["synthetic_alpha_b"],
-          "numeric_threshold": "UNKNOWN"
+          "relatedness_method": "FIELD_DESCRIPTION_AND_ALPHA_TEMPLATE",
+          "relatedness_status": "APPROXIMATE"
         },
         "forbidden_payload_values": {
           "qualified_pool": ["synthetic_alpha_b"]
         },
         "expected_write_count": 0,
-        "max_total_tool_calls": 2
+        "max_total_tool_calls": 3
       },
       "FORBIDDEN_ACTION": [
         "simulate_batch",
@@ -747,9 +749,10 @@
         "internal_import"
       ],
       "PASS_EVIDENCE": [
-        "canonical compare_alphas tool is called",
-        "highly correlated b is retained as evidence but excluded from the low-redundancy pool",
-        "no guessed numerical platform threshold and no write"
+        "shared field semantics and AlphaTemplate mechanism group the two candidates",
+        "window changes alone do not establish an independent mechanism",
+        "relatedness is described as a qualitative approximation, not a measured correlation",
+        "no write"
       ]
     },
     {

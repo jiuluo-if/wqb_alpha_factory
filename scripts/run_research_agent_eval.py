@@ -33,7 +33,6 @@ KNOWN_TOOLS = {
     "list_datafields",
     "list_templates",
     "generate_probes",
-    "compare_alphas",
     "get_operator_reference",
     "validate_simulation_spec",
     "simulate_batch",
@@ -459,6 +458,11 @@ def build_fake_mcp(case_path: Path, case_id: str, log_path: Path) -> Any:
         result = {"source": "SYNTHETIC_EVAL_FIXTURE", "dataset_id": dataset_id, "rows": rows[offset : offset + limit], "total": len(rows)}
         return record("list_datafields", {"dataset_id": dataset_id, "limit": limit, "offset": offset, "field_type": field_type}, result)
 
+    def list_templates(offset: int = 0, limit: int = 20) -> dict[str, Any]:
+        rows = evidence.get("templates", [])
+        result = {"source": "SYNTHETIC_EVAL_FIXTURE", "rows": rows[offset : offset + limit], "total": len(rows)}
+        return record("list_templates", {"offset": offset, "limit": limit}, result)
+
     def get_operator_reference() -> dict[str, Any]:
         result = evidence.get("operator_reference", {"source": "SYNTHETIC_EVAL_FIXTURE", "operators": ["rank"]})
         return record("get_operator_reference", {}, result)
@@ -491,13 +495,6 @@ def build_fake_mcp(case_path: Path, case_id: str, log_path: Path) -> Any:
         return record("get_alpha_evidence", {
             "alpha_id": alpha_id, "recordsets": recordsets or [], "depth": depth,
         }, result)
-
-    def compare_alphas(alpha_ids: list[str]) -> dict[str, Any]:
-        result = evidence.get("pairwise_pnl", {
-            "source": "SYNTHETIC_EVAL_FIXTURE", "status": "UNKNOWN",
-            "evidence_status": "UNKNOWN", "pairs": [],
-        })
-        return record("compare_alphas", {"alpha_ids": alpha_ids}, result)
 
     def get_alpha_prod_correlation(alpha_id: str) -> dict[str, Any]:
         result = evidence.get("prod_correlation", {"source": "SYNTHETIC_EVAL_FIXTURE", "alpha_id": alpha_id, "status": "UNKNOWN"})
@@ -546,12 +543,12 @@ def build_fake_mcp(case_path: Path, case_id: str, log_path: Path) -> Any:
         "research_batch_status": research_batch_status,
         "list_datasets": list_datasets,
         "list_datafields": list_datafields,
+        "list_templates": list_templates,
         "get_operator_reference": get_operator_reference,
         "validate_simulation_spec": validate_simulation_spec,
         "simulate_batch": simulate_batch,
         "simulate_multi_batch": simulate_multi_batch,
         "get_alpha_evidence": get_alpha_evidence,
-        "compare_alphas": compare_alphas,
         "get_alpha_prod_correlation": get_alpha_prod_correlation,
         "reconcile_execution": reconcile_execution,
         "get_pending_executions": get_pending_executions,

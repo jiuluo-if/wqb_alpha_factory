@@ -106,7 +106,6 @@ class TestResearchApi(unittest.TestCase):
             "get_alpha_recordsets",
             "reconcile_execution", "get_alpha_prod_correlation",
             "get_pending_executions", "list_templates", "generate_probes",
-            "compare_alphas",
         })
         dangerous = {"create_template", "sync_alpha_colors", "alpha_submission"}
         self.assertTrue(dangerous <= full_names)
@@ -392,20 +391,6 @@ class TestResearchApi(unittest.TestCase):
         client.get_pnl.assert_called_once_with("a1")
         client.get_correlation.assert_called_once_with("a1", kind="prod")
         client.get_aggregates.assert_not_called()
-        client.get_self_correlation.assert_not_called()
-
-    def test_batch_comparison_defaults_to_summary_evidence(self):
-        client = mock.Mock()
-        client.get_alpha.side_effect = lambda alpha_id: {
-            "id": alpha_id, "is": {"sharpe": 1.0},
-        }
-
-        result = research_api.compare_alphas(["a1", "a2"], client=client)
-
-        self.assertEqual([row["alpha"]["id"] for row in result["alphas"]], ["a1", "a2"])
-        self.assertEqual(client.get_alpha.call_count, 2)
-        client.get_aggregates.assert_not_called()
-        client.get_pnl.assert_not_called()
         client.get_self_correlation.assert_not_called()
 
     def test_field_classification_exposes_type_dataset_and_semantics(self):
@@ -1230,52 +1215,6 @@ class TestResearchApi(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "LIVE_EVIDENCE_REQUIRED"):
             get_alpha_evidence("a1", client=client, live=False)
 
-        client.get_alpha.assert_not_called()
-
-    def test_compare_alphas_keeps_public_envelope(self):
-        client = mock.Mock()
-        client.get_alpha.side_effect = [
-            {"id": "a1", "is": {"sharpe": 1.2}},
-            {"id": "a2", "is": {"sharpe": 0.8}},
-        ]
-
-        result = __import__("wqb_agent.research_api", fromlist=["compare_alphas"]).compare_alphas(
-            ["a1", "a2"], client=client
-        )
-
-        self.assertEqual(
-            {key: result[key] for key in ("source", "status", "evidence_status")},
-            {"source": "LIVE", "status": "AVAILABLE", "evidence_status": "AVAILABLE"},
-        )
-        self.assertEqual([item["alpha_id"] for item in result["alphas"]], ["a1", "a2"])
-        client.list_alpha_recordsets.assert_not_called()
-        client.get_aggregates.assert_not_called()
-        client.get_pnl.assert_not_called()
-        client.get_self_correlation.assert_not_called()
-
-    def test_compare_alphas_exposes_pairwise_pnl_mode_through_public_facade(self):
-        client = mock.Mock()
-        client.get_pnl.side_effect = [
-            {"pnl": [
-                {"date": "2024-02-01", "value": 1.0},
-                {"date": "2024-02-02", "value": 2.0},
-                {"date": "2024-02-03", "value": 3.0},
-            ]},
-            {"pnl": [
-                {"date": "2024-02-01", "value": 3.0},
-                {"date": "2024-02-02", "value": 6.0},
-                {"date": "2024-02-03", "value": 9.0},
-            ]},
-        ]
-
-        result = research_api.compare_alphas(
-            ["alpha-a", "alpha-b"], client=client, pairwise_pnl=True,
-        )
-
-        self.assertEqual(result["method"], "PEARSON_DAILY_PNL")
-        self.assertEqual(result["strongest_pairs"][0]["correlation"], 1.0)
-        self.assertEqual(result["strongest_pairs"][0]["overlap_count"], 3)
-        client.get_pnl.assert_has_calls([mock.call("alpha-a"), mock.call("alpha-b")])
         client.get_alpha.assert_not_called()
 
     def test_selected_recordsets_are_exposed_by_public_facade(self):
