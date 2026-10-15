@@ -14,6 +14,7 @@ from typing import Any
 
 from .artifacts import atomic_write_json_if_changed
 from .client import (
+    MAX_ALPHA_HISTORY_SECONDS,
     REGION_AGNOSTIC_SIMULATION_TYPE,
     REGULAR_SIMULATION_TYPE,
     SUPPORTED_SIMULATION_REQUEST_TYPES,
@@ -64,8 +65,12 @@ REGION_AGNOSTIC_CHILD_UNIVERSES = {
 
 # Current bounded scan policy follows verified platform behavior.  Widening
 # the window requires new live evidence; scan results remain explicitly incomplete.
+# The shard walk enforces its own wall-clock ceiling (``MAX_ALPHA_HISTORY_SECONDS``)
+# and rejects a larger request, so this policy value is derived from the client
+# contract instead of a second magic number that can drift out of range and make
+# every duplicate-history preflight fail closed.
 REMOTE_DUPLICATE_LOOKBACK_DAYS = 1
-REMOTE_DUPLICATE_SCAN_BUDGET_SEC = 900
+REMOTE_DUPLICATE_SCAN_BUDGET_SEC = MAX_ALPHA_HISTORY_SECONDS
 REMOTE_DUPLICATE_SCAN_KEY = "__remote_duplicate_scan__"
 
 

@@ -16,6 +16,7 @@ from tests.test_targeted_ci import critical_contract
 from wqb_agent import research_api
 from wqb_agent import simulation_gateway as simulation_gateway_module
 from wqb_agent.client import (
+    MAX_ALPHA_HISTORY_SECONDS,
     WQBNotFoundError,
     WQBRateLimitError,
     WQBRemoteSimulationError,
@@ -2238,7 +2239,7 @@ class TestSimulationGateway(unittest.TestCase):
                 client.scan_kwargs["lookback_days"], 1
             )
             self.assertEqual(
-                client.scan_kwargs["time_budget_sec"], 900
+                client.scan_kwargs["time_budget_sec"], MAX_ALPHA_HISTORY_SECONDS
             )
             self.assertEqual(
                 result["remote_duplicate_scan"]["status"], "BOUNDED_RECENT_WINDOW"
