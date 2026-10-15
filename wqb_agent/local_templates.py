@@ -56,6 +56,7 @@ __all__ = [
     "load_local_templates",
     "local_template_registry",
     "normalize_local_request",
+    "template_mechanism_keys",
 ]
 
 
@@ -146,42 +147,82 @@ def _normalize_fields(fields, dataset_id=None):
 
 
 def mechanism_key(template):
-    """Return the declared mechanism group of one template."""
+    """Return the declared mechanism group of one template.
+
+    The fine-grained declared family wins over the coarse source tag, so a real
+    private catalog groups by mechanism (``PRIVATE_AMIHUD_ILLIQUIDITY``) instead
+    of collapsing every entry into ``LIVE``/``PRIVATE``.
+    """
+    novelty = getattr(template, "novelty_family", None)
+    if novelty and str(novelty).strip():
+        return str(novelty)
+    family = getattr(template, "family", None)
+    if family and str(family).strip():
+        return str(family)
     tags = tuple(getattr(template, "mechanism_tags", ()) or ())
     if tags:
         return str(tags[0])
-    novelty = getattr(template, "novelty_family", None)
-    if novelty:
-        return str(novelty)
-    return str(getattr(template, "family", "") or template.template_id)
+    return str(template.template_id)
 
 
-def _mechanism_groups(registry, mechanisms=None):
+def template_mechanism_keys(template):
+    """Return every declared identity that a mechanism filter may match."""
+    keys = []
+    for value in (
+        mechanism_key(template),
+        getattr(template, "novelty_family", None),
+        getattr(template, "family", None),
+    ):
+        if value and str(value).strip() and str(value) not in keys:
+            keys.append(str(value))
+    for tag in getattr(template, "mechanism_tags", ()) or ():
+        if str(tag).strip() and str(tag) not in keys:
+            keys.append(str(tag))
+    return tuple(keys)
+
+
+def _fold_mechanisms(mechanisms):
+    if isinstance(mechanisms, str):
+        mechanisms = [mechanisms]
+    if not isinstance(mechanisms, (list, tuple)) or not mechanisms or any(
+        not isinstance(item, str) or not item.strip() for item in mechanisms
+    ):
+        raise ValueError("mechanisms must be a non-empty explicit list")
+    return {item.strip().casefold() for item in mechanisms}
+
+
+def _matches_mechanisms(template, wanted):
+    if wanted is None:
+        return True
+    folded = {key.casefold() for key in template_mechanism_keys(template)}
+    return bool(folded & wanted)
+
+
+def _mechanism_groups(registry, mechanisms=None, template_ids=None):
+    wanted_ids = None
+    if template_ids is not None:
+        wanted_ids = set(_selected_ids(template_ids))
     wanted = None
     if mechanisms is not None:
-        if isinstance(mechanisms, str):
-            mechanisms = [mechanisms]
-        if not isinstance(mechanisms, (list, tuple)) or any(
-            not isinstance(item, str) or not item.strip() for item in mechanisms
-        ):
-            raise ValueError("mechanisms must be a non-empty explicit list")
-        wanted = {item.strip() for item in mechanisms}
+        wanted = _fold_mechanisms(mechanisms)
     groups = OrderedDict()
     for template in registry.economic_templates():
-        key = mechanism_key(template)
-        if wanted is not None and key not in wanted:
+        if wanted_ids is not None and template.template_id not in wanted_ids:
             continue
-        groups.setdefault(key, []).append(template)
+        if not _matches_mechanisms(template, wanted):
+            continue
+        groups.setdefault(mechanism_key(template), []).append(template)
     if not groups:
         for template in registry.catalog():
             identifier = template.get("template_id") or template.get("id")
             candidate = registry.get(identifier)
             if candidate is None or candidate.template_mode != "CONCRETE":
                 continue
-            key = mechanism_key(candidate)
-            if wanted is not None and key not in wanted:
+            if wanted_ids is not None and candidate.template_id not in wanted_ids:
                 continue
-            groups.setdefault(key, []).append(candidate)
+            if not _matches_mechanisms(candidate, wanted):
+                continue
+            groups.setdefault(mechanism_key(candidate), []).append(candidate)
     return groups
 
 
@@ -292,9 +333,9 @@ def describe_local_templates(*, templates=None, catalog_path=None,
     wanted = None
     if template_ids is not None:
         wanted = set(_selected_ids(template_ids))
-    allowed_mechanisms = None
+    wanted_mechanisms = None
     if mechanisms is not None:
-        allowed_mechanisms = set(_mechanism_groups(registry, mechanisms))
+        wanted_mechanisms = _fold_mechanisms(mechanisms)
     rows = []
     for entry in registry.catalog():
         template_id = entry.get("template_id") or entry.get("id")
@@ -303,8 +344,7 @@ def describe_local_templates(*, templates=None, catalog_path=None,
         template = registry.get(template_id)
         if template is None:
             continue
-        key = mechanism_key(template)
-        if allowed_mechanisms is not None and key not in allowed_mechanisms:
+        if not _matches_mechanisms(template, wanted_mechanisms):
             continue
         row = dict(entry)
         row["simulation_type"] = template.simulation_type
@@ -312,7 +352,8 @@ def describe_local_templates(*, templates=None, catalog_path=None,
         row["economic_field_count"] = template.economic_field_count
         row["field_slots"] = list(template.field_slots)
         row["field_roles"] = list(template.field_roles)
-        row["mechanism_key"] = key
+        row["mechanism_key"] = mechanism_key(template)
+        row["mechanism_keys"] = list(template_mechanism_keys(template))
         row["relationship_contract"] = effective_relationship_contract(template)
         row["semantic_contract"] = effective_semantic_contract(template)
         rows.append(row)
@@ -326,9 +367,14 @@ def build_local_candidates(*, fields, count=6, template_ids=None, selection="aut
                            dataset_id=None):
     """Render mechanism-tagged candidates locally.
 
-    ``template_ids`` selects explicit templates.  Without them the construction
-    rotates mechanisms: distinct mechanism groups, then their templates, then
-    the field bundles inside each dataset.
+    ``template_ids`` names the templates the construction may use — a specific
+    mechanism can be forced this way.  With ``selection="explicit"`` (the
+    ``auto`` default whenever ``template_ids`` are given) those templates are
+    used in the given order.  With ``selection="rotate"`` the same set is
+    rotated instead: mechanisms first, then their templates, then the field
+    bundles inside each dataset.  Without ``template_ids`` rotation draws from
+    every local template carrying a declared economic mechanism, optionally
+    narrowed by ``mechanisms``.  ``seed`` makes a rotation reproducible.
     """
     target = _count(count)
     selected_fields = _normalize_fields(fields, dataset_id=dataset_id)
@@ -338,13 +384,14 @@ def build_local_candidates(*, fields, count=6, template_ids=None, selection="aut
     if mode not in {"auto", "explicit", "rotate"}:
         raise ValueError("selection must be auto, explicit or rotate")
     if template_ids is not None:
-        if mode == "rotate":
-            raise ValueError("selection=rotate cannot be combined with template_ids")
         selected_ids = _selected_ids(template_ids)
+        if mode == "auto":
+            mode = "explicit"
     else:
         selected_ids = None
         if mode == "explicit":
             raise ValueError("selection=explicit requires template_ids")
+        mode = "rotate"
     effective_settings = dict(settings or {})
     if neutralization is None:
         neutralization = effective_settings.get("neutralization")
@@ -357,7 +404,7 @@ def build_local_candidates(*, fields, count=6, template_ids=None, selection="aut
         registry=registry,
     )
     rng = random.Random(seed)
-    if selected_ids is not None:
+    if mode == "explicit":
         chosen = []
         for template_id in selected_ids:
             template = registry.get(template_id)
@@ -370,9 +417,9 @@ def build_local_candidates(*, fields, count=6, template_ids=None, selection="aut
                     f"template {template_id} needs an explicit live operator reference"
                 )
             chosen.append(template)
-        labels = {"template_id": [t.template_id for t in chosen], "selection": "EXPLICIT"}
+        selection_label = "EXPLICIT"
     else:
-        groups = _mechanism_groups(registry, mechanisms)
+        groups = _mechanism_groups(registry, mechanisms, selected_ids)
         order = _rotating_order(groups, rng)
         chosen = [
             template for template in order
@@ -381,13 +428,13 @@ def build_local_candidates(*, fields, count=6, template_ids=None, selection="aut
         ]
         if not chosen:
             raise ValueError("no local template with a declared mechanism is available")
-        labels = {"template_id": None, "selection": "ROTATE"}
+        selection_label = "ROTATE"
     records = _render_candidates(
         factory, chosen, _field_sampler(selected_fields, rng), target,
         effective_settings, operator_reference,
     )
     for record in records:
-        record["selection"] = labels["selection"]
+        record["selection"] = selection_label
     return records
 
 

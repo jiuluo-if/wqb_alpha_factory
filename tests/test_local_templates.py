@@ -18,11 +18,12 @@ from wqb_agent.local_templates import (
     local_template_registry,
     mechanism_key,
     normalize_local_request,
+    template_mechanism_keys,
 )
 
 
 def _template(template_id="local-fixture", mechanism="fixture mechanism",
-              family="local-fixture-family", tags=("fixture_tags",)):
+              family="local-fixture-family", tags=("fixture_tags",), novelty=None):
     return AlphaTemplate(
         template_id=template_id,
         family=family,
@@ -36,7 +37,7 @@ def _template(template_id="local-fixture", mechanism="fixture mechanism",
         falsification="fixture fails",
         semantic_contract="SYNTHETIC_FIXTURE",
         mechanism_tags=tags,
-        novelty_family=family,
+        novelty_family=novelty if novelty is not None else family.upper(),
     )
 
 
@@ -65,10 +66,12 @@ class TestLocalTemplateReading(unittest.TestCase):
         self.assertIsNone(registry.get("missing-template"))
 
     def test_ambiguous_template_source_is_rejected(self):
-        with self.assertRaises(ValueError):
-            local_template_registry(
-                templates=(_template(),), catalog_path="C:/missing/catalog.toml"
-            )
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = str(Path(tmp) / "missing-catalog.toml")
+            with self.assertRaises(ValueError):
+                local_template_registry(
+                    templates=(_template(),), catalog_path=missing
+                )
 
     def test_describe_reports_contracts_mechanisms_and_filtering(self):
         rows = describe_local_templates(templates=(_template(),))
@@ -78,7 +81,9 @@ class TestLocalTemplateReading(unittest.TestCase):
         self.assertEqual(row["economic_field_count"], 1)
         self.assertEqual(row["field_slots"], ["p"])
         self.assertEqual(row["simulation_type"], "REGULAR")
-        self.assertEqual(row["mechanism_key"], "fixture_tags")
+        self.assertEqual(row["mechanism_key"], "LOCAL-FIXTURE-FAMILY")
+        self.assertIn("fixture_tags", row["mechanism_keys"])
+        self.assertIn("local-fixture-family", row["mechanism_keys"])
         self.assertTrue(row["relationship_contract"])
         self.assertTrue(row["semantic_contract"])
         self.assertEqual(
@@ -100,11 +105,38 @@ class TestLocalTemplateReading(unittest.TestCase):
             [],
         )
 
-    def test_mechanism_key_requires_declared_mechanism(self):
-        self.assertEqual(mechanism_key(_template()), "fixture_tags")
+    def test_mechanism_key_prefers_the_declared_family(self):
+        self.assertEqual(mechanism_key(_template()), "LOCAL-FIXTURE-FAMILY")
         self.assertEqual(
-            mechanism_key(_template(tags=(), family="novelty-family")),
-            "novelty-family",
+            mechanism_key(_template(novelty=None, family="family-only")),
+            "FAMILY-ONLY",
+        )
+        keys = template_mechanism_keys(_template())
+        self.assertEqual(keys[0], "LOCAL-FIXTURE-FAMILY")
+        self.assertIn("local-fixture-family", keys)
+        self.assertIn("fixture_tags", keys)
+
+    def test_mechanism_filter_matches_any_declared_key(self):
+        templates = (_template(),)
+        for mechanisms in (["LOCAL-FIXTURE-FAMILY"], ["local-fixture-family"],
+                           ["fixture_tags"], ["fixture_TAGS"]):
+            with self.subTest(mechanisms=mechanisms):
+                self.assertEqual(
+                    len(describe_local_templates(templates=templates,
+                                                 mechanisms=mechanisms)),
+                    1,
+                )
+        self.assertEqual(
+            describe_local_templates(templates=templates,
+                                     mechanisms=["unrelated_mechanism"]),
+            [],
+        )
+        self.assertEqual(
+            [record["mechanism_key"] for record in build_local_candidates(
+                fields=[_field()], count=1, mechanisms=["fixture_tags"],
+                templates=templates,
+            )],
+            ["LOCAL-FIXTURE-FAMILY"],
         )
 
 
@@ -145,7 +177,7 @@ class TestLocalTemplateConstruction(unittest.TestCase):
         self.assertEqual(records[0]["selection"], "EXPLICIT")
         self.assertEqual(records[0]["template_id"], "local-fixture")
         self.assertEqual(records[0]["mechanism"], "fixture mechanism")
-        self.assertEqual(records[0]["mechanism_key"], "fixture_tags")
+        self.assertEqual(records[0]["mechanism_key"], "LOCAL-FIXTURE-FAMILY")
         self.assertEqual(records[0]["field_ids"], ["arbitrary-field"])
 
     def test_rotation_spreads_distinct_mechanisms(self):
@@ -167,7 +199,7 @@ class TestLocalTemplateConstruction(unittest.TestCase):
         self.assertEqual({record["selection"] for record in records}, {"ROTATE"})
         self.assertEqual(
             {record["mechanism_key"] for record in records},
-            {"mechanism_a", "mechanism_b"},
+            {"FAMILY-A", "FAMILY-B"},
         )
         self.assertEqual(
             len({record["spec"].expression for record in records}), 2
@@ -185,16 +217,45 @@ class TestLocalTemplateConstruction(unittest.TestCase):
         self.assertEqual([record["template_id"] for record in records],
                          ["template-b"])
 
+    def test_rotation_can_be_scoped_to_explicit_templates(self):
+        templates = (
+            _template(template_id="template-a", tags=("mechanism_a",)),
+            _template(template_id="template-b", tags=("mechanism_b",)),
+            _template(template_id="template-c", tags=("mechanism_c",)),
+        )
+        records = build_local_candidates(
+            fields=[
+                _field(field_id="field_a", dataset="dataset_one"),
+                _field(field_id="field_b", dataset="dataset_two"),
+            ],
+            count=2, seed=5, selection="rotate",
+            template_ids=["template-a", "template-b"], templates=templates,
+        )
+        self.assertEqual(len(records), 2)
+        self.assertEqual({record["selection"] for record in records}, {"ROTATE"})
+        self.assertEqual({record["template_id"] for record in records},
+                         {"template-a", "template-b"})
+
+    def test_rotation_is_reproducible_for_a_seed(self):
+        templates = (
+            _template(template_id="template-a", tags=("mechanism_a",)),
+            _template(template_id="template-b", tags=("mechanism_b",)),
+        )
+        fields = [_field(field_id="field_a"), _field(field_id="field_b")]
+        first = build_local_candidates(fields=fields, count=2, seed=11,
+                                       templates=templates)
+        second = build_local_candidates(fields=fields, count=2, seed=11,
+                                        templates=templates)
+        self.assertEqual(
+            [(record["template_id"], record["field_ids"]) for record in first],
+            [(record["template_id"], record["field_ids"]) for record in second],
+        )
+
     def test_unknown_or_conflicting_selection_is_rejected_locally(self):
         with self.assertRaises(ValueError):
             build_local_specs(
                 template_ids=["missing-template"], fields=[_field()], count=1,
                 templates=(_template(),),
-            )
-        with self.assertRaises(ValueError):
-            build_local_specs(
-                template_ids=["local-fixture"], fields=[_field()], count=1,
-                selection="rotate", templates=(_template(),),
             )
         with self.assertRaises(ValueError):
             build_local_specs(
