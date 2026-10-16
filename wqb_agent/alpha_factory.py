@@ -92,6 +92,7 @@ class AlphaFactory:
         normalized = []
         normalized_profiles = []
         seen_profile_keys = set()
+        dataset_by_field_id = {}
         for field in fields:
             field_id = field.get("id") if isinstance(field, dict) else field
             if not isinstance(field_id, (str, int)) or not field:
@@ -99,6 +100,12 @@ class AlphaFactory:
             field_id = str(field_id)
             dataset = field.get("dataset") if isinstance(field, dict) else None
             dataset = str(dataset) if dataset is not None else None
+            if dataset is not None:
+                previous_dataset = dataset_by_field_id.setdefault(field_id, dataset)
+                if previous_dataset != dataset:
+                    raise ValueError(
+                        f"field id {field_id!r} has provenance in multiple datasets"
+                    )
             profile_key = (dataset, field_id)
             if profile_key in seen_profile_keys:
                 continue

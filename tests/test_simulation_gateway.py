@@ -1253,6 +1253,23 @@ class RejectedMultiGatewayClient(MultiGatewayClient):
 
 
 class TestSimulationGateway(unittest.TestCase):
+    def test_spec_rejects_duplicate_field_id_across_datasets(self):
+        from wqb_agent.failures import ResearchReasonError
+
+        with self.assertRaisesRegex(ResearchReasonError, "field id.*multiple datasets"):
+            _SimulationSpec(
+                "add(ts_zscore(same_field, 5), ts_zscore(same_field, 22))",
+                fields=(
+                    {"id": "same_field", "dataset": "d1"},
+                    {"id": "same_field", "dataset": "d2"},
+                ),
+            )
+        with self.assertRaisesRegex(ResearchReasonError, "field id.*multiple datasets"):
+            _SimulationSpec(
+                "rank(field_1)", fields=("1",),
+                field_datasets={1: "d1", "1": "d2"},
+            )
+
     def test_independent_processes_allow_at_most_one_simulation_post(self):
         context = multiprocessing.get_context("spawn")
         with tempfile.TemporaryDirectory() as tmp:
@@ -2865,6 +2882,20 @@ class TestSimulationGateway(unittest.TestCase):
             guard = ExecutionGuard(tmp)
             with self.assertRaisesRegex(ValueError, "parent fingerprint"):
                 guard.register("child", kind=ExecutionGuard.MULTI_CHILD)
+
+    def test_guard_rejects_unknown_kind_and_unregistered_multi_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = ExecutionGuard(tmp)
+            with self.assertRaisesRegex(ValueError, "kind"):
+                guard.register("bad-kind", kind="UNKNOWN_KIND")
+            with self.assertRaisesRegex(ValueError, "kind"):
+                guard.register("empty-kind", kind="")
+            with self.assertRaisesRegex(ValueError, "registered MULTI_PARENT"):
+                guard.register(
+                    "orphan-child", kind=ExecutionGuard.MULTI_CHILD,
+                    parent_fingerprint="missing-parent",
+                )
+            self.assertEqual(guard.entries(), [])
 
     def test_child_moved_into_another_multi_parent_is_not_reposted(self):
         with tempfile.TemporaryDirectory() as tmp:

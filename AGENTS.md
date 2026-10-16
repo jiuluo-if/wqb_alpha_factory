@@ -66,7 +66,7 @@ Gateway 只负责：规范化有效 settings、基本请求 schema、live 字段
 
 Regular field capability 按候选自身的 live field scope 核验。`REGION_AGNOSTIC` 的表达式在 USA/EUR/ASI/GLB 子地区执行，而 field catalog 不接受聚合的 `region=ALL` scope；Gateway 分别查询四个子地区，并要求表达式声明的全部字段在至少两个相同子地区可用且 VECTOR 使用合法。少于两个完整地区时只阻断该候选并给出 capability reason；Agent 不得省略字段 provenance、改 region scope 或绕过检查。
 
-`research_status()` 的 `BLOCKED_BY_REMOTE_STATE` 表示至少一个已有写入未解决，不得重发或清除它；它不自动证明所有不同候选都不可运行。候选批次先用 READ_ONLY `research_batch_status(specs)` 让 Gateway 按真实执行指纹逐项检查：命中 guard 的 proposal 标为 `SUBMIT_UNKNOWN`/重复并排除，互不冲突且能力、权限、quota 和字段/算子检查通过的 proposal 可获 `READY`。Gateway 写入时再次执行全部准入检查与远端去重。Research Agent 不得自行重算或覆盖该结论；若一部分候选被阻断，应保留其隔离并继续独立可执行的候选，只有批次级准入也阻断时才暂停写入，并沿现有 reconcile/能力恢复路径处理具体原因。
+`research_status()` 的 `BLOCKED_BY_REMOTE_STATE` 表示至少一个已有写入未解决；不得自动重发或由 Agent 自行清除它。用户明确要求清除本地 guard 时，可在持有 state-dir owner lock 后原子移除指定记录。此操作只清除本地防重记录，不取消远端任务、不证明其结果，并会移除对应 fingerprint 的 exactly-once 保护；清除后不得据此重试或重发同一候选，远端结果仍保持 `UNKNOWN`，直到取得新的 BRAIN 证据。未决状态不自动证明所有不同候选都不可运行。候选批次先用 READ_ONLY `research_batch_status(specs)` 让 Gateway 按真实执行指纹逐项检查：命中 guard 的 proposal 标为 `SUBMIT_UNKNOWN`/重复并排除，互不冲突且能力、权限、quota 和字段/算子检查通过的 proposal 可获 `READY`。Gateway 写入时再次执行全部准入检查与远端去重。Research Agent 不得自行重算或覆盖该结论；若一部分候选被阻断，应保留其隔离并继续独立可执行的候选，只有批次级准入也阻断时才暂停写入，并沿现有 reconcile/能力恢复路径处理具体原因。
 
 Multi 的每 parent 子项数、并发 parent capacity、quota、rate limit 与一次 write request 上限由 Gateway/runtime 的当前 transport contract 负责。每个未解决 `MULTI_PARENT`（包括 `SUBMIT_UNKNOWN`）会按实际 contract 保留一个并发槽；READ_ONLY candidate admission 返回当前可用 parent slots、可并发子项上界及逐 proposal eligibility，write 前 Gateway 重查全部事实。研究没有全项目固定最小批次或累计完成量解锁规则：Agent 按当前方向的 soft budget、候选解释价值、live admission 与工具 schema，尽可能 dispatch 所有有意义且 READY 的候选；候选不足时发送较小合法 batch，单候选可用 Single 路径。超出一次请求容量时由 Agent 分批，Gateway 在每次请求中继续限制并发与安全。不得制造候选填满容量。
 
@@ -76,7 +76,7 @@ ExecutionGuard 是唯一远端写安全负责方，记录只允许指纹、`SUBM
 
 BRAIN 是 Alpha、Simulation、指标、检查项、聚合、PnL 和相关性的事实源。本地缓存只能作为可重建视图并标明新鲜度，不能覆盖实时结果或把 `UNKNOWN` 变成 `PASS`。不得恢复第二份研究结果数据库。
 
-本地允许：ExecutionGuard、远端滚动缓存、外部 credentials 引用和进程锁。不得手改或删除真实运行目录中的未解决 guard；真实环境只做只读诊断和明确授权的恢复。
+本地允许：ExecutionGuard、远端滚动缓存、外部 credentials 引用和进程锁。真实运行目录中的未解决 guard 默认只读；只有用户明确要求清除时，才可在持有 state-dir owner lock 后按上文流程原子移除，并保留远端结果为 `UNKNOWN` 的判断。
 
 ## 本地 tmp 工作区
 

@@ -96,6 +96,11 @@ class TestResearchApi(unittest.TestCase):
         full = research_api.research_tool_manifest(profile="full")
         core_names = {item["name"] for item in core}
         full_names = {item["name"] for item in full}
+        recovery = {item["name"]: item for item in full}
+        for name in ("resume_execution", "reconcile_execution"):
+            self.assertEqual(recovery[name]["mode"], "LOCAL_STATE_WRITE")
+            self.assertFalse(recovery[name]["remote_write"])
+            self.assertTrue(recovery[name]["local_write"])
         expected_full = set(research_api.__all__) - {
             "SimulationSpec", "research_tool_manifest",
         }

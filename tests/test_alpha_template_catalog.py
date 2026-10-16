@@ -1049,6 +1049,23 @@ class TestPrivateTemplateContract(unittest.TestCase):
                 "ALLOW",
             )
 
+    def test_factory_rejects_duplicate_field_id_across_datasets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "private.toml"
+            path.write_text(PRIVATE_TOML, encoding="utf-8")
+            factory = AlphaFactory(registry=AlphaTemplateRegistry(private_catalog=path))
+            profiles = [
+                {"id": "same_field", "description": "daily close price",
+                 "dataset": "d1", "frequency": "daily", "category": "market",
+                 "semantic_status": "KNOWN"},
+                {"id": "same_field", "description": "daily trading volume",
+                 "dataset": "d2", "frequency": "daily", "category": "market",
+                 "semantic_status": "KNOWN"},
+            ]
+
+            with self.assertRaisesRegex(ValueError, "field id.*multiple datasets"):
+                factory.generate({"template_ids": ["private-probe"]}, profiles, count=1)
+
     @critical_contract("template.public_catalog_synthetic_horizon_lattice")
     def test_public_catalog_is_synthetic_and_horizons_are_lattice(self):
         registry = AlphaTemplateRegistry()

@@ -117,6 +117,7 @@ def normalize_local_request(*, template_ids, count, fields, dataset_id=None):
     target = _count(count)
 
     selected_fields = []
+    dataset_by_field_id = {}
     for item in fields:
         if isinstance(item, Mapping):
             field = dict(item)
@@ -133,6 +134,13 @@ def normalize_local_request(*, template_ids, count, fields, dataset_id=None):
             raise ValueError("each selected field requires a BRAIN dataset id")
         field["id"] = str(field_id).strip()
         field["dataset"] = str(dataset).strip()
+        previous_dataset = dataset_by_field_id.setdefault(
+            field["id"], field["dataset"]
+        )
+        if previous_dataset != field["dataset"]:
+            raise ValueError(
+                f"field id {field['id']!r} has provenance in multiple datasets"
+            )
         selected_fields.append(field)
     return selected_ids, target, selected_fields
 

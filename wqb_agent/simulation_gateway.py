@@ -385,11 +385,19 @@ class SimulationSpec:
         object.__setattr__(self, "simulation_type", simulation_type)
         raw_fields = (self.fields,) if isinstance(self.fields, str) else (self.fields or ())
         fields = []
-        field_datasets = {
-            str(field_id).strip(): str(dataset_id).strip()
-            for field_id, dataset_id in self.field_datasets.items()
-            if str(field_id).strip() and str(dataset_id).strip()
-        }
+        field_datasets = {}
+        for field_id, dataset_id in self.field_datasets.items():
+            normalized_id = str(field_id).strip()
+            normalized_dataset = str(dataset_id).strip()
+            if not normalized_id or not normalized_dataset:
+                continue
+            previous_dataset = field_datasets.get(normalized_id)
+            if previous_dataset is not None and previous_dataset != normalized_dataset:
+                raise ResearchReasonError(
+                    f"field id {normalized_id!r} has provenance in multiple datasets",
+                    "CAPABILITY_UNAVAILABLE",
+                )
+            field_datasets[normalized_id] = normalized_dataset
         for item in raw_fields:
             if isinstance(item, Mapping):
                 field_id = item.get("id") or item.get("field_id")
@@ -402,7 +410,14 @@ class SimulationSpec:
                     )
                 normalized_id = str(field_id).strip()
                 if dataset is not None and str(dataset).strip():
-                    field_datasets[normalized_id] = str(dataset).strip()
+                    normalized_dataset = str(dataset).strip()
+                    previous_dataset = field_datasets.get(normalized_id)
+                    if previous_dataset is not None and previous_dataset != normalized_dataset:
+                        raise ResearchReasonError(
+                            f"field id {normalized_id!r} has provenance in multiple datasets",
+                            "CAPABILITY_UNAVAILABLE",
+                        )
+                    field_datasets[normalized_id] = normalized_dataset
             else:
                 normalized_id = str(item).strip()
             if normalized_id and normalized_id not in fields:
@@ -480,9 +495,11 @@ class ExecutionGuard:
 
     @classmethod
     def _normalize_kind(cls, value):
-        """Unknown or legacy rows stay a plain Single write."""
-        kind = str(value or cls.SINGLE).strip().upper()
-        return kind if kind in cls.KINDS else cls.SINGLE
+        """Validate an explicit execution kind before persisting a guard row."""
+        kind = str(cls.SINGLE if value is None else value).strip().upper()
+        if kind not in cls.KINDS:
+            raise ValueError("invalid execution guard kind")
+        return kind
 
     @classmethod
     def _validate_simulation_count(cls, value):
@@ -584,26 +601,36 @@ class ExecutionGuard:
         self, fingerprint, *, progress_url=None, status="SUBMITTING",
         simulation_count=1, kind=SINGLE, parent_fingerprint=None,
     ):
+        if not isinstance(fingerprint, str) or not fingerprint.strip():
+            raise ValueError("execution fingerprint must be non-empty text")
         if status not in self.STATUSES:
             raise ValueError("invalid execution guard status")
         simulation_count = self._validate_simulation_count(simulation_count)
         kind = self._normalize_kind(kind)
-        if kind == self.MULTI_CHILD and not parent_fingerprint:
+        if kind == self.MULTI_CHILD and (
+            not isinstance(parent_fingerprint, str) or not parent_fingerprint.strip()
+        ):
             raise ValueError("MULTI_CHILD requires a parent fingerprint")
         now = time.time()
         with self._lock:
             rows = self._read()
+            if kind == self.MULTI_CHILD:
+                parent = next((row for row in rows if row.get(
+                    "execution_fingerprint"
+                ) == parent_fingerprint), None)
+                if parent is None or parent.get("kind") != self.MULTI_PARENT:
+                    raise ValueError("MULTI_CHILD requires a registered MULTI_PARENT")
             existing = next((row for row in rows
                              if row.get("execution_fingerprint") == fingerprint), None)
             if existing is not None:
                 return False
             row = {
-                "execution_fingerprint": str(fingerprint), "status": status,
+                "execution_fingerprint": fingerprint, "status": status,
                 "progress_url": progress_url, "created_at": now, "updated_at": now,
                 "simulation_count": simulation_count, "kind": kind,
             }
             if parent_fingerprint:
-                row["parent_fingerprint"] = str(parent_fingerprint)
+                row["parent_fingerprint"] = parent_fingerprint
             rows.append(row)
             self._write(rows)
             return True

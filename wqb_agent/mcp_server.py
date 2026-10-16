@@ -142,7 +142,8 @@ def _finite_number(value: Any) -> bool:
 
 def _envelope(
     payload: Mapping[str, Any], *, owner: str, allow_expression: bool = False,
-    list_item_limit: int = MAX_LIST_ITEMS,
+    list_item_limit: int = MAX_LIST_ITEMS, access_mode: str = "READ_ONLY",
+    local_write: bool = False,
 ) -> dict[str, Any]:
     source = _short_text(payload.get("source") or "UNKNOWN")
     bounded, truncated = _bounded(
@@ -173,7 +174,7 @@ def _envelope(
     if not _finite_number(age_sec):
         age_sec = None
     envelope = {
-        "access_mode": "READ_ONLY",
+        "access_mode": access_mode,
         "owner": owner,
         "source": source,
         "status": status,
@@ -187,6 +188,7 @@ def _envelope(
         "age_sec": age_sec,
         "truncated": truncated,
         "data": bounded,
+        **({"local_write": True} if local_write else {}),
     }
     try:
         size = len(json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
@@ -200,9 +202,12 @@ def _envelope(
     return envelope
 
 
-def _failed_result(exc: Exception, *, owner: str, source: str = "BRAIN_LIVE") -> dict[str, Any]:
+def _failed_result(
+    exc: Exception, *, owner: str, source: str = "BRAIN_LIVE",
+    access_mode: str = "READ_ONLY", local_write: bool = False,
+) -> dict[str, Any]:
     return {
-        "access_mode": "READ_ONLY",
+        "access_mode": access_mode,
         "owner": owner,
         "source": source,
         "status": "UNAVAILABLE",
@@ -213,6 +218,7 @@ def _failed_result(exc: Exception, *, owner: str, source: str = "BRAIN_LIVE") ->
         "truncated": False,
         "data": None,
         "error": _error_code(exc),
+        **({"local_write": True} if local_write else {}),
     }
 
 
@@ -764,6 +770,12 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
     )
     remote_read = ToolAnnotations(readOnlyHint=True, openWorldHint=True)
     local_read = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+    local_state_reconcile = ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=True,
+    )
     simulation_write = ToolAnnotations(
         readOnlyHint=False,
         destructiveHint=False,
@@ -781,20 +793,25 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
 
     def read_facade(
         name, *args, allow_expression=False,
-        list_item_limit=MAX_LIST_ITEMS, **kwargs,
+        list_item_limit=MAX_LIST_ITEMS, access_mode="READ_ONLY",
+        local_write=False, **kwargs,
     ):
         try:
             payload = getattr(api, name)(
                 *args, client=resolve_client(), config=config, **kwargs,
             )
         except Exception as exc:  # Do not return remote messages, URLs, or secrets.
-            return _failed_result(exc, owner=f"research_api.{name}")
+            return _failed_result(
+                exc, owner=f"research_api.{name}", access_mode=access_mode,
+                local_write=local_write,
+            )
         if not isinstance(payload, Mapping):
             payload = {"source": "UNKNOWN", "status": "UNKNOWN", "result": payload}
         return _envelope(
             payload, owner=f"research_api.{name}",
             allow_expression=allow_expression,
             list_item_limit=list_item_limit,
+            access_mode=access_mode, local_write=local_write,
         )
 
     def write_facade(name, specs, **options):
@@ -1063,9 +1080,9 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
             return _invalid_result(owner="research_api.get_alpha_prod_correlation")
         return read_facade("get_alpha_prod_correlation", alpha_id)
 
-    @server.tool(annotations=remote_read)
+    @server.tool(annotations=local_state_reconcile)
     def reconcile_execution(fingerprint: str) -> dict[str, Any]:
-        """[READ_ONLY] Reconcile one existing guard; never submit again."""
+        """[LOCAL_STATE_WRITE] Reconcile one guard; it may update or clear local guard state, and never resubmits."""
         try:
             current = api.get_simulation_config(config=config)
             runtime = current.get("runtime") or {}
@@ -1076,10 +1093,14 @@ def build_research_server(*, api=research_api, client=None, config=None, state_d
                 float(configured_timeout), RECONCILE_POLL_TIMEOUT_SEC,
             )
         except Exception as exc:
-            return _failed_result(exc, owner="research_api.reconcile_execution")
+            return _failed_result(
+                exc, owner="research_api.reconcile_execution",
+                access_mode="LOCAL_STATE_WRITE", local_write=True,
+            )
         return read_facade(
             "reconcile_execution", fingerprint, state_dir=state_dir,
             poll_timeout_sec=poll_timeout,
+            access_mode="LOCAL_STATE_WRITE", local_write=True,
         )
 
     @server.tool(annotations=local_read)

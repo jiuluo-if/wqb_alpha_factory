@@ -893,7 +893,7 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
         remote_read_names = {
             "research_status", "list_datasets", "list_datafields",
             "get_operator_reference", "validate_simulation_spec",
-            "get_alpha_evidence", "reconcile_execution", "get_alpha_prod_correlation",
+            "get_alpha_evidence", "get_alpha_prod_correlation",
         }
         for name in remote_read_names:
             annotations = by_name[name].annotations
@@ -902,6 +902,11 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("FINALIST_ONLY", by_name["get_alpha_prod_correlation"].description)
         self.assertNotIn("compare_alphas", by_name)
+
+        reconcile = by_name["reconcile_execution"]
+        self.assertIs(reconcile.annotations.read_only_hint, False)
+        self.assertIs(reconcile.annotations.idempotent_hint, False)
+        self.assertIn("LOCAL_STATE_WRITE", reconcile.description)
 
         for name in ("simulate_batch", "simulate_multi_batch"):
             annotations = by_name[name].annotations
@@ -1223,6 +1228,8 @@ class ResearchMCPServerTests(unittest.IsolatedAsyncioTestCase):
                 recovered = await client.call_tool("reconcile_execution", {"fingerprint": row["fingerprint"]})
         self.assertEqual(recovered.structured_content["data"]["status"], "SUBMIT_UNKNOWN")
         self.assertEqual(recovered.structured_content["data"]["fingerprint"], parent)
+        self.assertEqual(recovered.structured_content["access_mode"], "LOCAL_STATE_WRITE")
+        self.assertTrue(recovered.structured_content["local_write"])
 
     async def test_multi_batch_accepts_small_meaningful_candidate_set(self):
         multi = Mock(return_value=[])

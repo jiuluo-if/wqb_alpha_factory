@@ -141,6 +141,13 @@ class TestLocalTemplateReading(unittest.TestCase):
 
 
 class TestLocalTemplateConstruction(unittest.TestCase):
+    def test_normalization_rejects_duplicate_field_id_across_datasets(self):
+        with self.assertRaisesRegex(ValueError, "field id.*multiple datasets"):
+            normalize_local_request(
+                template_ids=["local-fixture"], count=1,
+                fields=[_field("same", dataset="d1"), _field("same", dataset="d2")],
+            )
+
     def test_build_renders_specs_without_client_network_or_disk(self):
         settings = {
             "region": "USA", "universe": "TOP3000", "delay": 1,
