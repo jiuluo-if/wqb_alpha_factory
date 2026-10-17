@@ -1,6 +1,7 @@
 """Pure validation gates for public synthetic and local private templates."""
 
 import math
+import re
 
 from ..expression import has_redundant_unary_wrapper, operator_occurrence_count
 from .model import (
@@ -37,11 +38,41 @@ PROBE_OPERATOR_MAX = 10
 # extreme/quantile condition, so its expression must realize an extremal gate.
 FIELD_FUNCTIONS = ("CONDITION", "SIGNAL", "STRONG_SIGNAL")
 SIGNAL_FUNCTIONS = frozenset({"SIGNAL", "STRONG_SIGNAL"})
-STRONG_SIGNAL_GATE_OPERATORS = frozenset({
+GATE_COMPARISON_OPERATORS = frozenset({
     "greater", "less", "trade_when", "hump", "if_else", "bucket",
+})
+EXTREMAL_OPERATORS = frozenset({
     "rank", "ts_rank", "quantile", "ts_quantile", "zscore", "ts_zscore",
     "ts_arg_max", "ts_arg_min", "vec_max", "vec_min",
 })
+# Operators that restrict *when/how much* a position may exist: a comparison branch of a
+# gate, or a conditioning aggregation that scales the traded leg by its own extremeness.
+RESTRICTION_OPERATORS = GATE_COMPARISON_OPERATORS | EXTREMAL_OPERATORS
+STRONG_SIGNAL_GATE_OPERATORS = RESTRICTION_OPERATORS
+_OPERATOR_HEAD = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)$")
+
+
+def _slot_contexts(expression, token):
+    """Return the set of enclosing operator names for every occurrence of a slot."""
+    stack = []
+    spans = []
+    for index, char in enumerate(expression):
+        if char == "(":
+            head = _OPERATOR_HEAD.search(expression[:index])
+            stack.append((head.group(1) if head else "", index))
+        elif char == ")" and stack:
+            name, start = stack.pop()
+            spans.append((name, start, index))
+    contexts = []
+    start = expression.find(token)
+    while start != -1:
+        enclosing = sorted(
+            (span for span in spans if span[1] < start < span[2]),
+            key=lambda span: span[1],
+        )
+        contexts.append({name for name, _start, _end in enclosing if name})
+        start = expression.find(token, start + len(token))
+    return contexts
 
 
 def effective_semantic_contract(template):
@@ -233,13 +264,18 @@ def validate_template_contract(template, *, production=False):
             if not has_signal:
                 errors.append("SINGLE_FIELD_CONDITION_ONLY")
         else:
-            if "CONDITION" not in field_functions:
-                errors.append("MISSING_CONDITION_FIELD")
+            # A joint bet (spread / ratio / confirmation) may carry signals only; a
+            # declared CONDITION must still be a real restriction, never a label.
             if not has_signal:
                 errors.append("MISSING_SIGNAL_FIELD")
-        if ("STRONG_SIGNAL" in field_functions
-                and not STRONG_SIGNAL_GATE_OPERATORS.intersection(template.operator_names)):
-            errors.append("STRONG_SIGNAL_WITHOUT_GATE")
+            for slot, function in zip(template.field_slots, field_functions):
+                contexts = _slot_contexts(template.expression, "{" + slot + "}")
+                restricted = any(
+                    RESTRICTION_OPERATORS.intersection(context) for context in contexts)
+                if function == "CONDITION" and not restricted:
+                    errors.append("CONDITION_WITHOUT_RESTRICTION")
+                if function == "STRONG_SIGNAL" and not restricted:
+                    errors.append("STRONG_SIGNAL_WITHOUT_GATE")
     if len(template.numeric_slots) > 3:
         errors.append("NUMERIC_SLOT_LIMIT")
     for slot in template.numeric_slots:

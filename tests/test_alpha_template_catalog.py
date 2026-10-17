@@ -1198,14 +1198,20 @@ class TestFieldFunctionContract(unittest.TestCase):
         self.assertNotIn("SINGLE_FIELD_CONDITION_ONLY",
                          validate_template_contract(gated)["errors"])
 
-    def test_multi_field_needs_both_a_restriction_and_a_signal(self):
-        two_signals = self._template(("SIGNAL", "SIGNAL"), "rank(add({p}, {s}))")
-        self.assertIn("MISSING_CONDITION_FIELD",
-                      validate_template_contract(two_signals)["errors"])
+    def test_multi_field_needs_a_signal_and_honest_restrictions(self):
+        two_signals = self._template(("SIGNAL", "SIGNAL"),
+                                     "rank(add(ts_zscore({p}, 5), {s}))")
+        # A spread / ratio / confirmation bets on both legs at once: signals only.
+        self.assertTrue(validate_template_contract(two_signals)["ok"],
+                        validate_template_contract(two_signals)["errors"])
         two_conditions = self._template(("CONDITION", "CONDITION"),
-                                        "rank(add({p}, {s}))")
+                                        "rank(add(ts_zscore({p}, 5), {s}))")
         self.assertIn("MISSING_SIGNAL_FIELD",
                       validate_template_contract(two_conditions)["errors"])
+        fake_restriction = self._template(("CONDITION", "SIGNAL"),
+                                          "add(ts_delta({p}, 5), ts_mean({s}, 22))")
+        self.assertIn("CONDITION_WITHOUT_RESTRICTION",
+                      validate_template_contract(fake_restriction)["errors"])
         split = self._template(("CONDITION", "STRONG_SIGNAL"),
                                "trade_when(greater(rank({p}), 0.8), ts_delta({s}, 5), 0)")
         self.assertTrue(validate_template_contract(split)["ok"],
