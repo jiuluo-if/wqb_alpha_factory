@@ -9,7 +9,10 @@ from unittest.mock import patch
 
 from tests.test_targeted_ci import critical_contract
 from wqb_agent.alpha_factory import AlphaFactory
-from wqb_agent.alpha_templates.field_family import field_family_admission
+from wqb_agent.alpha_templates.field_family import (
+    field_families,
+    field_family_admission,
+)
 from wqb_agent.alpha_templates.loader import (
     PrivateTemplateCatalogError,
     load_private_templates,
@@ -1272,6 +1275,26 @@ class TestFieldFamilyGate(unittest.TestCase):
             {"id": "news_flow", "dataset": {"id": "news12"}, "category": "News"},
             {"id": "news_tone", "dataset": {"id": "news12"}, "category": "News"},
         ]
+        self.assertEqual(field_family_admission(template, profiles)["admission"], "ALLOW")
+
+    def test_price_reaction_field_in_a_news_dataset_is_not_news(self):
+        template = self._template(("LIVE_NEWS_SENTIMENT",))
+        profiles = [
+            {"id": "news_range_stddev", "dataset": {"id": "news12"}, "category": "News",
+             "description": "Z-score of current day's trading range compared to 30-day average"},
+        ]
+        self.assertEqual(field_families(profiles[0]), frozenset({"LIVE_PRICE_VOLUME"}))
+        decision = field_family_admission(template, profiles)
+        self.assertEqual(decision["admission"], "DENY")
+        self.assertIn("FIELD_FAMILY_MISMATCH", decision["reasons"])
+
+    def test_text_field_in_a_news_dataset_stays_news(self):
+        template = self._template(("LIVE_NEWS_SENTIMENT",))
+        profiles = [
+            {"id": "news_tone", "dataset": {"id": "news12"}, "category": "News",
+             "description": "Daily news sentiment score"},
+        ]
+        self.assertEqual(field_families(profiles[0]), frozenset({"LIVE_NEWS_SENTIMENT"}))
         self.assertEqual(field_family_admission(template, profiles)["admission"], "ALLOW")
 
     def test_unknown_field_metadata_stays_renderable(self):

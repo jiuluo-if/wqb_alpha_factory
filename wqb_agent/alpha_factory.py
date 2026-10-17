@@ -630,6 +630,20 @@ class AlphaFactory:
                 assignment_reason = (
                     "same-dataset profitability and asset efficiency jointly confirm the fundamental state"
                 )
+            elif (
+                relationship_type == "same_economic_concept"
+                and field_types == ["MATRIX", "MATRIX"]
+                and categories[0] == categories[1]
+                and categories[0] in {"news", "sentiment"}
+            ):
+                # Two same-source text statistics: one states narrative coherence,
+                # the other states the traded drift. The pair is a confirmation of
+                # one text state, not a spread of two different quantities.
+                valid_types = True
+                confirmation_mechanism = "news_coherence_confirmation"
+                assignment_reason = (
+                    "same-dataset news coherence condition and attention signal jointly confirm the text state"
+                )
             else:
                 valid_types = False
                 confirmation_mechanism = None

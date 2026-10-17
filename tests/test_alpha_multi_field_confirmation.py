@@ -81,6 +81,30 @@ class MultiFieldConfirmationTests(unittest.TestCase):
 
         self.assertEqual(decision["admission"], "REJECT")
 
+    def test_admits_same_dataset_matrix_news_coherence_pair(self):
+        decision = AlphaFactory._relationship_gate(
+            [
+                _field("tone", "Daily news sentiment score", field_type="MATRIX"),
+                _field("drift", "News sentiment dispersion across articles", field_type="MATRIX"),
+            ],
+            _template(),
+        )
+
+        self.assertEqual(decision["admission"], "ALLOW")
+        self.assertEqual(decision["relationship_type"], "same_economic_concept")
+        self.assertEqual(decision["confirmation_mechanism"], "news_coherence_confirmation")
+
+    def test_rejects_matrix_confirmation_outside_news_and_sentiment(self):
+        decision = AlphaFactory._relationship_gate(
+            [
+                _field("assets", "Total assets", field_type="MATRIX", category="fundamental"),
+                _field("book", "Book value per share", field_type="MATRIX", category="fundamental"),
+            ],
+            _template(),
+        )
+
+        self.assertEqual(decision["admission"], "REJECT")
+
     def test_admits_unknown_frequency_only_with_same_dataset_scope(self):
         fields = [
             _field("sentiment", "Story polarity confidence"),

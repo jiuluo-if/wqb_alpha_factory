@@ -7,6 +7,12 @@ families do not intersect, the pair is refused *before* rendering: a news templa
 to a securities-lending field is not a news mechanism, and materialising it would
 manufacture a candidate whose economic meaning cannot be stated.
 
+The family is resolved from the field's *semantics* first.  Several BRAIN datasets carry
+names that misdescribe their contents: ``news12`` is mostly intraday price reaction to
+news (``market_price``) rather than text sentiment, so resolving by dataset prefix alone
+would let a news template bind a price-reaction field and call the result a news
+mechanism.  Semantic concept therefore outranks category and dataset id.
+
 Unknown metadata never denies admission: synthetic fixtures and newly registered
 datasets stay renderable, but they are reported as ``FIELD_FAMILY_UNKNOWN`` so a reviewer
 can see that the match was not proved.
@@ -22,6 +28,58 @@ FAMILY_GROUPS = {
     "OPTION": frozenset({"LIVE_OPTION_ANALYTICS", "LIVE_OPTION_VOLATILITY"}),
     "PRICE_VOLUME": frozenset({"LIVE_PRICE_VOLUME"}),
 }
+
+# Semantic concepts are the strongest evidence of what a field measures.  They are
+# derived from the live description by ``alpha_semantics``, so a field named
+# ``news_range_stddev`` is classified as price behaviour, not as text sentiment.
+CONCEPT_GROUPS = {
+    "market_price": "PRICE_VOLUME",
+    "liquidity": "PRICE_VOLUME",
+    "price_volume": "PRICE_VOLUME",
+    "volatility": "PRICE_VOLUME",
+    "sentiment": "NEWS",
+    "event_novelty": "NEWS",
+    "event_count": "NEWS",
+    "social_attention": "SOCIAL",
+    "fundamental": "FUNDAMENTAL",
+    "asset_base": "FUNDAMENTAL",
+    "equity_capital": "FUNDAMENTAL",
+    "operating_cashflow": "FUNDAMENTAL",
+    "debt_balance": "FUNDAMENTAL",
+    "profitability_measure": "FUNDAMENTAL",
+    "asset_efficiency": "FUNDAMENTAL",
+    "valuation": "FUNDAMENTAL",
+    "earnings": "FUNDAMENTAL",
+    "analyst_revision": "ANALYST",
+    "analyst_dispersion": "ANALYST",
+    "analyst_expectation": "ANALYST",
+    "market_beta": "MODEL",
+    "market_correlation": "MODEL",
+    "implied_volatility": "OPTION",
+    "realized_volatility": "OPTION",
+}
+
+# A dataset name can lie about content, and a field id can be ambiguous, but the live
+# description of a price/volume quantity is explicit.  These markers are checked before
+# the category name for exactly that reason.
+DESCRIPTION_GROUPS = (
+    ("short interest", "SHORT_INTEREST"),
+    ("securities lending", "SHORT_INTEREST"),
+    ("insider", "SHORT_INTEREST"),
+    ("trading range", "PRICE_VOLUME"),
+    ("session", "PRICE_VOLUME"),
+    ("intraday", "PRICE_VOLUME"),
+    ("price", "PRICE_VOLUME"),
+    ("volume", "PRICE_VOLUME"),
+    ("quote", "PRICE_VOLUME"),
+    ("turnover", "PRICE_VOLUME"),
+    ("true range", "PRICE_VOLUME"),
+    ("sentiment", "NEWS"),
+    ("tone", "NEWS"),
+    ("article", "NEWS"),
+    ("headline", "NEWS"),
+    ("novelty", "NEWS"),
+)
 
 # Category names are matched case-insensitively as substrings, most specific first.
 CATEGORY_GROUPS = (
@@ -86,6 +144,12 @@ def _category_name(profile):
     return str(category or "").strip()
 
 
+def _description_text(profile):
+    if not isinstance(profile, dict):
+        return ""
+    return str(profile.get("description") or "").strip().lower()
+
+
 def _dataset_id(profile):
     dataset = profile.get("dataset") if isinstance(profile, dict) else None
     if isinstance(dataset, dict):
@@ -93,8 +157,39 @@ def _dataset_id(profile):
     return str(dataset or "").strip()
 
 
+def _semantic_group(profile):
+    """Return the group implied by the field's derived semantic concept, if any."""
+    try:
+        from ..alpha_semantics import derive_field_semantic_traits
+    except Exception:  # noqa: BLE001 - semantics stay optional for callers
+        return ""
+    try:
+        traits = derive_field_semantic_traits(profile)
+    except Exception:  # noqa: BLE001 - a broken profile must not crash rendering
+        return ""
+    concept = str((traits or {}).get("concept") or "").strip().lower()
+    confident = (
+        str((traits or {}).get("confidence") or "").upper() == "HIGH"
+        and str((traits or {}).get("semantic_admission") or "").upper() == "ALLOW"
+    )
+    if concept in CONCEPT_GROUPS and confident:
+        return CONCEPT_GROUPS[concept]
+    if confident:
+        tags = {str(tag).lower() for tag in ((traits or {}).get("tags") or ())}
+        if {"price", "volatility"} & tags:
+            return "PRICE_VOLUME"
+    return ""
+
+
 def field_families(profile):
     """Resolve a bound field profile to its possible BRAIN field families."""
+    semantic = _semantic_group(profile)
+    if semantic:
+        return FAMILY_GROUPS[semantic]
+    description = _description_text(profile)
+    for needle, group in DESCRIPTION_GROUPS:
+        if needle in description:
+            return FAMILY_GROUPS[group]
     category = _category_name(profile).lower()
     for needle, group in CATEGORY_GROUPS:
         if needle in category:
