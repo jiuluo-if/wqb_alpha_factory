@@ -14,7 +14,7 @@ tracked catalog 只能包含 TOY/SYNTHETIC/NON-RESEARCH 示例；真实模板、
 
 私有模板只从显式绝对构造器路径、`WQB_ALPHA_TEMPLATE_CATALOG` 或 `~/.wqb_alpha_factory/private/alpha_templates.toml` 加载。私有输入缺失报 `PRIVATE_TEMPLATE_CATALOG_MISSING`；绝不搜索 cwd/上级目录，也绝不回退到公开包 catalog。
 
-每个私有模板声明 `role`、字段角色/关系、机制、方向与理由、期望 horizon、证伪、自相关影响、novelty 家族、settings 分支与 horizon profiles。`required_slots` 含全部渲染绑定：`p`/`data_field`、`s`、`t` 是经济字段槽，`g` 是控制绑定；`p` 与 `data_field` 是别名且不可共存。Probe 模板要求 3–10 个算子出现与 1–3 个概念经济字段；同一算子可重复且每次出现分别计数。上限由 6 放宽到 10（用户授权，2026-10-17）是为了让需要重复 VECTOR 聚合算子的门控结构（entry/hold/exit 三分支）能被忠实表达，不是鼓励堆算子；没有经济理由的算子仍然违规。对照组仍允许 1–3 个算子/单字段。Horizon 取值限定为 `[5, 22, 66, 120, 255]`；多窗口 profile 是有序相邻 lattice 周期，不是笛卡尔积。
+每个私有模板声明 `role`、字段角色/关系、机制、方向与理由、期望 horizon、证伪、自相关影响、novelty 家族、settings 分支与 horizon profiles。`required_slots` 含全部渲染绑定：`p`/`data_field`、`s`、`t` 是经济字段槽，`g` 是控制绑定；`p` 与 `data_field` 是别名且不可共存。Probe 模板要求 3–10 个**去重**命名算子（相同算子只计一次；重复出现的同一算子不增加计数，用户口径 2026-10-17）与 1–3 个概念经济字段。上限由 6 放宽到 10（用户授权，2026-10-17）是为了让需要重复 VECTOR 聚合算子的门控结构（entry/hold/exit 三分支）能被忠实表达，不是鼓励堆算子；没有经济理由的算子仍然违规。对照组仍允许 1–3 个去重算子/单字段。Horizon 取值限定为 `[5, 22, 66, 120, 255]`；多窗口 profile 是有序相邻 lattice 周期，不是笛卡尔积。
 
 算子覆盖是多样性目标，永不是在没有明确经济机制时添加算子的理由。优先在独立机制间广覆盖已验证算子，同时保持 arity、语义关系、novelty 与复杂度 gate。数值字面量按 fail-closed 分类；只有声明的 `RESEARCH_HORIZON` 槽可轮换。
 

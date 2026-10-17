@@ -73,7 +73,7 @@ frontmatter 中 `metadata.wqb_alpha_factory_research_contract` 是本文件编�
 ## 方向与局部优化
 
 - Probe 开始前声明 `direction`、`direction_reason` 和 `direction_transform`，理由必须先于结果；不得因 Sharpe 为负而事后反转方向。
-- 复杂度按最终表达式的 effective operator occurrence 计算，`direction_transform` 等机械 wrapper 也计数。CONTROL 为 1–3，PROBE 为 3–10（上限经用户授权于 2026-10-17 从 6 放宽到 10，用于必须重复 VECTOR 聚合算子的门控结构）；上限是硬约束，不是目标，不加无经济理由的算子凑数。
+- 复杂度按最终表达式的**去重**命名算子数计算（相同算子只计一次，用户口径 2026-10-17），`direction_transform` 等机械 wrapper 也计入去重集合。CONTROL 为 1–3，PROBE 为 3–10（上限经用户授权于 2026-10-17 从 6 放宽到 10，用于必须重复 VECTOR 聚合算子的门控结构）；上限是硬约束，不是目标，不加无经济理由的算子凑数，也不能靠重复同一算子抬高计数。
 - 局部优化先声明 immutable anchor。每个 variant 只改一个已声明的 numeric slot 或一个 settings key；字段、template、mechanism、算子顺序/拓扑和 operator count 保持不变。需要改拓扑时另立 `NEW_PROBE` 假设。
 - Template-slot optimization 只使用当前 `list_templates` inventory 明确返回的 `default`、`allowed_values` 与 `economic_role`。需要的信息未暴露时报告 `TEMPLATE_SLOT_METADATA_MISSING`，归类为 `LOCAL_RESEARCH_CAPABILITY_LIMIT`；不得猜 allowed values、从旧缓存恢复当前 template contract，或提交依赖该槽位的 Simulation，但可继续普通 `NEW_PROBE`、字段研究和非 template-specific settings research。
 - baseline 已有证据时不重复提交它。解释时比较 baseline 与所有 variants，不自动选 winner；若邻近变化没有一致、可解释的支持证据，停止该优化维度并保留其他解释。

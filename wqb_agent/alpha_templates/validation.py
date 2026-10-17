@@ -240,14 +240,14 @@ def validate_template_contract(template, *, production=False):
         if semantic_contract == "UNDECLARED":
             errors.append("SEMANTIC_CONTRACT_UNDECLARED")
     if role == "CONTROL_ALPHA":
-        if not 1 <= template.operator_count <= 3:
+        if not 1 <= template.distinct_operator_count <= 3:
             errors.append("CONTROL_OPERATOR_COUNT")
         if template.economic_field_count != 1:
             errors.append("CONTROL_ECONOMIC_FIELD_COUNT")
     elif role == "PROBE_ALPHA":
-        if not PROBE_OPERATOR_MIN <= template.operator_count <= PROBE_OPERATOR_MAX:
+        if not PROBE_OPERATOR_MIN <= template.distinct_operator_count <= PROBE_OPERATOR_MAX:
             errors.append("PROBE_OPERATOR_COUNT")
-            if template.operator_count < PROBE_OPERATOR_MIN:
+            if template.distinct_operator_count < PROBE_OPERATOR_MIN:
                 errors.append("ROLE_COMPLEXITY_MISMATCH")
         if not 1 <= template.economic_field_count <= 3:
             errors.append("PROBE_ECONOMIC_FIELD_COUNT")

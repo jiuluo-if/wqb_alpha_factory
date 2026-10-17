@@ -212,6 +212,15 @@ class AlphaTemplate:
         return operator_occurrence_count(self.expression)
 
     @property
+    def distinct_operator_count(self):
+        """Count each named operator once: repeated identical operators are one operator.
+
+        User rule (2026-10-17): 相同算子算同个算子.  Role complexity bounds use this
+        count so repeating one operator cannot inflate measured complexity.
+        """
+        return len(dict.fromkeys(self.operator_names))
+
+    @property
     def operator_names(self):
         names = tuple(OPERATOR_OCCURRENCE_RE.findall(self.expression)) + tuple(
             slot.baseline_operator for slot in self.operator_slots

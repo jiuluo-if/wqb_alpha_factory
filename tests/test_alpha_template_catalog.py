@@ -552,15 +552,18 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
                   "ts_delta(vec_avg({p}), 5), less(rank(vec_avg({p})), 0.2))")
         )
         self.assertTrue(probe_at_nine["ok"], probe_at_nine["errors"])
+        # 相同算子算同个算子: this gate repeats rank/vec_avg but only six distinct operators.
         probe_too_complex = validate_template_contract(
             probe("multiply(scale(normalize(rank(subtract(ts_mean({p}, 5), "
-                  "ts_mean(ts_mean({s}, 5), 5))))), add(scale(rank({p})), {s}))")
+                  "ts_median({s}, 5))))), add(ts_std_dev(ts_delta({s}, 5)), "
+                  "divide(ts_rank({p}, 5), abs(ts_zscore({p}, 5)))))")
         )
         self.assertIn("PROBE_OPERATOR_COUNT", probe_too_complex["errors"])
         probe_too_simple = validate_template_contract(probe("rank(add({p}))"))
         self.assertIn("PROBE_OPERATOR_COUNT", probe_too_simple["errors"])
 
-    def test_repeated_operator_occurrences_count_toward_probe_complexity(self):
+    def test_repeated_operators_count_once_toward_probe_complexity(self):
+        """用户口径（2026-10-17）：相同算子算同个算子，重复出现不能抬高复杂度。"""
         template = AlphaTemplate(
             "repeated-operator-probe", family="synthetic",
             expression="rank(add({p}, add({s}, add({t}, {p}))))",
@@ -578,9 +581,29 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
 
         self.assertEqual(template.operator_count, 4)
         self.assertEqual(template.operator_names.count("add"), 3)
+        self.assertEqual(template.distinct_operator_count, 2)
         report = validate_template_contract(template, production=True)
-        self.assertTrue(report["ok"], report)
+        self.assertIn("PROBE_OPERATOR_COUNT", report["errors"])
+        self.assertIn("ROLE_COMPLEXITY_MISMATCH", report["errors"])
         self.assertEqual(template.economic_field_count, 3)
+
+        distinct_three = AlphaTemplate(
+            "distinct-three-probe", family="synthetic",
+            expression="rank(add(subtract({p}, subtract({s}, {t})), {p}))",
+            required_slots=("p", "s", "t"), role="PROBE_ALPHA",
+            semantic_contract="RELATIONAL_PRIMARY",
+            relationship_contract="MULTI_FIELD_CONFIRMATION",
+            field_roles=("primary", "secondary", "confirmation"),
+            economic_mechanism="independent indicators confirm a persistent state",
+            field_relationship="three-field economic confirmation",
+            direction_reason="the confirmed state is hypothesized to persist",
+            expected_horizon="short-term",
+            falsification="the confirmation adds no independent response",
+            novelty_family="synthetic-distinct-operator",
+        )
+        self.assertEqual(distinct_three.operator_count, 4)
+        self.assertEqual(distinct_three.distinct_operator_count, 3)
+        self.assertTrue(validate_template_contract(distinct_three)["ok"])
 
     def test_private_registry_without_path_uses_default_private_path_and_fails_closed(self):
         with tempfile.TemporaryDirectory() as home:
@@ -643,14 +666,15 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
         raw_eleven = AlphaTemplate(
             "effective-eleven", family="synthetic",
             expression="multiply(scale(normalize(rank(subtract(ts_mean({p}, 5), "
-                       "ts_mean(ts_mean({s}, 5), 5))))), add(scale(rank({p})), {s}))",
+                       "ts_median({s}, 5))))), add(ts_std_dev(ts_delta({s}, 5)), "
+                       "divide(ts_rank({p}, 5), abs(ts_zscore({p}, 5)))))",
             required_slots=("p", "s"), role="PROBE_ALPHA",
             semantic_contract="SYNTHETIC_FIXTURE", economic_mechanism="synthetic",
             field_relationship="paired fields", direction_reason="synthetic",
             direction_transform="reverse", expected_horizon="short-term",
             falsification="synthetic",
         )
-        self.assertEqual(raw_eleven.operator_count, 12)
+        self.assertGreater(raw_eleven.distinct_operator_count, 10)
         self.assertIn("PROBE_OPERATOR_COUNT",
                       validate_template_contract(raw_eleven)["errors"])
 
