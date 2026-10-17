@@ -128,6 +128,18 @@ _SEMANTIC_CONCEPT_RULES = (
             "fundamental",
         ),
     ),
+    (
+        "borrow_fee",
+        ("loan rate", "borrow fee", "fee rate", "rebate rate", "cost to borrow"),
+    ),
+    (
+        "loan_utilization",
+        ("utilization", "loaned share", "shares on loan", "on loan"),
+    ),
+    (
+        "short_interest",
+        ("short interest", "days to cover", "short ratio", "short position"),
+    ),
     ("market_price", ("price", "close", "open", "high", "low", "vwap", "return")),
 )
 
@@ -250,6 +262,9 @@ def derive_field_semantic_traits(
             "social": "sentiment",
             "news": "sentiment",
             "liquidity": "liquidity",
+            "short interest": "short_interest",
+            "shortinterest": "short_interest",
+            "securities lending": "short_interest",
         }.get(category, "unknown")
         concept_hits = [category] if concept != "unknown" else []
         direct_concept_hits = []
@@ -353,6 +368,9 @@ def derive_field_semantic_traits(
         "fundamental",
         "earnings",
         "data_quality",
+        "borrow_fee",
+        "loan_utilization",
+        "short_interest",
     }:
         sign_semantics = "nonnegative_level"
     elif measurement == "dispersion":
@@ -391,6 +409,9 @@ def derive_field_semantic_traits(
         "fundamental": "economic_scale",
         "market_price": "market_level",
         "data_quality": "data_availability",
+        "borrow_fee": "lending_supply_cost",
+        "loan_utilization": "lending_supply_consumption",
+        "short_interest": "short_side_positioning",
     }.get(concept, "unknown")
     tags = set()
     if concept == "market_price" or any(
@@ -419,6 +440,8 @@ def derive_field_semantic_traits(
         tags.add("event_count")
     if concept == "social_attention":
         tags.update(("attention", "volume"))
+    if concept in {"borrow_fee", "loan_utilization", "short_interest"}:
+        tags.update(("short_interest", "lending"))
     if concept in {"realized_volatility", "implied_volatility"}:
         tags.add("volatility")
     if concept == "equity_capital":

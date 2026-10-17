@@ -25,6 +25,8 @@ def relationship_labels(
         labels.add("sentiment_attention_scale")
     if concepts == {"profitability_measure", "asset_efficiency"}:
         labels.add("profitability_efficiency")
+    if concepts == {"borrow_fee", "loan_utilization"}:
+        labels.add("borrow_fee_crowding")
     if concepts == {"market_beta", "market_correlation"}:
         labels.add("beta_correlation")
     if {left_concept, right_concept} == {"event_novelty", "sentiment"}:
@@ -157,6 +159,7 @@ def relationship_type(labels: set[str]) -> str:
         "revision_dispersion",
         "numerator_denominator",
         "same_economic_concept",
+        "borrow_fee_crowding",
         "comparable_scale",
         "price_volume",
         "complementary_expectations",

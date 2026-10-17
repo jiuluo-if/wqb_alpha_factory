@@ -270,6 +270,11 @@ class AlphaFactory:
     @staticmethod
     def _profile_dataset(profile):
         value = profile.get("dataset") if isinstance(profile, dict) else None
+        if isinstance(value, dict):
+            # A live catalog row may carry the dataset as a nested object while a
+            # cached field-library row carries the bare id; both must resolve to
+            # the same dataset identity for the relationship gate.
+            value = value.get("id") or value.get("name")
         return str(value) if value is not None else None
 
     @staticmethod
@@ -629,6 +634,21 @@ class AlphaFactory:
                 confirmation_mechanism = "profitability_efficiency"
                 assignment_reason = (
                     "same-dataset profitability and asset efficiency jointly confirm the fundamental state"
+                )
+            elif (
+                relationship_type == "borrow_fee_crowding"
+                and field_types == ["VECTOR", "VECTOR"]
+                and categories[0] == categories[1]
+                and categories[0] in {"short interest", "shortinterest"}
+            ):
+                # Borrow-fee instability and lendable-supply consumption are two
+                # views of one securities-lending state: the fee says the supply
+                # repriced, the utilization says the short side is crowded. Only
+                # their conjunction identifies contested shorts.
+                valid_types = True
+                confirmation_mechanism = "borrow_fee_crowding_confirmation"
+                assignment_reason = (
+                    "same-dataset borrow fee and utilization jointly confirm the securities-lending state"
                 )
             elif (
                 relationship_type == "same_economic_concept"

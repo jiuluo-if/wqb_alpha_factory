@@ -27,6 +27,49 @@ class AlphaSemanticsTests(unittest.TestCase):
         self.assertEqual(result["semantic_admission"], "ALLOW")
         self.assertEqual(result["sign_semantics"], "signed_change")
 
+    def test_short_interest_text_derives_borrow_fee_and_utilization(self):
+        cases = {
+            "mean_loan_rate": (
+                "Mean securities lending loan rate across venues",
+                "borrow_fee",
+            ),
+            "utilization": (
+                "Percent of lendable shares already on loan",
+                "loan_utilization",
+            ),
+        }
+        for name, (description, concept) in cases.items():
+            with self.subTest(field=name):
+                result = derive_field_semantic_traits(
+                    {
+                        "id": name,
+                        "description": description,
+                        "dataset": "shortinterest3",
+                    }
+                )
+                self.assertEqual(result["semantic_admission"], "ALLOW")
+                self.assertEqual(result["concept"], concept)
+
+    def test_borrow_fee_and_utilization_relationship_is_symmetric(self):
+        borrow = derive_field_semantic_traits(
+            {
+                "id": "mean_loan_rate",
+                "description": "Mean securities lending loan rate across venues",
+                "dataset": "shortinterest3",
+            }
+        )
+        utilization = derive_field_semantic_traits(
+            {
+                "id": "utilization",
+                "description": "Percent of lendable shares already on loan",
+                "dataset": "shortinterest3",
+            }
+        )
+
+        labels = relationship_labels(borrow, utilization)
+
+        self.assertEqual(relationship_type(labels), "borrow_fee_crowding")
+
     def test_missing_profile_is_unknown(self):
         result = derive_field_semantic_traits(None)
         self.assertEqual(result["semantic_admission"], "UNKNOWN")

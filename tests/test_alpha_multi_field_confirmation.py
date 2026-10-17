@@ -462,6 +462,52 @@ class MultiFieldConfirmationTests(unittest.TestCase):
 
         self.assertEqual(decision["admission"], "REVIEW")
 
+    def test_admits_same_dataset_borrow_fee_and_utilization_pair(self):
+        fields = [
+            _field(
+                "mean_loan_rate",
+                "Mean securities lending loan rate across venues",
+                dataset="shortinterest3",
+                category="short interest",
+            ),
+            _field(
+                "utilization",
+                "Percent of lendable shares already on loan",
+                dataset="shortinterest3",
+                category="short interest",
+            ),
+        ]
+
+        decision = AlphaFactory._relationship_gate(fields, _template())
+
+        self.assertEqual(decision["admission"], "ALLOW")
+        self.assertEqual(decision["relationship_type"], "borrow_fee_crowding")
+        self.assertEqual(
+            decision["confirmation_mechanism"], "borrow_fee_crowding_confirmation"
+        )
+
+    def test_borrow_fee_confirmation_rejects_cross_dataset_and_other_categories(self):
+        borrow = _field(
+            "mean_loan_rate",
+            "Mean securities lending loan rate across venues",
+            dataset="shortinterest3",
+            category="short interest",
+        )
+        utilization = _field(
+            "utilization",
+            "Percent of lendable shares already on loan",
+            dataset="shortinterest3",
+            category="short interest",
+        )
+        other_dataset = dict(utilization, dataset="shortinterest7")
+        other_category = dict(utilization, category="news")
+
+        for field in (other_dataset, other_category):
+            with self.subTest(dataset=field["dataset"], category=field["category"]):
+                decision = AlphaFactory._relationship_gate([borrow, field], _template())
+                self.assertNotEqual(decision["admission"], "ALLOW")
+                self.assertIsNone(decision["confirmation_mechanism"])
+
 
 if __name__ == "__main__":
     unittest.main()
