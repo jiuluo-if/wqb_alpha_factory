@@ -27,6 +27,8 @@ FAMILY_GROUPS = {
     "MODEL": frozenset({"LIVE_MODEL_RISK"}),
     "OPTION": frozenset({"LIVE_OPTION_ANALYTICS", "LIVE_OPTION_VOLATILITY"}),
     "PRICE_VOLUME": frozenset({"LIVE_PRICE_VOLUME"}),
+    "INSIDER": frozenset({"LIVE_INSIDER"}),
+    "INSTITUTION": frozenset({"LIVE_INSTITUTION"}),
 }
 
 # Semantic concepts are the strongest evidence of what a field measures.  They are
@@ -65,7 +67,7 @@ CONCEPT_GROUPS = {
 DESCRIPTION_GROUPS = (
     ("short interest", "SHORT_INTEREST"),
     ("securities lending", "SHORT_INTEREST"),
-    ("insider", "SHORT_INTEREST"),
+    ("insider", "INSIDER"),
     ("trading range", "PRICE_VOLUME"),
     ("session", "PRICE_VOLUME"),
     ("intraday", "PRICE_VOLUME"),
@@ -85,8 +87,8 @@ DESCRIPTION_GROUPS = (
 CATEGORY_GROUPS = (
     ("short interest", "SHORT_INTEREST"),
     ("securities lending", "SHORT_INTEREST"),
-    ("insider", "SHORT_INTEREST"),
-    ("institution", "SHORT_INTEREST"),
+    ("insider", "INSIDER"),
+    ("institution", "INSTITUTION"),
     ("social", "SOCIAL"),
     ("news", "NEWS"),
     ("sentiment", "NEWS"),
@@ -104,8 +106,8 @@ CATEGORY_GROUPS = (
 # Dataset-id prefixes are the fallback when the live row carries no category.
 DATASET_GROUPS = (
     ("shortinterest", "SHORT_INTEREST"),
-    ("insiders", "SHORT_INTEREST"),
-    ("institutions", "SHORT_INTEREST"),
+    ("insiders", "INSIDER"),
+    ("institutions", "INSTITUTION"),
     ("news", "NEWS"),
     ("ai_news_scores", "NEWS"),
     ("sentiment", "NEWS"),

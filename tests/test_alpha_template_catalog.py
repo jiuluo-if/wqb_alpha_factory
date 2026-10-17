@@ -1297,6 +1297,28 @@ class TestFieldFamilyGate(unittest.TestCase):
         self.assertEqual(field_families(profiles[0]), frozenset({"LIVE_NEWS_SENTIMENT"}))
         self.assertEqual(field_family_admission(template, profiles)["admission"], "ALLOW")
 
+    def test_insider_filing_field_is_not_securities_lending(self):
+        template = self._template(("LIVE_SHORT_INTEREST",))
+        profiles = [
+            {"id": "insd3_10q_negative_freq", "dataset": {"id": "insiders3"},
+             "category": "Insiders", "description": "Frequency of negative insider filings"},
+        ]
+        self.assertEqual(field_families(profiles[0]), frozenset({"LIVE_INSIDER"}))
+        decision = field_family_admission(template, profiles)
+        self.assertEqual(decision["admission"], "DENY")
+        self.assertIn("FIELD_FAMILY_MISMATCH", decision["reasons"])
+
+    def test_institutional_holding_field_is_not_securities_lending(self):
+        template = self._template(("LIVE_SHORT_INTEREST",))
+        profiles = [
+            {"id": "inst6_total_holding", "dataset": {"id": "institutions6"},
+             "category": "Institutions", "description": "Total shares held by institutions"},
+        ]
+        self.assertEqual(field_families(profiles[0]), frozenset({"LIVE_INSTITUTION"}))
+        decision = field_family_admission(template, profiles)
+        self.assertEqual(decision["admission"], "DENY")
+        self.assertIn("FIELD_FAMILY_MISMATCH", decision["reasons"])
+
     def test_unknown_field_metadata_stays_renderable(self):
         template = self._template(("TOY_ONLY",))
         profiles = [{"id": "toy", "dataset": {"id": "synthetic_ds"}}]
