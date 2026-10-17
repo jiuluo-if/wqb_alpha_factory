@@ -545,9 +545,16 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
         for expression in probe_expressions:
             report = validate_template_contract(probe(expression))
             self.assertTrue(report["ok"], report["errors"])
+        # Authorized 2026-10-17: the probe ceiling moved from 6 to 10 named operators so a
+        # faithful VECTOR-slot gate (aggregation repeated per slot occurrence) stays legal.
+        probe_at_nine = validate_template_contract(
+            probe("trade_when(greater(rank(vec_avg({p})), 0.8), "
+                  "ts_delta(vec_avg({p}), 5), less(rank(vec_avg({p})), 0.2))")
+        )
+        self.assertTrue(probe_at_nine["ok"], probe_at_nine["errors"])
         probe_too_complex = validate_template_contract(
             probe("multiply(scale(normalize(rank(subtract(ts_mean({p}, 5), "
-                  "ts_mean({s}, 5))))), {p})")
+                  "ts_mean(ts_mean({s}, 5), 5))))), add(scale(rank({p})), {s}))")
         )
         self.assertIn("PROBE_OPERATOR_COUNT", probe_too_complex["errors"])
         probe_too_simple = validate_template_contract(probe("rank(add({p}))"))
@@ -617,8 +624,35 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
             falsification="synthetic",
         )
         self.assertEqual(raw_six.operator_count, 7)
+        # Seven effective operators stay inside the authorized probe ceiling (10).
+        self.assertTrue(validate_template_contract(raw_six)["ok"])
+
+        raw_ten = AlphaTemplate(
+            "effective-ten", family="synthetic",
+            expression="trade_when(greater(rank(vec_avg({p})), 0.8), "
+                       "ts_delta(vec_avg({p}), 5), less(rank(vec_avg({p})), 0.2))",
+            required_slots=("p",), role="PROBE_ALPHA",
+            semantic_contract="SYNTHETIC_FIXTURE", economic_mechanism="synthetic",
+            field_relationship="single gated field", direction_reason="synthetic",
+            direction_transform="reverse", expected_horizon="short-term",
+            falsification="synthetic",
+        )
+        self.assertEqual(raw_ten.operator_count, 10)
+        self.assertTrue(validate_template_contract(raw_ten)["ok"])
+
+        raw_eleven = AlphaTemplate(
+            "effective-eleven", family="synthetic",
+            expression="multiply(scale(normalize(rank(subtract(ts_mean({p}, 5), "
+                       "ts_mean(ts_mean({s}, 5), 5))))), add(scale(rank({p})), {s}))",
+            required_slots=("p", "s"), role="PROBE_ALPHA",
+            semantic_contract="SYNTHETIC_FIXTURE", economic_mechanism="synthetic",
+            field_relationship="paired fields", direction_reason="synthetic",
+            direction_transform="reverse", expected_horizon="short-term",
+            falsification="synthetic",
+        )
+        self.assertEqual(raw_eleven.operator_count, 12)
         self.assertIn("PROBE_OPERATOR_COUNT",
-                      validate_template_contract(raw_six)["errors"])
+                      validate_template_contract(raw_eleven)["errors"])
 
     def test_production_field_roles_and_numeric_slots_fail_closed(self):
         template = AlphaTemplate(

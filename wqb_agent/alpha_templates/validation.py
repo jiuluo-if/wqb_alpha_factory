@@ -23,6 +23,14 @@ SEMANTIC_CONTRACTS = frozenset({
     "TIME_SERIES_STATE", "PERSISTENT_STATE", "CROSS_SECTIONAL_STATE",
     "RELATIONAL_PRIMARY", "VECTOR_AGGREGATION", "UNDECLARED",
 })
+# Operator-occurrence budget for probe templates. The lower bound keeps a probe honest
+# (a real structure, not a single wrapper); the upper bound was raised from 6 to 10 on
+# user authorization (2026-10-17) because a faithful entry/hold/exit gate over a VECTOR
+# slot repeats the aggregation operator once per slot occurrence: a three-branch gate
+# (entry compare, exit compare, traded change) costs 8-10 named operators and cannot be
+# expressed at 6 without dropping a branch or silently changing the mechanism.
+PROBE_OPERATOR_MIN = 3
+PROBE_OPERATOR_MAX = 10
 
 
 def effective_semantic_contract(template):
@@ -237,9 +245,9 @@ def validate_template_contract(template, *, production=False):
         if template.economic_field_count != 1:
             errors.append("CONTROL_ECONOMIC_FIELD_COUNT")
     elif role == "PROBE_ALPHA":
-        if not 3 <= template.operator_count <= 6:
+        if not PROBE_OPERATOR_MIN <= template.operator_count <= PROBE_OPERATOR_MAX:
             errors.append("PROBE_OPERATOR_COUNT")
-            if template.operator_count < 3:
+            if template.operator_count < PROBE_OPERATOR_MIN:
                 errors.append("ROLE_COMPLEXITY_MISMATCH")
         if not 1 <= template.economic_field_count <= 3:
             errors.append("PROBE_ECONOMIC_FIELD_COUNT")
