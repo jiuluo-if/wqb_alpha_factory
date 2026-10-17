@@ -104,6 +104,10 @@ DIRECT_TESTS = {
     "wqb_agent/alpha_templates/validation.py": (
         "tests/test_alpha_template_catalog.py",
     ),
+    "wqb_agent/alpha_templates/field_family.py": (
+        "tests/test_alpha_template_catalog.py",
+        "tests/test_local_templates.py",
+    ),
     "wqb_agent/alpha_templates/registry.py": (
         "tests/test_alpha_template_catalog.py",
     ),

@@ -1,5 +1,10 @@
 """Standalone, read-only Alpha template catalog and registry."""
 
+from .field_family import (
+    expand_families,
+    field_families,
+    field_family_admission,
+)
 from .loader import (
     PrivateTemplateCatalogError,
     load_builtin_templates,
@@ -16,6 +21,7 @@ from .registry import (
     template_numeric_audit,
 )
 from .validation import (
+    FIELD_FUNCTIONS,
     RELATIONSHIP_CONTRACTS,
     SEMANTIC_CONTRACTS,
     effective_relationship_contract,
@@ -28,6 +34,10 @@ __all__ = [
     "AlphaTemplate",
     "TemplateNumericSlot",
     "TemplateOperatorSlot",
+    "FIELD_FUNCTIONS",
+    "expand_families",
+    "field_families",
+    "field_family_admission",
     "AlphaTemplateRegistry",
     "DEFAULT_TEMPLATES",
     "ECONOMIC_TEMPLATES",

@@ -101,6 +101,7 @@ class AlphaTemplate:
     kind: str
     role: str
     field_roles: tuple
+    field_functions: tuple
     fixed_field_bindings: tuple
     allowed_field_families: tuple
     field_relationship: str
@@ -123,7 +124,7 @@ class AlphaTemplate:
                  expected_horizon="short-term", falsification="",
                  self_correlation_impact="unknown", tags=(),
                  selection_groups=(), selection_order=1000, role=None,
-                 field_roles=(), fixed_field_bindings=(),
+                 field_roles=(), field_functions=(), fixed_field_bindings=(),
                  allowed_field_families=(), field_relationship="",
                  relationship_contract="UNDECLARED",
                  semantic_contract="UNDECLARED",
@@ -150,6 +151,9 @@ class AlphaTemplate:
         object.__setattr__(self, "kind", kind or ("economic" if economic else "baseline"))
         object.__setattr__(self, "role", role or ("PROBE_ALPHA" if economic else "CONTROL_ALPHA"))
         object.__setattr__(self, "field_roles", tuple(field_roles))
+        object.__setattr__(self, "field_functions",
+                           tuple(str(function or "").upper()
+                                 for function in field_functions))
         object.__setattr__(self, "fixed_field_bindings", tuple(fixed_field_bindings))
         object.__setattr__(self, "allowed_field_families", tuple(allowed_field_families))
         object.__setattr__(self, "field_relationship", field_relationship)
@@ -193,6 +197,31 @@ class AlphaTemplate:
         """Economic slots after the primary p/data_field alias."""
         return tuple(slot for slot in self.field_slots
                      if slot not in PRIMARY_FIELD_SLOT_ALIASES)
+
+    @property
+    def field_function_by_slot(self):
+        """Map each economic slot to its declared function when the tuple aligns."""
+        if len(self.field_functions) != len(self.field_slots):
+            return {}
+        return dict(zip(self.field_slots, self.field_functions))
+
+    @property
+    def condition_field_slots(self):
+        """Slots that restrict *when* the trade is allowed."""
+        return tuple(slot for slot, function in self.field_function_by_slot.items()
+                     if function == "CONDITION")
+
+    @property
+    def signal_field_slots(self):
+        """Slots that carry the continuous trade signal."""
+        return tuple(slot for slot, function in self.field_function_by_slot.items()
+                     if function == "SIGNAL")
+
+    @property
+    def strong_signal_field_slots(self):
+        """Slots whose signal is only credited inside an extreme condition."""
+        return tuple(slot for slot, function in self.field_function_by_slot.items()
+                     if function == "STRONG_SIGNAL")
 
     @property
     def effective_relationship_contract(self):
@@ -329,6 +358,11 @@ class AlphaTemplate:
             "selection_order": self.selection_order,
             "role": self.role,
             "field_roles": list(self.field_roles),
+            "field_functions": list(self.field_functions),
+            "field_functions_status": (
+                "DECLARED" if self.field_functions else "LEGACY_UNDECLARED"
+            ),
+            "field_function_by_slot": dict(self.field_function_by_slot),
             "fixed_field_bindings": list(self.fixed_field_bindings),
             "allowed_field_families": list(self.allowed_field_families),
             "field_relationship": self.field_relationship,

@@ -31,6 +31,17 @@ SEMANTIC_CONTRACTS = frozenset({
 # expressed at 6 without dropping a branch or silently changing the mechanism.
 PROBE_OPERATOR_MIN = 3
 PROBE_OPERATOR_MAX = 10
+# Economic field functions (user directive 2026-10-17: 模板内的子字段分为限制条件、
+# 信号、强信号).  A CONDITION field decides *when* a position may exist, a SIGNAL field
+# carries the continuous bet, and a STRONG_SIGNAL field is only credited inside an
+# extreme/quantile condition, so its expression must realize an extremal gate.
+FIELD_FUNCTIONS = ("CONDITION", "SIGNAL", "STRONG_SIGNAL")
+SIGNAL_FUNCTIONS = frozenset({"SIGNAL", "STRONG_SIGNAL"})
+STRONG_SIGNAL_GATE_OPERATORS = frozenset({
+    "greater", "less", "trade_when", "hump", "if_else", "bucket",
+    "rank", "ts_rank", "quantile", "ts_quantile", "zscore", "ts_zscore",
+    "ts_arg_max", "ts_arg_min", "vec_max", "vec_min",
+})
 
 
 def effective_semantic_contract(template):
@@ -205,6 +216,30 @@ def validate_template_contract(template, *, production=False):
         errors.append("FIELD_ROLE_COUNT_MISMATCH")
     if any(not isinstance(role, str) or not role.strip() for role in field_roles):
         errors.append("INVALID_FIELD_ROLE")
+    field_functions = tuple(getattr(template, "field_functions", ()) or ())
+    if not field_functions:
+        # Legacy synthetic templates declare no field functions; the private catalog's
+        # strict schema and the production flag keep that from becoming silent.
+        if production:
+            errors.append("FIELD_FUNCTIONS_UNDECLARED")
+    elif len(field_functions) != template.economic_field_count:
+        errors.append("FIELD_FUNCTION_COUNT_MISMATCH")
+    elif any(function not in FIELD_FUNCTIONS for function in field_functions):
+        errors.append("INVALID_FIELD_FUNCTION")
+    else:
+        has_signal = any(function in SIGNAL_FUNCTIONS for function in field_functions)
+        if template.economic_field_count == 1:
+            # A lone restriction states when *not* to trade but never carries a bet.
+            if not has_signal:
+                errors.append("SINGLE_FIELD_CONDITION_ONLY")
+        else:
+            if "CONDITION" not in field_functions:
+                errors.append("MISSING_CONDITION_FIELD")
+            if not has_signal:
+                errors.append("MISSING_SIGNAL_FIELD")
+        if ("STRONG_SIGNAL" in field_functions
+                and not STRONG_SIGNAL_GATE_OPERATORS.intersection(template.operator_names)):
+            errors.append("STRONG_SIGNAL_WITHOUT_GATE")
     if len(template.numeric_slots) > 3:
         errors.append("NUMERIC_SLOT_LIMIT")
     for slot in template.numeric_slots:
@@ -271,6 +306,10 @@ def validate_template_contract(template, *, production=False):
         if any(value not in HORIZON_LATTICE for value in profile):
             errors.append("NON_LATTICE_HORIZON")
     return {"ok": not errors, "errors": errors, "role": role,
+            "field_functions": list(field_functions),
+            "field_functions_status": (
+                "DECLARED" if field_functions else "LEGACY_UNDECLARED"
+            ),
             "relationship_contract": effective_relationship_contract(template),
             "relationship_contract_status": (
                 "DECLARED" if contract != "UNDECLARED" else "LEGACY_UNDECLARED"

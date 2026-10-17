@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from tests.test_targeted_ci import critical_contract
 from wqb_agent.alpha_factory import AlphaFactory
+from wqb_agent.alpha_templates.field_family import field_family_admission
 from wqb_agent.alpha_templates.loader import (
     PrivateTemplateCatalogError,
     load_private_templates,
@@ -405,12 +406,15 @@ class TestAlphaTemplateCatalog(unittest.TestCase):
             relationship_contract="SINGLE_FIELD",
             semantic_contract="TIME_SERIES_STATE",
             field_roles=("primary economic signal",),
+            field_functions=("SIGNAL",),
             direction_reason="persistent state has a positive continuation hypothesis",
             expected_horizon="short-term",
             falsification="the state has no independent response",
         )
         contract = validate_template_contract(template, production=True)
         self.assertTrue(contract["ok"], contract)
+        self.assertEqual(contract["field_functions"], ["SIGNAL"])
+        self.assertEqual(contract["field_functions_status"], "DECLARED")
         self.assertEqual(template.operator_count, 3)
         self.assertEqual(template.economic_field_count, 1)
         self.assertEqual(template.control_slots, ("g",))
@@ -925,6 +929,7 @@ expression = "rank(ts_corr(ts_zscore({p}, 5), ts_zscore({s}, 5), 22))"
 required_slots = ["p", "s"]
 economic_mechanism = "TOY synchronization probe."
 field_roles = ["signal", "confirmation"]
+field_functions = ["SIGNAL", "CONDITION"]
 allowed_field_families = ["TOY_ONLY"]
 field_relationship = "synchronized toy information"
 direction = "long"
@@ -974,6 +979,7 @@ expression = "rank({op_relation}(ts_zscore({p}, 5), ts_zscore({s}, 5), 22))"
 required_slots = ["p", "s"]
 economic_mechanism = "TOY synchronization probe."
 field_roles = ["signal", "confirmation"]
+field_functions = ["SIGNAL", "CONDITION"]
 allowed_field_families = ["TOY_ONLY"]
 field_relationship = "synchronized toy information"
 direction = "long"
@@ -1032,6 +1038,7 @@ expression = "rank(add(ts_zscore({p}, 5), ts_zscore({s}, 22)))"
 required_slots = ["p", "s"]
 economic_mechanism = "private test confirmation"
 field_roles = ["signal", "confirmation"]
+field_functions = ["SIGNAL", "CONDITION"]
 fixed_field_bindings = []
 allowed_field_families = ["TEST"]
 field_relationship = "complementary test signals"
@@ -1147,6 +1154,151 @@ class TestPrivateTemplateContract(unittest.TestCase):
         self.assertNotIn("wqb_agent/alpha_templates/catalog/private.toml", tracked)
         self.assertNotIn("alpha_templates.private.toml", tracked)
         self.assertTrue(all("round_" not in path for path in tracked if "alpha_templates" in path))
+
+
+class TestFieldFunctionContract(unittest.TestCase):
+    """User directive 2026-10-17: fields are CONDITION / SIGNAL / STRONG_SIGNAL."""
+
+    @staticmethod
+    def _template(functions, expression, *, slots=("p", "s"), families=("LIVE_NEWS_SENTIMENT",)):
+        return AlphaTemplate(
+            "field-function-fixture", family="news_attention_hysteresis",
+            expression=expression, required_slots=slots, role="PROBE_ALPHA",
+            economic_mechanism="a news-event state conditions a release change",
+            field_roles=tuple(f"slot {index}" for index in range(len(slots))),
+            field_functions=functions, allowed_field_families=families,
+            field_relationship="state gates the traded change",
+            relationship_contract="CO_MOVEMENT",
+            semantic_contract="RELATIONAL_PRIMARY",
+            direction_reason="state persistence", expected_horizon="short-term",
+            falsification="no independent response", novelty_family="FIXTURE",
+        )
+
+    def test_production_requires_declared_field_functions(self):
+        template = self._template((), "rank(add({p}, {s}))")
+        errors = validate_template_contract(template, production=True)["errors"]
+        self.assertIn("FIELD_FUNCTIONS_UNDECLARED", errors)
+
+    def test_field_function_count_and_vocabulary_fail_closed(self):
+        short = self._template(("SIGNAL",), "rank(add({p}, {s}))")
+        self.assertIn("FIELD_FUNCTION_COUNT_MISMATCH",
+                      validate_template_contract(short)["errors"])
+        unknown = self._template(("SIGNAL", "BOOST"),
+                                 "rank(add({p}, {s}))")
+        self.assertIn("INVALID_FIELD_FUNCTION",
+                      validate_template_contract(unknown)["errors"])
+
+    def test_single_field_cannot_be_only_a_restriction(self):
+        condition_only = self._template(("CONDITION",), "rank({p})", slots=("p",))
+        self.assertIn("SINGLE_FIELD_CONDITION_ONLY",
+                      validate_template_contract(condition_only)["errors"])
+        gated = self._template(("STRONG_SIGNAL",),
+                               "trade_when(greater(rank({p}), 0.8), ts_delta({p}, 5), 0)",
+                               slots=("p",))
+        self.assertNotIn("SINGLE_FIELD_CONDITION_ONLY",
+                         validate_template_contract(gated)["errors"])
+
+    def test_multi_field_needs_both_a_restriction_and_a_signal(self):
+        two_signals = self._template(("SIGNAL", "SIGNAL"), "rank(add({p}, {s}))")
+        self.assertIn("MISSING_CONDITION_FIELD",
+                      validate_template_contract(two_signals)["errors"])
+        two_conditions = self._template(("CONDITION", "CONDITION"),
+                                        "rank(add({p}, {s}))")
+        self.assertIn("MISSING_SIGNAL_FIELD",
+                      validate_template_contract(two_conditions)["errors"])
+        split = self._template(("CONDITION", "STRONG_SIGNAL"),
+                               "trade_when(greater(rank({p}), 0.8), ts_delta({s}, 5), 0)")
+        self.assertTrue(validate_template_contract(split)["ok"],
+                        validate_template_contract(split)["errors"])
+
+    def test_strong_signal_requires_an_extremal_gate(self):
+        ungated = self._template(("CONDITION", "STRONG_SIGNAL"),
+                                 "add(ts_delta({p}, 5), {s})")
+        self.assertIn("STRONG_SIGNAL_WITHOUT_GATE",
+                      validate_template_contract(ungated)["errors"])
+
+    def test_declared_functions_are_exposed_on_the_model(self):
+        template = self._template(("CONDITION", "STRONG_SIGNAL"),
+                                  "trade_when(greater(rank({p}), 0.8), ts_delta({s}, 5), 0)")
+        self.assertEqual(template.condition_field_slots, ("p",))
+        self.assertEqual(template.strong_signal_field_slots, ("s",))
+        self.assertEqual(template.field_function_by_slot,
+                         {"p": "CONDITION", "s": "STRONG_SIGNAL"})
+        entry = template.catalog_entry()
+        self.assertEqual(entry["field_functions"], ["CONDITION", "STRONG_SIGNAL"])
+        self.assertEqual(entry["field_functions_status"], "DECLARED")
+
+
+class TestFieldFamilyGate(unittest.TestCase):
+    """A template only consumes the field families its mechanism is written over."""
+
+    @staticmethod
+    def _template(families):
+        return AlphaTemplate(
+            "family-gate-fixture", family="news_attention_hysteresis",
+            expression="trade_when(greater(rank({p}), 0.8), ts_delta({s}, 5), 0)",
+            required_slots=("p", "s"), role="PROBE_ALPHA",
+            economic_mechanism="a news-event state conditions a release change",
+            field_roles=("state", "signal"), field_functions=("CONDITION", "STRONG_SIGNAL"),
+            allowed_field_families=tuple(families),
+            field_relationship="state gates the traded change",
+            relationship_contract="CO_MOVEMENT",
+            semantic_contract="RELATIONAL_PRIMARY",
+            direction_reason="state persistence", expected_horizon="short-term",
+            falsification="no independent response", novelty_family="FIXTURE",
+        )
+
+    def test_news_template_refuses_securities_lending_fields(self):
+        template = self._template(("LIVE_NEWS_SENTIMENT",))
+        profiles = [
+            {"id": "loan_rate", "dataset": {"id": "shortinterest3"},
+             "category": "Short Interest"},
+            {"id": "shares_available", "dataset": {"id": "shortinterest3"},
+             "category": "Short Interest"},
+        ]
+        decision = field_family_admission(template, profiles)
+        self.assertEqual(decision["admission"], "DENY")
+        self.assertIn("FIELD_FAMILY_MISMATCH", decision["reasons"])
+
+    def test_same_family_binding_is_admitted(self):
+        template = self._template(("LIVE_NEWS_SENTIMENT",))
+        profiles = [
+            {"id": "news_flow", "dataset": {"id": "news12"}, "category": "News"},
+            {"id": "news_tone", "dataset": {"id": "news12"}, "category": "News"},
+        ]
+        self.assertEqual(field_family_admission(template, profiles)["admission"], "ALLOW")
+
+    def test_unknown_field_metadata_stays_renderable(self):
+        template = self._template(("TOY_ONLY",))
+        profiles = [{"id": "toy", "dataset": {"id": "synthetic_ds"}}]
+        decision = field_family_admission(template, profiles)
+        self.assertEqual(decision["admission"], "ALLOW")
+        self.assertIn("FIELD_FAMILY_UNKNOWN", decision["reasons"])
+
+    def test_factory_drops_cross_domain_candidates(self):
+        template = self._template(("LIVE_NEWS_SENTIMENT",))
+
+        class _SingleTemplateRegistry:
+            def get(self, template_id):
+                return template if template_id == template.template_id else None
+
+            def catalog(self):
+                return [template.catalog_entry()]
+
+            def select(self, hypothesis=None):
+                return [template]
+
+        factory = AlphaFactory(registry=_SingleTemplateRegistry())
+        profiles = [
+            {"id": "loan_rate", "description": "loan rate", "dataset": {"id": "shortinterest3"},
+             "frequency": "daily", "category": "Short Interest", "semantic_status": "KNOWN"},
+            {"id": "shares_available", "description": "available shares",
+             "dataset": {"id": "shortinterest3"}, "frequency": "daily",
+             "category": "Short Interest", "semantic_status": "KNOWN"},
+        ]
+        candidates = factory.generate({"template_ids": ["family-gate-fixture"]},
+                                      profiles, count=1)
+        self.assertEqual(candidates, [])
 
 
 if __name__ == "__main__":

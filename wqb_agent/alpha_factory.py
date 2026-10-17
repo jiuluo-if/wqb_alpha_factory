@@ -23,6 +23,7 @@ from .alpha_templates import (
     TemplateNumericSlot,
     template_numeric_audit,
 )
+from .alpha_templates.field_family import field_family_admission
 from .alpha_templates.validation import (
     effective_relationship_contract,
     effective_semantic_contract,
@@ -160,6 +161,10 @@ class AlphaFactory:
             return
         for bundle in self._field_bundles(normalized_profiles, template.economic_field_count):
             slot_profiles = list(bundle)
+            # Refuse domain grafting before rendering: a template may only consume the
+            # field families its stated mechanism is written over.
+            if field_family_admission(template, slot_profiles)["admission"] != "ALLOW":
+                continue
             if template.economic_field_count == 1:
                 semantic = self._template_semantic_compatibility(
                     template, slot_profiles[0]

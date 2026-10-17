@@ -101,10 +101,11 @@ def _parse(document, *, strict_schema=False):
             raise ValueError(f"{raw.get('id', '<unknown>')}: SYNTHETIC_SEMANTIC_CONTRACT_PRIVATE")
         required = _REQUIRED
         if strict_schema:
-            required = (*required, "role", "field_roles", "allowed_field_families",
-                        "field_relationship", "direction_reason",
-                        "allowed_horizon_profiles", "allowed_settings_arms",
-                        "mechanism_tags", "novelty_family", "semantic_contract")
+            required = (*required, "role", "field_roles", "field_functions",
+                        "allowed_field_families", "field_relationship",
+                        "direction_reason", "allowed_horizon_profiles",
+                        "allowed_settings_arms", "mechanism_tags",
+                        "novelty_family", "semantic_contract")
         missing = [key for key in required if key not in raw]
         if missing:
             raise ValueError(f"template missing required keys: {', '.join(missing)}")
@@ -186,6 +187,7 @@ def _parse(document, *, strict_schema=False):
             numeric_slots=numeric_slots,
             role=raw.get("role"),
             field_roles=tuple(raw.get("field_roles", [])),
+            field_functions=tuple(raw.get("field_functions", [])),
             fixed_field_bindings=tuple(raw.get("fixed_field_bindings", [])),
             allowed_field_families=tuple(raw.get("allowed_field_families", [])),
             field_relationship=_text(raw.get("field_relationship", "synthetic example"), "field_relationship"),

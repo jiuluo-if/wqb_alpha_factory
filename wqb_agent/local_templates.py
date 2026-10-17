@@ -360,6 +360,7 @@ def describe_local_templates(*, templates=None, catalog_path=None,
         row["economic_field_count"] = template.economic_field_count
         row["field_slots"] = list(template.field_slots)
         row["field_roles"] = list(template.field_roles)
+        row["field_functions"] = list(template.field_functions)
         row["mechanism_key"] = mechanism_key(template)
         row["mechanism_keys"] = list(template_mechanism_keys(template))
         row["relationship_contract"] = effective_relationship_contract(template)

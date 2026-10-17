@@ -18,6 +18,10 @@ tracked catalog 只能包含 TOY/SYNTHETIC/NON-RESEARCH 示例；真实模板、
 
 算子覆盖是多样性目标，永不是在没有明确经济机制时添加算子的理由。优先在独立机制间广覆盖已验证算子，同时保持 arity、语义关系、novelty 与复杂度 gate。数值字面量按 fail-closed 分类；只有声明的 `RESEARCH_HORIZON` 槽可轮换。
 
+`field_functions` 与 `field_roles` 一一对应，取值 `CONDITION`（限制条件：决定何时允许持仓）、`SIGNAL`（信号：承载连续下注）、`STRONG_SIGNAL`（强信号：只在极值/门控条件下才计入）。用户口径（2026-10-17）：模板内的子字段必须按这三类角色构造，禁止只堆字段名而不交代经济学分工。规则：数量不符报 `FIELD_FUNCTION_COUNT_MISMATCH`；非法值报 `INVALID_FIELD_FUNCTION`；单字段模板只能是 `SIGNAL`/`STRONG_SIGNAL`（仅 `CONDITION` 报 `SINGLE_FIELD_CONDITION_ONLY`）；多字段模板必须同时含 ≥1 `CONDITION`（`MISSING_CONDITION_FIELD`）与 ≥1 `SIGNAL`/`STRONG_SIGNAL`（`MISSING_SIGNAL_FIELD`）；声明 `STRONG_SIGNAL` 时表达式必须出现极值/门控算子（`greater`/`less`/`trade_when`/`hump`/`if_else`/`bucket`/`rank`/`ts_rank`/`quantile`/`ts_quantile`/`zscore`/`ts_zscore`/`ts_arg_max`/`ts_arg_min`/`vec_max`/`vec_min`），否则报 `STRONG_SIGNAL_WITHOUT_GATE`。严格私有加载与 production 契约都要求该字段（`FIELD_FUNCTIONS_UNDECLARED`），因此任何新模板不声明角色分工就无法被加载。
+
+`allowed_field_families` 是绑定期强制门，不是注释：工厂在渲染前用绑定字段的 dataset/category 推导字段族（映射见 `field_families.FIELD_DATASET_FAMILIES` 与 `FIELD_CATEGORY_FAMILIES`），与声明集合无交集即拒绝该组合（`FIELD_FAMILY_MISMATCH`），字段元数据未知时保留 `UNKNOWN` 但仍可渲染。这条门禁止「新闻注意力模板绑借券/基本面字段」这类跨域嫁接——2026-10-17 之前的多次失败批次正是把不匹配的字段硬塞进模板，得到的是统计噪声而非机制证据。
+
 `TemplateNumericSlot` 只支持显式 `RESEARCH_HORIZON` kind；其他/未声明数值 kind 不可物化或轮换。每个 horizon slot 必须是有限数值范围、`allowed_values` 唯一且非空、`default` 在允许值内，且所有 allowed value 属于 `HORIZON_LATTICE`；不同 slot 必须指向不同的 `(token, occurrence)`。非 horizon 数字如安全 epsilon、算子参数仍按固定数值审查，不得伪装成可变 slot。
 
 模板默认 `CONCRETE`。只有显式 `PARTIAL_OPERATOR` probe 兄弟模板可声明恰好一个有界 `TemplateOperatorSlot`；该兄弟必须保留其 concrete 父模板的机制、字段关系、方向、数值 profile、settings 分支与家族。物化只用声明算子与当前 `LIVE_VERIFIED` BRAIN 能力的交集。静态语法与 fixture 数据永不是可用性事实；恢复永不重渲染已物化的 proposal。

@@ -50,7 +50,7 @@ _TEMPLATE_INVENTORY_KEYS = (
     "template_id", "version", "kind", "family", "role", "economic",
     "economic_mechanism", "direction_reason",
     "required_slots", "economic_field_slots", "control_slots",
-    "economic_field_count", "field_roles", "allowed_field_families",
+    "economic_field_count", "field_roles", "field_functions", "allowed_field_families",
     "field_relationship", "relationship_contract", "semantic_contract",
     "direction", "direction_transform", "expected_horizon", "falsification",
     "self_correlation_impact", "numeric_slots", "allowed_horizon_profiles",
