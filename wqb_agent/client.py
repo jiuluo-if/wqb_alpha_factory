@@ -172,6 +172,13 @@ def _bounded_choice_values(choices, *, instrument_type=None, region=None):
     )
 
 
+# A burst of reads can make BRAIN answer ``/authentication`` with a bare 400
+# (observed after ~30 sequential evidence GETs) and 5xx during deploys. Neither
+# is a credential failure — 401 is — so these are retried inside the ordinary
+# transport budget instead of aborting the read as an infrastructure error.
+TRANSIENT_AUTH_STATUSES = frozenset({400, 500, 502, 503, 504})
+
+
 class WQBError(Exception):
     """Base class for all classified WQB errors."""
 
@@ -497,11 +504,28 @@ class WQBClient:
                         status_code=429,
                     )
                 continue
-            else:
-                raise WQBSimulationError(
-                    f"Authentication failed with status {resp.status_code}.",
-                    status_code=resp.status_code,
-                )
+            if resp.status_code in TRANSIENT_AUTH_STATUSES:
+                if transport_attempt >= self.max_retries - 1:
+                    raise WQBSimulationError(
+                        f"Authentication failed with status {resp.status_code} "
+                        f"after {self.max_retries} attempts.",
+                        status_code=resp.status_code,
+                    )
+                delay = self._backoff(transport_attempt, cap=8.0)
+                remaining = self._read_only_budget_remaining("Authentication")
+                if remaining is not None and delay >= remaining:
+                    time.sleep(max(0.0, remaining))
+                    raise WQBTimeoutError(
+                        "Authentication exceeded the bounded read-only status budget.",
+                        status_code=resp.status_code,
+                    )
+                time.sleep(delay)
+                transport_attempt += 1
+                continue
+            raise WQBSimulationError(
+                f"Authentication failed with status {resp.status_code}.",
+                status_code=resp.status_code,
+            )
 
     def _ensure_auth(self):
         if self._is_authenticated():

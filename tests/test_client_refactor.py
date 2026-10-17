@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tests.test_targeted_ci import critical_contract
 from wqb_agent.client import (
     DEFAULT_SUBMIT_SPACING_SEC,
+    TRANSIENT_AUTH_STATUSES,
     WQBAuthError,
     WQBClient,
     WQBNotFoundError,
@@ -1625,6 +1626,38 @@ class TestSharedRateLimitGate(unittest.TestCase):
             c._authenticate()
 
         self.assertEqual(session.post.call_count, 1)
+
+    def test_authentication_retries_transient_400_inside_transport_budget(self):
+        """A burst can make /authentication answer a bare 400; it is not a credential failure."""
+        self.assertIn(400, TRANSIENT_AUTH_STATUSES)
+        c = make_client()
+        c.username = "synthetic-user"
+        c.password = "synthetic-password"
+        session = mock.Mock()
+        session.post.side_effect = [FakeResponse(400), FakeResponse(201)]
+        c._local.session = session
+
+        with mock.patch.object(c, "_wait_rate_limit_gate", return_value=True), \
+             mock.patch("wqb_agent.client.time.sleep") as sleep:
+            c._authenticate()
+
+        self.assertEqual(session.post.call_count, 2)
+        self.assertTrue(sleep.called)
+
+    def test_authentication_transient_status_exhausts_transport_budget(self):
+        c = make_client()
+        c.username = "synthetic-user"
+        c.password = "synthetic-password"
+        session = mock.Mock()
+        session.post.return_value = FakeResponse(400)
+        c._local.session = session
+
+        with mock.patch.object(c, "_wait_rate_limit_gate", return_value=True), \
+             mock.patch("wqb_agent.client.time.sleep"):
+            with self.assertRaisesRegex(WQBSimulationError, "after .* attempts"):
+                c._authenticate()
+
+        self.assertEqual(session.post.call_count, c.max_retries)
 
     def test_authentication_wait_for_existing_gate_is_bounded(self):
         c = make_client()
